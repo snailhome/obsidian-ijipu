@@ -4,6 +4,11 @@
  * 引擎设计原则：
  *  - 纯 TypeScript，零 React / 零 DOM 依赖，可在 Node 中单测；
  *  - 数据流单向：source(.jps) → parse → layout → render / playback。
+ *
+ * 实现独立性：引擎为独立 clean-room 实现，行为对齐 JPS 脚本规范
+ * （`docs/JPS-SPEC.md`），不依赖、不包含任何第三方实现的代码片段
+ * 或版权素材；规范层面参考「番茄简谱」(.jps V1.0) 脚本以保证语法兼容，
+ *  具体算法与代码组织均为本项目原创。
  */
 export * from './types'
 export { parseJps } from './parser'
