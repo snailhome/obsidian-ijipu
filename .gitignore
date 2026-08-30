@@ -5,4 +5,4 @@ main.js
 .DS_Store
 release/
 
-# 引擎共享源码（由 ijipu 项目提供，非本插件所有）
+# 引擎源码 vendor 内置（自包含，提交入库）

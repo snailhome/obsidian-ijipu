@@ -108,5 +108,38 @@ ijipu_show_instrument: true
 | 连音线样式 | `ijipu_lianyinxian_type` | 数字 | 0 自动 / 1 圆弧 / 2 平顶（默认 0） |
 
 ## 标注
-- 引擎：`@ijipu/engine`（.jps 解析 → 排版 → SVG 渲染 → 播放序列 → Web Audio 试听）。
+- 引擎：`@ijipu/engine`（.jps 解析 → 排版 → SVG 渲染 → 播放序列 → Web Audio 试听）。引擎源码随插件 **vendor 内置**（`vendor/engine`，自包含，可上社区/云 CI）。
 - 许可证：AGPL-3.0（与引擎一致）。特别致谢「番茄简谱」原作与社区。
+
+## 开发与构建
+```bash
+npm install          # 依赖（若 peer 冲突可 npm install --legacy-peer-deps）
+npm run build        # tsc 类型检查 + vite(rolldown) 打包 → main.js
+npm run dev          # 监听构建（vite --watch）
+```
+- `@ijipu/engine` 以内置源码（`vendor/engine`）被打包进 `main.js`，无需外部 npm 包，仓库自包含。
+
+## 发布到 GitHub + Obsidian 社区插件
+1. **推送到 GitHub**（仓库已 git init）：
+   ```bash
+   git remote add origin git@github.com:<你的用户名>/obsidian-ijipu.git
+   git branch -M main
+   git push -u origin main
+   ```
+2. **打 tag 触发自动发布**：
+   ```bash
+   git tag 0.1.0 && git push origin 0.1.0
+   ```
+   GitHub Actions（`.github/workflows/release.yml`）会自动 `npm ci --legacy-peer-deps` + `npm run build`，把 `main.js` / `manifest.json` / `styles.css` 发布为 GitHub Release 资产。
+3. **提交社区插件**：到 [obsidianmd/obsidian-releases](https://github.com/obsidianmd/obsidian-releases) 进行 Fork，编辑 `community-plugins.json` 追加：
+   ```json
+   {
+     "id": "obsidian-ijipu",
+     "name": "iJipu",
+     "author": "iJipu Dev",
+     "description": "在笔记中用 .jps 脚本渲染可视化简谱并试听（复用 @ijipu/engine，设置与 iJipu 应用一致）。",
+     "repo": "<你的用户名>/obsidian-ijipu"
+   }
+   ```
+   提交 PR，Obsidian 官方审核通过后即进入社区插件市场。
+
