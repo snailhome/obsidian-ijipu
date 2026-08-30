@@ -23,6 +23,49 @@
   padding: 2px 10px;
   cursor: pointer;
 }
+
+/* 显示模式切换按钮 */
+.ijipu-mode-btn {
+  font-size: 0.8em;
+  padding: 2px 9px;
+  cursor: pointer;
+  border-radius: 4px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+.ijipu-mode-btn.is-active {
+  background: var(--interactive-accent);
+  border-color: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+/* 三种显示模式 */
+/* 整页：完整显示一页（保持纸张比例，fit 容器宽） */
+.ijipu-mode-page .ijipu-page-svg svg {
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+/* 满宽：撑满 Obsidian 页面宽度 */
+.ijipu-mode-full .ijipu-page-svg svg {
+  width: 100%;
+  height: auto;
+  margin: 0;
+}
+/* 谱面：裁掉页边距、只显示内容区，并撑满容器宽（viewBox 由 JS 裁剪） */
+.ijipu-mode-score .ijipu-page-svg svg {
+  width: 100%;
+  height: auto;
+  margin: 0;
+}
+
+/* 播放色块跟进（SVG 内叠加矩形，随音符移动） */
+.ijipu-play-block {
+  fill: rgba(0, 0, 0, 0.13);
+  pointer-events: none;
+}
+
 .ijipu-page-label {
   font-size: 0.75em;
   color: var(--text-muted);

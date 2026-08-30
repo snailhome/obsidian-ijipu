@@ -8,6 +8,7 @@ import {
   schedulePlay,
   defaultPageConfig,
   type PageConfig,
+  type PlacedToken,
 } from '@ijipu/engine'
 
 /**
@@ -52,6 +53,7 @@ export function renderScore(
 export async function playScore(
   source: string,
   pageConfig: PageConfig = defaultPageConfig,
+  onNote?: (placed: PlacedToken) => void,
 ): Promise<{ cancel: () => void; totalMs: number } | null> {
   const parsed = parseJps(source)
   if (parsed.errors.length > 0) return null
@@ -62,5 +64,5 @@ export async function playScore(
   const backend = createBackend('synth')
   // SynthBackend.ensure()：异步创建/恢复 AudioContext（需用户手势触发）
   await (backend as { ensure?: () => Promise<unknown> }).ensure?.()
-  return schedulePlay(seq, backend)
+  return schedulePlay(seq, backend, onNote)
 }
