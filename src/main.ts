@@ -41,6 +41,12 @@ export default class IJipuPlugin extends Plugin {
     )
   }
 
+  onunload(): void {
+    // 插件卸载（禁用/重载）时兜底停止所有试听
+    for (const stop of this.playStops) stop()
+    this.playStops = []
+  }
+
   async loadSettings(): Promise<void> {
     this.settings = Object.assign({}, await this.loadData())
   }
