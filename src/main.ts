@@ -23,6 +23,8 @@ const PLAYHEAD_COLORS = [
  */
 export default class IJipuPlugin extends Plugin {
   settings: IJipuSettings = {}
+  /** 所有进行中试听的停止函数（切换笔记时统一停止） */
+  private playStops: (() => void)[] = []
 
   async onload(): Promise<void> {
     await this.loadSettings()
@@ -30,6 +32,13 @@ export default class IJipuPlugin extends Plugin {
     this.registerMarkdownCodeBlockProcessor('jps', (source, el, ctx) => {
       this.renderBlock(source, el, ctx.sourcePath)
     })
+    // 切换笔记时自动结束所有试听（避免试听继续却失去控制）
+    this.registerEvent(
+      this.app.workspace.on('active-leaf-change', () => {
+        for (const stop of this.playStops) stop()
+        this.playStops = []
+      }),
+    )
   }
 
   async loadSettings(): Promise<void> {
@@ -132,6 +141,7 @@ export default class IJipuPlugin extends Plugin {
         clearPlayBlock()
         playing = null
         playBtn.setText('▶ 试听')
+        this.playStops = this.playStops.filter((f) => f !== stopPlay)
         return
       }
       rafId = requestAnimationFrame(tick)
@@ -143,6 +153,7 @@ export default class IJipuPlugin extends Plugin {
       cancelAnimationFrame(rafId)
       clearPlayBlock()
       playBtn.setText('▶ 试听')
+      this.playStops = this.playStops.filter((f) => f !== stopPlay) // 从全局停止列表移除
     }
 
     playBtn.addEventListener('click', () => {
@@ -160,6 +171,7 @@ export default class IJipuPlugin extends Plugin {
         playBtn.setText('⏹ 停止')
         cancelAnimationFrame(rafId)
         rafId = requestAnimationFrame(tick)
+        this.playStops.push(stopPlay) // 登记为可全局停止（切换笔记时自动结束）
       })
     })
 
