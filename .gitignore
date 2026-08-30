@@ -5,4 +5,13 @@ main.js
 .DS_Store
 release/
 
+# ijipu 应用资源/构建残留误拷防护（此仓库不应含）
+Jianpu.ico
+Jianpu.png
+good.png
+pwa-*.png
+manifest.webmanifest
+sw.js
+doc/
+
 # 引擎源码 vendor 内置（自包含，提交入库）
