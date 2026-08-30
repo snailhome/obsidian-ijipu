@@ -75,3 +75,20 @@
   font-size: 0.85em;
   white-space: pre-wrap;
 }
+
+/* 插件设置页头部 */
+.ijipu-settings-header {
+  margin-bottom: 1em;
+}
+.ijipu-settings-header h2 {
+  margin: 0 0 0.3em;
+}
+.ijipu-settings-header p {
+  margin: 0 0 0.6em;
+  line-height: 1.55;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+}
+.ijipu-settings-header a {
+  font-weight: 600;
+}

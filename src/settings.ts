@@ -90,6 +90,22 @@ export class IJipuSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this
     containerEl.empty()
+
+    // 插件头部：标题 + 说明 + 链接
+    const head = containerEl.createDiv({ cls: 'ijipu-settings-header' })
+    head.createEl('h2', { text: 'iJipu 爱记谱' })
+    head.createEl('p', {
+      text: '在 Obsidian 笔记中用 ```jps 代码块把 .jps 简谱脚本渲染为可视化简谱，支持试听（播放时色块跟进音符）与「整页 / 满宽 / 谱面」三种显示模式；设置项与 iJipu 应用一脉传承（页面 / 字体 / 行距 / 渲染），并可用笔记 frontmatter（ijipu_* 前缀）覆盖。',
+    })
+    const a1 = head.createEl('a', { text: 'iJipu 官网' })
+    a1.setAttr('href', 'https://ijipu.pages.dev')
+    a1.setAttr('target', '_blank')
+    head.createEl('span', { text: ' · ' })
+    const a2 = head.createEl('a', { text: '脚本规则说明' })
+    a2.setAttr('href', 'https://ijipu.pages.dev/doc/jps-spec.md')
+    a2.setAttr('target', '_blank')
+    head.createEl('div')
+
     for (const group of GROUPS) {
       const items = DEFS.filter((d) => d.group === group)
       if (items.length === 0) continue
