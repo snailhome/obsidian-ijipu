@@ -93,7 +93,7 @@ export class IJipuSettingTab extends PluginSettingTab {
 
     // 插件头部：标题 + 说明 + 链接
     const head = containerEl.createDiv({ cls: 'ijipu-settings-header' })
-    head.createEl('h2', { text: 'iJipu 爱记谱' })
+    head.createEl('h2', { text: '爱记谱（iJipu）' })
     head.createEl('p', {
       text: '在 Obsidian 笔记中用 ```jps 代码块把 .jps 简谱脚本渲染为可视化简谱，支持试听（播放时色块跟进音符）与「整页 / 满宽 / 谱面」三种显示模式；设置项与 iJipu 应用一脉传承（页面 / 字体 / 行距 / 渲染），并可用笔记 frontmatter（ijipu_* 前缀）覆盖。',
     })

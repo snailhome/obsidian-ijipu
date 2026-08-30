@@ -1,4 +1,4 @@
-# obsidian-ijipu（iJipu 简谱）
+# obsidian-ijipu（爱记谱 iJipu）
 
 在 Obsidian 笔记中用 ` ```jps ` 代码块把 **.jps 简谱脚本渲染为可视化简谱（SVG）**，并可**试听**。渲染引擎复用 `@ijipu/engine`（与 iJipu 应用一致），设置项与 iJipu 一脉传承。
 
