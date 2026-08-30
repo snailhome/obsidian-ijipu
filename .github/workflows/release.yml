@@ -32,6 +32,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
+          body_path: docs/RELEASE-NOTES.md
           files: |
             main.js
             manifest.json

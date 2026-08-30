@@ -1,0 +1,39 @@
+# 爱记谱 iJipu 0.1.0（首版）
+
+在 Obsidian 笔记中用 ` ```jps ` 代码块把 **.jps 简谱脚本**渲染为可视化简谱（SVG），并可**试听**。渲染引擎复用 `@ijipu/engine`（与 iJipu 应用一致），设置项与 iJipu 一脉传承。
+
+## 主要功能
+
+- **可视化简谱渲染**：引擎支持 `.jps` 描述头、Q/C 行、修饰符、连音线、多声部、小节线 / 反复 / 跳房子
+- **试听**：Web Audio 合成（SynthBackend），播放色块逐音符跟进（iJipu 同款 playheadPosOf 逻辑），多声部同时高亮
+- **三种显示模式**：整页 / 满宽 / **谱面**（默认，自动消除页边距、最大化有效观看面积）
+- **设置项与 iJipu 应用一脉传承**：页面 / 字体 / 行距 / 渲染 四组共 30+ 项
+- **frontmatter 覆盖**：单笔记可用 `ijipu_*` 键覆盖全局默认，优先级：默认 < 全局 < frontmatter
+- **插件卸载 / 切笔记自动停止试听**：避免失去控制
+- **赞赏入口**：设置页「支持作者 ❤」链接到 iJipu 应用微信赞赏码
+
+## 用法
+
+在任意笔记写 ` ```jps ` 代码块即可：
+
+```jps
+V: 1.0
+B: 两只老虎
+Z: 法国童谣 词曲
+D: C
+P: 4/4
+Q: 1 2 3 1 | 1 2 3 1 | 3 4 5 - | 3 4 5 - |
+C: 两只老虎 两只老虎 跑得快 跑得快
+```
+
+详细 frontmatter 键对照表见 `README.md`。
+
+## 链接
+
+- [iJipu 官网](https://ijipu.pages.dev)
+- [脚本规则说明](https://ijipu.pages.dev/doc/jps-spec.html)
+- 引擎：[@ijipu/engine](https://github.com/snailhome/obsidian-ijipu)（vendor 内置，仓库自包含）
+
+## 反馈
+
+有问题请到 iJipu 官网或 GitHub Issues。
