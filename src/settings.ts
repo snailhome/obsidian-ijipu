@@ -102,7 +102,7 @@ export class IJipuSettingTab extends PluginSettingTab {
     a1.setAttr('target', '_blank')
     head.createEl('span', { text: ' · ' })
     const a2 = head.createEl('a', { text: '脚本规则说明' })
-    a2.setAttr('href', 'https://ijipu.pages.dev/doc/jps-spec.md')
+    a2.setAttr('href', 'https://ijipu.pages.dev/doc/jps-spec.html')
     a2.setAttr('target', '_blank')
     head.createEl('div')
 
