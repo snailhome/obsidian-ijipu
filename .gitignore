@@ -3,5 +3,6 @@ node_modules/
 main.js
 *.map
 .DS_Store
+release/
 
 # 引擎共享源码（由 ijipu 项目提供，非本插件所有）
