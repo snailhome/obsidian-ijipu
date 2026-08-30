@@ -200,6 +200,9 @@ export default class IJipuPlugin extends Plugin {
           const mr = pageConfig.margin_right ?? 0
           const mb = pageConfig.margin_bottom ?? 0
           svgEl.setAttribute('viewBox', `${ml} ${mt} ${Math.max(1, w - ml - mr)} ${Math.max(1, h - mt - mb)}`)
+          // 移除纸张原生宽高，交由 viewBox + CSS 完全控制，确保只显示内容区（消除上下左右边距）
+          svgEl.removeAttribute('width')
+          svgEl.removeAttribute('height')
         } else {
           svgEl.setAttribute('viewBox', orig)
         }
