@@ -62,7 +62,7 @@ export default class IJipuPlugin extends Plugin {
     const svgEls: SVGSVGElement[] = []
 
     const clearPlayBlock = (): void => {
-      for (const svgEl of svgEls) svgEl.querySelector('.ijipu-play-block')?.remove()
+      for (const svgEl of svgEls) svgEl.querySelectorAll('.ijipu-play-block').forEach((el) => el.remove())
     }
 
     // 与 iJipu PreviewPane.playheadPosOf 完全一致：按拍段定位整曲行色块（每组独立；多声部各行）
