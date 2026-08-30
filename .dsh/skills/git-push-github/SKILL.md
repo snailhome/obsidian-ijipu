@@ -75,20 +75,19 @@ CI 偶尔跑挂了、或你想重新触发：
 | `tag '0.1.0' already exists` | 删本地 `git tag -d 0.1.0`，删远程 `git push origin :refs/tags/0.1.0`，再新建 |
 | Release 没资产 | 看 Actions 日志；常见原因：build 失败、workflow 缺 `permissions: contents: write`、softprops 的 `body_path` 文件不存在 |
 
-## 一键脚本（Windows）
+## 一键脚本（cmd batch）
 
-仓库根有 `scripts/git-push.ps1`：
+仓库根有 `scripts/git-push.bat`（cmd 批处理，Windows 直接双击或 cmd 调用）：
 
-```powershell
-# 平时推送
-pwsh scripts/git-push.ps1
+```bat
+:: 平时推送
+scripts\git-push.bat
 
-# 打 tag 触发 Release
-pwsh scripts/git-push.ps1 -Tag 0.2.0
+:: 打 tag 触发 Release（如仓库配了 .github/workflows/release.yml）
+scripts\git-push.bat 0.2.0
 
-# 跳过 push main，只推 tag（CI 手动跑过一次后只改 tag）
-pwsh scripts/git-push.ps1 -Tag 0.2.0 -SkipMain
-
-# HTTPS 仓库
-pwsh scripts/git-push.ps1 -RemoteUrl https://github.com/snailhome/obsidian-ijipu.git -Token ghp_xxx
+:: 自定义 remote（HTTPS）
+scripts\git-push.bat 0.2.0 https://github.com/snailhome/obsidian-ijipu.git
 ```
+
+参数：`%1 = Tag`、`%2 = RemoteUrl`。自动 commit 当前 staged 改动 → push main → 可选打 tag + push tag（自动清理同名旧 tag）。
