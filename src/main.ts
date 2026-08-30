@@ -170,12 +170,12 @@ export default class IJipuPlugin extends Plugin {
       const opt = modeSel.createEl('option', { text: label })
       opt.value = mode
     }
-    modeSel.value = 'page'
+    modeSel.value = 'score'
     modeSel.addEventListener('change', () => setMode(modeSel.value as ViewMode))
     modeWrap.createEl('span', { cls: 'ijipu-mode-caret', text: '▼' })
 
     // —— 逐页插入 SVG（存元素，供色块定位与谱面 viewBox 裁剪）——
-    const svgWrap = container.createDiv({ cls: 'ijipu-svgs ijipu-mode-page' })
+    const svgWrap = container.createDiv({ cls: 'ijipu-svgs ijipu-mode-score' })
     svgs.forEach((svg, i) => {
       if (svgs.length > 1) {
         container.createDiv({ cls: 'ijipu-page-label', text: `第 ${i + 1} / ${svgs.length} 页` })
@@ -208,5 +208,8 @@ export default class IJipuPlugin extends Plugin {
         }
       }
     }
+
+    // 默认显示模式：谱面（消除边距，最大化有效观看面积）
+    setMode('score')
   }
 }
