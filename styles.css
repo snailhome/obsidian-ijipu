@@ -71,9 +71,8 @@
   margin: 0;
 }
 
-/* 播放色块跟进（SVG 内叠加矩形，随音符移动） */
+/* 播放色块（SVG 内叠加矩形；填充/描边颜色由 JS 按声部 inline 设置） */
 .ijipu-play-block {
-  fill: rgba(0, 0, 0, 0.13);
   pointer-events: none;
 }
 

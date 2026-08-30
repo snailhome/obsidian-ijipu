@@ -6,6 +6,14 @@ import type { PlacedToken, PlayEvent } from '@ijipu/engine'
 
 type ViewMode = 'page' | 'full' | 'score'
 const MODE_LABEL: Record<ViewMode, string> = { page: '整页', full: '满宽', score: '谱面' }
+/** 与 iJipu 应用一致的播放色块配色（按声部半透明；voice1 红，延续单声部红块） */
+const PLAYHEAD_COLORS = [
+  'rgba(255, 93, 108,',
+  'rgba(87, 170, 255,',
+  'rgba(63, 122, 46,',
+  'rgba(255, 200, 87,',
+  'rgba(138, 95, 184,',
+]
 
 /**
  * obsidian-ijipu —— 在 Obsidian 笔记里用 ```jps 代码块渲染可视化简谱并可试听。
@@ -58,34 +66,44 @@ export default class IJipuPlugin extends Plugin {
       for (const svgEl of svgEls) svgEl.querySelector('.ijipu-play-block')?.remove()
     }
 
-    const updateBlock = (placed: PlacedToken): void => {
+    const addBlock = (placed: PlacedToken): void => {
       const svgEl = svgEls[placed.id.page]
       if (!svgEl) return
-      svgEl.querySelector('.ijipu-play-block')?.remove()
+      const color = PLAYHEAD_COLORS[(placed.id.voice - 1) % PLAYHEAD_COLORS.length]
       const noteSize = pageConfig.note_size ?? 13
       const x = placed.x
       const right = placed.rightX !== undefined ? placed.rightX : placed.x + placed.width
-      const h = noteSize * 1.8
+      const h = noteSize * 2.6 // 近似曲行高度（音符+歌词），与 iJipu 整曲行色块观感接近
       const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
       rect.setAttribute('class', 'ijipu-play-block')
       rect.setAttribute('x', String(x))
       rect.setAttribute('width', String(Math.max(1, right - x)))
-      rect.setAttribute('y', String(placed.y - h))
+      rect.setAttribute('y', String(placed.y - h + noteSize * 0.4))
       rect.setAttribute('height', String(h))
+      rect.setAttribute('fill', `${color}0.32)`)
+      rect.setAttribute('stroke', `${color}0.5)`)
+      rect.setAttribute('stroke-width', '1')
       svgEl.appendChild(rect)
     }
 
     const tick = (): void => {
       const elapsed = performance.now() - playStart
-      // events 按 atMs 递增；从后往前找最后一个 atMs <= elapsed 的音符（当前应播放）
-      let cur: PlacedToken | null = null
-      for (let i = events.length - 1; i >= 0; i--) {
-        if (events[i].atMs <= elapsed) {
-          cur = events[i].placed
-          break
+      // 当前正在发声的音符：atMs <= elapsed < atMs+durationMs（跨声部 → 多声部同时高亮）
+      const cur: PlacedToken[] = []
+      for (const ev of events) {
+        if (ev.atMs <= elapsed && elapsed < ev.atMs + ev.durationMs) cur.push(ev.placed)
+      }
+      if (cur.length === 0) {
+        // 节拍间隙：退化为最近一个已开始的音符
+        for (let i = events.length - 1; i >= 0; i--) {
+          if (events[i].atMs <= elapsed) {
+            cur.push(events[i].placed)
+            break
+          }
         }
       }
-      if (cur) updateBlock(cur)
+      clearPlayBlock()
+      for (const p of cur) addBlock(p)
       const total = playing?.totalMs ?? 0
       if (elapsed >= total) {
         clearPlayBlock()
