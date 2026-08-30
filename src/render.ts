@@ -8,7 +8,6 @@ import {
   schedulePlay,
   defaultPageConfig,
   type PageConfig,
-  type PlayEvent,
 } from '@ijipu/engine'
 
 /**
@@ -50,10 +49,21 @@ export function renderScore(
  * 试听：.jps → 播放序列 → Web Audio 合成（复用 @ijipu/engine 播放引擎）。
  * 返回 { cancel, totalMs } 供播放/停止切换；解析失败返回 null。
  */
+export type PlayheadSeg = {
+  atMs: number
+  durationMs: number
+  pageIndex: number
+  x: number
+  y: number
+  width: number
+  voice: number
+  group: number
+}
+
 export async function playScore(
   source: string,
   pageConfig: PageConfig = defaultPageConfig,
-): Promise<{ cancel: () => void; totalMs: number; events: PlayEvent[] } | null> {
+): Promise<{ cancel: () => void; totalMs: number; track: PlayheadSeg[] } | null> {
   const parsed = parseJps(source)
   if (parsed.errors.length > 0) return null
   // buildPlaySequence 需 layout（排版）与 bpm（速度，可由描述头推断）
@@ -63,6 +73,21 @@ export async function playScore(
   const backend = createBackend('synth')
   // SynthBackend.ensure()：异步创建/恢复 AudioContext（需用户手势触发）
   await (backend as { ensure?: () => Promise<unknown> }).ensure?.()
-  const control = schedulePlay(seq, backend)
-  return { ...control, events: seq.events }
+  // 200ms 起播延迟（与 iJipu PLAY_FIRST_DELAY_MS 一致，声画同步）
+  const control = schedulePlay(seq, backend, undefined, undefined, 200)
+  // 构建播放色块轨道（与 iJipu 一致：按 playheadSegs 拍段，每段 ≤1 拍）
+  const beatMs = 60000 / bpm
+  const track: PlayheadSeg[] = seq.events.flatMap((e) =>
+    (e.playheadSegs ?? []).map((s) => ({
+      atMs: e.atMs + s.beat * beatMs,
+      durationMs: s.beats * beatMs,
+      pageIndex: s.pageIndex,
+      x: s.x,
+      y: s.y,
+      width: s.width,
+      voice: s.voice,
+      group: s.group,
+    })),
+  )
+  return { ...control, track }
 }

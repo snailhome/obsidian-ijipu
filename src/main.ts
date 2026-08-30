@@ -2,7 +2,7 @@ import { Plugin } from 'obsidian'
 import { mergePageConfig, renderScore, playScore } from './render'
 import { IJipuSettingTab } from './settings'
 import type { IJipuSettings } from './types'
-import type { PlacedToken, PlayEvent } from '@ijipu/engine'
+import type { PlayheadSeg } from './render'
 
 type ViewMode = 'page' | 'full' | 'score'
 const MODE_LABEL: Record<ViewMode, string> = { page: '整页', full: '满宽', score: '谱面' }
@@ -54,9 +54,8 @@ export default class IJipuPlugin extends Plugin {
     const toolbar = container.createDiv({ cls: 'ijipu-score-toolbar' })
     toolbar.createSpan({ cls: 'ijipu-page-label', text: `${svgs.length} 页` })
 
-    // —— 试听（播放/停止 + RAF 驱动的色块跟随）——
-    let playing: { cancel: () => void; totalMs: number } | null = null
-    let events: PlayEvent[] = []
+    // —— 试听（播放/停止 + RAF 驱动整曲行色块跟随，与 iJipu 一致）——
+    let playing: { cancel: () => void; totalMs: number; track: PlayheadSeg[] } | null = null
     let rafId = 0
     let playStart = 0
     const playBtn = toolbar.createEl('button', { cls: 'ijipu-play', text: '▶ 试听' })
@@ -66,20 +65,48 @@ export default class IJipuPlugin extends Plugin {
       for (const svgEl of svgEls) svgEl.querySelector('.ijipu-play-block')?.remove()
     }
 
-    const addBlock = (placed: PlacedToken): void => {
-      const svgEl = svgEls[placed.id.page]
+    // 与 iJipu PreviewPane.playheadPosOf 完全一致：按拍段定位整曲行色块（每组独立；多声部各行）
+    const playheadPosOf = (
+      track: PlayheadSeg[],
+      currentMs: number,
+      pageIndex: number,
+      noteSize: number,
+      group: number,
+    ): { x: number; yTop: number; yBottom: number; width: number; voice: number } | null => {
+      if (track.length === 0 || currentMs <= 0) return null
+      const segs = track.filter((t) => t.group === group)
+      if (segs.length === 0) return null
+      let lo = 0
+      let hi = segs.length
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1
+        if (segs[mid].atMs <= currentMs) lo = mid + 1
+        else hi = mid
+      }
+      const i = lo - 1
+      if (i < 0 || i >= segs.length) return null
+      const a = segs[i]
+      if (currentMs >= a.atMs + a.durationMs) return null
+      if (a.pageIndex !== pageIndex) return null
+      const ext = noteSize * 0.5
+      const yTop = a.y - noteSize * 1.1 - ext
+      const yBottom = a.y - noteSize * 1.1 + noteSize * 1.7 + ext
+      return { x: a.x, yTop, yBottom, width: a.width, voice: a.voice }
+    }
+
+    const addBlock = (
+      pageIndex: number,
+      pos: { x: number; yTop: number; yBottom: number; width: number; voice: number },
+    ): void => {
+      const svgEl = svgEls[pageIndex]
       if (!svgEl) return
-      const color = PLAYHEAD_COLORS[(placed.id.voice - 1) % PLAYHEAD_COLORS.length]
-      const noteSize = pageConfig.note_size ?? 13
-      const x = placed.x
-      const right = placed.rightX !== undefined ? placed.rightX : placed.x + placed.width
-      const h = noteSize * 2.6 // 近似曲行高度（音符+歌词），与 iJipu 整曲行色块观感接近
+      const color = PLAYHEAD_COLORS[(pos.voice - 1) % PLAYHEAD_COLORS.length]
       const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
       rect.setAttribute('class', 'ijipu-play-block')
-      rect.setAttribute('x', String(x))
-      rect.setAttribute('width', String(Math.max(1, right - x)))
-      rect.setAttribute('y', String(placed.y - h + noteSize * 0.4))
-      rect.setAttribute('height', String(h))
+      rect.setAttribute('x', String(pos.x))
+      rect.setAttribute('width', String(Math.max(1, pos.width)))
+      rect.setAttribute('y', String(pos.yTop))
+      rect.setAttribute('height', String(Math.max(1, pos.yBottom - pos.yTop)))
       rect.setAttribute('fill', `${color}0.32)`)
       rect.setAttribute('stroke', `${color}0.5)`)
       rect.setAttribute('stroke-width', '1')
@@ -87,28 +114,23 @@ export default class IJipuPlugin extends Plugin {
     }
 
     const tick = (): void => {
-      const elapsed = performance.now() - playStart
-      // 当前正在发声的音符：atMs <= elapsed < atMs+durationMs（跨声部 → 多声部同时高亮）
-      const cur: PlacedToken[] = []
-      for (const ev of events) {
-        if (ev.atMs <= elapsed && elapsed < ev.atMs + ev.durationMs) cur.push(ev.placed)
-      }
-      if (cur.length === 0) {
-        // 节拍间隙：退化为最近一个已开始的音符
-        for (let i = events.length - 1; i >= 0; i--) {
-          if (events[i].atMs <= elapsed) {
-            cur.push(events[i].placed)
-            break
+      const currentMs = performance.now() - playStart - 200 // 与 iJipu 一致的 200ms 起播延迟
+      const noteSize = pageConfig.note_size ?? 13
+      const track = playing?.track ?? []
+      clearPlayBlock()
+      if (currentMs > 0 && track.length) {
+        for (let pageIndex = 0; pageIndex < svgEls.length; pageIndex++) {
+          const pageGroups = [...new Set(track.filter((t) => t.pageIndex === pageIndex).map((t) => t.group))]
+          for (const g of pageGroups) {
+            const pos = playheadPosOf(track, currentMs, pageIndex, noteSize, g)
+            if (pos) addBlock(pageIndex, pos)
           }
         }
       }
-      clearPlayBlock()
-      for (const p of cur) addBlock(p)
       const total = playing?.totalMs ?? 0
-      if (elapsed >= total) {
+      if (currentMs >= total) {
         clearPlayBlock()
         playing = null
-        events = []
         playBtn.setText('▶ 试听')
         return
       }
@@ -119,7 +141,6 @@ export default class IJipuPlugin extends Plugin {
       playing?.cancel()
       playing = null
       cancelAnimationFrame(rafId)
-      events = []
       clearPlayBlock()
       playBtn.setText('▶ 试听')
     }
@@ -135,7 +156,6 @@ export default class IJipuPlugin extends Plugin {
           return
         }
         playing = r
-        events = r.events
         playStart = performance.now()
         playBtn.setText('⏹ 停止')
         cancelAnimationFrame(rafId)
