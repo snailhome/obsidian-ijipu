@@ -3,7 +3,12 @@ name: Release Obsidian plugin
 on:
   push:
     tags: ['*']
-  workflow_dispatch:    # 允许手动触发（便于本地排查/补推）
+  workflow_dispatch:    # 允许手动触发（用于补推；dispatch 时需指定 tag）
+    inputs:
+      tag:
+        description: '要发布 Release 的 tag（须已存在）'
+        required: false
+        default: '0.1.0'
 
 permissions:
   contents: write
@@ -26,6 +31,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
           files: |
             main.js
             manifest.json
