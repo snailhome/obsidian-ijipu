@@ -1,0 +1,9 @@
+{
+  "id": "obsidian-ijipu",
+  "name": "iJipu 简谱",
+  "version": "0.1.0",
+  "minAppVersion": "1.0.0",
+  "description": "在笔记中用 .jps 脚本渲染可视化简谱，并可试听 —— 复用 @ijipu/engine 渲染引擎，设置项与 iJipu 应用一脉传承。",
+  "author": "iJipu Dev",
+  "isDesktopOnly": false
+}
