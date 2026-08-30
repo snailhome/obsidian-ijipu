@@ -24,28 +24,31 @@
   cursor: pointer;
 }
 
-/* 显示模式切换按钮 */
-.ijipu-mode-btn {
-  font-size: 0.8em;
-  padding: 2px 9px;
+/* 显示模式切换下拉 */
+.ijipu-mode-select {
+  font-size: 0.85em;
+  padding: 2px 6px;
   cursor: pointer;
   border-radius: 4px;
   border: 1px solid var(--background-modifier-border);
   background: var(--background-modifier-hover);
   color: var(--text-normal);
 }
-.ijipu-mode-btn.is-active {
-  background: var(--interactive-accent);
-  border-color: var(--interactive-accent);
-  color: var(--text-on-accent);
-}
 
 /* 三种显示模式 */
-/* 整页：完整显示一页（保持纸张比例，fit 容器宽） */
+/* 整页：完整显示一页，尽量填满可用空间（占视口高 + contain 居中） */
+.ijipu-mode-page .ijipu-page-svg {
+  height: clamp(320px, 70vh, 960px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
 .ijipu-mode-page .ijipu-page-svg svg {
   max-width: 100%;
+  max-height: 100%;
+  width: auto;
   height: auto;
-  margin: 0 auto;
+  margin: 0;
 }
 /* 满宽：撑满 Obsidian 页面宽度 */
 .ijipu-mode-full .ijipu-page-svg svg {

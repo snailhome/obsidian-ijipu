@@ -91,16 +91,14 @@ export default class IJipuPlugin extends Plugin {
       })
     })
 
-    // —— 显示模式切换（整页 / 满宽 / 谱面）——
-    const modeBtns: Partial<Record<ViewMode, HTMLButtonElement>> = {}
+    // —— 显示模式切换（整页 / 满宽 / 谱面，下拉选择）——
+    const modeSel = toolbar.createEl('select', { cls: 'ijipu-mode-select' })
     for (const [mode, label] of Object.entries(MODE_LABEL) as [ViewMode, string][]) {
-      const mb = toolbar.createEl('button', {
-        cls: 'ijipu-mode-btn' + (mode === 'page' ? ' is-active' : ''),
-        text: label,
-      })
-      mb.addEventListener('click', () => setMode(mode))
-      modeBtns[mode] = mb
+      const opt = modeSel.createEl('option', { text: label })
+      opt.value = mode
     }
+    modeSel.value = 'page'
+    modeSel.addEventListener('change', () => setMode(modeSel.value as ViewMode))
 
     // —— 逐页插入 SVG（存元素，供色块定位与谱面 viewBox 裁剪）——
     const svgWrap = container.createDiv({ cls: 'ijipu-svgs ijipu-mode-page' })
@@ -116,9 +114,7 @@ export default class IJipuPlugin extends Plugin {
 
     const setMode = (next: ViewMode): void => {
       svgWrap.setAttribute('class', `ijipu-svgs ijipu-mode-${next}`)
-      for (const [m, btn] of Object.entries(modeBtns) as [ViewMode, HTMLButtonElement][]) {
-        btn.classList.toggle('is-active', m === next)
-      }
+      modeSel.value = next
       // 谱面模式：把 viewBox 裁到页边距内（只显示内容区），再撑满容器宽
       for (const svgEl of svgEls) {
         const orig = svgEl.dataset.origVb || svgEl.getAttribute('viewBox') || ''
