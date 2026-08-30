@@ -2,7 +2,7 @@ import { Plugin } from 'obsidian'
 import { mergePageConfig, renderScore, playScore } from './render'
 import { IJipuSettingTab } from './settings'
 import type { IJipuSettings } from './types'
-import type { PlacedToken } from '@ijipu/engine'
+import type { PlacedToken, PlayEvent } from '@ijipu/engine'
 
 type ViewMode = 'page' | 'full' | 'score'
 const MODE_LABEL: Record<ViewMode, string> = { page: '整页', full: '满宽', score: '谱面' }
@@ -46,8 +46,11 @@ export default class IJipuPlugin extends Plugin {
     const toolbar = container.createDiv({ cls: 'ijipu-score-toolbar' })
     toolbar.createSpan({ cls: 'ijipu-page-label', text: `${svgs.length} 页` })
 
-    // —— 试听（播放/停止 + 色块跟进）——
-    let playing: { cancel: () => void } | null = null
+    // —— 试听（播放/停止 + RAF 驱动的色块跟随）——
+    let playing: { cancel: () => void; totalMs: number } | null = null
+    let events: PlayEvent[] = []
+    let rafId = 0
+    let playStart = 0
     const playBtn = toolbar.createEl('button', { cls: 'ijipu-play', text: '▶ 试听' })
     const svgEls: SVGSVGElement[] = []
 
@@ -55,12 +58,11 @@ export default class IJipuPlugin extends Plugin {
       for (const svgEl of svgEls) svgEl.querySelector('.ijipu-play-block')?.remove()
     }
 
-    const highlightNote = (placed: PlacedToken): void => {
+    const updateBlock = (placed: PlacedToken): void => {
       const svgEl = svgEls[placed.id.page]
       if (!svgEl) return
-      clearPlayBlock()
+      svgEl.querySelector('.ijipu-play-block')?.remove()
       const noteSize = pageConfig.note_size ?? 13
-      // placed.x 为占位左缘；右侧优先用 rightX（防止延伸到休止符）
       const x = placed.x
       const right = placed.rightX !== undefined ? placed.rightX : placed.x + placed.width
       const h = noteSize * 1.8
@@ -73,21 +75,53 @@ export default class IJipuPlugin extends Plugin {
       svgEl.appendChild(rect)
     }
 
-    playBtn.addEventListener('click', () => {
-      if (playing) {
-        playing.cancel()
-        playing = null
+    const tick = (): void => {
+      const elapsed = performance.now() - playStart
+      // events 按 atMs 递增；从后往前找最后一个 atMs <= elapsed 的音符（当前应播放）
+      let cur: PlacedToken | null = null
+      for (let i = events.length - 1; i >= 0; i--) {
+        if (events[i].atMs <= elapsed) {
+          cur = events[i].placed
+          break
+        }
+      }
+      if (cur) updateBlock(cur)
+      const total = playing?.totalMs ?? 0
+      if (elapsed >= total) {
         clearPlayBlock()
+        playing = null
+        events = []
         playBtn.setText('▶ 试听')
         return
       }
-      void playScore(source, pageConfig, highlightNote).then((r) => {
-        if (r) {
-          playing = r
-          playBtn.setText('⏹ 停止')
-        } else {
+      rafId = requestAnimationFrame(tick)
+    }
+
+    const stopPlay = (): void => {
+      playing?.cancel()
+      playing = null
+      cancelAnimationFrame(rafId)
+      events = []
+      clearPlayBlock()
+      playBtn.setText('▶ 试听')
+    }
+
+    playBtn.addEventListener('click', () => {
+      if (playing) {
+        stopPlay()
+        return
+      }
+      void playScore(source, pageConfig).then((r) => {
+        if (!r) {
           playBtn.setText('▶ 试听')
+          return
         }
+        playing = r
+        events = r.events
+        playStart = performance.now()
+        playBtn.setText('⏹ 停止')
+        cancelAnimationFrame(rafId)
+        rafId = requestAnimationFrame(tick)
       })
     })
 
