@@ -92,13 +92,15 @@ export default class IJipuPlugin extends Plugin {
     })
 
     // —— 显示模式切换（整页 / 满宽 / 谱面，下拉选择）——
-    const modeSel = toolbar.createEl('select', { cls: 'ijipu-mode-select' })
+    const modeWrap = toolbar.createDiv({ cls: 'ijipu-mode-select-wrap' })
+    const modeSel = modeWrap.createEl('select', { cls: 'ijipu-mode-select' })
     for (const [mode, label] of Object.entries(MODE_LABEL) as [ViewMode, string][]) {
       const opt = modeSel.createEl('option', { text: label })
       opt.value = mode
     }
     modeSel.value = 'page'
     modeSel.addEventListener('change', () => setMode(modeSel.value as ViewMode))
+    modeWrap.createEl('span', { cls: 'ijipu-mode-caret', text: '▼' })
 
     // —— 逐页插入 SVG（存元素，供色块定位与谱面 viewBox 裁剪）——
     const svgWrap = container.createDiv({ cls: 'ijipu-svgs ijipu-mode-page' })

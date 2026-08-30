@@ -25,28 +25,36 @@
 }
 
 /* 显示模式切换下拉 */
+.ijipu-mode-select-wrap {
+  position: relative;
+  display: inline-flex;
+}
 .ijipu-mode-select {
+  appearance: none;
+  -webkit-appearance: none;
   font-size: 0.85em;
-  padding: 2px 6px;
+  padding: 2px 24px 2px 8px;
   cursor: pointer;
   border-radius: 4px;
   border: 1px solid var(--background-modifier-border);
   background: var(--background-modifier-hover);
   color: var(--text-normal);
 }
+.ijipu-mode-caret {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  font-size: 0.7em;
+  color: var(--text-muted);
+  line-height: 1;
+}
 
 /* 三种显示模式 */
-/* 整页：完整显示一页，尽量填满可用空间（占视口高 + contain 居中） */
-.ijipu-mode-page .ijipu-page-svg {
-  height: clamp(320px, 70vh, 960px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
+/* 整页：完整显示一页，宽度撑满 Obsidian 内容区（尽量填充有效范围） */
 .ijipu-mode-page .ijipu-page-svg svg {
-  max-width: 100%;
-  max-height: 100%;
-  width: auto;
+  width: 100%;
   height: auto;
   margin: 0;
 }
