@@ -16,7 +16,7 @@
     "noEmit": true,
     "types": ["node"],
     "paths": {
-      "@ijipu/engine": ["../ijipu/packages/ijipu-engine/src/engine/index.ts"]
+      "@ijipu/engine": ["./vendor/engine/index.ts"]
     }
   },
   "include": ["src"]

@@ -27,7 +27,7 @@ const context = await esbuild.context({
   treeShaking: true,
   outfile: 'main.js',
   alias: {
-    '@ijipu/engine': path.resolve(__dirname, '../ijipu/packages/ijipu-engine/src/engine/index.ts'),
+    '@ijipu/engine': path.resolve(__dirname, './vendor/engine/index.ts'),
   },
 })
 

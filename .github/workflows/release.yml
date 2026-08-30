@@ -1,0 +1,28 @@
+name: Release Obsidian plugin
+
+on:
+  push:
+    tags: ['*']
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      # 插件依赖 vite/esbuild/obsidian；用 legacy-peer-deps 规避 vite 与 esbuild 的 peer 版本冲突
+      - run: npm ci --legacy-peer-deps
+
+      - run: npm run build
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            main.js
+            manifest.json
+            styles.css
