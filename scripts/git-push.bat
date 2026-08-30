@@ -1,40 +1,42 @@
-@echo off
+﻿@echo off
 setlocal EnableDelayedExpansion
+chcp 65001 >nul
 
 REM ============================================================
-REM  obsidian-ijipu one-click push script (cmd batch, ASCII safe)
-REM  Usage:
-REM    scripts\git-push.bat                       push main only
-REM    scripts\git-push.bat 0.2.0                 push main + tag 0.2.0 (triggers CI Release)
-REM    scripts\git-push.bat 0.2.0 https://...      custom remote (HTTPS, no token)
+REM  obsidian-ijipu 一键推送脚本（cmd batch，UTF-8 BOM 中文兼容）
+REM  用法：
+REM    scripts\git-push.bat                       只 push main
+REM    scripts\git-push.bat 0.2.0                 push main + 打 tag 触发 CI Release
+REM    scripts\git-push.bat 0.2.0 SSH             自定义 remote（默认 SSH）
+REM    scripts\git-push.bat 0.2.0 HTTPS URL       自定义 remote（HTTPS，不带 token）
 REM ============================================================
 
-REM  cd to repo root (script lives in scripts/, go up one level)
+REM 切到仓库根（脚本在 scripts/，向上退一级）
 cd /d "%~dp0.."
 
-REM  Args: %1 = Tag (optional), %2 = RemoteUrl (optional)
+REM 参数
 set "TAG=%~1"
 set "REMOTE_URL=%~2"
 if "%REMOTE_URL%"=="" set "REMOTE_URL=git@github.com:snailhome/obsidian-ijipu.git"
 set "BRANCH=main"
 
-echo === Repo: %cd% ===
+echo === 仓库：%cd% ===
 git remote -v
 
-REM  Add origin if not set
+REM 若 origin 不存在则添加
 git remote get-url origin >nul 2>&1
 if errorlevel 1 (
-    echo === Adding origin: %REMOTE_URL% ===
+    echo === 添加 origin: %REMOTE_URL% ===
     git remote add origin "%REMOTE_URL%"
 )
 
 echo === git status ===
 git status --short
 
-echo === git add ===
+echo === add ===
 git add -A
 
-REM  Commit if there are staged changes
+REM 若有 staged 改动则 commit
 git diff --cached --quiet
 if not errorlevel 1 (
     if "!TAG!"=="" (
@@ -42,34 +44,34 @@ if not errorlevel 1 (
     ) else (
         set "MSG=chore: release !TAG!"
     )
-    echo === Commit: !MSG! ===
+    echo === commit: !MSG! ===
     git commit -m "!MSG!"
 ) else (
-    echo === No staged changes, skip commit ===
+    echo === 无 staged 改动，跳过 commit ===
 )
 
-echo === Push origin %BRANCH% ===
+echo === push origin %BRANCH% ===
 git push origin %BRANCH%
 if errorlevel 1 (
-    echo !!! push main FAILED, check remote / permissions !!!
+    echo !!! push main 失败，请检查 remote / 权限 !!!
     exit /b 1
 )
 
-REM  Tag + push tag (if Tag specified)
+REM 打 tag 并推送（如指定 Tag）
 if not "%TAG%"=="" (
-    echo === Tag !TAG! ===
+    echo === tag !TAG! ===
     git tag -d !TAG! 2>nul
     git push origin :refs/tags/!TAG! 2>nul
     git tag !TAG!
-    echo === Push tag !TAG! ===
+    echo === push tag !TAG! ===
     git push origin !TAG!
     if errorlevel 1 (
-        echo !!! push tag FAILED !!!
+        echo !!! push tag 失败 !!!
         exit /b 1
     )
 )
 
 echo.
-echo === Done ===
+echo === 完成 ===
 echo Actions:   https://github.com/snailhome/obsidian-ijipu/actions
 echo Releases:  https://github.com/snailhome/obsidian-ijipu/releases
