@@ -20,6 +20,9 @@ export default defineConfig({
       formats: ['cjs'],
       fileName: () => 'main.js',
     },
+    // outDir 必须为项目根目录（Obsidian 插件结构要求 `main.js` 与 `manifest.json`
+    // 同级：`<plugin>/main.js`）。emptyOutDir 保持 false，防御 Vite 在写入 `main.js`
+    // 时清空源文件目录（Vite 8 已对 outDir=根目录加防御性警告）。
     outDir: '.',
     emptyOutDir: false,
     sourcemap: true,
