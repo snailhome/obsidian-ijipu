@@ -47,6 +47,11 @@ export const BARLINE_DOT_GAP = 1.2
 export const BARLINE_W_THIN = 0.9
 /** 小节线粗线宽设计值（px，adj104 由 1.8 调小；线宽不随字号） */
 export const BARLINE_W_THICK = 1.4
+/**
+ * 小节线两侧净间距（px，adj314 用户规则：固定小值，不随音符占宽(W)放大——
+ * 宽松时避免"空上加空"、压缩时仍能区分小节；先设为 0，如需调整只改此值）。
+ */
+export const BARLINE_PAD = 0
 /** 跳房子线距小节线上端间距（px；adj73：比线下方元素最高点（小节线上端）高 8px） */
 export const VOLTA_BAR_GAP = 8
 /** 跳房子 + 修饰（抬高）每级间距（px） */

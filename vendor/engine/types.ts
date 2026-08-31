@@ -1,7 +1,8 @@
 /**
- * engine/types.ts — iJipu 简谱引擎核心类型
+ * engine/types.ts — iJipu（爱记谱）简谱引擎核心类型
  *
- * 语法依据：JPS 脚本规范（兼容 .jps V1.0）。
+ * 语法依据：原「番茄简谱」脚本说明手册（doc.lezhi99.com/zhipu）完整逆向，
+ * 兼容 .jps 标记语言 V1.0。
  *
  * 本文件只包含纯类型定义，无任何运行时逻辑，是 parser / layout / render /
  * playback 各模块的共同契约。引擎保持零 React 依赖，可独立单测。

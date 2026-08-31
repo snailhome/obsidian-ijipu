@@ -1,7 +1,7 @@
 /**
  * engine/playback/sampler.ts — 采样音源后端（可切换，实验性）
  *
- * 从外部加载钢琴采样（midi-js-soundfonts MusyngKite，开源第三方 SoundFont 库）。
+ * 从外部加载钢琴采样（midi-js-soundfonts MusyngKite，原站同源方案）。
  * 依赖网络；加载失败或离线时由 UI 提示并回退到合成音色。
  * 采样按需加载（首次播放时），缓存于内存。
  */
