@@ -1,12 +1,17 @@
-# 爱记谱 iJipu 0.2.0（引擎同步）
+# 爱记谱 iJipu 0.10.1（引擎同步 adj314 → adj320）
 
 ## 引擎同步
 
-- **同步主项目 `packages/ijipu-engine` 至 adj314**（vendor/engine 镜像更新）：
-  - 多声部空间优先布局：每声部每小节本体宽 → 小节基准本体宽（取 max）→ 按拍数占比分摊空白 → 小节内每拍不等宽（每拍宽 ∝ 该拍最大本体占宽），音符数字锚定段起点、严格同拍对齐
-  - 小节线间距固定化（`BARLINE_PAD`）：宽松时避免空上加空、压缩时仍区分小节；预算与放置一致
+- **同步主项目 `packages/ijipu-engine` 至 adj320**（vendor/engine 镜像更新 3 个文件）：
+  - `layout/index.ts`：多声部空间优先几何重写（adj314 → adj318）——`mspSegX`/`mspBarRelW`/`mspS` 拉伸空白均分「(tb+numBars−1) 槽」、首小节节头 = 0（行首贴左）、末节线钳制 `rightLimit − halfBarW`（与单声部 `atEnd` 一致）、多声部读 `config.align_min_bars`（自然宽 ↔ 撑满分叉）
+  - `layout/spacing.ts`：新增 `DOT_AFTER_DIGIT_GAP` 常量（adj317，规范化附点间隙常量于 `spacing.ts`，符合 AGENTS.md 五-3）
+  - `playback/sequence.ts`：试听色块按"时值元素"分块（adj319 → adj320）——附点并入主音符（`5.` → 1 块）、增时线独立（`5---` → 4 块）、双附点 `5..` 含两个附点圆一个色块；色块右边界 = 下一时值元素左缘或小节线左缘（连续覆盖）；多声部段循环 `dur` 用主时值（去附点）防双重计入
 
-> 0.1.0 的发布说明保留如下，未改动。
+## 用法
+
+完全兼容旧版（0.1.0 / 0.2.0 的 `.jps` 代码块无需改动）。详细见 `README.md`。
+
+> 0.2.0 的发布说明保留如下，未改动。
 
 ---
 

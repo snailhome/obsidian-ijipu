@@ -48,10 +48,11 @@ export const BARLINE_W_THIN = 0.9
 /** 小节线粗线宽设计值（px，adj104 由 1.8 调小；线宽不随字号） */
 export const BARLINE_W_THICK = 1.4
 /**
- * 小节线两侧净间距（px，adj314 用户规则：固定小值，不随音符占宽(W)放大——
- * 宽松时避免"空上加空"、压缩时仍能区分小节；先设为 0，如需调整只改此值）。
+ * 小节线两侧净间距（px，adj314 用户规则：按 1/4 音符字体宽度——
+ * 不随音符占宽(W)放大，宽松时避免"空上加空"、压缩时仍区分小节；
+ * 运行时按 noteSize 计算，间距随字号比例缩放）。
  */
-export const BARLINE_PAD = 0
+export const barlinePad = (noteSize: number): number => noteSize / 4
 /** 跳房子线距小节线上端间距（px；adj73：比线下方元素最高点（小节线上端）高 8px） */
 export const VOLTA_BAR_GAP = 8
 /** 跳房子 + 修饰（抬高）每级间距（px） */
@@ -86,6 +87,10 @@ export const TUPLET_LABEL_PAD = 1
 export const BRACKET_PAD = 5
 /** 水平元素（音符块/增时线/附点/括号/小节线等）之间最小间距 */
 export const H_GAP = 2
+/** 附点圆心与数字右缘的净间距（adj317：多声部 space 显式 dot 段位置；设计值 18 号字基准，实际 × 主音符缩放因子 s）。
+ *  旧实现直接写 `noteSize * 0.2`，本常量统一在 spacing.ts 便于调整。 */
+export const DOT_AFTER_DIGIT_GAP = (noteSize: number) => 0.2 * noteScaleOf(noteSize) * 18
+// = noteSize * 0.2（与原值一致）；noteSize=13 → ≈2.6px，noteSize=18 → 3.6px
 
 // ---- 倚音（adj103：以下设计值均为 18 号字基准，实际使用一律 ×主音符缩放因子 s） ----
 /** 倚音字号与主音符字号比值（adj105：0.4 → 0.5） */

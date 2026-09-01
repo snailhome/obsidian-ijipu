@@ -28,7 +28,7 @@ import type {
   ScorePageMeta,
   VoiceBlock,
 } from '../types'
-import { DIGIT_HEIGHT_RATIO, LAYER_GAP, SLUR_W, octaveTopY, BRACKET_PAD, H_GAP, noteScaleOf, GRACE_SIZE_RATIO, GRACE_SLOT_RATIO, GRACE_SLOT_RATIO_MULTI, VOLTA_BAR_GAP, VOLTA_RAISE, DYN_HALF_H, BARLINE_PAD } from './spacing'
+import { DIGIT_HEIGHT_RATIO, LAYER_GAP, SLUR_W, octaveTopY, BRACKET_PAD, H_GAP, noteScaleOf, GRACE_SIZE_RATIO, GRACE_SLOT_RATIO, GRACE_SLOT_RATIO_MULTI, VOLTA_BAR_GAP, VOLTA_RAISE, DYN_HALF_H, barlinePad, DOT_AFTER_DIGIT_GAP, DOT_R } from './spacing'
 // adj284：空间优先布局的度量（本体宽 / 时值拆分 / 非时值元素间距）
 import { splitNoteDur, noteBodyW, augBodyW, dotBodyW, accidentalBodyW, bracketBodyW, digitSlotW, hxBodyW } from './spaceLayout'
 // adj303：乐器名标注需要用 resolveInstrument / 库名（@乐器名 / @@ 后下一个音符）
@@ -586,7 +586,7 @@ export function layoutScore(result: ParseResult, config: PageConfig): ScoreLayou
    */
   const placeNoteAt = (
     t: Extract<MusicToken, { kind: 'note' | 'rest' | 'rhythm' }>,
-    segments: { x: number; perBeat: number; beats: number }[],
+    segments: { x: number; perBeat: number; beats: number; el?: 'note' | 'aug' | 'dot' }[],
     yTop: number,
     pageIdx: number,
     groupIndex: number,
@@ -599,7 +599,8 @@ export function layoutScore(result: ParseResult, config: PageConfig): ScoreLayou
     barIndex: number,
     // adj314：多声部空间优先用「音符块本体在时值段内水平居中」（参考单声部 placeNoteSpace）——
     // 提供 space 时按本体居中定位 note.x/width；时值优先路径不传，行为不变。
-    space?: { noteBodyW: number; dotBodyW: number; accW: number; leftExt: number; hasDot: boolean },
+    // adj319：augW/hxW 含增时线/hx 显示占宽，noteRightX 累加避免色块按段宽算时漏掉
+    space?: { noteBodyW: number; dotBodyW: number; accW: number; leftExt: number; hasDot: boolean; augW: number; hxW: number },
   ) => {
     const dur = tokenDuration(t)
     const first = segments[0] ?? { x: 0, perBeat: BPW_NATURAL, beats: dur }
@@ -616,8 +617,31 @@ export function layoutScore(result: ParseResult, config: PageConfig): ScoreLayou
     let noteRightX: number
     if (space) {
       nx = first.x
-      noteW = space.noteBodyW
-      noteRightX = first.x + space.noteBodyW
+      // ★ adj319：noteRightX 累加附点+增时线+hx 显示占宽（照搬单声部 actualW/rightX 计算，
+      // 此前多声部 rightX 只含本体宽 → 色块按段滑动时末段 width 用本体宽，且 dot段 x1
+      // 小于 dot.x 时附点色块消失）。附点右缘 = 附点圆心 + 圆半径（确保 endX ≥ 附点圆右缘）。
+      let displayW = space.noteBodyW
+      if (space.hasDot) {
+        const dotGapE = DOT_AFTER_DIGIT_GAP(m.noteSize)
+        // 附点右缘 = 数字右 + 间隙 + 第一个附点圆心 + 半径；双附点第 i 个圆心在 dotX0 + (i)·2·rDot，
+        // 需覆盖最后一个附点圆右 → 加 (t.dots − 1)·2·DOT_R（adj320：双附点作为一个时值元素）
+        displayW = Math.max(displayW, space.noteBodyW + dotGapE + space.dotBodyW / 2 + DOT_R + (t.dots - 1) * 2 * DOT_R)
+      }
+      if (space.augW) displayW += space.augW
+      if (space.hxW) displayW += space.hxW
+      noteW = displayW
+      noteRightX = first.x + displayW
+      // adj317：多声部 space 显式附点段位置（圆心 = 数字右缘 + 间隙 + 半附点宽），
+      // 避免渲染回退公式 seg0.x + mainDur*perBeat 在 perBeat<本体宽时落在数字内
+      if (space.hasDot) {
+        const dotGap = DOT_AFTER_DIGIT_GAP(m.noteSize)
+        segments.push({
+          x: r1(first.x + space.noteBodyW + dotGap + space.dotBodyW / 2),
+          perBeat: r1(space.dotBodyW / 0.5),
+          beats: 0.5,
+          el: 'dot',
+        })
+      }
     } else {
       nx = (centerOnFirst ? first.x + first.beats * (first.perBeat / 2) : first.x + w / 2) - 6
       noteW = w
@@ -1311,11 +1335,12 @@ export function layoutScore(result: ParseResult, config: PageConfig): ScoreLayou
       durBodySum += n.noteBodyW + (n.hasDot ? n.dotBodyW : 0) + n.augCount * augBodyW(m.noteSize)
     }
     let nonDurPad = 0
+    const bp = barlinePad(m.noteSize)
     for (const bk of barList) {
-      // adj314：预算与放置一致——小节线占位 = 线自身宽 + 两侧固定净间距 BARLINE_PAD。
+      // adj314：预算与放置一致——小节线占位 = 线自身宽 + 两侧净间距 barlinePad(noteSize)。
       // 之前用 barlineSpace(含固定 +8 空隙) / 0.5×音符宽 做预算，高估占位→ W 被挤小→ 拍内音符过密。
       const lineW = barlineTotalW(bk.bar.type)
-      nonDurPad += lineW + BARLINE_PAD * 2
+      nonDurPad += lineW + bp * 2
     }
     // adj294：&zkh/&ykh 为独立括号标记（无时值元素）——占位从行宽扣（A 方案）
     let bracketCount = 0
@@ -1340,9 +1365,10 @@ export function layoutScore(result: ParseResult, config: PageConfig): ScoreLayou
       if (segFirstPb[n.barIdx] === undefined) segFirstPb[n.barIdx] = n.perBeatW
       segLastPb[n.barIdx] = n.perBeatW
     }
-    // adj314：小节线一侧间距 = 固定小值 BARLINE_PAD（用户规则 A）——不随音符占宽(W)放大，
-    // 宽松时避免"空上加空"、压缩时仍能区分小节；如需调整只改 spacing.ts 的 BARLINE_PAD。
-    const barGapSide = () => BARLINE_PAD
+    // adj314：小节线一侧间距 = 1/2 音符字体宽度 barlinePad(noteSize)（用户规则 A）——
+    // 不随音符占宽(W)放大，宽松时避免"空上加空"、压缩时仍能区分小节；
+    // 间距随字号比例缩放，要调整只改 spacing.ts 的 barlinePad。
+    const barGapSide = () => barlinePad(m.noteSize)
 
     // ---- 小节线几何（与既有 matchMusicRow 一致） ----
     const barNoteY = yTop + m.noteSize * 1.1
@@ -1454,8 +1480,9 @@ export function layoutScore(result: ParseResult, config: PageConfig): ScoreLayou
       // 该 seg 末尾小节线（非时值元素）
       if (seg.bar && barList[barCursor] && barList[barCursor].bar === seg.bar) {
         const bk = barList[barCursor]
-        // 相邻音符每拍宽（左侧本段末音符、右侧下一段首音符），间距动态收紧
-        const gapL = barGapSide()
+        // adj315：间距只朝向有音符的一侧——行首/行末背对音符那侧不设间距（贴边）。
+        // 中间小节线左侧/右侧各 barlinePad；行首（左侧无音符）gapL=0；行末（atEnd）gapR=0。
+        const gapL = segLastPb[b] === undefined ? 0 : barGapSide()
         const gapR = bk.atEnd ? 0 : barGapSide()
         // adj314：小节线占位用「线自身宽 + 两侧动态间距」，不再叠加 barlineSpace 固定 +8 空隙——
         // 否则一侧间距被撑到 ~8.5px，超过半个音符宽（4.03px）导致小节线间距过大。
@@ -1570,15 +1597,7 @@ export function layoutScore(result: ParseResult, config: PageConfig): ScoreLayou
     // 块级每小节间隔空间：统一所有声部（取该小节线上类型；|/ 不占位），保证纵向对齐
     const gapSpaces: number[] = []
     for (let b = 0; b < numBars - 1; b++) {
-      let bt: Extract<MusicToken, { kind: 'barline' }> | null = null
-      for (const p of parts) {
-        const s = p.segs[b]
-        if (s?.bar) {
-          bt = s.bar
-          break
-        }
-      }
-      gapSpaces.push(barlineSpace(config.bar_gap, bt?.type, bt?.comment, m.noteSize))
+      gapSpaces.push(barlinePad(m.noteSize))
     }
     const pads = BAR_PAD * 2 + gapSpaces.reduce((a, s) => a + s, 0)
     // adj250：多声部块改用拍级每拍宽（allocatePerBeats，与单声部 bars 行一致）——
@@ -1599,6 +1618,11 @@ export function layoutScore(result: ParseResult, config: PageConfig): ScoreLayou
     // 每声部每小节本体宽 → 小节基准本体宽 = max(各声部) → 按基准本体宽占比分摊空白。
     // 此时值优先路径仍保留（noteSpaceLayout !== 'space' 时走原切分法则）。
     const useSpace = config.noteSpaceLayout === 'space'
+    // adj316：多声部空间优先——拉伸空白 s_b 均分到「小节头 + 各拍后」，使上/下音符与小节线
+    // 间距相对平均（用户要求，替代把 W 摊进每拍段宽导致小节线侧右）。仅 space 路径填充。
+    const mspS: number[] = []
+    const mspBarRelW: number[] = []
+    const mspSegX: number[] = new Array(totalBeats).fill(0)
     const perBeats: number[] = useSpace ? (() => {
       // ---- ① 每声部每小节带时值元素本体宽之和 ----
       const bodyW: number[][] = parts.map((p) => {
@@ -1625,7 +1649,7 @@ export function layoutScore(result: ParseResult, config: PageConfig): ScoreLayou
       for (let b = 0; b < numBars; b++) {
         for (const a of bodyW) baseW[b] = Math.max(baseW[b], a[b] ?? 0)
       }
-      const durBodySum = baseW.reduce((a, b) => a + b, 0)
+      // const durBodySum = baseW.reduce((a, b) => a + b, 0) // adj317b 改用 baseBarSum（拍级 ΣbeatBodyW），不再需要此基线口径
       // ---- ③ 非时值元素占位：pads（内容边界 + 块级共享小节间距）+ 括号 + &hx 滑音箭头 ----
       let nonDurPad = pads
       for (let b = 0; b < numBars; b++) {
@@ -1637,9 +1661,6 @@ export function layoutScore(result: ParseResult, config: PageConfig): ScoreLayou
           }
         }
       }
-      // 内容可用宽：blockAvailW - 非时值占位（含小节间距，放置段会加回）- 每拍间隙预算。
-      // 额外预留 1×NOTE_GAP 容差：beatStartX 循环到 totalBeats（含末）多计一次 gap。
-      const availableContent = blockAvailW - nonDurPad - noteGapOf(totalBeats) - NOTE_GAP
       // ---- ③b 每小节每拍最大本体占宽（含非时值占位），跨声部取最大——供小节内拍级不等宽分配 ----
       const beatBodyW: number[][] = []
       for (let b = 0; b < numBars; b++) {
@@ -1658,10 +1679,12 @@ export function layoutScore(result: ParseResult, config: PageConfig): ScoreLayou
               const dur = tokenDuration(t)
               // 音符本体宽均分到它覆盖的拍（跨拍增时线/附点按拍均分）
               const startBeat = Math.floor(beatAcc + 1e-9)
-              const endBeat = Math.floor(beatAcc + dur + 1e-9)
+              // adj316：拍区间半开 [startBeat, endBeat)，endBeat 用 ceil（跨拍/半拍正确），
+              // 原 `k <= endBeat`（floor）对整拍音符双计宽（本体宽 2 倍 → 段宽远超本体 → 小节线侧右）。
+              const endBeat = Math.min(bb, Math.ceil(beatAcc + dur - 1e-9))
               const nSpan = Math.max(1, endBeat - startBeat)
               const perPiece = bodyW0 / nSpan
-              for (let k = startBeat; k <= endBeat && k < bb; k++) voiceBeats[k] += perPiece
+              for (let k = startBeat; k < endBeat && k < bb; k++) voiceBeats[k] += perPiece
               beatAcc += dur
             } else {
               // 非时值元素（&zkh/&ykh 括号）计入当前拍
@@ -1674,22 +1697,44 @@ export function layoutScore(result: ParseResult, config: PageConfig): ScoreLayou
         }
         beatBodyW.push(perBeatMax)
       }
-      // ---- ④ 每小节分得空白 = W × 该小节拍数/总拍数；小节占宽 = 基准本体宽 + 分得空白 ----
-      const W = Math.max(0, availableContent - durBodySum)
-      const barW: number[] = baseW.map((bw, b) => bw + (totalBeats > 0 ? (W * barBeats[b]) / totalBeats : 0))
-      // ---- ⑤ 超宽等比压缩（保持小节对齐） ----
-      const sumBarW = barW.reduce((a, b) => a + b, 0)
-      const scale = sumBarW > availableContent && sumBarW > 0 ? availableContent / sumBarW : 1
-      const barW2 = barW.map((w) => w * scale)
-      // ---- ⑥ 小节内每拍不等宽：perBeat = 小节占宽 × 该拍最大本体占宽 / Σ该小节每拍最大本体占宽 ----
+      // ---- ⑥ adj317：拍宽 = 该拍最大本体占宽；拉伸空白 s 均分到「(总拍数+numBars-1) 个槽位」——
+      // 每小节 (拍数+1) 个槽位中：首小节「节头」= 0（行首贴左）；其余 (tb+numBars-1) 个
+      // 槽位均分 s。末小节末拍后填 s → 末音符右缘对齐内容右界（行尾对齐）；中间小节节头 +
+      // 各拍后 = s（小节线两侧间距对称）。
       const outPerBeat: number[] = []
+      let baseBarSum = 0
+      for (let b = 0; b < numBars; b++) {
+        baseBarSum += (beatBodyW[b] ?? []).reduce((a, s) => a + s, 0) + (barBeats[b] > 0 ? (barBeats[b] - 1) * NOTE_GAP : 0)
+      }
+      const totalSlots = totalBeats + numBars - 1
+      // adj317c：末节线钳制到 rightLimit - halfW（与单声部 atEnd 行末线一致），avStretch 反推 ΣbarBar
+      // lineX0末 = blockStartX + ΣbarBar + ΣgapSpaces(前) + BAR（末小节后无 gapSpaces，不加 gap/2），
+      // 令 lineX0末 = pageW - margin_right - halfW → ΣbarBar = (pageW - margin_right - halfW) - blockStartX - ΣgapSpaces - BAR
+      // adj318：行小节数 < align_min_bars（与单声部 stretch 同步）→ 自然宽，不撑满、不钳制末线
+      // （s=0，avStretch=0，ΣbarBar=baseBarSum，lineX末 自然值 ≤ 钳制上界）
+      const stretchBars = numBars >= config.align_min_bars
+      const sumGapSpaces = gapSpaces.reduce((a, s) => a + s, 0)
+      const halfBarW = barlineTotalW('|') / 2
+      const targetEndBarX = pages[pageIndex].width - config.margin_right - halfBarW
+      const targetBarSum = stretchBars ? Math.max(0, targetEndBarX - blockStartX - sumGapSpaces - BAR_PAD) : 0
+      const avStretch = stretchBars ? Math.max(0, targetBarSum - baseBarSum) : 0
+      const s = totalSlots > 0 ? avStretch / totalSlots : 0
       for (let b = 0; b < numBars; b++) {
         const bb = barBeats[b]
-        const bw = barW2[b]
-        const zsum = beatBodyW[b].reduce((a, s) => a + s, 0)
+        const start = barStartBeat[b]
+        mspS[b] = s
+        // 首小节节头 = 0（行首贴左）；中间小节节头 = s（小节线对称）
+        let rel = b === 0 ? 0 : s
         for (let k = 0; k < bb; k++) {
-          outPerBeat.push(zsum > 0 ? bw * (beatBodyW[b][k] / zsum) : bw / bb)
+          const idx = start + k
+          const wb = beatBodyW[b][k] > 0 ? beatBodyW[b][k] : BPW_NATURAL
+          outPerBeat[idx] = wb
+          mspSegX[idx] = rel
+          rel += wb + NOTE_GAP + s
         }
+        // 末拍后净间隙 = s（去 NOTE_GAP）—— 末小节末拍后 s 撑到内容右界
+        rel -= NOTE_GAP
+        mspBarRelW[b] = rel
       }
       while (outPerBeat.length < totalBeats) outPerBeat.push(BPW_NATURAL)
       return outPerBeat
@@ -1766,7 +1811,11 @@ export function layoutScore(result: ParseResult, config: PageConfig): ScoreLayou
         const barStartB = barStartBeat[b]
         for (const t of seg.notes) {
           if (t.kind === 'note' || t.kind === 'rest' || t.kind === 'rhythm') {
-            const dur = tokenDuration(t)
+            // adj320：段循环拆「主时值」段（去附点）——附点由 placeNoteAt 生成 dot 段。
+            // 此前用 tokenDuration(t)（含附点）拆段 + placeNoteAt 又 push dot 段 → 附点双重计入
+            // （segments.beats 总和 > 实际时值，色块跨拍时多出/乱序）。
+            const sd = splitNoteDur(t)
+            const dur = sd.noteDur * (1 + sd.augCount)
             // adj250：段 x 用拍级每拍宽累计（块内拍位），小节内拍位置从 0 起
             const segments: { x: number; perBeat: number; beats: number }[] = []
             {
@@ -1781,7 +1830,7 @@ export function layoutScore(result: ParseResult, config: PageConfig): ScoreLayou
                 segments.push({
                   // 段 x = 拍起点累计 + 拍内浮点偏移（(pos-pp)*perBeat）——
                   // 否则同拍内的减时线音符（2/ 3/ 等）都被映射到拍起点、重叠
-                  x: x + BAR_PAD + ((beatStartX[blockBeat] ?? 0) - (beatStartX[barStartB] ?? 0)) + (pos - pp) * perBeat,
+                  x: x + BAR_PAD + (useSpace ? (mspSegX[blockBeat] ?? 0) : ((beatStartX[blockBeat] ?? 0) - (beatStartX[barStartB] ?? 0))) + (pos - pp) * perBeat,
                   perBeat,
                   beats: piece,
                 })
@@ -1792,7 +1841,7 @@ export function layoutScore(result: ParseResult, config: PageConfig): ScoreLayou
             // adj226：id.group 用真实组索引（此前误传块内声部序号 vi——
             // 前面还有单声部行时组序号错位，预览↔编辑器光标联动全偏）
             // adj314：多声部空间优先——音符块本体在时值段内水平居中（参考单声部）
-            let space: { noteBodyW: number; dotBodyW: number; accW: number; leftExt: number; hasDot: boolean } | undefined
+            let space: { noteBodyW: number; dotBodyW: number; accW: number; leftExt: number; hasDot: boolean; augW: number; hxW: number } | undefined
             if (useSpace) {
               const accW = t.kind === 'note' && t.accidental ? accidentalBodyW(m.noteSize) : 0
               const grW = t.kind === 'note' ? graceExtraW(t, m.noteSize) : 0
@@ -1804,6 +1853,9 @@ export function layoutScore(result: ParseResult, config: PageConfig): ScoreLayou
                 accW,
                 leftExt,
                 hasDot: t.dots > 0,
+                // ★ adj319：增时线/hx 占宽累加进 noteRightX（与单声部 actualW 对齐）
+                augW: t.kind === 'note' ? splitNoteDur(t).augCount * augBodyW(m.noteSize) : 0,
+                hxW: t.kind === 'note' && t.symbols.includes('hx') ? hxBodyW(m.noteSize) : 0,
               }
             }
             const dur2 = placeNoteAt(t, segments, voiceY, pageIndex, p.groupIndex, p.voice, slotIndex, p.lyricMaps, geciSize, sp, beatAcc, b, space)
@@ -1812,7 +1864,7 @@ export function layoutScore(result: ParseResult, config: PageConfig): ScoreLayou
           }
         }
         // 小节右端（下一小节起点）：本小节拍宽累计（去尾拍间距）+ 小节间距
-        x += ((beatStartX[barStartB + barBeats[b]] ?? 0) - (beatStartX[barStartB] ?? 0)) + (b < numBars - 1 ? gapSpaces[b] : 0)
+        x += (useSpace ? (mspBarRelW[b] ?? 0) : ((beatStartX[barStartB + barBeats[b]] ?? 0) - (beatStartX[barStartB] ?? 0))) + (b < numBars - 1 ? gapSpaces[b] : 0)
       }
       voiceY += voiceHeights[vi] + (vi < parts.length - 1 ? sp.shengbu : 0)
     }
@@ -1836,9 +1888,10 @@ export function layoutScore(result: ParseResult, config: PageConfig): ScoreLayou
       // 小节线按拍子累计位置：小节内容右端 = 小节起点 + BAR_PAD + 小节拍宽累计（去尾拍间距）
       // + 前面拍间距累计 + 空间/2（与单声部 bars 行一致）
       // 小节宽度 = 拍宽累计（含拍间距）；小节线在小节内容右端 + 空间/2（与音符段 x 一致）
-      const barWb = (beatStartX[barStartBeat[b] + barBeats[b]] ?? 0) - (beatStartX[barStartBeat[b]] ?? 0)
-      const lineX0 =
-        xBar + BAR_PAD + barWb + (bt ? barlineSpace(config.bar_gap, bt.type, bt.comment, m.noteSize) : 0) / 2
+      const barWb = useSpace ? (mspBarRelW[b] ?? 0) : ((beatStartX[barStartBeat[b] + barBeats[b]] ?? 0) - (beatStartX[barStartBeat[b]] ?? 0))
+      // adj315：与 xBar 推进用同一 gapSpaces（barlinePad），小节线 = 小节内容右端 + 半间距
+      const barToNextGap = b < numBars - 1 ? gapSpaces[b] : 0
+      const lineX0 = xBar + BAR_PAD + barWb + barToNextGap / 2
       barX[b] = r1(
         Math.min(
           Math.max(lineX0, config.margin_left + halfW),

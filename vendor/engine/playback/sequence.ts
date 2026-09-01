@@ -81,9 +81,12 @@ interface SeqItem {
   bar?: { type: BarlineType; marks?: BarlineMark[]; voltaStart?: PlacedBarline['voltaStart']; voltaEnd?: boolean }
 }
 
-/** adj300：构建一个音符的播放拍段（placed.segments 每段 ≤1 拍；无 segments 兜底单段）。
- *  beat = 段起点拍偏移（相对事件起点）；连音合并时以累计拍数作后续音符起始拍。 */
-function buildPlayheadSegs(plc: PlacedToken, startBeat: number): PlayheadSeg[] {
+/** adj320：构建一个音符的播放拍段——按「时值元素」分块：
+ *  · 附图段（el='dot'）与其前一个主音符段**合并为一个色块**（附点不单独分块）；
+ *  · 增时线段（el='aug'）**独立一个色块**；纯音符跨拍段（多声部 5--- 无 aug el）各拍一块。
+ *  x = 块左缘，width = 至「下一块左缘」（连续）；最后块宽 = to「endX」（下一时值元素左缘或小节线左缘）。
+ *  endX 由 buildPlaySequence 传入（同 group 内下一时值元素.x 或小节线.x）。 */
+function buildPlayheadSegs(plc: PlacedToken, startBeat: number, endX?: number): PlayheadSeg[] {
   const base = {
     pageIndex: plc.id.page,
     y: plc.y,
@@ -91,30 +94,27 @@ function buildPlayheadSegs(plc: PlacedToken, startBeat: number): PlayheadSeg[] {
     group: plc.id.group,
   }
   const segs = plc.segments ?? []
+  const right = endX ?? (plc.rightX ?? (plc.x + plc.width))
   if (segs.length === 0) {
-    return [{ beat: startBeat, beats: plc.duration, x: plc.x, width: plc.width, ...base }]
+    return [{ beat: startBeat, beats: plc.duration, x: plc.x, width: Math.max(0, right - plc.x), ...base }]
   }
-  // adj290：空间优先（段带 el 标记）——附点/增时线按独立时值逐个滑动；
-  // 色块宽 = 该段到下一段的物理区间（含分配+留空），连续覆盖无重叠。
-  if (segs.some((s) => s.el !== undefined)) {
-    const endX = plc.rightX ?? (plc.x + plc.width)
-    const out: PlayheadSeg[] = []
-    let acc = startBeat
-    for (let i = 0; i < segs.length; i++) {
-      const s = segs[i]
-      const x0 = s.x
-      const x1 = i < segs.length - 1 ? segs[i + 1].x : endX
-      out.push({ beat: acc, beats: s.beats, x: x0, width: Math.max(0, x1 - x0), ...base })
-      acc += s.beats
+  // 先分块（dot 并入前一个主音符块；aug/纯 note 各自成块）
+  const blocks: { x: number; beats: number; dot: boolean }[] = []
+  for (const s of segs) {
+    if (s.el === 'dot' && blocks.length > 0) {
+      blocks[blocks.length - 1].beats += s.beats
+    } else {
+      blocks.push({ x: s.x, beats: s.beats, dot: s.el === 'dot' })
     }
-    return out
   }
-  // 时值优先：按段宽（本体）滑动
+  // 算宽度：每块右 = 下一块左（连续）；最后块右 = right
   const out: PlayheadSeg[] = []
   let acc = startBeat
-  for (const s of segs) {
-    out.push({ beat: acc, beats: s.beats, x: s.x, width: s.perBeat * s.beats, ...base })
-    acc += s.beats
+  for (let i = 0; i < blocks.length; i++) {
+    const blk = blocks[i]
+    const x1 = i < blocks.length - 1 ? blocks[i + 1].x : right
+    out.push({ beat: acc, beats: blk.beats, x: blk.x, width: Math.max(0, x1 - blk.x), ...base })
+    acc += blk.beats
   }
   return out
 }
@@ -132,6 +132,27 @@ export function buildPlaySequence(
   const byIndex = new Map<number, PlacedToken>()
   for (const page of layout.pages) {
     for (const n of page.notes) byIndex.set(n.id.index, n)
+  }
+  // ★ adj320：每个音符的色块右边界 = 同 group 内下一个时值元素左缘，或该小节线左缘（取先到者）。
+  //   使色块「当前时值元素 → 下一时值元素/小节线前」连续覆盖，不依赖显示占宽右缘。
+  const rightEdgeByNoteIdx = new Map<number, number>()
+  {
+    const byGroupNotes = new Map<number, PlacedToken[]>()
+    const byGroupBars = new Map<number, PlacedBarline[]>()
+    for (const page of layout.pages) {
+      for (const n of page.notes) (byGroupNotes.get(n.id.group) ?? byGroupNotes.set(n.id.group, []).get(n.id.group)!).push(n)
+      for (const b of page.barlines) (byGroupBars.get(b.id.group) ?? byGroupBars.set(b.id.group, []).get(b.id.group)!).push(b)
+    }
+    for (const [group, notes] of byGroupNotes) {
+      const sorted = [...notes].sort((a, b) => a.x - b.x)
+      const bars = (byGroupBars.get(group) ?? []).slice().sort((a, b) => a.x - b.x)
+      sorted.forEach((n, i) => {
+        const nextNote = i < sorted.length - 1 && sorted[i + 1].x > n.x + 1e-3 ? sorted[i + 1].x : Infinity
+        const nextBar = bars.find((b) => b.x > n.x + 1e-3)?.x ?? Infinity
+        const edge = Math.min(nextNote, nextBar)
+        rightEdgeByNoteIdx.set(n.id.index, edge === Infinity ? (n.rightX ?? n.x + n.width) : edge)
+      })
+    }
   }
   // adj301/302：全局默认乐器 = 描述头第一个 Y 乐器（name 与试听音色库一致，无则音色库第一个钢琴）。
   // 多声部按声部序号对应 Y 行顺序（Q1→Y[0]、Q2→Y[1]…）；声部比 Y 行多时用全局默认。
@@ -353,7 +374,7 @@ export function buildPlaySequence(
         // adj300：连音合并——把被合并音符的拍段并入 prev 的播放拍段（色块可覆盖全时值，
         // 如 (1 - - - | 1) - 0 0 中 1 合并 6 拍，色块依次滑过 1 - - - 1 -）
         const prevBeat = (prev.playheadSegs ?? []).reduce((a, s) => a + s.beats, 0)
-        prev.playheadSegs = (prev.playheadSegs ?? []).concat(buildPlayheadSegs(item.note, prevBeat))
+        prev.playheadSegs = (prev.playheadSegs ?? []).concat(buildPlayheadSegs(item.note, prevBeat, rightEdgeByNoteIdx.get(item.note.id.index)))
         // adj157：合并时值；atMs 来自拍时钟（每个 event 独立），不需全局 at 累加
         lastEventNoteIdx = curNoteIdx
         i++
@@ -378,7 +399,7 @@ export function buildPlaySequence(
           })
         }
       }
-      events.push({ placed: item.note, instrument, atMs, durationMs, playheadSegs: buildPlayheadSegs(item.note, 0) })
+      events.push({ placed: item.note, instrument, atMs, durationMs, playheadSegs: buildPlayheadSegs(item.note, 0, rightEdgeByNoteIdx.get(item.note.id.index)) })
       if (gn && gn.after && gracePitches.length > 0) {
         for (let gi = 0; gi < gn.notes.length; gi++) {
           events.push({
