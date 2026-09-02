@@ -2026,10 +2026,27 @@ export function layoutScore(result: ParseResult, config: PageConfig): ScoreLayou
         } else {
           // adj55：先进后出 —— pop 最近打开的开括号；栈跨行保留（未闭合延续到后续行）
           const s = sQueue.pop()
-          // 退化对（起点=终点，如 "(2)"）也记录（adj137：供外层连音线分割），但不渲染自身；
-          // adj91：连音线嵌套最多两层（depth 0/1），第三层（如 (1 (2 (3 5))) 的 (3 5)）不渲染
-          if (s && s.start !== -1 && lastNote >= s.start && s.depth < 2) {
-            slurPairs.push({ start: s.start, end: lastNote, depth: s.depth, tuplet: s.tuplet, plus: s.plus, minus: s.minus })
+          // adj321 连接点规则：连音线至少连接 2 个音符。
+          // 「(X)」开+一个音符+关（pop 出的开括号为退化 start===lastNote），且栈内还有更早未闭合的
+          // 开括号（前方有未结束连音）时，X 是**连接点**——前一连音终止于 X、并以 X 为起点开启新连音。
+          // 用例：(1 (2) 3) → 1连到2(终止) + 2连到3(开始)，两条；而 (1(2 3)) / (1 (2 3) 4) 的
+          // (2 3) 是多音符内层 → 真嵌套（1→3外层 + 2→3内层 / 1→4 + 2→3）。
+          // adj321b：连接点检测**不受 depth<2（adj91 渲染层数限制）约束**——X 是明确的连音语义，
+          // 即使嵌套在深层括号内也应终止前一连音 + 起新连音（depth 取被终止连音层级，保持可渲染）。
+          // 否则普通退化对（如独立 (2)，前面无连音）走 adj137 分割；普通配对受 depth<2（adj91）限制。
+          if (s && s.start !== -1 && lastNote >= s.start) {
+            if (s.start === lastNote && sQueue.length > 0) {
+              // 连接点 X：终止栈内前一个未闭合连音（prev）于 X，并以 X 为起点重开新连音
+              const prev = sQueue.pop()
+              if (prev && prev.start !== -1 && lastNote >= prev.start) {
+                slurPairs.push({ start: prev.start, end: lastNote, depth: prev.depth, tuplet: prev.tuplet, plus: prev.plus, minus: prev.minus })
+              }
+              // 新连音从 X 起，层级取被终止的 prev（断开嵌套，保持可渲染）
+              sQueue.push({ ...s, start: lastNote, depth: prev ? prev.depth : s.depth })
+            } else if (s.depth < 2) {
+              // 普通配对（受 adj91 depth<2 渲染限制）
+              slurPairs.push({ start: s.start, end: lastNote, depth: s.depth, tuplet: s.tuplet, plus: s.plus, minus: s.minus })
+            }
           }
         }
       }
