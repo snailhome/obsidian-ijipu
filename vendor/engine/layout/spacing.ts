@@ -21,7 +21,8 @@ export const DIGIT_BOTTOM = 2
  * 间距统一为「空白间距」语义：两实体中心距 = 上实体半高 + 下实体半高 + 空白。
  * 层级之间空白 LAYER_GAP；同层元素之间空白 INNER_GAP。
  */
-/** 层级之间空白间距（px）：音符↔修饰层、修饰层↔修饰层 */
+/** 层级之间空白间距（px）：音符↔修饰层、修饰层↔修饰层
+ *  （注：享用于减时线/低八度点/连音线等；音符上方修饰层专属更小间距见 render 的 symLayerGap，adj338） */
 export const LAYER_GAP = 2
 /** 同层级内部元素之间空白间距（px）：八度点之间、减时线之间（adj61 由 1.5 收为 1） */
 export const INNER_GAP = 1.5

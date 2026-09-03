@@ -83,6 +83,21 @@ const FONT_SCRIPT = "'Segoe Script', 'Brush Script MT', 'Script MT', 'Lucida Han
  *  （adj：pp/p/mp/mf/f/ff/fff/sf/fp/sfp/rit，与 &.jps 语法一致） */
 const DYN_MARKS = new Set(['pp', 'p', 'mp', 'mf', 'f', 'ff', 'fff', 'sf', 'fp', 'sfp', 'rit'])
 
+/** adj334：音符上方单字修饰符（吐音/打音/叠音）——在音符正上方居中显示一个粗体字形。
+ *  吐音 &tu → 粗体 T；吐音 &ku → 粗体 K；打音 &da → 粗体 扌；叠音 &die → 粗体 又。
+ *  除 die（横向缩 0.75，adj335）外，其余走无缩放居中粗体分支。 */
+const ABOVE_GLYPH: Record<string, string> = {
+  tu: 'T',
+  ku: 'K',
+  da: '扌',
+  die: '又',
+}
+
+/** adj338：音符上方**修饰层**专属层间留白（px）——比共享 LAYER_GAP(2) 更小，
+ *  让多修饰符堆叠更紧凑；仅用于音符上方符号循环（`symY = aboveTop - SYM_LAYER_GAP*s`），
+ *  不影响减时线/连音线等（仍用 LAYER_GAP）。 */
+const SYM_LAYER_GAP = 1
+
 /**
  * 13px 元数据字形宽（Microsoft YaHei GDI 实测，px）——用于调式/节拍 = 号对齐（adj42）。
  * 其余 ASCII 按 7.62、CJK 按 13 兜底估算。
@@ -544,7 +559,7 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
     const SYM_FS = Math.round(10 * s) // 装饰符号字号（随字号）
     for (const sym of t.symbols) {
       // 上方符号（adj109 扩展 & 编码修饰符）：文字底 = aboveTop - LAYER_GAP×s；基线 = 底 - descender
-      const symY = aboveTop - LAYER_GAP * s - SYM_FS * DESC_RATIO
+      const symY = aboveTop - SYM_LAYER_GAP * s - SYM_FS * DESC_RATIO
       const cx = x + digitW / 2 // 数字槽中心
         if (sym === 'tr' || sym === 'cy+') {
           // 颤音：tr（粗体，adj112）+ 正弦波（adj115：周期数随音符点位/时值——每拍约 2 周期）
@@ -677,6 +692,20 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
             `<path d="M ${r1n(hx - hw)} ${r1n(hy - 3 * s)} L ${r1n(hx)} ${r1n(hy + 3 * s)} L ${r1n(hx + hw)} ${r1n(hy - 3 * s)}" fill="none" stroke="#1b1b1b" stroke-width="0.8"/>`,
           )
           continue // hx 在右侧，不占上方层顶
+        } else if (ABOVE_GLYPH[sym]) {
+          // adj334：吐音/打音/叠音——音符正上方居中显示一个粗体单字（T / 扌 / 又）。
+          // 用中文黑体栈（FONT_CN）保证 /扌/又 可见；粗体 + 居中于数字槽。
+          // adj335：叠音「又」显示宽度缩为 3/4（横向 scale 0.75）——以数字槽中心为锚缩放，
+          // 用 translate(cx,symY) + scale(0.75,1) + text-anchor="middle" 保持视觉居中。
+          if (sym === 'die') {
+            parts.push(
+              `<text x="0" y="0" text-anchor="middle" transform="translate(${r1n(cx)},${r1n(symY)}) scale(0.75,1)" font-size="${SYM_FS}" font-weight="bold" font-family="${FONT_CN}" fill="#1b1b1b">${xmlEsc(ABOVE_GLYPH[sym])}</text>`,
+            )
+          } else {
+            parts.push(
+              `<text x="${r1n(cx)}" y="${r1n(symY)}" text-anchor="middle" font-size="${SYM_FS}" font-weight="bold" font-family="${FONT_CN}" fill="#1b1b1b">${xmlEsc(ABOVE_GLYPH[sym])}</text>`,
+            )
+          }
         } else if (DYN_MARKS.has(sym)) {
           // 力度/速度标记（adj）：音符上方花体（斜体加粗），居中于数字槽。
           // 不用 Bravura 等非系统音乐字体，避免缺字；花体字栈带通用 fallback 保证可见

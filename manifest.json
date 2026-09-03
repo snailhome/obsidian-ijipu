@@ -1,7 +1,7 @@
 {
   "id": "obsidian-ijipu",
   "name": "iJipu",
-  "version": "0.10.3",
+  "version": "0.10.4",
   "minAppVersion": "1.0.0",
   "description": "在 Obsidian 笔记中用 .jps 脚本渲染可视化简谱（爱记谱 iJipu），支持试听与整页/满宽/谱面显示。官网：https://ijipu.pages.dev",
   "author": "蜗牛🐌",
