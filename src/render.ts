@@ -3,12 +3,12 @@ import {
   layoutScore,
   renderScoreToSvg,
   buildPlaySequence,
-  createBackend,
   inferBpm,
   schedulePlay,
   defaultPageConfig,
   type PageConfig,
 } from '@ijipu/engine'
+import { SpessaSynthBackend, HqCache, getHqLibrary, loadHqBank } from './soundbank'
 
 /**
  * 合并设置（优先级：默认 < 插件默认设置 < 笔记 frontmatter）。
@@ -46,8 +46,9 @@ export function renderScore(
 }
 
 /**
- * 试听：.jps → 播放序列 → Web Audio 合成（复用 @ijipu/engine 播放引擎）。
- * 返回 { cancel, totalMs } 供播放/停止切换；解析失败返回 null。
+ * 试听：.jps → 播放序列 → SpessaSynth 高保真（复用 @ijipu/engine 播放引擎 + obsidian 音源缓存）。
+ * 返回 { cancel, totalMs } 供播放/停止切换；解析失败/音源缺失返回 null。
+ * opts.workletUrl 由插件提供（内置 worklet）；opts.hqVoice 为默认音色（GM program，null=声部路由）。
  */
 export type PlayheadSeg = {
   atMs: number
@@ -63,6 +64,7 @@ export type PlayheadSeg = {
 export async function playScore(
   source: string,
   pageConfig: PageConfig = defaultPageConfig,
+  opts?: { hqVoice?: number | null; workletUrl?: string },
 ): Promise<{ cancel: () => void; totalMs: number; track: PlayheadSeg[] } | null> {
   const parsed = parseJps(source)
   if (parsed.errors.length > 0) return null
@@ -70,9 +72,17 @@ export async function playScore(
   const layout = layoutScore(parsed, pageConfig)
   const bpm = inferBpm(parsed)
   const seq = buildPlaySequence(parsed, layout, bpm)
-  const backend = createBackend('synth')
-  // SynthBackend.ensure()：异步创建/恢复 AudioContext（需用户手势触发）
-  await (backend as { ensure?: () => Promise<unknown> }).ensure?.()
+  // adj352：SpessaSynth 高保真试听——音源远端下载 + IndexedDB 缓存，worklet 由插件提供
+  const backend = new SpessaSynthBackend()
+  await backend.ready()
+  try {
+    const bank = await loadHqBank(getHqLibrary(), new HqCache())
+    await backend.load(bank, opts?.workletUrl ?? '')
+  } catch {
+    backend.dispose()
+    return null
+  }
+  backend.setVoice(opts?.hqVoice ?? null)
   // 200ms 起播延迟（与 iJipu PLAY_FIRST_DELAY_MS 一致，声画同步）
   const control = schedulePlay(seq, backend, undefined, undefined, 200)
   // 构建播放色块轨道（与 iJipu 一致：按 playheadSegs 拍段，每段 ≤1 拍）

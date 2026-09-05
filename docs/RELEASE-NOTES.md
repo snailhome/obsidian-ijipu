@@ -1,3 +1,20 @@
+# 爱记谱 iJipu 0.3.0
+
+## 音色库 + SpessaSynth 高保真试听（已同步 iJipu 引擎）
+
+- **同步 iJipu 引擎**：多声部声部乐器独立延续（adj351——Q1/Q2/Q3 各自动器、下一组同声部延续）等引擎更新。
+- **音色库设置**：插件设置新增「音色库」组——默认音色（GM 全集，自动=按声部名 @乐器 / Y 默认路由）+ 收藏音色（默认常用音色，可增删）。
+- **SpessaSynth 高保真试听**：试听由合成升级为 SpessaSynth（SF2 高保真通用音源 GeneralUser GS）；音源**远端下载一次 + IndexedDB 缓存**（之后直接用）；worklet 处理器随插件内置（`.obsidian/plugins/obsidian-ijipu/spessasynth_processor.min.js`）。
+- 依赖：spessasynth_lib / spessasynth_core（随插件 bundle 进 main.js；需在插件目录含 worklet 文件）。
+
+## 安装 / 使用
+
+- 升级后首次试听会下载约 30MB 高保真音源（仅一次，之后走缓存）；安装时请确认插件目录含 `spessasynth_processor.min.js`。
+- 在 Obsidian 设置 → iJipu → 音色库 配置默认音色与收藏音色。
+- 完全兼容旧版（0.1.0 及以上 `.jps` 代码块无需改动）。
+
+---
+
 # 爱记谱 iJipu 0.2.0（独立定版）
 
 > 0.2.0 为 obsidian-ijipu **独立版本线**的定版发布。此前的 `0.10.x` 版本号是随主机项目（iJipu 应用）对齐的历史编号，其累积更新已全部并入本版本说明，不再保留独立条目。

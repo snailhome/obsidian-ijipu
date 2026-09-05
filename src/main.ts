@@ -25,9 +25,12 @@ export default class IJipuPlugin extends Plugin {
   settings: IJipuSettings = {}
   /** 所有进行中试听的停止函数（切换笔记时统一停止） */
   private playStops: (() => void)[] = []
+  /** 内置 SpessaSynth worklet URL（插件目录读取 → Blob URL；缺失则试听高保真不可用） */
+  private workletUrl = ''
 
   async onload(): Promise<void> {
     await this.loadSettings()
+    this.workletUrl = await this.loadWorklet()
     this.addSettingTab(new IJipuSettingTab(this.app, this))
     this.registerMarkdownCodeBlockProcessor('jps', (source, el, ctx) => {
       this.renderBlock(source, el, ctx.sourcePath)
@@ -53,6 +56,19 @@ export default class IJipuPlugin extends Plugin {
 
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings)
+  }
+
+  /** 读取内置 SpessaSynth worklet 处理器（插件目录文件 → Blob URL，供 audioWorklet.addModule） */
+  private async loadWorklet(): Promise<string> {
+    try {
+      const p = `.obsidian/plugins/${this.manifest.id}/spessasynth_processor.min.js`
+      if (!(await this.app.vault.adapter.exists(p))) return ''
+      const buf = await this.app.vault.adapter.readBinary(p)
+      const blob = new Blob([buf], { type: 'application/javascript' })
+      return URL.createObjectURL(blob)
+    } catch {
+      return ''
+    }
   }
 
   private renderBlock(source: string, el: HTMLElement, sourcePath: string): void {
@@ -167,7 +183,7 @@ export default class IJipuPlugin extends Plugin {
         stopPlay()
         return
       }
-      void playScore(source, pageConfig).then((r) => {
+      void playScore(source, pageConfig, { hqVoice: this.settings.hqVoice, workletUrl: this.workletUrl }).then((r) => {
         if (!r) {
           playBtn.setText('▶ 试听')
           return

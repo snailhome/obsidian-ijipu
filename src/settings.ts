@@ -1,5 +1,6 @@
 import { App, PluginSettingTab, Setting } from 'obsidian'
 import { defaultPageConfig, type PageConfig } from '@ijipu/engine'
+import { GM_VOICE_OPTIONS, DEFAULT_HQ_ENABLED } from './soundbank'
 import type IJipuPlugin from './main'
 
 type FieldKey = keyof PageConfig
@@ -122,6 +123,46 @@ export class IJipuSettingTab extends PluginSettingTab {
         this.addControl(row, def, cur)
       }
     }
+
+    // —— 音色库（adj352：与 iJipu 一致——默认音色 + 收藏音色 + 高保真音源缓存）——
+    new Setting(containerEl).setName('音色库').setHeading()
+    new Setting(containerEl)
+      .setName('默认音色')
+      .setDesc('试听默认使用的高保真音色；「自动」= 按声部名 @乐器 / Y 默认路由（多声部各声部独立）。')
+      .addDropdown((dd) => {
+        dd.addOption('auto', '自动（按声部名）')
+        GM_VOICE_OPTIONS.forEach((v) => dd.addOption(String(v.program), v.label))
+        dd.setValue(this.plugin.settings.hqVoice == null ? 'auto' : String(this.plugin.settings.hqVoice))
+        dd.onChange((v) => { this.plugin.settings.hqVoice = v === 'auto' ? null : Number(v); void this.plugin.saveSettings() })
+      })
+    new Setting(containerEl)
+      .setName('收藏音色')
+      .setDesc('试听音色列表可用的音色（默认常用音色）；下拉选择加入，点音色名移除。')
+      .addDropdown((dd) => {
+        GM_VOICE_OPTIONS.forEach((v) => dd.addOption(String(v.program), v.label))
+        dd.onChange((v) => {
+          const p = Number(v)
+          const cur = this.plugin.settings.hqEnabled ?? DEFAULT_HQ_ENABLED.slice()
+          if (!cur.includes(p)) { this.plugin.settings.hqEnabled = [...cur, p]; void this.plugin.saveSettings() }
+        })
+      })
+    const favWrap = containerEl.createDiv({ cls: 'ijipu-settings-fav' })
+    const renderFavs = (): void => {
+      favWrap.empty()
+      const list = this.plugin.settings.hqEnabled ?? DEFAULT_HQ_ENABLED
+      for (const p of list) {
+        const v = GM_VOICE_OPTIONS.find((x) => x.program === p)
+        if (!v) continue
+        const chip = favWrap.createSpan({ cls: 'ijipu-settings-chip', text: v.label })
+        chip.addEventListener('click', () => {
+          this.plugin.settings.hqEnabled = (this.plugin.settings.hqEnabled ?? DEFAULT_HQ_ENABLED).filter((x) => x !== p)
+          void this.plugin.saveSettings()
+          renderFavs()
+        })
+      }
+      if (favWrap.children.length === 0) favWrap.createSpan({ cls: 'ijipu-settings-chip', text: '（未收藏）' })
+    }
+    renderFavs()
   }
 
   private addControl(row: Setting, def: SettingDef, cur: FieldValue): void {

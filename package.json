@@ -1,6 +1,6 @@
 {
   "name": "obsidian-ijipu",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Obsidian 插件：.jps 简谱渲染 + 试听（复用 @ijipu/engine）",
   "main": "main.js",
   "scripts": {
@@ -9,6 +9,10 @@
   },
   "keywords": ["obsidian", "简谱", "jps", "ijipu"],
   "license": "AGPL-3.0",
+  "dependencies": {
+    "spessasynth_core": "^4.3.22",
+    "spessasynth_lib": "^4.3.14"
+  },
   "devDependencies": {
     "@types/node": "^20.11.0",
     "builtin-modules": "^3.3.0",
