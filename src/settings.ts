@@ -1,6 +1,6 @@
-import { App, PluginSettingTab, Setting } from 'obsidian'
+import { App, Notice, PluginSettingTab, Setting } from 'obsidian'
 import { defaultPageConfig, type PageConfig } from '@ijipu/engine'
-import { GM_VOICE_OPTIONS, DEFAULT_HQ_ENABLED } from './soundbank'
+import { GM_VOICE_OPTIONS, DEFAULT_HQ_ENABLED, HqCache, getHqLibrary, prefetchHqLibraryProgress } from './soundbank'
 import type IJipuPlugin from './main'
 
 type FieldKey = keyof PageConfig
@@ -154,6 +154,31 @@ export class IJipuSettingTab extends PluginSettingTab {
         void this.plugin.saveSettings()
       })
     }
+
+    // —— 音源缓存：是否存在缓存判断 + 下载缓存按钮（adj353）——
+    const hqCache = new HqCache()
+    const hqLib = getHqLibrary()
+    const cacheSetting = new Setting(containerEl).setName('高保真音源缓存').setDesc('检测中…')
+    cacheSetting.addButton((b) =>
+      b
+        .setButtonText('下载并缓存')
+        .onClick(async () => {
+          b.setButtonText('下载中…').setDisabled(true)
+          try {
+            await prefetchHqLibraryProgress(hqLib, hqCache)
+            cacheSetting.setDesc('✓ 已缓存（约 30MB，离线可用）')
+            new Notice('音色库已下载并缓存')
+          } catch (e) {
+            cacheSetting.setDesc(`✗ 下载失败：${e instanceof Error ? e.message : String(e)}`)
+            new Notice('音色库下载失败', 5000)
+          } finally {
+            b.setButtonText('下载并缓存').setDisabled(false)
+          }
+        }),
+    )
+    void hqCache.has(hqLib.id).then((ok) => {
+      cacheSetting.setDesc(ok ? '✓ 已缓存（约 30MB，离线可用）' : '未缓存——点击「下载并缓存」（约 30MB）后试听即可用。')
+    })
   }
 
   private addControl(row: Setting, def: SettingDef, cur: FieldValue): void {
