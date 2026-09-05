@@ -67,20 +67,22 @@ export async function playScore(
   opts?: { hqVoice?: number | null; workletUrl?: string },
 ): Promise<{ cancel: () => void; totalMs: number; track: PlayheadSeg[] } | null> {
   const parsed = parseJps(source)
-  if (parsed.errors.length > 0) return null
+  if (parsed.errors.length > 0) throw new Error(`谱面解析失败：${parsed.errors.map((e) => String((e as { message?: string })?.message ?? e)).join('；')}`)
   // buildPlaySequence 需 layout（排版）与 bpm（速度，可由描述头推断）
   const layout = layoutScore(parsed, pageConfig)
   const bpm = inferBpm(parsed)
   const seq = buildPlaySequence(parsed, layout, bpm)
   // adj352：SpessaSynth 高保真试听——音源远端下载 + IndexedDB 缓存，worklet 由插件提供
   const backend = new SpessaSynthBackend()
-  await backend.ready()
   try {
+    // adj353：失败原因直接抛出，供 Obsidian 界面/控制台可见（不再静默无声）
+    await backend.ready()
+    if (!opts?.workletUrl) throw new Error('未找到内置 SpessaSynth worklet——请在插件目录放置 spessasynth_processor.min.js')
     const bank = await loadHqBank(getHqLibrary(), new HqCache())
-    await backend.load(bank, opts?.workletUrl ?? '')
-  } catch {
+    await backend.load(bank, opts.workletUrl)
+  } catch (e) {
     backend.dispose()
-    return null
+    throw e instanceof Error ? e : new Error(String(e))
   }
   backend.setVoice(opts?.hqVoice ?? null)
   // 200ms 起播延迟（与 iJipu PLAY_FIRST_DELAY_MS 一致，声画同步）

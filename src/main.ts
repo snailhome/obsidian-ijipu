@@ -1,4 +1,4 @@
-import { Plugin } from 'obsidian'
+import { Notice, Plugin } from 'obsidian'
 import { mergePageConfig, renderScore, playScore } from './render'
 import { IJipuSettingTab } from './settings'
 import type { IJipuSettings } from './types'
@@ -194,6 +194,10 @@ export default class IJipuPlugin extends Plugin {
         cancelAnimationFrame(rafId)
         rafId = requestAnimationFrame(tick)
         this.playStops.push(stopPlay) // 登记为可全局停止（切换笔记时自动结束）
+      }).catch((e) => {
+        // adj353：试听失败原因可见（不再静默无声）
+        playBtn.setText('▶ 试听')
+        new Notice(`试听失败：${e instanceof Error ? e.message : String(e)}`, 6000)
       })
     })
 
