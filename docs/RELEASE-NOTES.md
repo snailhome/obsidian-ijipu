@@ -1,3 +1,15 @@
+# 爱记谱 iJipu 0.3.8
+
+## 统一构建为 esbuild（修复 vite MISSING_EXPORT）
+
+- 之前 `npm run build` 走 **vite/rolldown**，把 `spessasynth_processor.min.js` 当 JS 模块找 default export → `[MISSING_EXPORT] "default" is not exported by "spessasynth_processor.min.js"`。
+- 现把 `package.json` 的 `dev`/`build` 改为 **esbuild**：
+  - `build` = `tsc -noEmit -skipLibCheck && node esbuild.config.mjs production`（esbuild 的 text loader 把 worklet 内联进 main.js）
+  - `dev` = `tsc -noEmit -skipLibCheck && node esbuild.config.mjs`（watch）
+- 此后统一用 esbuild 构建，产出单一 `main.js`（含内嵌 worklet）。
+
+---
+
 # 爱记谱 iJipu 0.3.7
 
 ## worklet 内嵌进 main.js（不再需要插件目录单独文件）
