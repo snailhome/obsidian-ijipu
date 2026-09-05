@@ -29,8 +29,26 @@ const GM_PROGRAMS: Record<InstrumentId, number> = {
   musicbox: 10,
 }
 
-/** 乐器/声部名 → GM 程序号（匹配失败回退钢琴 0） */
+/** 常用 GM 音色名 → GM program（adj334：@乐器名 用音色名路由到 GM 音色，非固定 6 种） */
+const GM_NAME_PROGRAMS: Record<string, number> = {
+  钢琴: 0, 亮音钢琴: 1, 电钢琴: 4, 酒吧钢琴: 3, 八音盒: 10, 颤音琴: 11, 马林巴: 12, 木琴: 13, 管钟: 14,
+  风琴: 19, 手风琴: 21, 口琴: 22,
+  原声吉他: 24, 电吉他: 25, 木贝斯: 32, 电贝斯: 34, 无品贝斯: 35,
+  小提琴: 40, 中提琴: 41, 大提琴: 42, 低音提琴: 43, 竖琴: 45, 弦乐: 48,
+  合唱: 52, 人声: 53,
+  小号: 56, 长号: 57, 圆号: 60, 铜管: 61,
+  双簧管: 68, 单簧管: 71, 巴松: 70,
+  短笛: 72, 长笛: 73, 竖笛: 75, 排箫: 80,
+  萨克斯: 65, 爵士吉他: 31,
+}
+
+/** 乐器/声部名 → GM 程序号。支持 `音色名`（默认高保真 GM 路由）与 `库id:音色名`（取音色名部分）；
+ *  匹配失败回退钢琴 0。 */
 export function instrumentToProgram(name: string | undefined): number {
+  if (!name) return 0
+  const n = name.includes(':') ? name.slice(name.indexOf(':') + 1) : name
+  const direct = GM_NAME_PROGRAMS[n.trim()]
+  if (direct !== undefined) return direct
   return GM_PROGRAMS[matchInstrument(name)] ?? 0
 }
 

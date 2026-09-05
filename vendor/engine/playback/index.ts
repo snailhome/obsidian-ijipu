@@ -8,6 +8,8 @@
  */
 import type { PlacedToken } from '../types'
 import type { AudioBackend, BackendKind } from './types'
+import type { SamplerLibrary } from './libraries'
+import type { SamplerCache } from './sampler-cache'
 import { SynthBackend } from './synth'
 import { SamplerBackend } from './sampler'
 
@@ -16,18 +18,25 @@ export type { PlayEvent, PlaySequence } from './sequence'
 export { SynthBackend, renderSynthNote, pitchToFreq } from './synth'
 export { SamplerBackend }
 export type { AudioBackend, BackendKind } from './types'
+// adj323：采样音色库元数据 + 联网分类（纯函数，可单测）
+export { SAMPLER_LIBRARIES, getSamplerLibrary } from './libraries'
+export type { SamplerLibrary } from './libraries'
+export { classifyNetwork } from './network'
+export type { NetworkClass, NetworkInfo } from './network'
+// adj323：采样色库离线缓存接口（浏览器 IndexedDB / Tauri 文件系统实现，由 src 注入）
+export type { SamplerCache } from './sampler-cache'
 // adj283：合成乐器预设与名称路由（多声部按各自乐器同时发声）
-export { INSTRUMENT_PRESETS, INSTRUMENT_OPTIONS, INSTRUMENT_LIB_NAMES, matchInstrument, resolveInstrument } from './instruments'
-export type { InstrumentId, InstrumentPreset } from './instruments'
+export { INSTRUMENT_PRESETS, INSTRUMENT_OPTIONS, INSTRUMENT_LIB_NAMES, matchInstrument, resolveInstrument, parseInstrumentRef } from './instruments'
+export type { InstrumentId, InstrumentPreset, ParsedVoiceRef } from './instruments'
 // adj289：MIDI 导出（复用播放序列）
 export { eventsToMidi, pitchToMidiNote, instrumentToProgram } from './midi'
 export type { MidiExportOptions } from './midi'
 // adj290：WAV（PCM16）编码——音频导出共用
 export { pcmToWav } from './wav'
 
-/** 创建音频后端 */
-export function createBackend(kind: BackendKind): AudioBackend {
-  if (kind === 'sampler') return new SamplerBackend()
+/** 创建音频后端；采样后端可指定音色库与离线缓存（缺省用默认库，adj323） */
+export function createBackend(kind: BackendKind, library?: SamplerLibrary, cache?: SamplerCache): AudioBackend {
+  if (kind === 'sampler') return new SamplerBackend(library, cache)
   return new SynthBackend()
 }
 

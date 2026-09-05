@@ -49,6 +49,7 @@ import {
   octaveTopY,
 } from '../layout/spacing'
 import { tempoLabel } from '../parser/parser'
+import { parseInstrumentRef } from '../playback/instruments'
 
 // ============================================================
 // 工具
@@ -272,7 +273,7 @@ function renderMeta(page: ScorePage, config: PageConfig, opts?: RenderFontMeta):
   for (let i = 0; i < page.meta.instruments.length; i++) {
     const pos = posOf(`instrument_${i}`, { x: 0, y: instOffY })
     parts.push(
-      `<text data-meta="instrument_${i}" x="${pos.x}" y="${pos.y}" text-anchor="middle" font-size="${mSize}" font-family="${mFont}" fill="#1b1b1b">${xmlEsc(page.meta.instruments[i])}</text>`,
+      `<text data-meta="instrument_${i}" x="${pos.x}" y="${pos.y}" text-anchor="middle" font-size="${mSize}" font-family="${mFont}" fill="#1b1b1b">${xmlEsc(parseInstrumentRef(page.meta.instruments[i]).display)}</text>`,
     )
     instOffY += mSize * 1.4
   }

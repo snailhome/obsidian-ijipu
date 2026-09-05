@@ -240,7 +240,7 @@ export function tokenizeMusicLine(
       continue
     }
 
-    // adj301：@乐器名 / @@ 乐器切换指令（Q 行内；不占时值、不渲染，仅播放切换乐器）
+    // adj301/adj337：@乐器名 / @@ 乐器切换指令；支持 `@库id:乐器名["显示名"]@` 包裹（legacy=false）
     if (c === '@') {
       if (content[i + 1] === '@') {
         // @@ → 切回默认乐器
@@ -248,11 +248,18 @@ export function tokenizeMusicLine(
         i += 2
         continue
       }
+      // 收集 @ 后内容：到空白/小节线/行尾（允许库前缀 `:`、括号 `()`、引号显示名）
       let k = i + 1
-      // 收集乐器名：到空白/小节线/行尾为止（中文名如 钢琴、英文如 piano）
-      while (k < n && content[k] !== ' ' && content[k] !== '\t' && content[k] !== '|' && content[k] !== ':' && content[k] !== '\n') k++
+      while (k < n && content[k] !== ' ' && content[k] !== '\t' && content[k] !== '|' && content[k] !== '\n') k++
+      // `@...@` 包裹：分隔符前若有尾 @ → 整段原样（new syntax）；否则旧写法（legacy=true，待告警）
+      const tailAt = content.indexOf('@', i + 1)
+      if (tailAt !== -1 && tailAt < k) {
+        tokens.push({ kind: 'instrument', name: content.slice(i + 1, tailAt), pos: i, raw: content.slice(i, tailAt + 1), legacy: false })
+        i = tailAt + 1
+        continue
+      }
       if (k > i + 1) {
-        tokens.push({ kind: 'instrument', name: content.slice(i + 1, k), pos: i, raw: content.slice(i, k) })
+        tokens.push({ kind: 'instrument', name: content.slice(i + 1, k), pos: i, raw: content.slice(i, k), legacy: true })
         i = k
         continue
       }

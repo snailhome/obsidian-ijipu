@@ -259,6 +259,14 @@ export function parseJps(source: string): ParseResult {
       const voiceName = musicMatch[2] || undefined
       const { tokens, errors: tokErrors } = tokenizeMusicLine(musicMatch[3] ?? '', pos)
       errors.push(...tokErrors)
+      // adj338：旧写法单 @乐器名（legacy）→ 告警提示改用 @...@（带行+列定位）
+      // 注意：列 = 行前缀（`Q1: ` 等）+ token 在曲行内容内的偏移，使跳转定位到 @ 所在完整列
+      const prefixLen = trimmed.length - (musicMatch[3] ?? '').length
+      for (const t of tokens) {
+        if (t.kind === 'instrument' && t.legacy && t.name) {
+          errors.push(errAt(`旧乐器写法 @${t.name}，建议改用 @${t.name}@`, pos.line, prefixLen + t.pos, 'warning'))
+        }
+      }
       const ml: MusicLine = {
         kind: 'music',
         voice,

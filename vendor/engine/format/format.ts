@@ -52,6 +52,19 @@ export function formatLine(raw: string): string {
         continue
       }
     }
+    // adj337：@...@ 乐器指定包裹段——整段原样保留（不补空格/不重排），确保 () 等特殊字符不被拆分
+    if (note === '@') {
+      const endAt = trimmed.indexOf('@', x + 1)
+      if (endAt !== -1 && endAt > x + 1) {
+        out.push(trimmed.slice(x, endAt + 1))
+        lastNote = ''
+        last = trimmed[endAt]
+        x = endAt
+        continue
+      }
+      out.push(note)
+      continue
+    }
     // 普通区空白压缩为单空格（adj23：块间恰好一个空格；引号/跳房子内原样）
     if (note === ' ') {
       if (out[out.length - 1] !== ' ') out.push(' ')

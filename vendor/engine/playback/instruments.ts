@@ -37,8 +37,8 @@ export const INSTRUMENT_PRESETS: Record<InstrumentId, InstrumentPreset> = {
   musicbox: { partials: [[1, 1, 'sine'], [4, 0.25, 'sine'], [8, 0.08, 'sine']], attack: 0.005 },
 }
 
-/** 乐器选择项（UI 下拉）：auto = 按声部名自动路由；sampler = 采样后端 */
-export const INSTRUMENT_OPTIONS: { id: InstrumentId | 'auto' | 'sampler'; label: string }[] = [
+/** 合成乐器选择项（UI 下拉）：auto = 按声部名自动路由。采样色库独立于 sampling（见 libraries.ts） */
+export const INSTRUMENT_OPTIONS: { id: InstrumentId | 'auto'; label: string }[] = [
   { id: 'auto', label: '自动（按声部名）' },
   { id: 'piano', label: '钢琴' },
   { id: 'organ', label: '风琴' },
@@ -46,7 +46,6 @@ export const INSTRUMENT_OPTIONS: { id: InstrumentId | 'auto' | 'sampler'; label:
   { id: 'flute', label: '长笛' },
   { id: 'brass', label: '铜管' },
   { id: 'musicbox', label: '八音盒' },
-  { id: 'sampler', label: '采样（钢琴）' },
 ]
 
 /** 名称关键词表：声部名/乐器名包含任一关键词即路由到该预设（中文优先，含常见英文） */
@@ -91,4 +90,39 @@ export function resolveInstrument(name: string | undefined): InstrumentId {
     if (n === lib || n.toLowerCase() === id) return id
   }
   return 'piano'
+}
+
+/** 乐器引用解析结果（adj336） */
+export interface ParsedVoiceRef {
+  /** 路由用引用：`库id:乐器名` 或 `乐器名`（已剥显示名与 @ 前缀） */
+  ref: string
+  /** 纯净乐器名（无库 id、无引号） */
+  instrument: string
+  /** 显示名：`"显示名"` 内容，缺省为纯净乐器名 */
+  display: string
+}
+
+/**
+ * 解析乐器引用：`[库id:]乐器名["显示名"]`。
+ *  `@` 前缀可由调用方剥离；`库id` 可省略。显示名可省略，缺省=纯净乐器名。
+ *  示例：`generaluser_gs:小提琴"领奏"` → { ref:'generaluser_gs:小提琴', instrument:'小提琴', display:'领奏' }；
+ *        `长笛` → { ref:'长笛', instrument:'长笛', display:'长笛' }。
+ */
+export function parseInstrumentRef(raw: string): ParsedVoiceRef {
+  let body = raw.trim().replace(/^@/, '').replace(/@$/, '') // 剥首尾 @（@...@ 包裹）
+  let display: string | null = null
+  // 剥离首个成对引号（显示名）
+  const qi = body.indexOf('"')
+  if (qi >= 0) {
+    const qe = body.indexOf('"', qi + 1)
+    if (qe > qi) {
+      display = body.slice(qi + 1, qe)
+      body = (body.slice(0, qi) + body.slice(qe + 1)).trim()
+    }
+  }
+  // 库id:乐器名
+  let instrument = body
+  const ci = body.indexOf(':')
+  if (ci >= 0) instrument = body.slice(ci + 1).trim()
+  return { ref: body, instrument, display: display ?? instrument }
 }

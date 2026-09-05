@@ -294,6 +294,8 @@ export interface InstrumentToken {
   name: string | null
   pos: number
   raw: string
+  /** adj337：true = 旧写法单 @乐器名（无尾 @），需告警提示用 @...@ 新语法；false = @...@ 包裹 */
+  legacy?: boolean
 }
 
 /**
