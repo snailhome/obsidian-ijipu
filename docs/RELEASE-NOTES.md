@@ -1,3 +1,11 @@
+# 爱记谱 iJipu 0.3.5
+
+## 修复构建失败（BigInt target 过旧）
+
+- esbuild 构建目标由 `es2018` 提升到 **`es2020`**（`spessasynth_core` 用到 BigInt，`es2018` 不支持导致 `node esbuild.config.mjs production` 报 `Big integer literals are not available`）。Obsidian/Electron 全程支持 ES2020，不受影响。
+
+---
+
 # 爱记谱 iJipu 0.3.4
 
 ## 修复试听无声（Cannot find module dist-*.js）

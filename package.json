@@ -1,6 +1,6 @@
 {
   "name": "obsidian-ijipu",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Obsidian 插件：.jps 简谱渲染 + 试听（复用 @ijipu/engine）",
   "main": "main.js",
   "scripts": {
