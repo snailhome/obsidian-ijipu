@@ -136,33 +136,24 @@ export class IJipuSettingTab extends PluginSettingTab {
         dd.onChange((v) => { this.plugin.settings.hqVoice = v === 'auto' ? null : Number(v); void this.plugin.saveSettings() })
       })
     new Setting(containerEl)
-      .setName('收藏音色')
-      .setDesc('试听音色列表可用的音色（默认常用音色）；下拉选择加入，点音色名移除。')
-      .addDropdown((dd) => {
-        GM_VOICE_OPTIONS.forEach((v) => dd.addOption(String(v.program), v.label))
-        dd.onChange((v) => {
-          const p = Number(v)
-          const cur = this.plugin.settings.hqEnabled ?? DEFAULT_HQ_ENABLED.slice()
-          if (!cur.includes(p)) { this.plugin.settings.hqEnabled = [...cur, p]; void this.plugin.saveSettings() }
-        })
+      .setName('收藏音色（可用音色）')
+      .setDesc('勾选试听可用的音色（默认常用音色；列表可滚动）。')
+    const editVoice = this.plugin.settings.hqEnabled == null ? DEFAULT_HQ_ENABLED.slice() : [...this.plugin.settings.hqEnabled]
+    const favWrap = containerEl.createDiv({ cls: 'ijipu-soundbanks' })
+    favWrap.setAttr('style', 'max-height:300px;overflow:auto;border:1px solid var(--background-modifier-border);border-radius:6px;padding:4px;background:var(--background-primary);')
+    for (const v of GM_VOICE_OPTIONS) {
+      const row = favWrap.createEl('label', { cls: 'ijipu-voice-row' })
+      row.setAttr('style', 'display:flex;align-items:center;gap:6px;padding:3px 6px;font-size:13px;cursor:pointer;')
+      const cb = row.createEl('input')
+      cb.type = 'checkbox'
+      cb.checked = editVoice.includes(v.program)
+      row.appendText(v.label)
+      cb.addEventListener('change', () => {
+        const cur = this.plugin.settings.hqEnabled ?? DEFAULT_HQ_ENABLED.slice()
+        this.plugin.settings.hqEnabled = cb.checked ? [...cur, v.program] : cur.filter((x) => x !== v.program)
+        void this.plugin.saveSettings()
       })
-    const favWrap = containerEl.createDiv({ cls: 'ijipu-settings-fav' })
-    const renderFavs = (): void => {
-      favWrap.empty()
-      const list = this.plugin.settings.hqEnabled ?? DEFAULT_HQ_ENABLED
-      for (const p of list) {
-        const v = GM_VOICE_OPTIONS.find((x) => x.program === p)
-        if (!v) continue
-        const chip = favWrap.createSpan({ cls: 'ijipu-settings-chip', text: v.label })
-        chip.addEventListener('click', () => {
-          this.plugin.settings.hqEnabled = (this.plugin.settings.hqEnabled ?? DEFAULT_HQ_ENABLED).filter((x) => x !== p)
-          void this.plugin.saveSettings()
-          renderFavs()
-        })
-      }
-      if (favWrap.children.length === 0) favWrap.createSpan({ cls: 'ijipu-settings-chip', text: '（未收藏）' })
     }
-    renderFavs()
   }
 
   private addControl(row: Setting, def: SettingDef, cur: FieldValue): void {
