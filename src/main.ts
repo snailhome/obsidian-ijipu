@@ -3,6 +3,8 @@ import { mergePageConfig, renderScore, playScore } from './render'
 import { IJipuSettingTab } from './settings'
 import type { IJipuSettings } from './types'
 import type { PlayheadSeg } from './render'
+// @ts-ignore esbuild 以 text loader 把 worklet 内联为字符串（main.js 单文件自包含，无需插件目录单独 worklet）
+import workletCode from '../spessasynth_processor.min.js'
 
 type ViewMode = 'page' | 'full' | 'score'
 const MODE_LABEL: Record<ViewMode, string> = { page: '整页', full: '满宽', score: '谱面' }
@@ -25,12 +27,12 @@ export default class IJipuPlugin extends Plugin {
   settings: IJipuSettings = {}
   /** 所有进行中试听的停止函数（切换笔记时统一停止） */
   private playStops: (() => void)[] = []
-  /** 内置 SpessaSynth worklet URL（插件目录读取 → Blob URL；缺失则试听高保真不可用） */
+  /** 内置 SpessaSynth worklet URL（worklet 代码内联进 main.js → Blob URL，随插件单文件分发） */
   private workletUrl = ''
 
   async onload(): Promise<void> {
     await this.loadSettings()
-    this.workletUrl = await this.loadWorklet()
+    this.workletUrl = this.makeWorkletUrl()
     this.addSettingTab(new IJipuSettingTab(this.app, this))
     this.registerMarkdownCodeBlockProcessor('jps', (source, el, ctx) => {
       this.renderBlock(source, el, ctx.sourcePath)
@@ -58,13 +60,10 @@ export default class IJipuPlugin extends Plugin {
     await this.saveData(this.settings)
   }
 
-  /** 读取内置 SpessaSynth worklet 处理器（插件目录文件 → Blob URL，供 audioWorklet.addModule） */
-  private async loadWorklet(): Promise<string> {
+  /** 由内嵌 worklet 代码构造 Blob URL（不再依赖插件目录单独文件；供 audioWorklet.addModule） */
+  private makeWorkletUrl(): string {
     try {
-      const p = `.obsidian/plugins/${this.manifest.id}/spessasynth_processor.min.js`
-      if (!(await this.app.vault.adapter.exists(p))) return ''
-      const buf = await this.app.vault.adapter.readBinary(p)
-      const blob = new Blob([buf], { type: 'application/javascript' })
+      const blob = new Blob([workletCode], { type: 'application/javascript' })
       return URL.createObjectURL(blob)
     } catch {
       return ''

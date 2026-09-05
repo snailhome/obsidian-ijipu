@@ -2,6 +2,7 @@ import esbuild from 'esbuild'
 import process from 'process'
 import builtins from 'builtin-modules'
 import path from 'node:path'
+import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -29,6 +30,19 @@ const context = await esbuild.context({
   alias: {
     '@ijipu/engine': path.resolve(__dirname, './vendor/engine/index.ts'),
   },
+  plugins: [
+    {
+      name: 'worklet-raw',
+      setup(build) {
+        // 把 spessasynth_processor.min.js 以文本内联进 bundle —— main.js 单文件自包含，
+        // 无需插件目录再放单独的 worklet 文件（解决「未找到内置 worklet」）。
+        build.onLoad({ filter: /spessasynth_processor\.min\.js$/ }, async (args) => ({
+          contents: await readFile(args.path, 'utf8'),
+          loader: 'text',
+        }))
+      },
+    },
+  ],
 })
 
 if (prod) {

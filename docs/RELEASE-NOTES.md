@@ -1,3 +1,13 @@
+# 爱记谱 iJipu 0.3.7
+
+## worklet 内嵌进 main.js（不再需要插件目录单独文件）
+
+- 之前的做法要读取插件目录的 `spessasynth_processor.min.js`，装后若没该文件就报「未找到内置 worklet」。
+- 现改为：**esbuild 把 worklet 内容以文本内联进 `main.js`**，运行时用 Blob URL 加载——**插件只要 `main.js` 一个文件即可试听**，不再依赖单独的 worklet 文件。
+- 重新构建：`node esbuild.config.mjs production`，用新 `main.js` 替换即可（`spessasynth_processor.min.js` 可不放插件目录）。
+
+---
+
 # 爱记谱 iJipu 0.3.6
 
 ## 发布产物包含 worklet + 单一 main.js
