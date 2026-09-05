@@ -1,3 +1,14 @@
+# 爱记谱 iJipu 0.3.6
+
+## 发布产物包含 worklet + 单一 main.js
+
+- **修复**：GitHub Actions 发布产物此前只含 `main.js/manifest.json/styles.css`，**不含 `spessasynth_processor.min.js`**（用户安装后插件目录无 worklet → 试听无声）。现发布流程：
+  - 用 `node esbuild.config.mjs production` 产出**单一 main.js**（不再用 vite 拆出 `dist-*.js` chunk，避免 `Cannot find module`）。
+  - 发布 `files` 追加 **`spessasynth_processor.min.js`**（worklet）。
+- 安装后请确认插件目录含 `main.js` + `spessasynth_processor.min.js`。
+
+---
+
 # 爱记谱 iJipu 0.3.5
 
 ## 修复构建失败（BigInt target 过旧）

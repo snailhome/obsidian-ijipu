@@ -26,7 +26,8 @@ jobs:
       # 插件依赖 vite/esbuild/obsidian；用 install + legacy-peer-deps（比 ci 更宽容 lock 微差）
       - run: npm install --legacy-peer-deps
 
-      - run: npm run build
+      # 用 esbuild 产单一 main.js（不拆 chunk，避免 Obsidian 插件目录缺 dist-*.js 报 Cannot find module）
+      - run: node esbuild.config.mjs production
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -37,3 +38,4 @@ jobs:
             main.js
             manifest.json
             styles.css
+            spessasynth_processor.min.js
