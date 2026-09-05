@@ -1,3 +1,13 @@
+# 爱记谱 iJipu 0.3.4
+
+## 修复试听无声（Cannot find module dist-*.js）
+
+- **根因**：`spessasynth_lib` 用动态 `import()` 拆出了独立 chunk（`dist-*.js`），而 Obsidian 插件目录只有 `main.js`，缺少该 chunk → 试听时报 `Cannot find module '.../dist-CwEozVpz.js'` 而无声。
+- **修复**：`spessasynth_lib` 改为**静态 import**，打包进 `main.js` 单文件（不再拆 chunk），无需额外 `dist-*.js`。
+- **请重新构建**（本机）：`node esbuild.config.mjs production`，用新 `main.js` 替换插件目录旧的（并确保插件目录含 `spessasynth_processor.min.js`）。
+
+---
+
 # 爱记谱 iJipu 0.3.3
 
 ## 试听失败可见（定位无声问题）

@@ -9,7 +9,7 @@
  *  - prefetchHqLibraryProgress / loadHqBank：远端下载 + 写缓存（带进度回调）
  *  - SpessaSynthBackend：spessasynth_lib 合成器后端（动态加载，worklet 由插件提供）
  */
-import type { WorkletSynthesizer } from 'spessasynth_lib'
+import { WorkletSynthesizer } from 'spessasynth_lib'
 import { instrumentToProgram, pitchToMidiNote } from '@ijipu/engine'
 
 /** 高保真音源库（SF2/SF3/DLS）元数据 */
@@ -189,8 +189,8 @@ export class SpessaSynthBackend {
     try {
       const ctx = await this.ensureCtx()
       if (!ctx) throw new Error('AudioContext 不可用')
-      // adj352：动态加载 spessasynth_lib（大库）——试听时才按需引入
-      const { WorkletSynthesizer } = await import('spessasynth_lib')
+      // adj354：spessasynth_lib 用静态 import（避免构建拆出 dist-*.js chunk——Obsidian 插件目录只有 main.js，
+      // 缺失 chunk 导致 Cannot find module；静态导入随 main.js 单文件内联）
       if (!this.synth) {
         await ctx.audioWorklet.addModule(workletUrl)
         const synth = new WorkletSynthesizer(ctx)
