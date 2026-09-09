@@ -556,6 +556,8 @@ export function layoutScore(
 
   let pageIndex = 0
   let y = m.titleAreaH // 当前行顶 y
+  // adj355：上一行/上一组(空间优先)各小节内容宽——跨组共享，供后续自然宽行小节对齐（如 2 行谱第 2 行对齐第 1 行）
+  let prevRowMeasW: (number | undefined)[] | undefined
 
   /** 歌词 → 槽位映射（每行词独立）：标点不占槽位；@ 消耗槽位 */
   const buildLyricMaps = (lyrics: LyricLine[]): Map<number, LyricChar>[] =>
@@ -1575,8 +1577,6 @@ export function layoutScore(
 
     // adj199：参考每拍宽（前面曲部行的平均每拍宽，供未撑满行按小节线对齐）
     let refPerBeat: number | undefined
-    // adj355：上一行(空间优先)各小节内容宽，供本行自然宽时小节对齐
-    let prevRowMeasW: (number | undefined)[] | undefined
     rows.forEach((row, ri) => {
       const sp = spacingFor(config, pageIndex)
       const rowH = lineHeightOf(config, m, sp, lyrics.length)
