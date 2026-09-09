@@ -48,11 +48,12 @@ export function tokenizeMusicLine(
     lastBlockCounts = true
   }
 
-  /** 解析 [ 后的跳房子修饰（adj26）：+ 抬高（可多个）、/ 不封闭、引号注释（番号） */
-  const parseVoltaMods = (start: number): { k: number; slash: boolean; plus: number; comment?: string } => {
+  /** 解析 [ 后的跳房子修饰（adj26）：+ 抬高、- 降低（adj356）、/ 不封闭、引号注释（番号） */
+  const parseVoltaMods = (start: number): { k: number; slash: boolean; plus: number; minus: number; comment?: string } => {
     let k = start
     let slash = false
     let plus = 0
+    let minus = 0
     let comment: string | undefined
     while (k < n) {
       const ch = content[k]
@@ -61,6 +62,9 @@ export function tokenizeMusicLine(
         k++
       } else if (ch === '+') {
         plus++
+        k++
+      } else if (ch === '-') {
+        minus++
         k++
       } else if (ch === '"') {
         const close = content.indexOf('"', k + 1)
@@ -76,7 +80,7 @@ export function tokenizeMusicLine(
         break
       }
     }
-    return { k, slash, plus, comment }
+    return { k, slash, plus, minus, comment }
   }
 
   // 收集一个 token 的公共后缀：变音/减时线/增时线/附点/高低音点/装饰/注释
@@ -318,7 +322,7 @@ export function tokenizeMusicLine(
           if (content[j] === '[') {
             // 跳房子开始（adj26：修饰 = + 抬高 / 不封闭 / 引号注释）
             const mod = parseVoltaMods(j + 1)
-            t.voltaStart = { open: true, slash: mod.slash, plus: mod.plus, comment: mod.comment }
+            t.voltaStart = { open: true, slash: mod.slash, plus: mod.plus, minus: mod.minus, comment: mod.comment }
             t.raw = rawAt(i, mod.k)
             j = mod.k
           } else if (content[j] === ']') {
@@ -466,13 +470,13 @@ export function tokenizeMusicLine(
       const last = tokens[tokens.length - 1]
       if (last && last.kind === 'barline' && !last.voltaStart && !last.voltaEnd) {
         // 继承前一小节线（含番号备注），合并跳房子起点
-        last.voltaStart = { open: true, slash: mod.slash, plus: mod.plus, comment: mod.comment }
+        last.voltaStart = { open: true, slash: mod.slash, plus: mod.plus, minus: mod.minus, comment: mod.comment }
         last.raw += rawAt(i, mod.k)
         lastBlockEnd = mod.k // 小节线块结束延展
       } else if (last && last.kind === 'barline' && last.voltaEnd && !last.voltaStart) {
         // ] 后连续 [（如 |]["2"）：第二段起点与第一段结束**共用同一小节线**
         // （adj139：voltaEnd + voltaStart 共存于一根小节线，不另画竖线）
-        last.voltaStart = { open: true, slash: mod.slash, plus: mod.plus, comment: mod.comment }
+        last.voltaStart = { open: true, slash: mod.slash, plus: mod.plus, minus: mod.minus, comment: mod.comment }
         last.raw += rawAt(i, mod.k)
         lastBlockEnd = mod.k
       } else {
@@ -488,7 +492,7 @@ export function tokenizeMusicLine(
         tokens.push({
           kind: 'barline',
           type: '|',
-          voltaStart: { open: true, slash: mod.slash, plus: mod.plus, comment: mod.comment },
+          voltaStart: { open: true, slash: mod.slash, plus: mod.plus, minus: mod.minus, comment: mod.comment },
           voltaOnly: true,
           pos: i,
           raw: rawAt(i, mod.k),

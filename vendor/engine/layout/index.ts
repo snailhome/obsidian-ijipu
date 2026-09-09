@@ -2240,7 +2240,8 @@ export function layoutScore(
     let floor: number | null = null
     for (const b of pages[r.page].barlines) {
       if (Math.abs(b.yTop - barY) < 1 && b.voltaStart) {
-        const vy = b.yTop - VOLTA_BAR_GAP - (b.voltaStart.plus ?? 0) * VOLTA_RAISE
+        const vy =
+          b.yTop - VOLTA_BAR_GAP - (b.voltaStart.plus ?? 0) * VOLTA_RAISE + (b.voltaStart.minus ?? 0) * VOLTA_RAISE
         if (floor === null || vy < floor) floor = vy
       }
     }

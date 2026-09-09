@@ -1007,8 +1007,9 @@ function renderVoltaLine(
   firstOfRow?: Map<number, PlacedBarline>,
 ): string {
   const plus = start.voltaStart?.plus ?? 0
-  // adj60：跳房子线基于小节线定位（距小节线上端 VOLTA_BAR_GAP，+ 修饰每级 VOLTA_RAISE）
-  const y = start.yTop - VOLTA_BAR_GAP - plus * VOLTA_RAISE
+  const minus = start.voltaStart?.minus ?? 0
+  // adj60：跳房子线基于小节线定位（距小节线上端 VOLTA_BAR_GAP，+ 修饰每级 VOLTA_RAISE 抬升、- 修饰每级降低，adj356）
+  const y = start.yTop - VOLTA_BAR_GAP - plus * VOLTA_RAISE + minus * VOLTA_RAISE
   // 起止偏移（adj50）：起点 = 小节线正中右移 2px、终点 = 小节线正中左移 2px
   const x1 = start.x + 2
   const openEnd = !end || !!end.voltaEndSlash // 开口结束：无终点折线（adj26）
@@ -1033,7 +1034,7 @@ function renderVoltaLine(
       `<line x1="${x1}" y1="${y}" x2="${xEndA}" y2="${y}" stroke="#1b1b1b" stroke-width="0.8"/>`,
     )
     parts.push(labelSvg)
-    const yB = end.yTop - VOLTA_BAR_GAP - plus * VOLTA_RAISE
+    const yB = end.yTop - VOLTA_BAR_GAP - plus * VOLTA_RAISE + minus * VOLTA_RAISE
     const rowFirst = firstOfRow?.get(end.yTop)
     const xStartB =
       rowFirst && rowFirst.x < end.x - 2 ? rowFirst.x : marginLeft + 2

@@ -242,8 +242,10 @@ export interface BarlineToken {
     open: boolean
     /** [/ 表示右侧不封闭 */
     slash?: boolean
-    /** + 号数量，调整跳房子线高度 */
+    /** + 号数量，调整跳房子线高度（抬升，向上） */
     plus?: number
+    /** - 号数量，调整跳房子线高度（降低，向下，adj356 与 + 相反） */
+    minus?: number
     /** [ 后引号注释（跳房子番号，adj26） */
     comment?: string
   }
@@ -438,7 +440,7 @@ export interface PlacedBarline {
   /** 小节线修饰符列表（adj206：可叠加多个，如 |&ty&ds 同时渲染 ⊕ 与 D.S.） */
   marks?: BarlineMark[]
   /** 跳房子起点/终点标记 */
-  voltaStart?: { open: boolean; slash?: boolean; plus?: number; comment?: string }
+  voltaStart?: { open: boolean; slash?: boolean; plus?: number; minus?: number; comment?: string }
   voltaEnd?: boolean
   /** |]/ 跳房子开口结束（adj26） */
   voltaEndSlash?: boolean
