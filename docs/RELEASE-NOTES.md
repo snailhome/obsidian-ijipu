@@ -1,3 +1,12 @@
+# 爱记谱 iJipu 0.3.10
+
+## 引擎同步 adj354：`@@` 显示音色名与播放端一致
+
+- 同步 `@ijipu/engine`（`vendor/engine/layout/index.ts`）：`layoutScore` 新增可选 `defaultInstrumentRef`，`@@`（切回默认）后的音符标注取默认音色名（有 `Y:`→该声部 `Y:` 乐器名；无 `Y:`→传入默认/第一音色库第一音色），不再固定显示"钢琴"。
+- 插件无"收藏音色"概念，`layoutScore` 不传 `defaultInstrumentRef` → 无 `Y:` 时 `@@` 标注为第一音色库第一音色（钢琴），行为不变。
+
+---
+
 # 爱记谱 iJipu 0.3.9
 
 ## 引擎同步 adj354：`@@` 恢复默认音色 = 第一音色 + 单声部空间优先尊重 `align_min_bars`

@@ -31,8 +31,8 @@ import type {
 import { DIGIT_HEIGHT_RATIO, LAYER_GAP, SLUR_W, octaveTopY, BRACKET_PAD, H_GAP, noteScaleOf, GRACE_SIZE_RATIO, GRACE_SLOT_RATIO, GRACE_SLOT_RATIO_MULTI, VOLTA_BAR_GAP, VOLTA_RAISE, DYN_HALF_H, barlinePad, DOT_AFTER_DIGIT_GAP, DOT_R } from './spacing'
 // adj284：空间优先布局的度量（本体宽 / 时值拆分 / 非时值元素间距）
 import { splitNoteDur, noteBodyW, augBodyW, dotBodyW, accidentalBodyW, bracketBodyW, digitSlotW, hxBodyW } from './spaceLayout'
-// adj303：乐器名标注需要用 resolveInstrument / 库名（@乐器名 / @@ 后下一个音符）
-import { resolveInstrument, INSTRUMENT_LIB_NAMES } from '../playback/instruments'
+// adj303：乐器名标注需要用 parseInstrumentRef / 库名（@乐器名 / @@ 后下一个音符）
+import { parseInstrumentRef, INSTRUMENT_LIB_NAMES } from '../playback/instruments'
 
 // ============================================================
 // 音高映射：简谱音级 → 音名（如 C4 / F#5）
@@ -508,7 +508,11 @@ interface Unit {
 // 主排版函数
 // ============================================================
 
-export function layoutScore(result: ParseResult, config: PageConfig): ScoreLayout {
+export function layoutScore(
+  result: ParseResult,
+  config: PageConfig,
+  defaultInstrumentRef?: string,
+): ScoreLayout {
   const paper = PAPER_SIZE[config.page]
   const m = metrics(config)
   const keySemitone = parseKey(result.header.key)
@@ -2335,16 +2339,22 @@ export function layoutScore(result: ParseResult, config: PageConfig): ScoreLayou
   }
 
   // adj303：显示乐器名——@乐器名 / @@（切回默认）后第一个音符上方标注乐器名（仅在 showInstrument 开启时）
+  // adj354：@@ 的默认乐器名与播放端（buildPlaySequence）一致——有 Y 用该声部 Y 乐器名；
+  // 无 Y 用调用方传入 defaultInstrumentRef（试听音色列表第一启用音色）；再空回退『第一音色库第一音色（钢琴）』。
+  // 直接用 parseInstrumentRef(...).instrument（纯乐器名），避免 resolveInstrument 只映射固定 6 种、漏掉 GM 音色名。
   if (config.showInstrument === true) {
-    const defaultId = resolveInstrument(result.header.instruments?.[0])
+    const yInst = result.header.instruments
+    const globalDefaultName = yInst?.[0]
+      ? parseInstrumentRef(yInst[0]).instrument
+      : defaultInstrumentRef?.trim() || INSTRUMENT_LIB_NAMES.piano
     for (const group of result.groups) {
       // 该声部默认乐器（按 Y 顺序，无对应 Y 用全局默认）——@@ 恢复名用
-      const gY = result.header.instruments?.[group.music.voice - 1]
-      const voiceDefaultId = gY !== undefined ? resolveInstrument(gY) : defaultId
+      const gY = yInst?.[group.music.voice - 1]
+      const voiceDefaultName = gY !== undefined ? parseInstrumentRef(gY).instrument : globalDefaultName
       let pending: string | null = null
       for (const tk of group.music.tokens) {
         if (tk.kind === 'instrument') {
-          pending = tk.name != null ? tk.name : INSTRUMENT_LIB_NAMES[voiceDefaultId] ?? ''
+          pending = tk.name != null ? tk.name : voiceDefaultName
         } else if (tk.kind === 'note' || tk.kind === 'rest' || tk.kind === 'rhythm') {
           if (pending !== null) {
             for (const page of pages) {
