@@ -1263,8 +1263,9 @@ export function layoutScore(
     geciSize: number,
     sp: Spacing,
     slotStart: number,
-  ) => {
-    if (row.kind !== 'bars') return
+    refRelMeasureW?: (number | undefined)[],
+  ): number[] | undefined => {
+    if (row.kind !== 'bars') return undefined
     const page = pages[pageIndex]
     const leadingEmpty = row.start < row.end && segs[row.start].notes.length === 0 ? 1 : 0
 
@@ -1363,13 +1364,36 @@ export function layoutScore(
     const stretch = barCount >= config.align_min_bars
     const W = stretch ? Math.max(0, availW - durBodySum - nonDurPad) : 0
 
+    // adj355: 自然宽行——行小节数 < align_min_bars 时各小节对齐上一行对应小节宽度（不窄于它）；
+    // 若本小节自然内容宽 < 上一行对应小节内容宽，则扩到上一行宽度，小节内音符按空间布局（按时值）摊开。
+    // 撑满行（stretch）沿用全局 W 分布，不做小节级对齐。
+    const segNatW: number[] = new Array(segs.length).fill(0)
+    const segDurSum: number[] = new Array(segs.length).fill(0)
+    const extraWByBar: number[] = new Array(segs.length).fill(0)
+    if (!stretch) {
+      for (const n of noteList) {
+        const noteElDur = n.noteDur + (n.hasDot ? n.dotDur : 0)
+        segNatW[n.barIdx] += n.noteBodyW + (n.hasDot ? n.dotBodyW : 0) + n.augCount * augBodyW(m.noteSize)
+        segDurSum[n.barIdx] += noteElDur + n.augCount * n.augDur
+      }
+      for (let b = row.start; b < row.end; b++) {
+        const refW = refRelMeasureW?.[b - row.start]
+        if (refW !== undefined && refW > segNatW[b]) extraWByBar[b] = refW - segNatW[b]
+      }
+    }
+    // 音符/增时线在「撑满(全局 W)」或「自然+小节对齐(per-bar extra)」下的可分配宽
+    const extraOf = (barIdx: number, elDur: number): number => {
+      if (stretch) return totalDur > 0 ? (elDur / totalDur) * W : 0
+      return segDurSum[barIdx] > 0 ? (elDur / segDurSum[barIdx]) * extraWByBar[barIdx] : 0
+    }
+
     // adj288：每音符每拍时值宽 + 每小节首/末音符每拍宽（供小节线间距自适应收紧）
     const segFirstPb: (number | undefined)[] = new Array(segs.length).fill(undefined)
     const segLastPb: (number | undefined)[] = new Array(segs.length).fill(undefined)
     for (const n of noteList) {
       const noteElDur = n.noteDur + (n.hasDot ? n.dotDur : 0)
       const noteElW =
-        n.noteBodyW + (n.hasDot ? n.dotBodyW : 0) + (totalDur > 0 ? (noteElDur / totalDur) * W : 0)
+        n.noteBodyW + (n.hasDot ? n.dotBodyW : 0) + extraOf(n.barIdx, noteElDur)
       n.perBeatW = noteElDur > 0 ? noteElW / noteElDur : 0
       if (segFirstPb[n.barIdx] === undefined) segFirstPb[n.barIdx] = n.perBeatW
       segLastPb[n.barIdx] = n.perBeatW
@@ -1432,6 +1456,8 @@ export function layoutScore(
     let curX = config.margin_left
     let barCursor = 0
     let noteCursor = 0
+    // adj355: 本行各小节「内容宽」（供下一行自然宽对齐）——按行内相对下标
+    const measureContentW: number[] = new Array(row.end - row.start).fill(0)
     for (let b = row.start; b < row.end; b++) {
       const seg = segs[b]
       const isEmptyLead = leadingEmpty === 1 && b === row.start
@@ -1441,7 +1467,7 @@ export function layoutScore(
             const n = noteList[noteCursor++]
             const noteElDur = n.noteDur + (n.hasDot ? n.dotDur : 0)
             const noteElW =
-              n.noteBodyW + (n.hasDot ? n.dotBodyW : 0) + (totalDur > 0 ? (noteElDur / totalDur) * W : 0)
+              n.noteBodyW + (n.hasDot ? n.dotBodyW : 0) + extraOf(n.barIdx, noteElDur)
             // 音符块段左缘：带附点时与附点三段留空分散（音符块靠左）；
             // 无附点时音符块内容在时值宽度 noteElW 内居中（左右等留空）
             let blockX = curX
@@ -1458,11 +1484,12 @@ export function layoutScore(
             if (n.hasDot) segments.push({ x: r1(dotCX), perBeat: r1(n.dotBodyW / n.dotDur), beats: n.dotDur, el: 'dot' })
             let xCursor = curX + noteElW
             for (let a = 0; a < n.augCount; a++) {
-              const augElW = augBodyW(m.noteSize) + (totalDur > 0 ? (n.augDur / totalDur) * W : 0)
+              const augElW = augBodyW(m.noteSize) + extraOf(n.barIdx, n.augDur)
               // perBeat = 实际每拍宽（段宽 = augElW），使增时线字符在自身时值宽度内居中
               segments.push({ x: r1(xCursor), perBeat: r1(augElW / n.augDur), beats: n.augDur, el: 'aug' })
               xCursor += augElW
             }
+            measureContentW[b - row.start] += xCursor - curX
             // 音符实际占位宽（不含括号）：音符块段（含附点三段留空）+ 增时线
             const actualW = xCursor - curX
             const rightX = xCursor // 音符实际占位右端
@@ -1520,6 +1547,7 @@ export function layoutScore(
         barCursor++
       }
     }
+    return measureContentW
   }
 
   /** 处理一个单声部组 */
@@ -1547,6 +1575,8 @@ export function layoutScore(
 
     // adj199：参考每拍宽（前面曲部行的平均每拍宽，供未撑满行按小节线对齐）
     let refPerBeat: number | undefined
+    // adj355：上一行(空间优先)各小节内容宽，供本行自然宽时小节对齐
+    let prevRowMeasW: (number | undefined)[] | undefined
     rows.forEach((row, ri) => {
       const sp = spacingFor(config, pageIndex)
       const rowH = lineHeightOf(config, m, sp, lyrics.length)
@@ -1561,10 +1591,13 @@ export function layoutScore(
       // 含 &zkh/&ykh 括号的行先行版回退时值优先（括号的空间优先占位后续再补）
       // adj286：空间优先已支持 &zkh/&ykh 括号占位，不再因括号回退时值优先
       const isSpace = config.noteSpaceLayout === 'space' && row.kind === 'bars'
-      const pb = isSpace
-        ? placeMusicRowSpace(segs, row, groupIndex, voice, y, lyricMaps, geciSize, sp, rowSlots[ri])
-        : placeMusicRow(segs, row, groupIndex, voice, y, lyricMaps, geciSize, sp, rowSlots[ri], refPerBeat)
-      if (!isSpace && row.kind === 'bars' && pb !== undefined) refPerBeat = pb
+      if (isSpace) {
+        const mws = placeMusicRowSpace(segs, row, groupIndex, voice, y, lyricMaps, geciSize, sp, rowSlots[ri], prevRowMeasW)
+        if (mws !== undefined) prevRowMeasW = mws
+      } else {
+        const pb = placeMusicRow(segs, row, groupIndex, voice, y, lyricMaps, geciSize, sp, rowSlots[ri], refPerBeat)
+        if (row.kind === 'bars' && pb !== undefined) refPerBeat = pb
+      }
       y += rowH
     })
   }
