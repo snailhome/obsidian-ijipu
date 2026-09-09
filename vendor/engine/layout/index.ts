@@ -141,12 +141,12 @@ function barlineTotalW(type: BarlineType): number {
       return 0 // |/ 不占位
   }
 }
-/** 临时节拍分数半宽（与 render 中一致：字号 10×s，数字 0.32em/位 + 1.5×s 留空） */
+/** 临时节拍分数半宽（与 render 中一致：字号 = 音符字号，数字 0.32em/位 + 1.5×s 留空） */
 function meterCommentHalfW(comment: string, noteSize: number): number | null {
   const pm = /^p:\s*(\d+)\s*\/\s*(\d+)$/i.exec(comment)
   if (!pm) return null
   const s = noteScaleOf(noteSize)
-  const size = Math.round(10 * s)
+  const size = noteSize // adj356：字号与音符一致
   return Math.max(pm[1].length, pm[2].length) * size * 0.32 + 1.5 * s
 }
 const barlineSpace = (gap: number, type: BarlineType = '|', comment?: string, noteSize = 18) => {
@@ -1521,7 +1521,11 @@ export function layoutScore(
         // adj315：间距只朝向有音符的一侧——行首/行末背对音符那侧不设间距（贴边）。
         // 中间小节线左侧/右侧各 barlinePad；行首（左侧无音符）gapL=0；行末（atEnd）gapR=0。
         const gapL = segLastPb[b] === undefined ? 0 : barGapSide()
-        const gapR = bk.atEnd ? 0 : barGapSide()
+        let gapR = bk.atEnd ? 0 : barGapSide()
+        // adj357：临时节拍（|"P:2/4"）在小节线右侧画分数——右侧占位须含「分数半宽×2 + 2×s 起始 + 2px 末距」，
+        // 空间优先路径原用固定 barGapSide（不含分数宽），导致分数压到下一小节音符；此处补足。
+        const meterHalf = bk.bar.comment ? meterCommentHalfW(bk.bar.comment, m.noteSize) : undefined
+        if (meterHalf != null) gapR = Math.max(gapR, 2 * noteScaleOf(m.noteSize) + 2 * meterHalf + 2)
         // adj314：小节线占位用「线自身宽 + 两侧动态间距」，不再叠加 barlineSpace 固定 +8 空隙——
         // 否则一侧间距被撑到 ~8.5px，超过半个音符宽（4.03px）导致小节线间距过大。
         // 行首小节线（该侧无音符）：线左缘贴边（用线自身半宽）。

@@ -771,7 +771,7 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
 // 小节线绘制
 // ============================================================
 
-function renderBarline(bar: PlacedBarline, noteSize = 18): string {
+function renderBarline(bar: PlacedBarline, noteSize = 18, noteFontFamily = FONT_CN): string {
   // 纯跳房子起点（] 后连续 [ 或行首）：只承载跳房子线，不画小节线竖线（adj26）
   if (bar.voltaOnly) return ''
   const { x, yTop, yBottom } = bar
@@ -836,10 +836,12 @@ function renderBarline(bar: PlacedBarline, noteSize = 18): string {
 
   // 小节线备注；adj67：|"P:2/4" 临时节拍 → 小节线右侧画分数（上下数字+横线，整体高度与小节线等高，随字号 adj69）
   // adj86：|"p:2/4" 与 |"P:2/4" 等效（大小写不敏感）
+  // adj357：字体=音符字体（shuzi_font）、字号=音符字号、加粗；分数高度缩减为正常字号的 2/3（紧凑，不压小节线）
   if (bar.comment) {
     const pm = /^p:\s*(\d+)\s*\/\s*(\d+)$/i.exec(bar.comment)
     if (pm) {
-      const size = Math.round(10 * s) // 分数字号：总高 ≈ 小节线高，随字号
+      const size = noteSize // 分数字号 = 音符字号（与音符一致）
+      const hScale = 2 / 3 // 高度缩减为正常字号高度的 2/3（围绕小节线中点纵向压缩）
       const halfW = Math.max(pm[1].length, pm[2].length) * size * 0.32 + 1.5 * s
       const midY = (yTop + yBottom) / 2
       const lineY = midY - s // 横线略上移，使分数整体居中于小节线
@@ -848,9 +850,11 @@ function renderBarline(bar: PlacedBarline, noteSize = 18): string {
       // 分数中心：左缘 = 小节线右缘 + 2px×s（adj68：左右留空），即 fx = 右缘 + 2s + halfW
       const fx = x + ({ '|': 0.55, '||': 1.95, '||/': 1.6, '|:': 4.2, ':|': 4.2, ':|:': 8.1, '||:': 3.85, '|*': 0.55, '|/': 0.55 }[bar.type] ?? 0.55) + 2 * s + halfW
       parts.push(
-        `<text x="${fx.toFixed(1)}" y="${numY.toFixed(1)}" text-anchor="middle" font-size="${size}" font-family="${FONT_CN}" fill="#1b1b1b">${pm[1]}</text>` +
+        `<g transform="translate(0,${midY.toFixed(1)}) scale(1,${hScale}) translate(0,${(-midY).toFixed(1)})">` +
+          `<text x="${fx.toFixed(1)}" y="${numY.toFixed(1)}" text-anchor="middle" font-weight="bold" font-size="${size}" font-family="${noteFontFamily}" fill="#1b1b1b">${pm[1]}</text>` +
           `<line x1="${(fx - halfW).toFixed(1)}" y1="${lineY.toFixed(1)}" x2="${(fx + halfW).toFixed(1)}" y2="${lineY.toFixed(1)}" stroke="#1b1b1b" stroke-width="1"/>` +
-          `<text x="${fx.toFixed(1)}" y="${denY.toFixed(1)}" text-anchor="middle" font-size="${size}" font-family="${FONT_CN}" fill="#1b1b1b">${pm[2]}</text>`,
+          `<text x="${fx.toFixed(1)}" y="${denY.toFixed(1)}" text-anchor="middle" font-weight="bold" font-size="${size}" font-family="${noteFontFamily}" fill="#1b1b1b">${pm[2]}</text>` +
+        `</g>`,
       )
     } else {
       parts.push(
@@ -1351,7 +1355,7 @@ function renderPage(page: ScorePage, config: PageConfig, pageCount: number, opts
   for (const n of page.notes) body.push(renderNote(n, config))
   // adj294：&zkh/&ykh 独立括号标记——按插位画括号
   for (const b of page.brackets) body.push(renderBracket(b, config))
-  for (const b of page.barlines) body.push(renderBarline(b, config.note_size))
+  for (const b of page.barlines) body.push(renderBarline(b, config.note_size, noteFont(config.shuzi_font)))
   for (const l of page.lyrics) body.push(renderLyric(l, config))
   for (const vb of page.voiceBlocks) body.push(renderVoiceBlocks(page, vb, config.note_size))
   body.push(renderPageNum(page, config, pageCount))
