@@ -1,3 +1,18 @@
+# 爱记谱 iJipu 0.3.9
+
+## 引擎同步 adj354：`@@` 恢复默认音色 = 第一音色 + 单声部空间优先尊重 `align_min_bars`
+
+- 同步 `@ijipu/engine`（`vendor/engine`）至 adj354：`buildPlaySequence` 新增可选 `defaultInstrumentRef`（`@@` 无 `Y:` 时取第一启用音色，否则第一音色库第一音色）；单声部空间优先 `barCount < align_min_bars` 时按自然宽排布（不撑满、末线不钳制）；多附点占宽按附点数计。
+- 试听导出回调无需改——`buildPlaySequence` 新参数可选，缺省行为不变（有 `Y:` 用 `Y:`，无则回退第一音色库第一音色）。
+
+## 发布流程不再附带 spessasynth_processor.min.js
+
+- 自 0.3.7 起 worklet 已内联进 `main.js`（esbuild text loader），插件目录无需再单独放 `spessasynth_processor.min.js`。
+- 现把 Release 产物的 `files` 列表同步为 `main.js` / `manifest.json` / `styles.css` 三项，**不再附带** `spessasynth_processor.min.js`（附件本就冗余，且易让人误以为还需要把它放进插件目录）。
+- 试听失败时若弹出"未找到内置 SpessaSynth worklet"，那是构建/分发异常（worklet 没正确内联进 `main.js`），不是插件目录缺文件——按"请重新构建并更新插件"处理即可。
+
+---
+
 # 爱记谱 iJipu 0.3.8
 
 ## 统一构建为 esbuild（修复 vite MISSING_EXPORT）

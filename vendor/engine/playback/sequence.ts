@@ -123,6 +123,7 @@ export function buildPlaySequence(
   layout: ScoreLayout,
   bpm: number,
   startNoteId?: string | null,
+  defaultInstrumentRef?: string,
 ): PlaySequence {
   // 0. adj88：起始音符定位——双击谱面音符试听时，从该音符（含之后）开始播放；
   //    事件延迟统一减去起点音符的 atMs，使起点音符立即播放
@@ -158,8 +159,11 @@ export function buildPlaySequence(
   // @乐器名 覆盖声部默认（全局持续直到 @@），@@ 清除覆盖（回声部默认）
   // adj339：Y 行默认乐器支持 `@库id:乐器名["显示名"]`（parseInstrumentRef 剥库前缀/显示名/可选 @），
   // 缺省仍是旧写法（如 `钢琴` / `@小提琴`），路由交给播放端。
+  // adjNN：@@ 恢复默认音色 = 第一音色——优先描述头第一个 Y；无 Y 时用调用方传入的「试听音色列表
+  // 第一音色」（defaultInstrumentRef）；仍空则回退 ''（播放端路由 → 第一音色库第一音色，钢琴）。
   const yInstruments = result.header.instruments
-  const defaultInstrument = parseInstrumentRef(yInstruments?.[0] ?? '').ref
+  const yRef = yInstruments?.[0] ? parseInstrumentRef(yInstruments[0]).ref : ''
+  const defaultInstrument = yRef !== '' ? yRef : defaultInstrumentRef?.trim() || ''
   const voiceDefaultOf = (voice: number): string => {
     const y = yInstruments?.[voice - 1]
     return y !== undefined ? parseInstrumentRef(y).ref : defaultInstrument

@@ -38,4 +38,3 @@ jobs:
             main.js
             manifest.json
             styles.css
-            spessasynth_processor.min.js

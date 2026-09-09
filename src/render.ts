@@ -77,7 +77,7 @@ export async function playScore(
   try {
     // adj353：失败原因直接抛出，供 Obsidian 界面/控制台可见（不再静默无声）
     await backend.ready()
-    if (!opts?.workletUrl) throw new Error('未找到内置 SpessaSynth worklet——请在插件目录放置 spessasynth_processor.min.js')
+    if (!opts?.workletUrl) throw new Error('未找到内置 SpessaSynth worklet（main.js 内联 worklet 失败，请重新构建并更新插件）')
     const bank = await loadHqBank(getHqLibrary(), new HqCache())
     await backend.load(bank, opts.workletUrl)
   } catch (e) {

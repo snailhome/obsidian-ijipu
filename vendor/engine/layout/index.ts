@@ -1313,7 +1313,7 @@ export function layoutScore(result: ParseResult, config: PageConfig): ScoreLayou
               dotDur: s.dotDur,
               hasDot: t.dots > 0,
               noteBodyW: noteBodyW(m.noteSize, grW) + accW,
-              dotBodyW: t.dots > 0 ? dotBodyW(m.noteSize) : 0,
+              dotBodyW: t.dots > 0 ? dotBodyW(m.noteSize) * t.dots : 0,
               accW,
               leftExt,
               hasHx: t.symbols.includes('hx'),
@@ -1352,7 +1352,12 @@ export function layoutScore(result: ParseResult, config: PageConfig): ScoreLayou
     for (const n of noteList) {
       if (n.hasHx) nonDurPad += hxBodyW(m.noteSize)
     }
-    const W = Math.max(0, availW - durBodySum - nonDurPad)
+    // adjNN：空间优先与时间优先同步——行小节数 < align_min_bars 时自然宽（不撑满、不钳制末线）。
+    // 原实现无论行小节数多少都撑满（W=全部剩余宽），违反「两端对齐最小小节数」；此处与多声部
+    // 空间优先（avStretch=0）一致：stretch=false 时 W=0，音符按自然本体宽排布、行尾留白。
+    const barCount = row.end - row.start - leadingEmpty
+    const stretch = barCount >= config.align_min_bars
+    const W = stretch ? Math.max(0, availW - durBodySum - nonDurPad) : 0
 
     // adj288：每音符每拍时值宽 + 每小节首/末音符每拍宽（供小节线间距自适应收紧）
     const segFirstPb: (number | undefined)[] = new Array(segs.length).fill(undefined)
@@ -1488,9 +1493,9 @@ export function layoutScore(result: ParseResult, config: PageConfig): ScoreLayou
         // 否则一侧间距被撑到 ~8.5px，超过半个音符宽（4.03px）导致小节线间距过大。
         // 行首小节线（该侧无音符）：线左缘贴边（用线自身半宽）。
         const barHalf = segLastPb[b] === undefined ? barlineTotalW(bk.bar.type) / 2 : barlineTotalW(bk.bar.type) / 2
-        // 行末小节线（atEnd）：右缘贴右边距，右侧不设间距；否则按左间距 + 中心推算
+        // 行末小节线（atEnd）：撑满时右缘贴右边距，右侧不设间距；否则按左间距 + 中心推算（自然宽行尾留白）
         let lineX = curX + gapL + barHalf
-        if (bk.atEnd) lineX = page.width - config.margin_right - barlineTotalW(bk.bar.type) / 2
+        if (bk.atEnd && stretch) lineX = page.width - config.margin_right - barlineTotalW(bk.bar.type) / 2
         const bid: LayoutId = { page: pageIndex, voice, group: groupIndex, index: barCounter }
         page.barlines.push({
           id: bid,
@@ -1849,7 +1854,7 @@ export function layoutScore(result: ParseResult, config: PageConfig): ScoreLayou
               const leftExt = gn && !gn.after ? grW : 0
               space = {
                 noteBodyW: noteBodyW(m.noteSize, grW) + accW,
-                dotBodyW: t.dots > 0 ? dotBodyW(m.noteSize) : 0,
+                dotBodyW: t.dots > 0 ? dotBodyW(m.noteSize) * t.dots : 0,
                 accW,
                 leftExt,
                 hasDot: t.dots > 0,
