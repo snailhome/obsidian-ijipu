@@ -265,10 +265,17 @@ export function buildPlaySequence(
   const hasBigRepeat = seq.some(
     (it) => it.kind === 'bar' && (it.bar?.marks?.includes('dc') || it.bar?.marks?.includes('ds')),
   )
-  const voltaNumOf = (it: SeqItem): number => {
-    if (it.kind !== 'bar' || !it.bar?.voltaStart) return 1
-    const m = /(\d+)/.exec(it.bar.voltaStart.comment ?? '')
-    return m ? Number(m[1]) : 1 // 无番号按第 1 遍（第 2 遍起跳过）
+  /**
+   * adj368：跳房子标签分类——
+   *  - `num`：引号注释里有数字（`["1."`/`["2."`）→ 番号 = 该遍才演奏
+   *  - `text`：引号注释里有文字但无数字（如 `["结束句"`）→ **末遍**房子（本段后续遍次奏响，见 segMaxPass）
+   *  - `none`：无注释 → 按第 1 遍（旧行为：第 2 遍起跳过）
+   */
+  const voltaLabelOf = (it: SeqItem): { kind: 'num' | 'text' | 'none'; num: number } => {
+    const c = it.kind === 'bar' ? it.bar?.voltaStart?.comment : undefined
+    if (!c || c.trim() === '') return { kind: 'none', num: 1 }
+    const m = /(\d+)/.exec(c)
+    return m ? { kind: 'num', num: Number(m[1]) } : { kind: 'text', num: 1 }
   }
   const repeatCountAt = new Map<number, number>()
   {
@@ -281,6 +288,30 @@ export function buildPlaySequence(
         repeatCountAt.set(k, endCount + 1)
       }
     })
+  }
+  /**
+   * adj368：每段「最终遍数」——用于「结束句」这类文字标签房子（无番号可依，语义 = 末遍才奏）。
+   * 段 = 最近一个 `|:`（或曲首）起、到下一个 `|:` 之前；段内最后一个 `:|` 的遍数即最终遍数
+   * （无 `:|` 则该段只奏 1 遍）。D.S./D.C. 造成的额外遍次 `pass` 更大，同样视为末遍之后 → 奏响。
+   */
+  const segMaxPass: number[] = new Array(seq.length).fill(1)
+  {
+    let segStart = 0
+    const fill = (from: number, to: number) => {
+      let max = 1
+      for (let k = from; k < to; k++) {
+        const c = repeatCountAt.get(k)
+        if (c !== undefined && c > max) max = c
+      }
+      for (let k = from; k < to; k++) segMaxPass[k] = max
+    }
+    seq.forEach((it, k) => {
+      if (k > segStart && it.kind === 'bar' && (it.bar?.type === '|:' || it.bar?.type === '||:')) {
+        fill(segStart, k)
+        segStart = k
+      }
+    })
+    fill(segStart, seq.length)
   }
 
   // 4. 展开反复（支持两层：反复内嵌跳房子）
@@ -490,10 +521,14 @@ export function buildPlaySequence(
       continue
     }
     const bar = item.bar!
-    // adj359：跳房子——本遍不演奏该 volta（volta 番号 = 遍次；无番号按第 1 遍）时，跳到其末尾小节线
+    // adj359：跳房子——本遍不演奏该 volta 时，跳到其末尾小节线
     // （停在末尾线上而非其后一位：`:|]["2."` 共用一根线时，仍需处理该线上的 volta2 番号）
+    // adj368：判断依据按标签类型——番号（`["2."`）比遍次；文字标签（`["结束句"`）比该段最终遍数
     const trySkipVolta = (): boolean => {
-      if (!(bar.voltaStart && voltaNumOf(item) !== pass)) return false
+      if (!bar.voltaStart) return false
+      const label = voltaLabelOf(item)
+      const skip = label.kind === 'text' ? pass < (segMaxPass[i] ?? 1) : label.num !== pass
+      if (!skip) return false
       const target = voltaAfter.get(i) ?? i + 1
       landedByVoltaSkip = target
       i = target
