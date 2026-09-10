@@ -77,7 +77,14 @@ interface SeqItem {
   noteIdx?: number
   /** adj301/351：乐器切换指令（@乐器名 / @@）——记录所属声部（voice），多声部各声部独立切换 */
   instr?: { name: string | null; voice: number }
-  bar?: { type: BarlineType; marks?: BarlineMark[]; voltaStart?: PlacedBarline['voltaStart']; voltaEnd?: boolean }
+  bar?: {
+    type: BarlineType
+    marks?: BarlineMark[]
+    voltaStart?: PlacedBarline['voltaStart']
+    voltaEnd?: boolean
+    /** adj360：|]/ 房子右侧未封闭——该房子延续到其后第一个跳跃小节线(:|)或结束小节线(||) */
+    voltaEndSlash?: boolean
+  }
 }
 
 /** adj320：构建一个音符的播放拍段——按「时值元素」分块：
@@ -192,7 +199,13 @@ export function buildPlaySequence(
       if (token.kind === 'barline') {
         seq.push({
           kind: 'bar',
-          bar: { type: token.type, marks: token.marks, voltaStart: token.voltaStart, voltaEnd: token.voltaEnd },
+          bar: {
+            type: token.type,
+            marks: token.marks,
+            voltaStart: token.voltaStart,
+            voltaEnd: token.voltaEnd,
+            voltaEndSlash: token.voltaEndSlash,
+          },
         })
       } else if (token.kind === 'instrument') {
         // adj301/351：乐器切换指令纳入播放序列（不产生音符事件）——按所属声部（voice）记录，
@@ -215,17 +228,60 @@ export function buildPlaySequence(
     }
   })
 
-  // 3. 跳房子配对：voltaStart 的 seq 索引 → 对应 voltaEnd 之后的位置
+  // 3. 跳房子配对：voltaStart 的 seq 索引 → 对应 voltaEnd 的 seq 索引
+  // adj359：指向 voltaEnd「本小节线」而非其后一位——使 `:|]["2."`（共用一根线：volta1 结束 + volta2 开始）
+  // 在跳过 volta1 后仍能处理该线上的 volta2 番号
   const voltaAfter = new Map<number, number>()
   const pendingStarts: number[] = []
   seq.forEach((item, si) => {
     if (item.kind !== 'bar') return
-    if (item.bar?.voltaStart) pendingStarts.push(si)
+    // 先收尾（voltaEnd 出栈配对）再开新（voltaStart 入栈）——`:|]["2."` 同一根线上
+    // 同时有 voltaEnd（结束上一房子）与 voltaStart（开始下一房子）时，若先入栈会把自身配成自己的末尾（死循环）
     if (item.bar?.voltaEnd && pendingStarts.length > 0) {
       const start = pendingStarts.pop()!
-      voltaAfter.set(start, si + 1)
+      // adj360：未封闭房子（|]/）延续到其后第一个「跳跃小节线 :|/：|:」或「结束小节线 ||/||/」处；
+      // 已封闭房子（|]）就以该末尾小节线为界
+      if (item.bar.voltaEndSlash) {
+        const ext = seq.findIndex(
+          (it, k) =>
+            k > si &&
+            it.kind === 'bar' &&
+            (it.bar?.type === ':|' || it.bar?.type === ':|:' || it.bar?.type === '||' || it.bar?.type === '||/'),
+        )
+        voltaAfter.set(start, ext >= 0 ? ext : si)
+      } else {
+        voltaAfter.set(start, si)
+      }
     }
+    if (item.bar?.voltaStart) pendingStarts.push(si)
   })
+
+  // 3b. adj359：跳跃展开的预计算
+  // - 花 S（&hs）位置：&ds 跳到「全曲第一个 hs」之后（hs 通常写在 ds 之前）
+  // - 是否有大反复（&dc/&ds）：决定 &fine 是否生效、&ty 是否跳越
+  // - 每个 :| 的反复遍数 = 「本段内到该线为止出现的 :| 个数 + 1」
+  //   （`|: A :|` 2 遍；`|: A |[1. B :|][2. C :|] D` 该段两个 :| → 3 遍，末遍两 volta 皆跳过）
+  const segnoIdx = seq.findIndex((it) => it.kind === 'bar' && it.bar?.marks?.includes('hs'))
+  const hasBigRepeat = seq.some(
+    (it) => it.kind === 'bar' && (it.bar?.marks?.includes('dc') || it.bar?.marks?.includes('ds')),
+  )
+  const voltaNumOf = (it: SeqItem): number => {
+    if (it.kind !== 'bar' || !it.bar?.voltaStart) return 1
+    const m = /(\d+)/.exec(it.bar.voltaStart.comment ?? '')
+    return m ? Number(m[1]) : 1 // 无番号按第 1 遍（第 2 遍起跳过）
+  }
+  const repeatCountAt = new Map<number, number>()
+  {
+    let endCount = 0
+    seq.forEach((it, k) => {
+      if (it.kind !== 'bar') return
+      if (it.bar?.type === '|:' || it.bar?.type === '||:') endCount = 0
+      if (it.bar?.type === ':|' || it.bar?.type === ':|:') {
+        endCount++
+        repeatCountAt.set(k, endCount + 1)
+      }
+    })
+  }
 
   // 4. 展开反复（支持两层：反复内嵌跳房子）
   // adj258：按 voiceBlocks 分块——多声部块内 group 共享 blockStartMs（同一组 Q1/Q2 同时播放），
@@ -315,8 +371,10 @@ export function buildPlaySequence(
   }
 
   const events: PlayEvent[] = []
-  let pass = 1
-  let repeatStart = -1
+  let pass = 1 // 当前反复遍次（1 起；决定演奏哪个 volta）
+  let repeatStart = 0 // 反复起点（无 |: 时默认从头反复）
+  let bigRepeatDone = false // adj359：&dc/&ds 是否已发生过（大反复；之后 &fine 生效、&ty 跳越、dc/ds 不再重复跳）
+  let landedByVoltaSkip = -1 // adj359：因跳过某 volta 而落在的小节线索引（该线上不再触发 :| 回跳，只处理其 volta 番号）
   let i = 0
   let guard = 0
   const maxIter = seq.length * 6 // 死循环保护
@@ -430,53 +488,91 @@ export function buildPlaySequence(
       continue
     }
     const bar = item.bar!
-    // adj126：小节线修饰符跳转（&fine 曲终结束 / &dc 从头反复 / &ds 跳到花S / &ty 跳到下一大跳跃）
+    // adj359：跳房子——本遍不演奏该 volta（volta 番号 = 遍次；无番号按第 1 遍）时，跳到其末尾小节线
+    // （停在末尾线上而非其后一位：`:|]["2."` 共用一根线时，仍需处理该线上的 volta2 番号）
+    const trySkipVolta = (): boolean => {
+      if (!(bar.voltaStart && voltaNumOf(item) !== pass)) return false
+      const target = voltaAfter.get(i) ?? i + 1
+      landedByVoltaSkip = target
+      i = target
+      return true
+    }
+    // 因跳过 volta 而落在的小节线：不再触发该线的 :| 回跳（该反复已在跳过时越过），只处理其 volta 番号后前进
+    if (i === landedByVoltaSkip) {
+      landedByVoltaSkip = -1
+      if (trySkipVolta()) continue
+      i++
+      continue
+    }
+    // adj359：小节线修饰符跳转（&fine 曲终 / &dc 从头反复 / &ds 跳花S / &ty 跳越）
+    // 规则（用户规范）：&dc/&ds「大反复」全曲各只跳一次（之后再遇不跳，续播到 Fine/终止线，避免死循环）；
+    // &ty 第一次遇到忽略，大反复之后再次遇到才跳到下一个 &ty（两 ty 之间不演奏）；
+    // &fine 在有 dc/ds 时仅于大反复之后生效（第一遍穿过 Fine 走到大反复）。
     if (bar.marks?.length) {
-      if (bar.marks.includes('fine')) {
+      if (bar.marks.includes('fine') && (!hasBigRepeat || bigRepeatDone)) {
         i = seq.length // 曲终：播放到此结束
         continue
       }
       if (bar.marks.includes('dc')) {
-        i = 0 // 从头反复
-        // adj282：从头反复 → 新遍，遍时钟推进（与 |: 跳回一致，避免 atMs 重叠）
-        passMs = passEndMs
+        if (!bigRepeatDone) {
+          i = 0 // 从头反复
+          bigRepeatDone = true
+          pass = 1
+          repeatStart = 0
+          passMs = passEndMs // adj282：新遍，遍时钟推进（展开事件 atMs 不重叠）
+          continue
+        }
+        i++
         continue
       }
       if (bar.marks.includes('ds')) {
-        // 跳到 &hs 花 S 标记位置开始
-        const hs = seq.findIndex((it, k) => k > i && it.kind === 'bar' && it.bar?.marks?.includes('hs'))
-        i = hs >= 0 ? hs + 1 : i + 1
+        if (!bigRepeatDone) {
+          i = segnoIdx >= 0 ? segnoIdx + 1 : 0 // 跳到花 S 之后（hs 通常写在 ds 之前）
+          bigRepeatDone = true
+          pass = 1
+          repeatStart = 0
+          passMs = passEndMs
+          continue
+        }
+        i++
         continue
       }
       if (bar.marks.includes('ty')) {
-        // 跳到下一个 &ty 大跳跃记号（两 ty 中间不演奏）
-        const nextTy = seq.findIndex((it, k) => k > i && it.kind === 'bar' && it.bar?.marks?.includes('ty'))
-        i = nextTy >= 0 ? nextTy + 1 : i + 1
+        if (bigRepeatDone) {
+          const nextTy = seq.findIndex((it, k) => k > i && it.kind === 'bar' && it.bar?.marks?.includes('ty'))
+          if (nextTy >= 0) {
+            i = nextTy + 1 // 跳到下一个 &ty 之后（两 ty 之间不演奏）
+            continue
+          }
+        }
+        i++
         continue
       }
     }
-    // 跳房子：第二遍跳过 [ 段
-    if (bar.voltaStart && pass === 2) {
-      i = voltaAfter.get(i) ?? i + 1
+    // 反复结束线 :| —— 优先于 volta 跳过：`:|]["2."` 共用一根线时（volta1 结束 + volta2 开始），
+    // 正常演奏到该线应先按反复回跳；只有「因跳过 volta1 而落在此线」时才越过回跳、转去判断 volta2 番号
+    if (bar.type === ':|' || bar.type === ':|:') {
+      const count = repeatCountAt.get(i) ?? 2 // 本段内到该线的第几个 :|（+1 = 总遍数）
+      if (pass < count) {
+        i = repeatStart
+        pass++
+        passMs = passEndMs // adj282：反复回跳 → 新遍
+        continue
+      }
+      if (bar.type === ':|:') {
+        repeatStart = i + 1 // 新段落起点
+        pass = 1
+      }
+      i++
       continue
     }
+    if (trySkipVolta()) continue
     switch (bar.type) {
       case '|:':
       case '||:':
         repeatStart = i + 1
+        pass = 1 // 新段落起点 → 遍次从 1 起
         i++
-        break
-      case ':|':
-      case ':|:':
-        if (pass === 1 && repeatStart >= 0) {
-          i = repeatStart
-          pass = 2
-          // adj282：反复回跳 → 新遍，遍时钟推进到本遍已播块末（展开事件 atMs 不重叠）
-          passMs = passEndMs
-        } else {
-          if (bar.type === ':|:') repeatStart = i + 1 // 新段落起点
-          i++
-        }
         break
       case '||':
       case '||/':
