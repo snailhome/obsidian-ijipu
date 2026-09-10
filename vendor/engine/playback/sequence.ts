@@ -292,8 +292,6 @@ export function buildPlaySequence(
   const beatMs = 60000 / bpm
   const groupStartMs: number[] = new Array(result.groups.length).fill(0)
   const barStartMsInGroup: number[][] = result.groups.map(() => [])
-  // adj282：group → 所在块时长 ms（同块各声部共享；反复回跳推进遍时钟用）
-  const blockDurOfGroup: number[] = new Array(result.groups.length).fill(0)
   let totalMs = 0
   {
     let ms = 0
@@ -349,7 +347,6 @@ export function buildPlaySequence(
         for (const gi of gis) {
           groupStartMs[gi] = ms
           barStartMsInGroup[gi] = bsMsOf(gi)
-          blockDurOfGroup[gi] = bb * beatMs
           covered.add(gi)
         }
         ms += bb * beatMs
@@ -364,7 +361,6 @@ export function buildPlaySequence(
       for (const tk of result.groups[gi].music.tokens) {
         if (tk.kind === 'note' || tk.kind === 'rest' || tk.kind === 'rhythm') bb += tokenDuration(tk)
       }
-      blockDurOfGroup[gi] = bb * beatMs
       ms += bb * beatMs
     }
     totalMs = ms
@@ -378,11 +374,14 @@ export function buildPlaySequence(
   let i = 0
   let guard = 0
   const maxIter = seq.length * 6 // 死循环保护
-  // adj282：播放遍时钟——反复回跳（:|/&dc）时把 passMs 推进到本遍已播块末，
-  // 展开后同一音符第二遍 atMs 不再重叠（此前布局时钟不变 → 音频重叠/高亮错乱）；
-  // 单向前跳（&ds/&ty/跳房子第二遍跳过）不推进（时间连续，跳过段不占时）
+  // adj361：无缝跳跃——跳跃（回跳/前跳）后从「当前播放时刻」继续，而不是按布局时钟累计。
+  // 原 adj282 用 passMs = passEndMs（= 遍偏移 + 该组布局起点 + 整组时长）→ 回跳后整体多等
+  // 「本组布局起点 + 整组时长」，且前跳（&ds/&ty/跳房子跳过）不改 passMs 而布局时钟已跳到后面
+  // → 跳过段被当成空档 → 出现十几~几十秒延迟。现改为：跳跃时记下待跳时刻 = lastEndMs（当前播放时刻），
+  // 下一个事件生成时把 passMs 对齐（使该事件 atMs 正好 = 待跳时刻），所有跳跃皆无缝。
   let passMs = 0
-  let passEndMs = 0
+  let lastEndMs = 0 // 已生成事件的最大结束时刻（= 当前播放时刻）
+  let pendingJumpMs = -1 // 跳跃后要对齐到的播放时刻（下一个事件落在此刻）
   // adj301/351：@乐器名 覆盖当前乐器——**各声部独立**（多声部 Q1/Q2/Q3 各自延续；@@ 清该声部覆盖回 Y 默认）。
   // adj334：保留原始名（可为 `音色名` 或 `库id:音色名`），由 instrumentToProgram 在播放端路由，
   // 不再压缩成固定 6 种——否则动态采样音色名会丢失。
@@ -406,17 +405,19 @@ export function buildPlaySequence(
       const durationMs = (tokenDuration(token) * 60000) / bpm
       const pitch = placed.audioPitch
       const curNoteIdx = item.noteIdx ?? -1
-      // adj256：每个 event 的 atMs 由所属 group 的拍时钟决定（不受源码顺序累加），
+      // adj282：每个 event 的 atMs 由所属 group 的拍时钟决定（不受源码顺序累加），
       // 保证同组同 (barIndex, beatPos) 的各声部事件 atMs 相同 → 同步播放
       const g = placed.id.group
       const bi = placed.barIndex
       const bp = placed.beatPos
-      // adj282：加播放遍偏移 passMs——同块各声部共享（同步保持），反复回跳后整体平移（不重叠）
-      const atMs = passMs + groupStartMs[g] + (barStartMsInGroup[g][bi] ?? 0) + bp * beatMs
-      // adj282：本遍已播块末（块时长固定，与音符时值/连音合并无关）——回跳时作为新遍起点
-      // adj285：块结束 = 遍偏移 + 块布局起点 + 块时长（此前漏加 groupStartMs →
-      // 多曲行谱 totalMs 只算到第一块，播放到后续行中途被 doneTimer 截断）
-      passEndMs = Math.max(passEndMs, passMs + groupStartMs[g] + blockDurOfGroup[g])
+      const clock = groupStartMs[g] + (barStartMsInGroup[g][bi] ?? 0) + bp * beatMs
+      // adj361：若有待跳时刻，先把 passMs 对齐（使本事件 atMs = 待跳时刻 → 无缝衔接）
+      if (pendingJumpMs >= 0) {
+        passMs = pendingJumpMs - clock
+        pendingJumpMs = -1
+      }
+      const atMs = passMs + clock
+      lastEndMs = Math.max(lastEndMs, atMs + durationMs)
       // adj89：合并判定——与前一已发事件音高相同、索引相邻（中间无音符）、
       // 且**两者同属同一条连音线**（严格 slur 内连奏）：
       // (2 - | 2/) 的 2 连 2.5 拍；(2 3/ 2/ | 2) 第 3、4 个 2 连奏；
@@ -437,6 +438,7 @@ export function buildPlaySequence(
       ) {
         const prev = events[events.length - 1]
         prev.durationMs += durationMs
+        lastEndMs = Math.max(lastEndMs, prev.atMs + prev.durationMs) // adj361：合并后当前播放时刻随之前移
         // adj300：连音合并——把被合并音符的拍段并入 prev 的播放拍段（色块可覆盖全时值，
         // 如 (1 - - - | 1) - 0 0 中 1 合并 6 拍，色块依次滑过 1 - - - 1 -）
         const prevBeat = (prev.playheadSegs ?? []).reduce((a, s) => a + s.beats, 0)
@@ -495,6 +497,7 @@ export function buildPlaySequence(
       const target = voltaAfter.get(i) ?? i + 1
       landedByVoltaSkip = target
       i = target
+      pendingJumpMs = lastEndMs // adj361：被跳过的房子不占时，从当前播放时刻无缝接上
       return true
     }
     // 因跳过 volta 而落在的小节线：不再触发该线的 :| 回跳（该反复已在跳过时越过），只处理其 volta 番号后前进
@@ -519,7 +522,7 @@ export function buildPlaySequence(
           bigRepeatDone = true
           pass = 1
           repeatStart = 0
-          passMs = passEndMs // adj282：新遍，遍时钟推进（展开事件 atMs 不重叠）
+          pendingJumpMs = lastEndMs // adj361：从当前播放时刻无缝接上（从头反复）
           continue
         }
         i++
@@ -531,7 +534,7 @@ export function buildPlaySequence(
           bigRepeatDone = true
           pass = 1
           repeatStart = 0
-          passMs = passEndMs
+          pendingJumpMs = lastEndMs // adj361：跳到花 S 后从当前播放时刻无缝接上
           continue
         }
         i++
@@ -542,6 +545,7 @@ export function buildPlaySequence(
           const nextTy = seq.findIndex((it, k) => k > i && it.kind === 'bar' && it.bar?.marks?.includes('ty'))
           if (nextTy >= 0) {
             i = nextTy + 1 // 跳到下一个 &ty 之后（两 ty 之间不演奏）
+            pendingJumpMs = lastEndMs // adj361：跳越段不占时，从当前播放时刻无缝接上
             continue
           }
         }
@@ -556,7 +560,7 @@ export function buildPlaySequence(
       if (pass < count) {
         i = repeatStart
         pass++
-        passMs = passEndMs // adj282：反复回跳 → 新遍
+        pendingJumpMs = lastEndMs // adj361：反复回跳→从当前播放时刻无缝接上（新遍）
         continue
       }
       if (bar.type === ':|:') {
@@ -583,8 +587,8 @@ export function buildPlaySequence(
     }
   }
 
-  // adj282：总时长 = 展开后的实际播放时长（含反复遍；原布局总时长在反复时会中途截断播放）
-  totalMs = passEndMs
+  // adj361：总时长 = 实际播放到的时刻（= 所有事件的最大结束时刻，含反复遍）
+  totalMs = lastEndMs
 
   // adj88：从指定音符开始——丢弃起点之前的音符事件，其后 atMs 统一减去起点 atMs
   if (startIdxByPage !== null) {
