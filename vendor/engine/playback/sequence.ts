@@ -532,8 +532,10 @@ export function buildPlaySequence(
         if (!bigRepeatDone) {
           i = segnoIdx >= 0 ? segnoIdx + 1 : 0 // 跳到花 S 之后（hs 通常写在 ds 之前）
           bigRepeatDone = true
-          pass = 1
-          repeatStart = 0
+          // adj362：D.S. 后进入「下一遍」（pass 递增，不重置为 1）——房子番号按遍次选择，
+          // 于是跳过前面已奏过的房子、进入下一号房子；repeatStart 保持不变（仍在同一反复段内，
+          // 且 pass 已超过该段遍数 → 不会再误回跳）
+          pass++
           pendingJumpMs = lastEndMs // adj361：跳到花 S 后从当前播放时刻无缝接上
           continue
         }
