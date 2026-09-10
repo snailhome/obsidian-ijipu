@@ -92,23 +92,22 @@ export function eventsToMidi(events: PlayEvent[], opts: MidiExportOptions): Uint
   const beatMs = 60000 / opts.bpm
   const toTick = (ms: number) => Math.max(0, Math.round((ms / beatMs) * DIV))
 
-  // 可发声事件 → 音符（按声部分组）
+  // 可发声事件 → 音符（按声部分组；adj357：每个音符记录其乐器 program，
+  // 支持曲内 @乐器名 切换 / @@ 回默认——旧实现每声部只取「第一个音符的乐器」发一次
+  // Program Change，导致整轨（含多声部、单/多声部混合）导出只用一个音色、@@ 不生效）
   const voices = [...new Set(events.map((e) => e.placed.id.voice))].sort((a, b) => a - b)
-  const notesByVoice = new Map<number, { tick: number; durTick: number; note: number }[]>()
-  const programByVoice = new Map<number, number>()
+  const notesByVoice = new Map<number, { tick: number; durTick: number; note: number; program: number }[]>()
   for (const e of events) {
     if (!e.placed.playable || !e.placed.audioPitch) continue
     const pitch = e.pitch ?? e.placed.audioPitch
     if (!pitch) continue
     const v = e.placed.id.voice
-    if (!notesByVoice.has(v)) {
-      notesByVoice.set(v, [])
-      programByVoice.set(v, instrumentToProgram(e.instrument))
-    }
+    if (!notesByVoice.has(v)) notesByVoice.set(v, [])
     notesByVoice.get(v)!.push({
       tick: toTick(e.atMs),
       durTick: Math.max(1, toTick(e.durationMs)),
       note: pitchToMidiNote(pitch),
+      program: instrumentToProgram(e.instrument),
     })
   }
 
@@ -119,22 +118,32 @@ export function eventsToMidi(events: PlayEvent[], opts: MidiExportOptions): Uint
   track0.push(...vlq(0), 0xff, 0x51, 0x03, (tempo >> 16) & 0xff, (tempo >> 8) & 0xff, tempo & 0xff)
   track0.push(...vlq(0), 0xff, 0x2f, 0x00)
 
+  // 同 tick 事件排序：Program Change 最先（先切音色再发声），Note Off 先于 Note On
+  const orderOf = (t: 'on' | 'off' | 'prog') => (t === 'prog' ? 0 : t === 'off' ? 1 : 2)
+
   // 每声部一条音符轨
   const noteTracks = voices.map((v, ti) => {
     const chan = ti % 16
-    const events2: { tick: number; type: 'on' | 'off'; note: number }[] = []
-    for (const n of notesByVoice.get(v) ?? []) {
-      events2.push({ tick: n.tick, type: 'on', note: n.note })
-      events2.push({ tick: n.tick + n.durTick, type: 'off', note: n.note })
+    // 音符按 tick 排序，乐器变化处插入 Program Change（含曲首第一个音色、曲内 @ 切换、@@ 回默认）
+    const notes = (notesByVoice.get(v) ?? []).slice().sort((a, b) => a.tick - b.tick)
+    const evs: { tick: number; type: 'on' | 'off' | 'prog'; note?: number; program?: number }[] = []
+    let curProgram: number | null = null
+    for (const n of notes) {
+      if (n.program !== curProgram) {
+        evs.push({ tick: n.tick, type: 'prog', program: n.program })
+        curProgram = n.program
+      }
+      evs.push({ tick: n.tick, type: 'on', note: n.note })
+      evs.push({ tick: n.tick + n.durTick, type: 'off', note: n.note })
     }
-    events2.sort((a, b) => a.tick - b.tick || (a.type === 'off' ? -1 : 1))
+    evs.sort((a, b) => a.tick - b.tick || orderOf(a.type) - orderOf(b.type))
     const bytes: number[] = []
-    bytes.push(...vlq(0), 0xc0 | chan, programByVoice.get(v) ?? 0) // Program Change（delta 0）
     let prev = 0
-    for (const s of events2) {
+    for (const s of evs) {
       bytes.push(...vlq(s.tick - prev))
       prev = s.tick
-      bytes.push(s.type === 'on' ? 0x90 | chan : 0x80 | chan, s.note, 90)
+      if (s.type === 'prog') bytes.push(0xc0 | chan, s.program ?? 0)
+      else bytes.push(s.type === 'on' ? 0x90 | chan : 0x80 | chan, s.note ?? 0, 90)
     }
     bytes.push(...vlq(0), 0xff, 0x2f, 0x00)
     return bytes
