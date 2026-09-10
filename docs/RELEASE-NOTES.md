@@ -1,3 +1,11 @@
+# 爱记谱 iJipu 0.3.13
+
+## 引擎同步 adj358：导出按音符乐器发 Program Change
+
+- 同步 `@ijipu/engine`（`vendor/engine/playback/midi.ts`）：`eventsToMidi` 改为**每个音符记录 program**、在乐器变化处插入 Program Change（原先每声部只取第一个音符的音色、每轨只发一次），使导出 MIDI/音频的曲内 `@乐器名` 切换与 `@@` 回默认生效。
+
+---
+
 # 爱记谱 iJipu 0.3.12
 
 ## 引擎同步 adj357：临时节拍显示优化 + adj355/356 对齐&跳房子
