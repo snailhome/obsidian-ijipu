@@ -80,11 +80,12 @@ export function formatLine(raw: string): string {
     const noSpaceBefore =
       upNote === 'Q' || upNote === 'C' || upNote === ' ' || upNote === '(' || isTupletY
     // adj295：独立括号 &zkh/&ykh 与前一元素分隔（@风琴&zkh → @风琴 &zkh）；其余 & 修饰符仍贴音符
+    // adj375：&hx（呼吸记号）同为独立标记——同样两侧分隔（6&hx 5 → 6 &hx 5；&hx6 5 → &hx 6 5）
     if (note === '&') {
       let kk = x + 1
       while (kk < trimmed.length && /[a-zA-Z]/.test(trimmed[kk])) kk++
       const code = trimmed.slice(x + 1, kk)
-      if (code === 'zkh' || code === 'ykh') ensureSpace()
+      if (code === 'zkh' || code === 'ykh' || code === 'hx') ensureSpace()
       out.push(note)
       continue
     }

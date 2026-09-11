@@ -30,7 +30,7 @@ import type {
 } from '../types'
 import { DIGIT_HEIGHT_RATIO, LAYER_GAP, SLUR_W, octaveTopY, BRACKET_PAD, H_GAP, noteScaleOf, GRACE_SIZE_RATIO, GRACE_SLOT_RATIO, GRACE_SLOT_RATIO_MULTI, VOLTA_BAR_GAP, VOLTA_RAISE, DYN_HALF_H, barlinePad, DOT_AFTER_DIGIT_GAP, DOT_R } from './spacing'
 // adj284：空间优先布局的度量（本体宽 / 时值拆分 / 非时值元素间距）
-import { splitNoteDur, noteBodyW, augBodyW, dotBodyW, accidentalBodyW, bracketBodyW, digitSlotW, hxBodyW } from './spaceLayout'
+import { splitNoteDur, noteBodyW, augBodyW, dotBodyW, accidentalBodyW, markBodyW, digitSlotW, hxBodyW } from './spaceLayout'
 // adj303：乐器名标注需要用 parseInstrumentRef / 库名（@乐器名 / @@ 后下一个音符）
 import { parseInstrumentRef, INSTRUMENT_LIB_NAMES } from '../playback/instruments'
 
@@ -432,7 +432,8 @@ function breakRows(segs: BarSeg[], availW: number, noteSize = 18): LayoutRow[] {
       // adj64：另含非时值元素（&zkh/&ykh 括号）占位宽，先扣除再分摊；adj294：括号为独立 token 计数
       let bp = 0
       for (const t of segs[i].notes) {
-        if (t.kind === 'bracket') bp += BRACKET_PAD
+        // adj375：独立标记（&zkh/&ykh 括号、&hx 呼吸记号）按各自本体宽占位
+        if (t.kind === 'bracket') bp += markBodyW(t.code, noteSize)
       }
       const nw = segW + bp
       if (i > start && w + nw > availW) {
@@ -465,8 +466,9 @@ function breakRowsSpace(segs: BarSeg[], availW: number, noteSize: number): Layou
           noteBodyW(noteSize, grW) + accW + (t.dots > 0 ? dotBodyW(noteSize) : 0) + s.augCount * augBodyW(noteSize)
       }
       // adj294：&zkh/&ykh 为独立 bracket token——按 token 计数占位宽，不再依附音符 symbols
+      // adj375：&hx 同为独立标记，宽度按 code 取（hx 略宽）
       for (const t of seg.notes) {
-        if (t.kind === 'bracket') durSum += bracketBodyW()
+        if (t.kind === 'bracket') durSum += markBodyW(t.code, noteSize)
       }
     }
     // 小节线占位（本体宽 + 双侧间距上限 0.5×音符宽）
@@ -760,7 +762,7 @@ export function layoutScore(
       // adj64：非时值元素（括号）占位先扣除再分摊（超长小节碎片行同规则）；adj294：括号为独立 token
       let fragBracket = 0
       for (const t of slice.notes) {
-        if (t.kind === 'bracket') fragBracket += BRACKET_PAD
+        if (t.kind === 'bracket') fragBracket += markBodyW(t.code, m.noteSize)
       }
       const perBeats = allocatePerBeats(beatsInfo, availW - BAR_PAD * 2 - noteGapOf(beatsInfo.length) - fragBracket, m.noteSize)
       // 段列表（adj36：附点段用基础拍每拍宽）
@@ -815,7 +817,7 @@ export function layoutScore(
           const tk = fragNotes[fragTokIdx]
           if (tk.kind === 'bracket') {
             pendFrag.push(tk)
-            fragBracketAcc += BRACKET_PAD
+            fragBracketAcc += markBodyW(tk.code, m.noteSize)
           }
           fragTokIdx++
         }
@@ -838,8 +840,9 @@ export function layoutScore(
         // adj294：渲染本音符源码之前的 bracket（紧贴本音符左缘，从远到近排列）
         for (let pi = 0; pi < pendFrag.length; pi++) {
           const bk = pendFrag[pi]
-          const bw = bracketBodyW()
+          const bw = markBodyW(bk.code, m.noteSize)
           page.brackets.push({
+            code: bk.code,
             dir: bk.dir,
             x: r1(fragPlacedX + bw / 2 - (pendFrag.length - pi) * bw),
             yTop: r1(yTop + m.noteSize * 0.7),
@@ -854,8 +857,9 @@ export function layoutScore(
       while (fragTokIdx < fragNotes.length) {
         const tk = fragNotes[fragTokIdx]
         if (tk.kind === 'bracket') {
-          const bw = bracketBodyW()
+          const bw = markBodyW(tk.code, m.noteSize)
           page.brackets.push({
+            code: tk.code,
             dir: tk.dir,
             x: r1(fragLastRight + bw / 2),
             yTop: r1(yTop + m.noteSize * 0.7),
@@ -1098,7 +1102,7 @@ export function layoutScore(
           const tk = segNotes[tokIdx]
           if (tk.kind === 'bracket') {
             pendingBrackets.push(tk)
-            bracketAcc += BRACKET_PAD
+            bracketAcc += markBodyW(tk.code, m.noteSize)
           }
           tokIdx++
         }
@@ -1143,8 +1147,9 @@ export function layoutScore(
         // adj294：渲染本音符源码之前的 bracket（紧贴本音符左缘，从远到近排列）
         for (let pi = 0; pi < pendingBrackets.length; pi++) {
           const bk = pendingBrackets[pi]
-          const bw = bracketBodyW()
+          const bw = markBodyW(bk.code, m.noteSize)
           page.brackets.push({
+            code: bk.code,
             dir: bk.dir,
             x: r1(placedX + bw / 2 - (pendingBrackets.length - pi) * bw),
             yTop: r1(yTop + m.noteSize * 0.7),
@@ -1160,8 +1165,9 @@ export function layoutScore(
       while (tokIdx < segNotes.length) {
         const tk = segNotes[tokIdx]
         if (tk.kind === 'bracket') {
-          const bw = bracketBodyW()
+          const bw = markBodyW(tk.code, m.noteSize)
           page.brackets.push({
+            code: tk.code,
             dir: tk.dir,
             x: r1(lastRightAbs + bw / 2),
             yTop: r1(yTop + m.noteSize * 0.7),
@@ -1350,11 +1356,14 @@ export function layoutScore(
       nonDurPad += lineW + bp * 2
     }
     // adj294：&zkh/&ykh 为独立括号标记（无时值元素）——占位从行宽扣（A 方案）
-    let bracketCount = 0
+    // adj375：&hx 呼吸记号同为独立标记，宽度按 code 取
+    let bracketPadSum = 0
     for (let bi = row.start; bi < row.end; bi++) {
-      for (const tk of segs[bi].notes) if (tk.kind === 'bracket') bracketCount++
+      for (const tk of segs[bi].notes) {
+        if (tk.kind === 'bracket') bracketPadSum += markBodyW(tk.code, m.noteSize)
+      }
     }
-    if (bracketCount > 0) nonDurPad += bracketBodyW() * bracketCount
+    if (bracketPadSum > 0) nonDurPad += bracketPadSum
     // adj293：&hx（滑音箭头，右侧）为无时值元素——依附其前的带时值元素之后，本体宽占位
     for (const n of noteList) {
       if (n.hasHx) nonDurPad += hxBodyW(m.noteSize)
@@ -1502,8 +1511,10 @@ export function layoutScore(
             curX = xCursor
           } else if (tok.kind === 'bracket') {
             // adj294：&zkh/&ykh 独立括号标记——占宽、按源码序列序插位、不影响音符
-            const bw = bracketBodyW()
+            // adj375：&hx 呼吸记号同样走这条独立标记通道（宽度按 code）
+            const bw = markBodyW(tok.code, m.noteSize)
             page.brackets.push({
+              code: tok.code,
               dir: tok.dir,
               x: r1(curX + bw / 2),
               yTop: r1(yTop + m.noteSize * 0.7),
@@ -1702,7 +1713,7 @@ export function layoutScore(
         for (const p of parts) {
           const seg = p.segs[b] ?? { notes: [], bar: null }
           for (const t of seg.notes) {
-            if (t.kind === 'bracket') nonDurPad += bracketBodyW()
+            if (t.kind === 'bracket') nonDurPad += markBodyW(t.code, m.noteSize)
             if (t.kind === 'note' && t.symbols.includes('hx')) nonDurPad += hxBodyW(m.noteSize)
           }
         }
@@ -1733,9 +1744,9 @@ export function layoutScore(
               for (let k = startBeat; k < endBeat && k < bb; k++) voiceBeats[k] += perPiece
               beatAcc += dur
             } else {
-              // 非时值元素（&zkh/&ykh 括号）计入当前拍
+              // 非时值元素（&zkh/&ykh 括号、&hx 呼吸记号）计入当前拍
               const bIdx = Math.min(bb - 1, Math.floor(beatAcc + 1e-9))
-              if (t.kind === 'bracket') voiceBeats[bIdx] += bracketBodyW()
+              if (t.kind === 'bracket') voiceBeats[bIdx] += markBodyW(t.code, m.noteSize)
             }
           }
           // 跨声部取最大：同一拍纵向堆叠、同一 x，取最宽声部

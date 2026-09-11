@@ -686,18 +686,6 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
           parts.push(
             `<path d="M ${r1n(x2 + ox)} ${r1n(y2 + oy)} L ${r1n(ax)} ${r1n(ay)} L ${r1n(x2 - ox)} ${r1n(y2 - oy)}" fill="none" stroke="#1b1b1b" stroke-width="1"/>`,
           )
-        } else if (sym === 'hx') {
-          // 呼吸记号：音符右侧上方，单线 V（尖朝下，adj112）；
-          // adj180：线宽 1 → 0.8（不加粗）、横向尺寸缩为 80%（3.5s → 2.8s）
-          // adj293：位置用「音符实际占位右端」(rightX，含附点/增时线等有时值元素) 之后，
-          // 而非固定数字右缘——否则增时线/附点会与 hx 重叠，不符「显示在有时值元素后面」。
-          const hx = (note.rightX ?? (x + digitW)) + 7 * s
-          const hy = y - size * 0.8 - 4 * s
-          const hw = 3.5 * s * 0.8
-          parts.push(
-            `<path d="M ${r1n(hx - hw)} ${r1n(hy - 3 * s)} L ${r1n(hx)} ${r1n(hy + 3 * s)} L ${r1n(hx + hw)} ${r1n(hy - 3 * s)}" fill="none" stroke="#1b1b1b" stroke-width="0.8"/>`,
-          )
-          continue // hx 在右侧，不占上方层顶
         } else if (ABOVE_GLYPH[sym]) {
           // adj334：吐音/打音/叠音——音符正上方居中显示一个粗体单字（T / 扌 / 又）。
           // 用中文黑体栈（FONT_CN）保证 /扌/又 可见；粗体 + 居中于数字槽。
@@ -1340,9 +1328,26 @@ function renderPageNum(page: ScorePage, config: PageConfig, pageCount: number): 
   )
 }
 
-/** adj294：渲染独立括号标记（&zkh/&ykh）——放在插位、垂直居中于数字（dominant-baseline=central 使字符中心对齐数字中心） */
-function renderBracket(b: { dir: 'open' | 'close'; x: number; yTop: number; width: number }, config: PageConfig): string {
+/**
+ * 渲染独立标记（&zkh/&ykh 括号、&hx 呼吸记号）——放在插位、垂直居中于数字
+ * （dominant-baseline=central 使字符中心对齐数字中心）。
+ * adj375：&hx 已独立化——画呼吸记号（单线 V、尖朝下，adj112 的既有画法），
+ * 位置取「占位中心 x」以及**略高于数字**的 y（呼吸记号画在音符右上方，不用数字基线中心）。
+ */
+function renderBracket(
+  b: { code: 'zkh' | 'ykh' | 'hx'; dir: 'open' | 'close'; x: number; yTop: number; width: number },
+  config: PageConfig,
+): string {
   const size = config.note_size
+  if (b.code === 'hx') {
+    // adj180：线宽 0.8（不加粗）、横向尺寸 80%（3.5s → 2.8s）。
+    // 纵向与旧「依附音符」画法一致：旧式为 `音符基线 - 0.8×字号 - 4s`，而括号/标记的
+    // yTop = 行顶 + 0.7×字号 = 数字中心 = 基线 - 0.4×字号 → 基线 = yTop + 0.4×字号。
+    const s = noteScaleOf(size)
+    const hw = 3.5 * s * 0.8
+    const cy = b.yTop - size * 0.4 - 4 * s
+    return `<path d="M ${r1n(b.x - hw)} ${r1n(cy - 3 * s)} L ${r1n(b.x)} ${r1n(cy + 3 * s)} L ${r1n(b.x + hw)} ${r1n(cy - 3 * s)}" fill="none" stroke="#1b1b1b" stroke-width="0.8"/>`
+  }
   const glyph = b.dir === 'open' ? '(' : ')'
   return `<text x="${r1n(b.x)}" y="${r1n(b.yTop)}" text-anchor="middle" dominant-baseline="central" font-weight="bold" font-size="${size}" font-family="${noteFont(config.shuzi_font)}" fill="#1b1b1b">${glyph}</text>`
 }

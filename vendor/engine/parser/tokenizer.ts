@@ -112,12 +112,13 @@ export function tokenizeMusicLine(
         // adj220：不再收数字——&dy5/ 中 5 是下一音符起点（此前被吞进 dy5，
         // 3&dy5/&dy5/… 粘连成一个音符）；编码均为字母（tr/cy/dy/fine 等）
         // adj294：&zkh/&ykh 为独立括号标记——不收集为音符符号，停止收集留给主循环处理
+        // adj375：&hx（呼吸记号）同理独立化——不再依附音符
         let k = j + 1
         while (k < n && /[a-zA-Z]/.test(content[k])) k++
         if (content[k] === '+') k++
         if (k > j + 1) {
           const code = content.slice(j + 1, k)
-          if (code === 'zkh' || code === 'ykh') break
+          if (code === 'zkh' || code === 'ykh' || code === 'hx') break
           base.symbols.push(code)
           j = k
         } else {
@@ -225,11 +226,15 @@ export function tokenizeMusicLine(
       if (k > i + 1) {
         const code = content.slice(i + 1, k)
         // adj294：&zkh/&ykh 是独立括号标记（无时值元素）——插在源码位置，占宽，不影响音符
+        // adj375：&hx 呼吸记号同样独立（可写在音符前或后：`&hx 6 5` / `6 &hx 5`）
         if (code === 'zkh') {
-          tokens.push({ kind: 'bracket', dir: 'open', pos: i, raw: content.slice(i, k) })
+          tokens.push({ kind: 'bracket', code: 'zkh', dir: 'open', pos: i, raw: content.slice(i, k) })
           i = k
         } else if (code === 'ykh') {
-          tokens.push({ kind: 'bracket', dir: 'close', pos: i, raw: content.slice(i, k) })
+          tokens.push({ kind: 'bracket', code: 'ykh', dir: 'close', pos: i, raw: content.slice(i, k) })
+          i = k
+        } else if (code === 'hx') {
+          tokens.push({ kind: 'bracket', code: 'hx', dir: 'open', pos: i, raw: content.slice(i, k) })
           i = k
         } else {
           tokens.push({ kind: 'decoration', code, pos: i, raw: content.slice(i, k) })
@@ -607,10 +612,11 @@ export function tokenizeMusicLine(
             while (j < n && /[a-zA-Z0-9]/.test(content[j])) j++
             if (j > i + 2) {
               const bkCode = content.slice(i + 2, j)
-              if (bkCode === 'zkh' || bkCode === 'ykh') {
+              // adj375：&hx 同样独立化（"-&hx" → 增时线归音符 + 独立呼吸记号）
+              if (bkCode === 'zkh' || bkCode === 'ykh' || bkCode === 'hx') {
                 lastBlockEnd = i + 1
                 found = true
-                break // 留在 & 处，主循环处理 &ykh → 独立 bracket token
+                break // 留在 & 处，主循环处理 &ykh/&hx → 独立 bracket token
               }
               if (last.kind === 'note') last.symbols.push(bkCode)
               last.raw += content.slice(i + 1, j)

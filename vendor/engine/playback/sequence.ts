@@ -192,10 +192,30 @@ export function buildPlaySequence(
   let noteIdx = 0
   const slurStarts: number[] = []
   const slurRanges: [number, number][] = []
+  /**
+   * adj375：&hx（呼吸记号）作用的音符全局 index 集合。
+   * 规则：取记号**左侧本组内最近的可发声 token**（音符/休止/节奏符）——即"占用前面音符 1/4 时值"；
+   * 若记号写在本组最前（左侧没有可发声元素，如 `&hx 6 5` 的行首写法），退化为它**右侧最近**的那个音符。
+   */
+  const hxBreathNoteIdx = new Set<number>()
   for (const line of result.lines) {
     if (line.kind !== 'music') continue
     const group = result.groups.find((g) => g.music === line)
     if (!group) continue
+    {
+      const toks = group.music.tokens
+      const soundablePos: number[] = [] // 组内可发声 token 的 token 下标（顺序）
+      toks.forEach((tk, k) => {
+        if (tk.kind === 'note' || tk.kind === 'rest' || tk.kind === 'rhythm') soundablePos.push(k)
+      })
+      toks.forEach((tk, k) => {
+        if (tk.kind !== 'bracket' || tk.code !== 'hx') return
+        let pick = -1
+        for (let q = 0; q < soundablePos.length; q++) if (soundablePos[q] < k) pick = q
+        if (pick < 0) pick = soundablePos.findIndex((sp) => sp > k)
+        if (pick >= 0) hxBreathNoteIdx.add(noteIdx + pick)
+      })
+    }
     for (const token of group.music.tokens) {
       if (token.kind === 'slur') {
         if (token.dir === 'open') slurStarts.push(noteIdx)
@@ -431,6 +451,24 @@ export function buildPlaySequence(
   // 当前音符若与上一个音高相同、同属某连音线且中间无音符（索引相邻），则时值并入前一事件
   let lastEventNoteIdx = -1
   let lastEventPitch: string | null | undefined = undefined
+  /**
+   * adj375：呼吸换气（&hx）——待结算的事件下标。
+   * 语义：`&hx` 占**前面音符**总时值（含同音连音/增时线/附点）的 1/4，且最多 1/2 拍，作为呼吸静音：
+   * 该音符的发声时值 = 总时值 − 呼吸量，而**槽位长度不变**（少掉的部分是静音），因此
+   * `totalMs`/后续事件位置都不受影响。
+   * 结算时机：该事件完成（下一个事件开始）或走查结束——这样连音合并后的总时值也算进基数。
+   */
+  let breathEvIdx = -1
+  const settleBreath = () => {
+    if (breathEvIdx < 0) return
+    const ev = events[breathEvIdx]
+    if (ev) {
+      const beats = ev.durationMs / beatMs
+      const breathMs = Math.min(beats / 4, 0.5) * beatMs
+      ev.durationMs = Math.max(0, ev.durationMs - breathMs)
+    }
+    breathEvIdx = -1
+  }
   while (i < seq.length && guard++ < maxIter) {
     const item = seq[i]
     if (item.kind === 'instrument') {
@@ -512,7 +550,11 @@ export function buildPlaySequence(
           })
         }
       }
+      // adj375：新事件开始 → 上一个事件已完成（不会再被连音合并）→ 结算它的呼吸静音
+      settleBreath()
       events.push({ placed: item.note, instrument, atMs, durationMs, playheadSegs: buildPlayheadSegs(item.note, 0, rightEdgeByNoteIdx.get(item.note.id.index)) })
+      // adj375：本音符是某 &hx 的作用对象 → 标记该事件待结算（连音合并会累加时值后再一起算）
+      if (hxBreathNoteIdx.has(curNoteIdx)) breathEvIdx = events.length - 1
       if (gn && gn.after && gracePitches.length > 0) {
         for (let gi = 0; gi < gn.notes.length; gi++) {
           events.push({
@@ -632,6 +674,9 @@ export function buildPlaySequence(
         i++
     }
   }
+
+  // adj375：走查结束——最后一个事件没有"下一个事件"来触发结算，这里补一次
+  settleBreath()
 
   // adj361：总时长 = 实际播放到的时刻（= 所有事件的最大结束时刻，含反复遍）
   totalMs = lastEndMs

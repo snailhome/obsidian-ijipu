@@ -88,8 +88,16 @@ export const nonDurGap = (noteSize: number) => noteSize * 0.5
 export const accidentalBodyW = (noteSize: number) => 7.62 * (noteSize / 13)
 
 /**
- * &hx（滑音箭头，右侧）无时值元素本体宽：依附其前面的带时值元素之后。
- * 与渲染一致——hx 中心偏移 7×s（noteScaleOf）、V 形两翼半宽 3.5×s×0.8，
- * 故占位 = 7s + 2.8s = 9.8×s（保证箭头不压到下一个音符）。
+ * &hx（滑音/呼吸记号，右侧）无时值元素本体宽。
+ * adj375：&hx 已独立为标记 token（不再依附音符），但本体宽沿用既有画法——
+ * V 形中心到两翼半宽：7s + 2.8s = 9.8×s（保证记号不压到相邻元素）。
  */
 export const hxBodyW = (noteSize: number) => 9.8 * noteScaleOf(noteSize)
+
+/**
+ * 独立标记符（&zkh/&ykh 括号 / &hx 呼吸记号）本体宽——非时值元素，先扣除再分摊时值宽。
+ *  - zkh/ykh：括号本体宽 BRACKET_PAD
+ *  - hx：呼吸记号 V 形略宽（hxBodyW），与旧「依附音符时」的占宽一致
+ */
+export const markBodyW = (code: 'zkh' | 'ykh' | 'hx', noteSize: number) =>
+  code === 'hx' ? hxBodyW(noteSize) : bracketBodyW()

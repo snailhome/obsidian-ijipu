@@ -301,13 +301,17 @@ export interface InstrumentToken {
 }
 
 /**
- * 括号标记（&zkh / &ykh，adj294）：**独立无时值元素**——不再依附音符。
- * 放在源码哪个位置，就在那插入一个括号符号并占宽；对音符的时值/位置不施加影响，
- * 仅是标记符。open=( 左括号；close=) 右括号。
+ * 独立标记符（&zkh / &ykh 括号，adj294；&hx 呼吸记号，adj375）：**独立无时值元素**——不依附音符。
+ * 放在源码哪个位置，就在那插入一个标记并占宽；对音符的时值/位置不施加影响，仅是标记符。
+ *  - zkh=( 左括号；ykh=) 右括号
+ *  - hx=呼吸换气记号（V 形，"换气/静音"语义由播放端实现：见 playback/sequence.ts）
+ * 显示上三者都占宽（`hx` 略宽），因此书写时可以写在音符前或音符后：`&hx 6 5` / `6 &hx 5`。
  */
 export interface BracketToken {
   kind: 'bracket'
-  /** open=( 左括号；close=) 右括号 */
+  /** 标记编码：zkh 左括号 / ykh 右括号 / hx 呼吸记号（adj375） */
+  code: 'zkh' | 'ykh' | 'hx'
+  /** open=( 左括号；close=) 右括号（hx 无方向，恒为 'open'：不画括号） */
   dir: 'open' | 'close'
   pos: number
   raw: string
@@ -501,13 +505,15 @@ export interface PlacedDynamic {
   plus?: number
 }
 
-/** 括号标记（&zkh/&ykh，adj294）：独立无时值元素，插位占宽 */
+/** 独立标记（&zkh/&ykh 括号、&hx 呼吸记号）：独立无时值元素，插位占宽 */
 export interface PlacedBracket {
-  /** open=( 左括号；close=) 右括号 */
+  /** 标记编码：zkh / ykh / hx（adj375） */
+  code: 'zkh' | 'ykh' | 'hx'
+  /** open=( 左括号；close=) 右括号（hx 恒 'open'） */
   dir: 'open' | 'close'
-  /** 括号字符绘制中心 x */
+  /** 标记绘制中心 x */
   x: number
-  /** 所在行顶 y（括号垂直居中于数字） */
+  /** 所在行顶 y（标记垂直居中于数字） */
   yTop: number
   /** 占位宽 */
   width: number
