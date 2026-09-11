@@ -96,8 +96,8 @@ export const hxBodyW = (noteSize: number) => 9.8 * noteScaleOf(noteSize)
 
 /**
  * 独立标记符（&zkh/&ykh 括号 / &hx 呼吸记号）本体宽——非时值元素，先扣除再分摊时值宽。
- *  - zkh/ykh：括号本体宽 BRACKET_PAD
- *  - hx：呼吸记号 V 形略宽（hxBodyW），与旧「依附音符时」的占宽一致
+ * adj376：三种标记**统一用基本占宽**（= 括号的 BRACKET_PAD）；`&hx` 的"时值占用"是**演奏概念**
+ * （占前一个音符的时值作换气静音，见 playback/sequence.ts），**与排版宽度无关**，
+ * 因此不再为它预留 V 形的额外宽度。
  */
-export const markBodyW = (code: 'zkh' | 'ykh' | 'hx', noteSize: number) =>
-  code === 'hx' ? hxBodyW(noteSize) : bracketBodyW()
+export const markBodyW = (_code: 'zkh' | 'ykh' | 'hx', _noteSize: number) => bracketBodyW()

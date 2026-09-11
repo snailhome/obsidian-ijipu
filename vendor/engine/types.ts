@@ -305,7 +305,7 @@ export interface InstrumentToken {
  * 放在源码哪个位置，就在那插入一个标记并占宽；对音符的时值/位置不施加影响，仅是标记符。
  *  - zkh=( 左括号；ykh=) 右括号
  *  - hx=呼吸换气记号（V 形，"换气/静音"语义由播放端实现：见 playback/sequence.ts）
- * 显示上三者都占宽（`hx` 略宽），因此书写时可以写在音符前或音符后：`&hx 6 5` / `6 &hx 5`。
+ * 显示上三者都按**基本占宽**（与括号相同，adj376），因此书写时可以写在音符前或音符后：`&hx 6 5` / `6 &hx 5`。
  */
 export interface BracketToken {
   kind: 'bracket'
