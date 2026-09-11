@@ -157,7 +157,16 @@ export function buildPlaySequence(
         const nextNote = i < sorted.length - 1 && sorted[i + 1].x > n.x + 1e-3 ? sorted[i + 1].x : Infinity
         const nextBar = bars.find((b) => b.x > n.x + 1e-3)?.x ?? Infinity
         const edge = Math.min(nextNote, nextBar)
-        rightEdgeByNoteIdx.set(n.id.index, edge === Infinity ? (n.rightX ?? n.x + n.width) : edge)
+        // adj374：本音符「时值元素实际右缘」——增时线每条各占一个时值元素槽，
+        // 而音符声明的 rightX = x + width 是按更窄的槽宽累加的，**末条增时线可能越过 rightX**；
+        // 末元素（后面既无音符也无小节线）时若直接用 rightX，末段色块宽度会被算成 0/极小
+        // → 观感"增时线没有色块"。故色块右边界取 max(下一时值元素/小节线左缘, 本音符实际右缘)，
+        // 保证「一个时值元素一块」且块至少盖住它自己画出来的笔画。
+        const segs = n.segments ?? []
+        const lastSeg = segs[segs.length - 1]
+        const inkRight = lastSeg ? lastSeg.x + lastSeg.perBeat * lastSeg.beats : (n.rightX ?? n.x + n.width)
+        const own = Math.max(n.rightX ?? inkRight, inkRight)
+        rightEdgeByNoteIdx.set(n.id.index, edge === Infinity ? own : Math.max(edge, own))
       })
     }
   }

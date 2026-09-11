@@ -7,6 +7,8 @@
  *  - 音符：数字（衬线粗体）+ 高低音点/变音/附点/增时线/减时线/休止符/节奏符；
  *  - 小节线：| || |: :| :|:（含隐藏线 |/ |* 不绘制）；
  *  - 光标联动契约：音符 <text data-notepos="page_voice_group_index">。
+ *    adj374：一个音符的**多个视觉元素**（数字主体 + 各条增时线）共用同一 data-notepos——
+ *    消费方需要「整音高亮/命中」时用 querySelectorAll，需要「取代表元素（滚动/定位）」时用 querySelector（首个=数字）。
  *
  * TODO(M1b)：多页分页输出
  * TODO(M1c)：歌词 <text data-cipos>
@@ -545,8 +547,11 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
       const lx = r1n(beatStart + (pb - digitW) / 2)
       // adj73："-" 字符随音符字号；dominant-baseline=central 使字符垂直居中于数字中心；
       // text-anchor=middle 使字符在占位宽（digitW）内居中；adj76：加粗与数字一致
+      // adj374：增时线同样带 data-notepos（与数字同一 id）——播放高亮/光标联动能覆盖到增时线，
+      // 此前只有数字带 id，试听时高亮"只显示到数字、后面的 -- 没有高亮"。
+      // 属性放在末尾：不影响既有断言/外部消费方对前面属性顺序的假设。
       parts.push(
-        `<text x="${r1n(lx + digitW / 2)}" y="${augY}" text-anchor="middle" dominant-baseline="central" font-weight="bold" font-size="${size}" font-family="${font}" fill="#1b1b1b">-</text>`,
+        `<text x="${r1n(lx + digitW / 2)}" y="${augY}" text-anchor="middle" dominant-baseline="central" font-weight="bold" font-size="${size}" font-family="${font}" fill="#1b1b1b" data-notepos="${nid}">-</text>`,
       )
     }
   }
