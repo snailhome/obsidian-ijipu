@@ -65,9 +65,15 @@ export function schedulePlay(
     void backend.play(pitch, ev.atMs + firstDelayMs, ev.durationMs, 0.5, instrument)
     onNote?.(ev.placed)
   }
-  const lastAt = seq.events.length > 0 ? seq.events[seq.events.length - 1].atMs + 100 : 0
+  // adj381：totalMs 取**所有事件尾端**（atMs + durationMs）的最大值，而不是末事件的起声时刻。
+  // 此前用 `末事件.atMs + 100`：末音符时值长时（如末尾 `6,---` 共 4 拍）该值只到它刚起声的位置，
+  // 试听收尾定时器（PlaybackDialog 用 job.totalMs + 100）在该音符刚起声时就触发 → 色块轨道与
+  // 高亮被清空，**末音符后面的增时线永远没有色块**（用户报告「最后一小节最后一个音符后面的
+  // 增时线没有色块」，且对话框显示的总时长与实播时长不一致）。保留 100ms 余量语义不变。
+  let endMs = 0
+  for (const ev of seq.events) endMs = Math.max(endMs, ev.atMs + ev.durationMs)
   return {
     cancel: () => backend.stop(),
-    totalMs: lastAt + firstDelayMs,
+    totalMs: endMs + 100 + firstDelayMs,
   }
 }
