@@ -16,6 +16,36 @@ import type { PageConfig } from './types'
 export const JPS_CONFIG_PREFIX = '# jps-config:'
 
 /**
+ * 不在 `defaultPageConfig` 对象上的**可选字段**：写回 `# jps-config` 后读回时必须保留，
+ * 否则「显示乐器名 / 歌词压缩 / 编辑器字体」这类开关保存后重开即失效。
+ *
+ * adj382：补 `showInstrument`——它此前漏在白名单外（`defaultPageConfig` 里没有它，
+ * 又不是显式白名单项），于是 `writeJpsConfig` 明明写进了 30 个字段，`extractJpsConfig`
+ * 只读回 29 个，App 勾选「显示乐器名」保存后重新打开就丢（同类"设置不生效"）。
+ * 下面的编译期断言保证**引擎新增可选字段时此处必须同步**（否则 tsc 报错）。
+ */
+const OPTIONAL_CONFIG_FIELDS = [
+  'heights',
+  'metaPos',
+  'editorFont',
+  'editorFontSize',
+  'lyricShrink',
+  'showInstrument',
+] as const
+
+/** PageConfig 中的可选字段集合 */
+type OptionalConfigKey = {
+  [K in keyof PageConfig]-?: undefined extends PageConfig[K] ? K : never
+}[keyof PageConfig]
+/** 编译期完整性断言：可选字段未列入 OPTIONAL_CONFIG_FIELDS 时报错（`never` 不可赋给 `true`） */
+export const _OPTIONAL_CONFIG_FIELDS_COMPLETE: Exclude<
+  OptionalConfigKey,
+  (typeof OPTIONAL_CONFIG_FIELDS)[number]
+> extends never
+  ? true
+  : never = true
+
+/**
  * 从源码中提取谱面级设置（无该注释返回 null）。
  * 只取白名单字段，损坏 JSON 静默忽略（回退公共设置）。
  */
@@ -30,17 +60,10 @@ export function extractJpsConfig(code: string): Partial<PageConfig> | null {
     const obj = JSON.parse(raw) as Record<string, unknown>
     if (typeof obj !== 'object' || obj === null) return null
     // 仅回填已知字段，防止任意键污染
-    // adj221：editorFont/editorFontSize 是 PageConfig 可选字段（不在 defaultPageConfig
-    // 对象上），必须显式加白名单——否则写回 # jps-config 后读回会被过滤丢失
-    const known = new Set([
-      ...Object.keys(defaultPageConfig),
-      'heights',
-      'metaPos',
-      'editorFont',
-      'editorFontSize',
-      // adj292：歌词压缩开关（可选字段，不在 defaultPageConfig 上，显式白名单）
-      'lyricShrink',
-    ])
+    // adj221/adj382：可选字段（不在 defaultPageConfig 对象上）必须显式列入白名单，
+    // 否则写回 # jps-config 后读回会被过滤丢失；新增可选字段时 OPTIONAL_CONFIG_FIELDS
+    // 与上面的编译期断言会强制同步。
+    const known = new Set<string>([...Object.keys(defaultPageConfig), ...OPTIONAL_CONFIG_FIELDS])
     const out: Record<string, unknown> = {}
     for (const k of Object.keys(obj)) {
       if (known.has(k)) out[k] = obj[k]

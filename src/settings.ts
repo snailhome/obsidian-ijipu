@@ -142,7 +142,7 @@ export class IJipuSettingTab extends PluginSettingTab {
     const head = containerEl.createDiv({ cls: 'ijipu-settings-header' })
     head.createEl('h2', { text: '爱记谱（iJipu）' })
     head.createEl('p', {
-      text: '在 Obsidian 笔记中用 ```jps 代码块把 .jps 简谱脚本渲染为可视化简谱，支持试听（播放时色块跟进音符）与「整页 / 满宽 / 谱面」三种显示模式；设置项与 iJipu 应用一脉传承（页面 / 字体 / 行距 / 渲染），并可用笔记 frontmatter（ijipu_* 前缀）覆盖。',
+      text: '在 Obsidian 笔记中用 ```jps 代码块把 .jps 简谱脚本渲染为可视化简谱，支持试听（播放时色块跟进音符）与「整页 / 满宽 / 谱面」三种显示模式；设置项与 iJipu 应用一脉传承（页面 / 字体 / 行距 / 渲染）。优先级：引擎默认 < 本页设置 < 笔记 frontmatter（ijipu_*）< 谱面源码内的 # jps-config 行——把 iJipu 里带设置行的 .jps 直接复制进来，即渲染成一模一样。',
     })
     const a1 = head.createEl('a', { text: 'iJipu 官网' })
     a1.setAttr('href', 'https://ijipu.pages.dev')
@@ -156,6 +156,16 @@ export class IJipuSettingTab extends PluginSettingTab {
     a3.setAttr('href', 'https://ijipu.pages.dev/good.png')
     a3.setAttr('target', '_blank')
     head.createEl('div')
+
+    // —— 设置优先级说明（源内 # jps-config 最高；与 iJipu 应用一致）——
+    new Setting(containerEl)
+      .setName('设置优先级（源内最高）')
+      .setDesc(
+        '① 引擎默认 → ② 本页设置（全局默认） → ③ 笔记 frontmatter（ijipu_*，笔记级兜底） → ' +
+          '④ **谱面源码内的 `# jps-config` 行**（该曲谱自带设置，优先级最高）。' +
+          'iJipu 点「保存设置」时会把整份配置写进源码那一行，所以从 iJipu 复制过来的 .jps 会按它自带的设置渲染；' +
+          '本页设置与 frontmatter 只对**源内没写的键**生效。',
+      )
 
     // —— frontmatter 键：一键复制（点每项下方的键名复制单个；此处整批复制）——
     new Setting(containerEl)

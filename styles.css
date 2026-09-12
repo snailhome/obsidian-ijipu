@@ -96,6 +96,11 @@
   cursor: help;
 }
 
+/* 源内 # jps-config 徽标（优先级最高的设置来源，用另一色与 frontmatter 徽标区分） */
+.ijipu-src-badge {
+  background: var(--interactive-success, var(--color-green));
+}
+
 /* 未识别的 frontmatter 键提示（含最近键名建议） */
 .ijipu-fm-warn {
   margin: 0 0 6px;

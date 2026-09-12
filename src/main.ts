@@ -1,5 +1,6 @@
 import { Events, MarkdownRenderChild, Notice, Plugin } from 'obsidian'
-import { applyFrontmatter, renderScore, playScore, unknownKeyHint } from './render'
+import { renderScore, playScore, unknownKeyHint } from './render'
+import { resolvePageConfig } from './config'
 import { IJipuSettingTab } from './settings'
 import type { IJipuSettings } from './types'
 import type { PlayheadSeg } from './render'
@@ -140,7 +141,9 @@ class IJipuBlock extends MarkdownRenderChild {
   private render(): void {
     this.teardown()
     const fm = this.plugin.app.metadataCache.getCache(this.sourcePath)?.frontmatter ?? null
-    const { config: pageConfig, applied, unknown } = applyFrontmatter(this.plugin.settings, fm)
+    // 优先级：默认 < 插件设置 < frontmatter < 源内 # jps-config（源内最高：
+    // 把 iJipu 的 .jps 直接复制进来即一模一样）
+    const { config: pageConfig, applied, unknown, sourceFields } = resolvePageConfig(this.source, this.plugin.settings, fm)
     const container = this.containerEl.createDiv({ cls: 'ijipu-score' })
     const { svgs, error } = renderScore(this.source, pageConfig)
 
@@ -151,13 +154,31 @@ class IJipuBlock extends MarkdownRenderChild {
 
     const toolbar = container.createDiv({ cls: 'ijipu-score-toolbar' })
     toolbar.createSpan({ cls: 'ijipu-page-label', text: `${svgs.length} 页` })
+    // 源内设置徽标：这份谱自带 `# jps-config`（优先级最高，覆盖插件设置与 frontmatter）
+    if (sourceFields.length > 0) {
+      const badge = toolbar.createSpan({
+        cls: 'ijipu-fm-badge ijipu-src-badge',
+        text: `谱面自带设置 ${sourceFields.length} 项`,
+      })
+      badge.setAttr(
+        'title',
+        `来自源码 # jps-config 行（优先级最高，覆盖插件设置与 frontmatter）：\n${sourceFields
+          .map((f) => `${f} = ${String((pageConfig as unknown as Record<string, unknown>)[f])}`)
+          .join('\n')}`,
+      )
+    }
     // frontmatter 覆盖可见化：改了哪些键、值是什么（悬停标题里列全）
     if (applied.length > 0) {
       const badge = toolbar.createSpan({
         cls: 'ijipu-fm-badge',
         text: `frontmatter 覆盖 ${applied.length} 项`,
       })
-      badge.setAttr('title', applied.map((a) => `${a.key} = ${String(a.value)}`).join('\n'))
+      badge.setAttr(
+        'title',
+        `来自笔记 frontmatter（只对谱面未自带设置的键生效）：\n${applied
+          .map((a) => `${a.key} = ${String(a.value)}`)
+          .join('\n')}`,
+      )
     }
 
     // —— 试听（播放/停止 + RAF 驱动整曲行色块跟随，与 iJipu 一致）——

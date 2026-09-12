@@ -17,6 +17,8 @@ import { SpessaSynthBackend, HqCache, getHqLibrary, loadHqBank } from './soundba
  */
 export { applyFrontmatter, mergePageConfig, frontmatterKey, unknownKeyHint, FRONTMATTER_PREFIX } from './frontmatter'
 export type { AppliedOverride, UnknownKey, FrontmatterResult } from './frontmatter'
+export { resolvePageConfig } from './config'
+export type { ResolvedConfig } from './config'
 
 /** 渲染 .jps → 每页 SVG 字符串（解析失败返回 error 信息） */
 export function renderScore(

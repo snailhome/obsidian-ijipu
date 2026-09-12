@@ -5,8 +5,9 @@
  * 断言来源：用户反馈「在 frontmatter 里设置像 `ijipu_note_size` 好像没生效」——
  * 覆盖键名写法兼容、值类型转换、未识别键提示、优先级四类。
  */
-import { defaultPageConfig } from '@ijipu/engine'
+import { defaultPageConfig, writeJpsConfig } from '@ijipu/engine'
 import { applyFrontmatter, frontmatterKey, mergePageConfig, unknownKeyHint, PAGE_CONFIG_FIELDS } from '../src/frontmatter'
+import { resolvePageConfig } from '../src/config'
 
 let pass = 0
 let fail = 0
@@ -108,6 +109,41 @@ console.log('[6] 键名映射与全字段命中')
   check(`字段表全部 ${PAGE_CONFIG_FIELDS.length} 个字段都能被同名 frontmatter 键命中`, miss.length === 0, miss.join(','))
   const appliedOnce = CFG({ ijipu_note_size: 15, ijipu_noteSize: 16 })
   check('同一字段两种写法重复出现时以最后写入为准（不报错）', appliedOnce.config.note_size === 16, String(appliedOnce.config.note_size))
+}
+
+console.log('[7] 谱面自带设置 # jps-config 优先级最高（阶段 1：复制 iJipu 的 .jps 即一模一样）')
+{
+  const SRC = 'V: 1.0\nB: 探针\nD: G\nP: 4/4\nJ: 90\n\nQ: | 6,--- &ykh ||\n'
+  // 模拟 iJipu「保存设置」：把整份配置写进源码 # jps-config 行
+  const withCfg = writeJpsConfig(SRC, {
+    ...defaultPageConfig,
+    note_size: 15,
+    margin_left: 32,
+    noteSpaceLayout: 'duration',
+    lianyinxian_type: 2,
+    showInstrument: true,
+    lyricShrink: true,
+  })
+  const r = resolvePageConfig(withCfg, { note_size: 99, margin_left: 99 }, { ijipu_note_size: 88, ijipu_margin_right: 12 })
+  check('源内设置 > frontmatter > 插件设置（note_size=15）', r.config.note_size === 15, String(r.config.note_size))
+  check('源内设置生效（margin_left=32 / noteSpaceLayout=duration / lianyinxian_type=2）', r.config.margin_left === 32 && r.config.noteSpaceLayout === 'duration' && r.config.lianyinxian_type === 2)
+  check('源内可选字段往返保真（showInstrument/lyricShrink=true）', r.config.showInstrument === true && r.config.lyricShrink === true, `${r.config.showInstrument}/${r.config.lyricShrink}`)
+  check('源内全量配置覆盖 frontmatter 同键（margin_right 用源内 40，而非 frontmatter 12）', r.config.margin_right === 40, String(r.config.margin_right))
+  // 源内只写部分键（手写的最小设置行）→ 其余键交给 frontmatter / 插件设置
+  const partial = `${SRC}\n# jps-config:{"note_size":15}\n`
+  const rp = resolvePageConfig(partial, { margin_right: 40 }, { ijipu_margin_right: 12 })
+  check('源内只写部分键时，其他键由 frontmatter 生效（margin_right=12）', rp.config.margin_right === 12, String(rp.config.margin_right))
+  check('源内部分设置里的键仍最高优先（note_size=15）', rp.config.note_size === 15, String(rp.config.note_size))
+  check('源内/frontmatter 都没写 → 插件设置生效（bar_gap）', resolvePageConfig(SRC, { bar_gap: 7 }, {}).config.bar_gap === 7)
+  check('sourceFields 报告源内生效字段数（≥7）且含 showInstrument', r.sourceFields.length >= 7 && r.sourceFields.includes('showInstrument'), `${r.sourceFields.length}:${r.sourceFields.slice(0, 3).join(',')}`)
+  check('无源内设置时 sourceFields 为空', resolvePageConfig(SRC, {}, {}).sourceFields.length === 0)
+  check('无源内设置时行为与此前一致（插件设置 > 默认）', resolvePageConfig(SRC, { note_size: 20 }, {}).config.note_size === 20)
+  check('源内设置行不影响解析（仍是 1 个曲行、无错误）', resolvePageConfig(withCfg, {}, {}).config.note_size === 15)
+  // 端到端等价性：同一份 .jps（含设置行）在两端解析出的配置应完全一致
+  const dst = resolvePageConfig(withCfg, {}, null).config
+  const appSide = { ...defaultPageConfig, ...(JSON.parse(withCfg.split('\n').find((l) => l.startsWith('# jps-config:'))!.slice('# jps-config:'.length)) as object) }
+  const diff = Object.keys(appSide).filter((k) => JSON.stringify((dst as unknown as Record<string, unknown>)[k]) !== JSON.stringify((appSide as unknown as Record<string, unknown>)[k]))
+  check('端到端：插件解析结果与 iJipu 源内配置逐字段一致（无一差异）', diff.length === 0, diff.join(','))
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

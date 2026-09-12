@@ -1,5 +1,18 @@
 # 爱记谱 iJipu（未发布）
 
+## 新增：直接复用 iJipu 的谱面设置（`# jps-config`），复制 .jps 即渲染一致
+
+- **谱面源码内的 `# jps-config:{...}` 行现在是最高优先级**：`引擎默认 < 插件设置 < 笔记 frontmatter < 谱面自带设置`。iJipu 点「保存设置」时用 `writeJpsConfig` 把**整份**配置（实测 30 个字段：纸张/四边距/各字体栈/各字号/行距/`noteSpaceLayout`/`lianyinxian_type`/`metaPos`/`editorFont*`）写进源码那一行，因此**把 iJipu 里的 .jps 直接粘进 Obsidian 代码块，排版与 iJipu 一致**；插件设置与 frontmatter 只对**源内没写的键**生效（手写的最小设置行同样支持）。
+- 新增纯逻辑模块 `src/config.ts` 的 `resolvePageConfig(source, settings, frontmatter)`：复用引擎 `mergeJpsConfig`（其语义正好是"默认 < 兜底 < 源内"），并回报源内生效字段数供界面显示。
+- 谱面工具栏新增来源徽标：绿色「**谱面自带设置 N 项**」（悬停列出每个字段的生效值）与「**frontmatter 覆盖 N 项**」（标题注明"只对谱面未自带设置的键生效"）。
+- 设置面板新增「**设置优先级（源内最高）**」说明行，并把面板文案改为"全局默认（谱面未自带设置时生效）"。
+
+## 修复（引擎，需与主项目同步）：`# jps-config` 往返丢 `showInstrument`
+
+- `extractJpsConfig` 的字段白名单 = `Object.keys(defaultPageConfig)` + 手工补的几项，而 `showInstrument`（「显示乐器名」）既是可选字段（不在 `defaultPageConfig` 对象上）又没被补进白名单 → 实测**写入 30 个字段、读回只剩 29**，保存设置后重开就丢。
+- 现把可选字段抽成 `OPTIONAL_CONFIG_FIELDS` 常量（补齐 `showInstrument`），并加**编译期完整性断言**：引擎以后新增可选字段而不更新常量时 `tsc` 直接报错，从机制上杜绝"白名单靠人工补"的漏项。
+- `vendor/engine/settings.ts` 与主项目 `packages/ijipu-engine/src/engine/settings.ts` 保持逐字节一致（adj382）。
+
 ## 修复：frontmatter 覆盖失效 / 键名写法兼容 / 未识别键不再静默忽略
 
 - **可选字段的键此前被静默忽略（这是"设置了没生效"的主因）**：引擎 `defaultPageConfig` 只含 28 个"有默认值"的字段，而 `lyricShrink` / `showInstrument`（正是设置面板里的两项）等 6 个**可选字段**不在其中。原实现按 `ijipu_<字段名>` 去 `defaultPageConfig` 查表，于是 `ijipu_showInstrument: true`、`ijipu_lyricShrink: true` 被判成"未识别键"**直接丢弃**。现显式列出 `PageConfig` 全部 **34 个字段**，并加**编译期完整性断言**（引擎增删字段时 `tsc` 直接报错提醒同步）。
@@ -20,7 +33,7 @@
 
 ## 验证
 
-- 新增 `npm run smoke`（esbuild 打包 `scripts/smoke-frontmatter.mts` → `dist-smoke/`，node 执行）：**39 项断言全绿**，覆盖键名写法兼容、值类型转换、可选字段识别、未识别键建议、优先级、字段表完整性（含"引擎全部 34 个字段都能被同名键命中"）。
+- 新增 `npm run smoke`（esbuild 打包 `scripts/smoke-frontmatter.mts` → `dist-smoke/`，node 执行）：**51 项断言全绿**，覆盖键名写法兼容、值类型转换、可选字段识别、未识别键建议、优先级、字段表完整性（含"引擎全部 34 个字段都能被同名键命中"），以及**源内 `# jps-config` 优先级**（源内 > frontmatter > 插件设置、源内部分设置行、以及"插件解析结果与 iJipu 源内配置逐字段一致"的端到端核对）。
 - `npm run build`（`tsc -noEmit -skipLibCheck` + esbuild production）通过；产物 `main.js` 已确认含新逻辑（`MarkdownRenderChild` + `metadataCache.on('changed')`、覆盖徽标、未识别提示、键名复制）。
 
 ---
