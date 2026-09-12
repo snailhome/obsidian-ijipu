@@ -7,15 +7,30 @@
  */
 const NS = 'http://www.w3.org/2000/svg'
 
-/** 建一个 14×14 描边图标（与 iJipu 应用顶栏图标同规格：strokeWidth 1.4、currentColor） */
-function strokeIcon(build: (add: (tag: 'rect' | 'path', attrs: Record<string, string>) => void) => void): SVGSVGElement {
+/**
+ * 图标基础线宽。
+ *
+ * 深色主题下 1.4px 的细笔画（尤其中空形状：田字格、满宽箭头）会糊成一团看不清，
+ * 故基准线宽提到 1.8；内部辅助线用 1.5 保持层次。颜色由父元素 `color` 决定
+ * （样式里用 `--text-normal`，不用 `--text-muted`——后者在深色主题偏暗）。
+ */
+const SW = '1.8'
+const SW_THIN = '1.5'
+
+/** 建一个描边图标（与 iJipu 应用顶栏图标同规格：currentColor + 圆角线帽，配色由主题决定） */
+function strokeIcon(
+  build: (add: (tag: 'rect' | 'path', attrs: Record<string, string>) => void) => void,
+  size = 14,
+): SVGSVGElement {
   const svg = document.createElementNS(NS, 'svg')
-  svg.setAttribute('width', '14')
-  svg.setAttribute('height', '14')
+  svg.setAttribute('width', String(size))
+  svg.setAttribute('height', String(size))
   svg.setAttribute('viewBox', '0 0 14 14')
   svg.setAttribute('fill', 'none')
   svg.setAttribute('stroke', 'currentColor')
-  svg.setAttribute('stroke-width', '1.4')
+  svg.setAttribute('stroke-width', SW)
+  svg.setAttribute('stroke-linecap', 'round')
+  svg.setAttribute('stroke-linejoin', 'round')
   svg.setAttribute('aria-hidden', 'true')
   build((tag, attrs) => {
     const el = document.createElementNS(NS, tag)
@@ -26,59 +41,46 @@ function strokeIcon(build: (add: (tag: 'rect' | 'path', attrs: Record<string, st
 }
 
 /**
- * 田字格图标（与 iJipu 应用顶栏「排版」按钮完全一致：14×14、stroke 1.4、方框 + 竖线 + 横线）。
- * @param size 像素尺寸（默认 14，与顶栏一致）
+ * 田字格图标（与 iJipu 应用顶栏「排版」按钮同一形状：方框 + 竖线 + 横线）。
+ * @param size 像素尺寸（默认 15：深色主题下 14 略小，笔画挤在一起不易辨认）
  */
-export function layoutIcon(size = 14): SVGSVGElement {
-  const svg = document.createElementNS(NS, 'svg')
-  svg.setAttribute('width', String(size))
-  svg.setAttribute('height', String(size))
-  svg.setAttribute('viewBox', '0 0 14 14')
-  svg.setAttribute('fill', 'none')
-  svg.setAttribute('stroke', 'currentColor')
-  svg.setAttribute('stroke-width', '1.4')
-  svg.setAttribute('aria-hidden', 'true')
-  const rect = document.createElementNS(NS, 'rect')
-  rect.setAttribute('x', '2.2')
-  rect.setAttribute('y', '2.2')
-  rect.setAttribute('width', '9.6')
-  rect.setAttribute('height', '9.6')
-  const vertical = document.createElementNS(NS, 'path')
-  vertical.setAttribute('d', 'M 7 3.6 V 10.4')
-  const horizontal = document.createElementNS(NS, 'path')
-  horizontal.setAttribute('d', 'M 3.6 7 H 10.4')
-  svg.append(rect, vertical, horizontal)
-  return svg
+export function layoutIcon(size = 15): SVGSVGElement {
+  return strokeIcon((add) => {
+    add('rect', { x: '2', y: '2', width: '10', height: '10' })
+    add('path', { d: 'M 7 2 V 12' })
+    add('path', { d: 'M 2 7 H 12' })
+  }, size)
 }
 
 /**
- * 显示模式图标（三种，形状直接表意）：
+ * 显示模式图标（三种，形状直接表意；笔画都尽量少、尽量粗，保证 14~15px 下清晰）：
  *  - 整页：整张纸 + 内部虚线框 = 含页边距的完整一页
- *  - 满宽：左右带箭头的整宽条 = 撑满容器宽（不留页面留白）
+ *  - 满宽：左右边界 + 贯穿双向箭头 = 横向撑满容器宽
  *  - 谱面：四角裁切标记 = 裁掉页边距、只保留内容区
  */
-export function modeIcon(mode: 'page' | 'full' | 'score'): SVGSVGElement {
+export function modeIcon(mode: 'page' | 'full' | 'score', size = 15): SVGSVGElement {
   if (mode === 'page') {
     return strokeIcon((add) => {
-      add('rect', { x: '2.4', y: '1.4', width: '9.2', height: '11.2' })
-      add('rect', { x: '4.2', y: '3.2', width: '5.6', height: '7.6', 'stroke-dasharray': '1.4 1.4', 'stroke-width': '1' })
-    })
+      add('rect', { x: '2.3', y: '1.3', width: '9.4', height: '11.4' })
+      add('rect', { x: '4.2', y: '3.1', width: '5.6', height: '7.8', 'stroke-dasharray': '1.6 1.5', 'stroke-width': SW_THIN })
+    }, size)
   }
   if (mode === 'full') {
-    // 「撑满容器宽」用经典意象：**页面框 + 两侧向外箭头**（比框内双向箭头更清楚，
-    // 14px 下不会糊成一团）；箭头线宽略细，避免与页面框粘连。
+    // 「横向撑满」：两条边界竖线 + 贯穿双向箭头（比"页面框 + 框外小箭头"笔画更少更清楚）
     return strokeIcon((add) => {
-      add('rect', { x: '3.1', y: '2.4', width: '7.8', height: '9.2' })
-      add('path', { d: 'M 2.8 7 H 1 M 2.1 5.9 L 0.75 7 L 2.1 8.1', 'stroke-width': '1.1' })
-      add('path', { d: 'M 11.2 7 H 13 M 11.9 5.9 L 13.25 7 L 11.9 8.1', 'stroke-width': '1.1' })
-    })
+      add('path', { d: 'M 1.5 3.3 V 10.7' })
+      add('path', { d: 'M 12.5 3.3 V 10.7' })
+      add('path', { d: 'M 4.4 7 H 9.6' })
+      add('path', { d: 'M 6 5.5 L 4.1 7 L 6 8.5' })
+      add('path', { d: 'M 8 5.5 L 9.9 7 L 8 8.5' })
+    }, size)
   }
-  // score：裁切标记（左上/右上/左下/右下四个角）
+  // score：裁切标记（左上/右上/左下/右下四个角）+ 中间内容线
   return strokeIcon((add) => {
-    add('path', { d: 'M 2.2 5.2 V 2.2 H 5.2' })
-    add('path', { d: 'M 8.8 2.2 H 11.8 V 5.2' })
-    add('path', { d: 'M 11.8 8.8 V 11.8 H 8.8' })
-    add('path', { d: 'M 5.2 11.8 H 2.2 V 8.8' })
-    add('path', { d: 'M 4.6 7 H 9.4', 'stroke-width': '1.1' })
-  })
+    add('path', { d: 'M 2 5.4 V 2 H 5.4' })
+    add('path', { d: 'M 8.6 2 H 12 V 5.4' })
+    add('path', { d: 'M 12 8.6 V 12 H 8.6' })
+    add('path', { d: 'M 5.4 12 H 2 V 8.6' })
+    add('path', { d: 'M 4.4 7 H 9.6', 'stroke-width': SW_THIN })
+  }, size)
 }

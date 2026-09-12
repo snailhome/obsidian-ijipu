@@ -237,7 +237,7 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     if (host.writeSource) {
       const cfgBtn = toolbar.createEl('button', { cls: 'ijipu-play ijipu-config-btn' })
       cfgBtn.setAttr('title', '排版：调整这一份谱的设置（保存到源码 # jps-config 行，与 iJipu 一致）')
-      cfgBtn.appendChild(layoutIcon(14))
+      cfgBtn.appendChild(layoutIcon(15))
       cfgBtn.createSpan({ text: '排版' })
       cfgBtn.addEventListener('click', () => {
         new ConfigDialog(plugin.app, {
@@ -268,7 +268,7 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       const btn = modeWrap.createEl('button', { cls: 'ijipu-mode-btn' })
       btn.setAttr('title', `${MODE_LABEL[mode]}：${MODE_HINT[mode]}`)
       btn.setAttr('aria-label', MODE_LABEL[mode])
-      btn.appendChild(modeIcon(mode))
+      btn.appendChild(modeIcon(mode, 15))
       btn.addEventListener('click', () => setMode(mode))
       modeBtns.set(mode, btn)
     }
