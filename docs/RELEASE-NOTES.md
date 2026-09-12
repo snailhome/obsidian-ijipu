@@ -1,5 +1,23 @@
 # 爱记谱 iJipu（未发布）
 
+## 新增：`.jps` 文件识别 + 链接/嵌入（`![[xxx.jps]]`）
+
+- **`.jps` 成为一等公民**：新增 `.jps` 文件视图（`src/fileView.ts`，`registerView` + `registerExtensions(['jps'], …)`）。
+  - 文件树双击、`[[我的谱.jps]]` 链接 → 用**简谱视图**打开（不再提示"无法打开该文件"）：渲染谱面 + 试听 + 显示模式 + 排版；
+  - 工具栏「✎ 源码」可切到纯文本编辑（textarea，输入停 600ms 自动保存，`Ctrl+S` 立即保存）——谱面报语法错误时可直接改源码；
+  - 视图内容即 `# jps-config` 所在的那份文件，「排版 → 保存到谱面」**直接改写该 .jps 文件**。
+- **`![[我的谱.jps]]` 嵌入**：新增嵌入处理器（`src/embed.ts`）。Obsidian 若已用 .jps 视图渲染嵌入则不重复渲染（先标记 + 延迟 100ms 确认），否则自己 `cachedRead` 后用同一面板内联渲染（紧凑形态）。链接写法支持 `#子标题`/`|别名`（`jpsLinkpath` 纯函数已加断言）；文件不存在时原位提示"找不到谱面文件"。
+- 三种入口（代码块 / 文件视图 / 嵌入）共用同一个渲染面板 `src/scorePane.ts`（试听色块、显示模式、来源徽标、排版、设置变更重渲染全部一致），避免各写一份漂移。
+
+## 新增：谱面内「排版」对话框（阶段 2，改这一份谱并写回源码）
+
+- 谱面工具栏新增**排版**按钮（图标 = **田字格**，与 iJipu 应用顶栏「排版」按钮同一形状：方框 + 一竖一横，见 `src/icons.ts` 内联 SVG），打开 `src/configDialog.ts` 对话框：与 iJipu 排版对话框同构的四组字段（页面/字体/行距/渲染），字段与控件**与设置面板共用一份定义**（`src/defs.ts` 的 `DEFS` + `addConfigControl`，杜绝两处漂移）。
+- 保存去向两条：
+  - 「**保存到谱面**」（主）：用引擎 `writeJpsConfig` 写回**当前曲谱**源码的 `# jps-config` 行——代码块写回笔记正文（优先 `editor.replaceRange` 保留撤销栈，阅读模式回退 `vault.process` 整文件事务写，纯函数 `replaceCodeBlockBody` 已加断言），文件/嵌入写回 `.jps` 文件；
+  - 「保存为插件默认」（次）：只把对话框里编辑的字段写入插件设置（全局默认）；
+  - 另有「恢复默认」「取消」（取消不改任何东西）。
+- 排版后新配置**立即生效**并弹 Notice 确认；工具栏绿色「谱面自带设置 N 项」徽标同步更新。
+
 ## 新增：直接复用 iJipu 的谱面设置（`# jps-config`），复制 .jps 即渲染一致
 
 - **谱面源码内的 `# jps-config:{...}` 行现在是最高优先级**：`引擎默认 < 插件设置 < 笔记 frontmatter < 谱面自带设置`。iJipu 点「保存设置」时用 `writeJpsConfig` 把**整份**配置（实测 30 个字段：纸张/四边距/各字体栈/各字号/行距/`noteSpaceLayout`/`lianyinxian_type`/`metaPos`/`editorFont*`）写进源码那一行，因此**把 iJipu 里的 .jps 直接粘进 Obsidian 代码块，排版与 iJipu 一致**；插件设置与 frontmatter 只对**源内没写的键**生效（手写的最小设置行同样支持）。
@@ -33,7 +51,7 @@
 
 ## 验证
 
-- 新增 `npm run smoke`（esbuild 打包 `scripts/smoke-frontmatter.mts` → `dist-smoke/`，node 执行）：**51 项断言全绿**，覆盖键名写法兼容、值类型转换、可选字段识别、未识别键建议、优先级、字段表完整性（含"引擎全部 34 个字段都能被同名键命中"），以及**源内 `# jps-config` 优先级**（源内 > frontmatter > 插件设置、源内部分设置行、以及"插件解析结果与 iJipu 源内配置逐字段一致"的端到端核对）。
+- 新增 `npm run smoke`（esbuild 打包 `scripts/smoke-frontmatter.mts` → `dist-smoke/`，node 执行）：**65 项断言全绿**，覆盖键名写法兼容、值类型转换、可选字段识别、未识别键建议、优先级、字段表完整性（含"引擎全部 34 个字段都能被同名键命中"）、**源内 `# jps-config` 优先级**（源内 > frontmatter > 插件设置、部分设置行、以及"插件解析结果与 iJipu 源内配置逐字段一致"的端到端核对），以及**写回源码的纯函数**（代码块正文替换保持围栏/区间非法原样返回/CRLF 归一、`jpsLinkpath` 链接解析）。
 - `npm run build`（`tsc -noEmit -skipLibCheck` + esbuild production）通过；产物 `main.js` 已确认含新逻辑（`MarkdownRenderChild` + `metadataCache.on('changed')`、覆盖徽标、未识别提示、键名复制）。
 
 ---
