@@ -25,7 +25,9 @@ const OUT = 'release-body.md'
 const lines = readFileSync(NOTES, 'utf8').replace(/\r\n/g, '\n').split('\n')
 const isH1 = (l) => /^#\s+/.test(l)
 
-const start = lines.findIndex((l) => isH1(l) && l.includes(version))
+// 版本号用"边界匹配"而不是 includes：否则版本 0.4.10 会先命中标题里的 0.4.1
+const versionRe = new RegExp(`(^|[^0-9.])${version.replace(/\./g, '\\.')}([^0-9.]|$)`)
+const start = lines.findIndex((l) => isH1(l) && versionRe.test(l))
 let from = start
 if (start < 0) {
   from = lines.findIndex(isH1)
