@@ -5,7 +5,11 @@
   border-radius: 6px;
   background: var(--background-secondary);
 }
-.ijipu-score svg {
+/* adj389：谱面纸张样式**只作用于渲染出来的谱面 SVG**。
+   此前写的是 `.ijipu-score svg`，而工具栏（试听/排版/设置/模式图标）也在 `.ijipu-score` 内，
+   于是白底 + 居中 + 拉伸一并套到了图标上——图标变成"白底白图标"，完全看不出形状（用户截图即此）。
+   谱面结构是 .ijipu-score > .ijipu-svgs > .ijipu-page-svg > svg，用后代+子选择器精确命中。 */
+.ijipu-svgs .ijipu-page-svg > svg {
   display: block;
   max-width: 100%;
   height: auto;
@@ -23,27 +27,48 @@
   padding: 2px 10px;
   cursor: pointer;
 }
-/* 页面设置按钮（滑杆图标 + 文字；深色主题下用 --text-normal 保证对比） */
+/* adj389：工具栏按钮配色**显式化**——此前依赖 Obsidian 默认按钮样式，个别主题的
+   `--interactive-normal` 偏浅，叠加 `--text-normal` 为浅色文字/图标 → "白底白图标"看不出形状。
+   现在：背景用半透明 hover 层（随主题文字色自适应）、文字/图标统一 --text-normal，
+   只有选中态（is-active）才用强调色底 + --text-on-accent。图标额外显式 stroke: currentColor，
+   避免被其它 svg 规则影响。 */
+.ijipu-play,
+.ijipu-guides-btn,
+.ijipu-config-btn {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 5px;
+}
+.ijipu-play:hover,
+.ijipu-guides-btn:hover,
+.ijipu-config-btn:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-active-hover, var(--background-modifier-hover));
+}
+.ijipu-play svg,
+.ijipu-guides-btn svg,
+.ijipu-config-btn svg {
+  display: block;
+  flex: 0 0 auto;
+  stroke: currentColor;
+}
+/* 页面设置按钮（滑杆图标 + 文字） */
 .ijipu-config-btn {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  color: var(--text-normal);
 }
-.ijipu-config-btn svg {
-  display: block;
-  flex: 0 0 auto;
-}
-/* 排版按钮（田字格）：开启辅助虚线时为选中态；排版用主题强调色描边与设置按钮区分 */
+/* 排版按钮（田字格）：开启辅助虚线时为选中态；选中态用主题强调色底 */
 .ijipu-guides-btn {
   display: inline-flex;
   align-items: center;
   gap: 4px;
 }
 .ijipu-guides-btn.is-active {
-  color: var(--text-on-accent);
-  background: var(--interactive-accent);
-  border-color: var(--interactive-accent);
+  color: var(--text-on-accent, var(--text-normal));
+  background: var(--interactive-accent, var(--color-accent, #4c6ef5));
+  border-color: var(--interactive-accent, var(--color-accent, #4c6ef5));
 }
 .ijipu-guides-btn svg {
   display: block;
