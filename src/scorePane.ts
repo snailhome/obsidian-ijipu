@@ -13,11 +13,17 @@ import { renderScore, playScore, unknownKeyHint, type PlayheadSeg } from './rend
 import { resolvePageConfig } from './config'
 import { ConfigDialog } from './configDialog'
 import { DEFS } from './defs'
-import { layoutIcon } from './icons'
+import { layoutIcon, modeIcon } from './icons'
 import type IJipuPlugin from './main'
 
 type ViewMode = 'page' | 'full' | 'score'
 const MODE_LABEL: Record<ViewMode, string> = { page: '整页', full: '满宽', score: '谱面' }
+/** 三种显示模式的含义（按钮悬停提示用——图标只表意，文字补足准确含义） */
+const MODE_HINT: Record<ViewMode, string> = {
+  page: '完整一页（含页边距），宽度撑满内容区',
+  full: '谱面撑满笔记宽度（不留页面左右留白）',
+  score: '裁掉页边距、只显示内容区（默认）',
+}
 /** 与 iJipu 应用一致的播放色块配色（按声部半透明；voice1 红，延续单声部红块） */
 const PLAYHEAD_COLORS = [
   'rgba(255, 93, 108,',
@@ -255,16 +261,17 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       })
     }
 
-    // —— 显示模式切换（整页 / 满宽 / 谱面，下拉选择）——
-    const modeWrap = toolbar.createDiv({ cls: 'ijipu-mode-select-wrap' })
-    const modeSel = modeWrap.createEl('select', { cls: 'ijipu-mode-select' })
-    for (const [mode, label] of Object.entries(MODE_LABEL) as [ViewMode, string][]) {
-      const opt = modeSel.createEl('option', { text: label })
-      opt.value = mode
+    // —— 显示模式切换（整页 / 满宽 / 谱面：图标表意 + 悬停说明，互斥选中态）——
+    const modeWrap = toolbar.createDiv({ cls: 'ijipu-mode-group' })
+    const modeBtns = new Map<ViewMode, HTMLButtonElement>()
+    for (const mode of Object.keys(MODE_LABEL) as ViewMode[]) {
+      const btn = modeWrap.createEl('button', { cls: 'ijipu-mode-btn' })
+      btn.setAttr('title', `${MODE_LABEL[mode]}：${MODE_HINT[mode]}`)
+      btn.setAttr('aria-label', MODE_LABEL[mode])
+      btn.appendChild(modeIcon(mode))
+      btn.addEventListener('click', () => setMode(mode))
+      modeBtns.set(mode, btn)
     }
-    modeSel.value = 'score'
-    modeSel.addEventListener('change', () => setMode(modeSel.value as ViewMode))
-    modeWrap.createEl('span', { cls: 'ijipu-mode-caret', text: '▼' })
 
     // 未识别的 ijipu_* 键：显式提示 + 最近键名建议（不再静默忽略）
     if (unknown.length > 0) {
@@ -285,7 +292,8 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
 
     const setMode = (next: ViewMode): void => {
       svgWrap.setAttribute('class', `ijipu-svgs ijipu-mode-${next}`)
-      modeSel.value = next
+      // 选中态（图标按钮组互斥）
+      for (const [m, btn] of modeBtns) btn.classList.toggle('is-active', m === next)
       // 谱面模式：把 viewBox 裁到页边距内（只显示内容区），再撑满容器宽
       for (const svgEl of svgEls) {
         const orig = svgEl.dataset.origVb || svgEl.getAttribute('viewBox') || ''

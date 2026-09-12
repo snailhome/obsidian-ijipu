@@ -34,31 +34,41 @@
   flex: 0 0 auto;
 }
 
-/* 显示模式切换下拉 */
-.ijipu-mode-select-wrap {
-  position: relative;
+/* 显示模式切换：三个表意图标（整页/满宽/谱面），互斥选中态；图标含义见 title 提示 */
+.ijipu-mode-group {
   display: inline-flex;
-}
-.ijipu-mode-select {
-  appearance: none;
-  -webkit-appearance: none;
-  font-size: 0.85em;
-  padding: 2px 24px 2px 8px;
-  cursor: pointer;
-  border-radius: 4px;
+  align-items: center;
+  gap: 2px;
+  padding: 1px;
+  border-radius: 6px;
   border: 1px solid var(--background-modifier-border);
   background: var(--background-modifier-hover);
-  color: var(--text-normal);
 }
-.ijipu-mode-caret {
-  position: absolute;
-  right: 8px;
-  top: 50%;
-  transform: translateY(-50%);
-  pointer-events: none;
-  font-size: 0.7em;
+.ijipu-mode-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 20px;
+  padding: 0;
+  cursor: pointer;
+  border: none;
+  border-radius: 4px;
   color: var(--text-muted);
-  line-height: 1;
+  background: transparent;
+  box-shadow: none;
+}
+.ijipu-mode-btn:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-active-hover, var(--background-modifier-hover));
+}
+.ijipu-mode-btn.is-active {
+  color: var(--text-on-accent);
+  background: var(--interactive-accent);
+}
+.ijipu-mode-btn svg {
+  display: block;
+  flex: 0 0 auto;
 }
 
 /* 三种显示模式 */
@@ -240,10 +250,13 @@
   margin-bottom: 2px;
   gap: 5px;
 }
-.ijipu-embedded .ijipu-play,
-.ijipu-embedded .ijipu-mode-select {
+.ijipu-embedded .ijipu-play {
   font-size: 0.75em;
   padding: 1px 6px;
+}
+.ijipu-embedded .ijipu-mode-btn {
+  width: 20px;
+  height: 18px;
 }
 
 /* 插件设置页头部 */
