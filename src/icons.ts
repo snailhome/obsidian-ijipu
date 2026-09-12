@@ -65,11 +65,12 @@ export function modeIcon(mode: 'page' | 'full' | 'score'): SVGSVGElement {
     })
   }
   if (mode === 'full') {
+    // 「撑满容器宽」用经典意象：**页面框 + 两侧向外箭头**（比框内双向箭头更清楚，
+    // 14px 下不会糊成一团）；箭头线宽略细，避免与页面框粘连。
     return strokeIcon((add) => {
-      add('rect', { x: '1.2', y: '3', width: '11.6', height: '8', 'stroke-width': '1.2', 'stroke-dasharray': '1.4 1.4' })
-      add('path', { d: 'M 3.2 7 H 10.8' })
-      add('path', { d: 'M 4.6 5.6 L 3.1 7 L 4.6 8.4' })
-      add('path', { d: 'M 9.4 5.6 L 10.9 7 L 9.4 8.4' })
+      add('rect', { x: '3.1', y: '2.4', width: '7.8', height: '9.2' })
+      add('path', { d: 'M 2.8 7 H 1 M 2.1 5.9 L 0.75 7 L 2.1 8.1', 'stroke-width': '1.1' })
+      add('path', { d: 'M 11.2 7 H 13 M 11.9 5.9 L 13.25 7 L 11.9 8.1', 'stroke-width': '1.1' })
     })
   }
   // score：裁切标记（左上/右上/左下/右下四个角）
