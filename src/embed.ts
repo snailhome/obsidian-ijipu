@@ -1,20 +1,26 @@
 /**
  * embed.ts — `![[xxx.jps]]` 嵌入支持
  *
- * Obsidian 对注册了扩展名的文件通常会直接用对应视图渲染嵌入，但插入时机是异步的，
- * 且不同版本行为不完全一致。这里做**兜底**：
- *  - 先标记容器，等一拍后确认：若嵌入里已经有 `.ijipu-score`（说明 Obsidian 已用 .jps
- *    文件视图渲染）就什么都不做；否则自己读文件并用共用面板渲染一份。
- *  - 读文件用 `cachedRead`（不触发磁盘 IO 抖动），并在 `onunload` 里卸下面板（停试听）。
- *  - 找不到文件（链接失效/改名）会给出行内提示，而不是留一个空白块。
+ * Obsidian 的嵌入内容**在 markdown post-processor 之后异步填充**：对未知扩展名（.jps 不属于
+ * Obsidian 内置可嵌入类型），它会插入一个"未知嵌入"占位块——正好覆盖掉我们在 post-processor 里
+ * 渲染好的谱面（用户看到的就是"一个未知的嵌入块，没有谱面"）。
+ *
+ * 因此这里的策略是「**立即挂载 + 被覆盖就重挂**」：
+ *  1. `onload` 立刻渲染一次（不等待）；
+ *  2. 用 `MutationObserver` 盯住容器：一旦发现我们渲染的 `.ijipu-score` 不见了（被 Obsidian 的
+ *     占位块替换），就清空并重新挂载（有次数上限，避免与宿主互相覆盖形成死循环）；
+ *  3. 另在 120ms / 600ms 各兜一次（占位块插入时机因 vault 大小而异）。
+ * 渲染顺序：**先读文件、再清空容器并挂载**——读文件期间宿主若插入占位块，也会被随后的清空带走。
  */
 import { MarkdownRenderChild, TFile, type MarkdownPostProcessorContext } from 'obsidian'
 import { mountScorePane, type ScorePaneHandle } from './scorePane'
 import { jpsLinkpath } from './sourceEdit'
 import type IJipuPlugin from './main'
 
-/** 等待一拍再确认（Obsidian 异步插入嵌入内容） */
-const CONFIRM_DELAY_MS = 100
+/** 兜底重挂的时间点（ms）——覆盖 Obsidian 占位块可能晚于 post-processor 插入的情况 */
+const RETRY_DELAYS_MS = [120, 600]
+/** 重挂次数上限（防与宿主互相覆盖死循环） */
+const MAX_REMOUNTS = 5
 
 /** 注册 `![[xxx.jps]]` 嵌入处理器（在插件 onload 里调用） */
 export function registerJpsEmbeds(plugin: IJipuPlugin): void {
@@ -30,10 +36,19 @@ export function registerJpsEmbeds(plugin: IJipuPlugin): void {
   })
 }
 
+/** 判断容器里是否已经是"我们的谱面" */
+function hasScore(el: HTMLElement): boolean {
+  return el.querySelector('.ijipu-score') !== null
+}
+
 /** 单个嵌入的渲染组件（随所在段落卸载而清理） */
 class JpsEmbed extends MarkdownRenderChild {
   private pane: ScorePaneHandle | null = null
   private source = ''
+  private observer: MutationObserver | null = null
+  private timers: number[] = []
+  private remounts = 0
+  private mounting = false
 
   constructor(
     private plugin: IJipuPlugin,
@@ -45,35 +60,63 @@ class JpsEmbed extends MarkdownRenderChild {
   }
 
   onload(): void {
-    window.setTimeout(() => {
-      if (!this.containerEl.isConnected) return
-      // 已由 .jps 文件视图渲染（Obsidian 的默认嵌入行为）→ 不重复渲染
-      if (this.containerEl.querySelector('.ijipu-score')) return
-      void this.render()
-    }, CONFIRM_DELAY_MS)
+    // ① 立即渲染
+    void this.mount()
+    // ② 被宿主占位块覆盖时重挂
+    this.observer = new MutationObserver(() => this.ensureMounted())
+    this.observer.observe(this.containerEl, { childList: true })
+    // ③ 占位块可能稍后插入，再兜两次
+    for (const d of RETRY_DELAYS_MS) this.timers.push(window.setTimeout(() => this.ensureMounted(), d))
   }
 
   onunload(): void {
+    for (const t of this.timers) window.clearTimeout(t)
+    this.timers = []
+    this.observer?.disconnect()
+    this.observer = null
     this.pane?.destroy()
     this.pane = null
   }
 
-  private async render(): Promise<void> {
+  /** 若容器里已不是我们的谱面（被宿主覆盖 / 首次尚未渲染），重新挂载一次 */
+  private ensureMounted(): void {
+    if (!this.containerEl.isConnected || this.mounting) return
+    if (hasScore(this.containerEl)) return
+    if (this.remounts >= MAX_REMOUNTS) return
+    this.remounts++
+    void this.mount()
+  }
+
+  private async mount(): Promise<void> {
     const file = this.plugin.app.metadataCache.getFirstLinkpathDest(this.linkpath, this.sourcePath)
     if (!(file instanceof TFile)) {
+      this.containerEl.empty()
       this.containerEl.createDiv({ cls: 'ijipu-error', text: `⚠ 找不到谱面文件：${this.linkpath}` })
       return
     }
+    this.mounting = true
+    let text: string
     try {
-      this.source = await this.plugin.app.vault.cachedRead(file)
+      // 先读文件（期间宿主插入的占位块会在下面的 empty() 里被清掉）
+      text = await this.plugin.app.vault.cachedRead(file)
     } catch (e) {
+      this.mounting = false
+      this.containerEl.empty()
       this.containerEl.createDiv({
         cls: 'ijipu-error',
         text: `⚠ 读取谱面失败：${e instanceof Error ? e.message : String(e)}`,
       })
       return
     }
-    if (!this.containerEl.isConnected) return
+    if (!this.containerEl.isConnected) {
+      this.mounting = false
+      return
+    }
+    this.source = text
+    // 清掉宿主占位块与上一次的渲染，再挂我们的面板
+    this.pane?.destroy()
+    this.pane = null
+    this.containerEl.empty()
     this.containerEl.addClass('ijipu-embed')
     this.pane = mountScorePane({
       plugin: this.plugin,
@@ -87,5 +130,6 @@ class JpsEmbed extends MarkdownRenderChild {
         await this.plugin.app.vault.modify(file, next)
       },
     })
+    this.mounting = false
   }
 }

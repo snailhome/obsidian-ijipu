@@ -137,8 +137,9 @@
   background: var(--background-modifier-active-hover, var(--background-modifier-hover));
 }
 .ijipu-mode-btn.is-active {
-  color: var(--text-on-accent);
-  background: var(--interactive-accent);
+  /* adj389：强调色缺失/过浅的主题下，白图标落在浅底上会"看不见" → 两处都加兜底 */
+  color: var(--text-on-accent, var(--text-normal));
+  background: var(--interactive-accent, var(--color-accent, #4c6ef5));
 }
 .ijipu-mode-btn svg {
   display: block;
@@ -180,19 +181,22 @@
   white-space: pre-wrap;
 }
 
-/* frontmatter 覆盖徽标（谱面工具栏内：点了哪些键、值是什么，悬停可见） */
+/* frontmatter 覆盖徽标（谱面工具栏内：点了哪些键、值是什么，悬停可见）
+   adj389：给强调色/前景色都加兜底——某些主题（浅色主题或自定义主题）里 --interactive-accent
+   可能很浅、--text-on-accent 又是白色，会出现"白底白字/白图标"看不出内容的情况。 */
 .ijipu-fm-badge {
   font-size: 0.72em;
   padding: 1px 6px;
   border-radius: 10px;
-  color: var(--text-on-accent);
-  background: var(--interactive-accent);
+  color: var(--text-on-accent, var(--text-normal));
+  background: var(--interactive-accent, var(--color-accent, #4c6ef5));
   cursor: help;
 }
 
 /* 源内 # jps-config 徽标（优先级最高的设置来源，用另一色与 frontmatter 徽标区分） */
 .ijipu-src-badge {
-  background: var(--interactive-success, var(--color-green));
+  color: var(--text-on-accent, var(--text-normal));
+  background: var(--interactive-success, var(--color-green, #2f9e44));
 }
 
 /* 未识别的 frontmatter 键提示（含最近键名建议） */
@@ -218,9 +222,9 @@
   border: 1px solid var(--background-modifier-border);
 }
 .ijipu-fm-key:hover {
-  color: var(--text-on-accent);
-  background: var(--interactive-accent);
-  border-color: var(--interactive-accent);
+  color: var(--text-on-accent, var(--text-normal));
+  background: var(--interactive-accent, var(--color-accent, #4c6ef5));
+  border-color: var(--interactive-accent, var(--color-accent, #4c6ef5));
 }
 .ijipu-fm-key:active {
   transform: translateY(1px);
