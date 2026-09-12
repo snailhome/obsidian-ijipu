@@ -13,8 +13,8 @@ import { App, Modal, Setting } from 'obsidian'
 import { defaultPageConfig, type PageConfig } from '@ijipu/engine'
 import { DEFS, GROUPS, addConfigControl } from './defs'
 
-/** 保存去向：谱面源码（# jps-config） / 插件设置（全局默认） */
-export type ConfigTarget = 'score' | 'plugin'
+/** 保存去向：谱面源码（# jps-config，差量） / 谱面源码（全量固化） / 插件设置（全局默认） */
+export type ConfigTarget = 'score' | 'score-full' | 'plugin'
 
 export interface ConfigDialogOptions {
   /** 当前生效配置（默认 < 插件设置 < frontmatter < 源内）——对话框的初值 */
@@ -73,6 +73,12 @@ export class ConfigDialog extends Modal {
       this.refresh()
     })
     mk('取消', 'ijipu-btn', () => this.close())
+    mk('固化全部到谱面', 'ijipu-btn', () => {
+      // adj-font（D1）：差量写入是默认（只写与默认不同的字段）；分享/存档需要"到哪都一样"时用全量
+      const cfg = this.draft
+      this.close()
+      this.opts.onApply('score-full', cfg)
+    })
     mk('保存为插件默认', 'ijipu-btn', () => {
       const cfg = this.draft
       this.close()

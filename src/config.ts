@@ -13,7 +13,7 @@
  * 因此源内配置会覆盖插件里所有相关默认值；插件设置与 frontmatter 只对**源内没写的键**生效。
  */
 import { extractJpsConfig, mergeJpsConfig, type PageConfig } from '@ijipu/engine'
-import { applyFrontmatter, type AppliedOverride, type UnknownKey } from './frontmatter'
+import { applyFrontmatter, type AppliedOverride, type DeprecatedKey, type UnknownKey } from './frontmatter'
 
 export type ResolvedConfig = {
   /** 最终生效的页面配置 */
@@ -22,6 +22,8 @@ export type ResolvedConfig = {
   applied: AppliedOverride[]
   /** 未识别的 frontmatter 键（含最近键名建议） */
   unknown: UnknownKey[]
+  /** 写法合法但已降级为「用户个性」的键（编辑器偏好等，不再随谱） */
+  deprecated: DeprecatedKey[]
   /** 源内 `# jps-config` 生效的字段名（供徽标显示） */
   sourceFields: string[]
 }
@@ -42,5 +44,5 @@ export function resolvePageConfig(
   const sourceFields = Object.keys(extractJpsConfig(source) ?? {})
   // mergeJpsConfig 的语义即「默认 < fallback < 源内」，恰好是本插件需要的优先级
   const config = mergeJpsConfig(source, fm.config)
-  return { config, applied: fm.applied, unknown: fm.unknown, sourceFields }
+  return { config, applied: fm.applied, unknown: fm.unknown, deprecated: fm.deprecated, sourceFields }
 }

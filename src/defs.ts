@@ -6,7 +6,7 @@
  * frontmatter 键的唯一约定仍来自 `frontmatter.ts`（`ijipu_` + 引擎字段名）。
  */
 import { Setting } from 'obsidian'
-import { defaultPageConfig, type PageConfig } from '@ijipu/engine'
+import { defaultPageConfig, SCORE_FONT_OPTIONS, type PageConfig } from '@ijipu/engine'
 import { frontmatterKey } from './frontmatter'
 
 export type FieldKey = keyof PageConfig
@@ -20,14 +20,8 @@ export interface SettingDef {
   group: string
 }
 
-/** 常用字体（值 = CSS font-family，与 iJipu SYS_FONT 一致） */
-export const FONTS = [
-  { label: '微软雅黑 / PingFang（默认）', value: "'Microsoft YaHei', 'PingFang SC', 'Noto Sans CJK SC', sans-serif" },
-  { label: '宋体', value: "'SimSun', serif" },
-  { label: '黑体', value: "'SimHei', sans-serif" },
-  { label: '楷体', value: "'KaiTi', serif" },
-  { label: 'Georgia', value: 'Georgia, serif' },
-]
+/** 谱面字体候选（adj-font：由引擎统一提供——每项都是含通用族的完整栈，跨机尽量有且保证有 fallback） */
+export const FONTS = SCORE_FONT_OPTIONS
 
 export const GROUPS = ['页面', '字体', '行距', '渲染'] as const
 

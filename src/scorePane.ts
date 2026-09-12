@@ -14,7 +14,7 @@
  */
 import { Notice } from 'obsidian'
 import { writeJpsConfig, dragDelta, clamp, type PageConfig } from '@ijipu/engine'
-import { renderScoreFull, playScore, unknownKeyHint, type PlayheadSeg } from './render'
+import { renderScoreFull, playScore, unknownKeyHint, deprecatedKeyHint, type PlayheadSeg } from './render'
 import { resolvePageConfig } from './config'
 import { ConfigDialog } from './configDialog'
 import { DEFS } from './defs'
@@ -286,9 +286,11 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
               void plugin.saveSettings().then(() => new Notice('已保存为插件默认（对未自带设置的谱生效）'))
               return
             }
-            void Promise.resolve(host.writeSource?.(writeJpsConfig(host.getSource(), next)))
+            // adj-font（D1）：'score' = 差量写入（只写与默认不同）；'score-full' = 固化全部（分享/存档）
+            const full = target === 'score-full'
+            void Promise.resolve(host.writeSource?.(writeJpsConfig(host.getSource(), next, full ? { mode: 'full' } : undefined)))
               .then(() => {
-                new Notice('已写入谱面 # jps-config（该谱自带设置，优先级最高）')
+                new Notice(full ? '已把全部设置固化到谱面（# jps-config，全量）' : '已写入谱面 # jps-config（差量：只记录与默认不同的项）')
                 paint()
               })
               .catch((e) => new Notice(`写入谱面失败：${e instanceof Error ? e.message : String(e)}`, 6000))
@@ -311,6 +313,10 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
 
     if (resolved.unknown.length > 0) {
       container.createDiv({ cls: 'ijipu-fm-warn', text: `⚠ 未识别的 frontmatter 键：${unknownKeyHint(resolved.unknown)}` })
+    }
+    // 已降级为「用户个性」的旧键（编辑器偏好等）：明确说明"为什么不生效"（不再随谱保存）
+    if (resolved.deprecated.length > 0) {
+      container.createDiv({ cls: 'ijipu-fm-warn', text: `ℹ 已不再随谱保存的设置：${deprecatedKeyHint(resolved.deprecated)}` })
     }
     if (plugin.showGuides) {
       container.createDiv({

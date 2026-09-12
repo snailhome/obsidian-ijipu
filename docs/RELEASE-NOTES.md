@@ -1,5 +1,13 @@
 # 爱记谱 iJipu（未发布）
 
+## 引擎同步 adj-font：设置分层（编辑器偏好移出谱面 / 差量写入 / 字体策略）
+
+- 同步 `@ijipu/engine`（`types.ts` / `settings.ts` / `index.ts` + 新增 `fonts.ts`，逐字节一致）：
+  - **编辑器偏好移出谱面级**：`PageConfig` 删除 `editorFont/editorFontSize`；读取白名单同时过滤这两个键（旧谱里已写入的值不再生效）。插件侧把它们归入「**已不再随谱保存**」并给专门提示（`ijipu_editorFont*` 不再算"未识别键"）。编辑器字体/字号请在**插件设置**里调（本机偏好）。
+  - **`# jps-config` 差量写入**：只写与默认值不同的字段（无差量不写/删除该行）；插件「设置」对话框新增「**固化全部到谱面**」（`mode:'full'`）用于分享/存档。
+  - **字体策略**：插件设置里的字体候选改由引擎 `SCORE_FONT_OPTIONS` 统一提供——**每项都是含通用族的完整栈**，旧的裸字体名（`SimSun`、`KaiTi`…）在读取时经 `normalizeFontStack` 自动补 `serif`/`sans-serif`/`monospace`。
+- 分层原则（`L0 默认 < L1 用户个性 < L1.5 笔记级 < L2 谱面级`）见主项目 `docs/SETTINGS-AUDIT.md` 与 `AGENTS.md` 七；插件这边对应关系：**L1 = 插件设置/本机缓存**，**L1.5 = 笔记 frontmatter**，**L2 = 源码 `# jps-config`**。
+
 ## 新增：`.jps` 文件识别 + 链接/嵌入（`![[xxx.jps]]`）
 
 - **`.jps` 成为一等公民**：新增 `.jps` 文件视图（`src/fileView.ts`，`registerView` + `registerExtensions(['jps'], …)`）。

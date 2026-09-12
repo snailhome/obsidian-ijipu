@@ -70,8 +70,6 @@ export const PAGE_CONFIG_FIELDS = [
   'align_min_bars',
   'noteSpaceLayout',
   'showInstrument',
-  'editorFont',
-  'editorFontSize',
   'metaPos',
   'lianyinxian_type',
   'heights',
@@ -88,8 +86,16 @@ export const _PAGE_CONFIG_FIELDS_COMPLETE: MissingPageConfigField extends never 
 const OPTIONAL_FIELD_KIND: Partial<Record<keyof PageConfig, 'number' | 'boolean' | 'string'>> = {
   lyricShrink: 'boolean',
   showInstrument: 'boolean',
-  editorFont: 'string',
-  editorFontSize: 'number',
+}
+
+/**
+ * **已不再属谱面级**的键（分层原则见 主项目 docs/SETTINGS-AUDIT.md）：
+ * 编辑器字体/字号是「用户个性」（L1），只影响本机编辑体验，不随谱保存。
+ * 早期版本把它们写进了 `# jps-config`，Frontmatter 里若还写着需明确提示（不是拼写错误）。
+ */
+const DEPRECATED_KEYS: Record<string, string> = {
+  editorfont: '编辑器字体已改为插件设置里的本机偏好（不随谱保存）',
+  editorfontsize: '编辑器字号已改为插件设置里的本机偏好（不随谱保存）',
 }
 
 /** 规范化字段名 → 真实 PageConfig 字段（一次构建，O(1) 查询） */
@@ -113,11 +119,19 @@ export type UnknownKey = {
   suggest: string | null
 }
 
+/** 已降级为「用户个性」的旧键（不再随谱；见 DEPRECATED_KEYS） */
+export type DeprecatedKey = {
+  key: string
+  reason: string
+}
+
 export type FrontmatterResult = {
   /** 合并结果：默认 < 插件设置 < frontmatter */
   config: PageConfig
   applied: AppliedOverride[]
   unknown: UnknownKey[]
+  /** 写法合法但已不再随谱保存的键（编辑器偏好等） */
+  deprecated: DeprecatedKey[]
 }
 
 /** 编辑距离（用于"是不是想写 X"的建议，键总量约 30 个，开销可忽略） */
@@ -194,12 +208,20 @@ export function applyFrontmatter(
   const config: PageConfig = { ...defaultPageConfig, ...defaults }
   const applied: AppliedOverride[] = []
   const unknown: UnknownKey[] = []
-  if (!frontmatter) return { config, applied, unknown }
+  const deprecated: DeprecatedKey[] = []
+  if (!frontmatter) return { config, applied, unknown, deprecated }
 
   for (const [key, raw] of Object.entries(frontmatter)) {
     if (key === 'position' || key === 'aliases' || key === 'cssclasses' || key === 'tags') continue
     if (!key.toLowerCase().startsWith(FRONTMATTER_PREFIX)) continue
-    const field = FIELD_BY_NORM.get(normKey(stripPrefix(key)))
+    const norm = normKey(stripPrefix(key))
+    // 写法合法但已降级为「用户个性」的键：明确提示，而不是当成拼写错误
+    const dep = DEPRECATED_KEYS[norm]
+    if (dep) {
+      deprecated.push({ key, reason: dep })
+      continue
+    }
+    const field = FIELD_BY_NORM.get(norm)
     if (!field) {
       unknown.push({ key, suggest: suggestKey(key) })
       continue
@@ -209,7 +231,7 @@ export function applyFrontmatter(
     ;(config as unknown as Record<string, unknown>)[field as string] = value
     applied.push({ key, field: String(field), value })
   }
-  return { config, applied, unknown }
+  return { config, applied, unknown, deprecated }
 }
 
 /** 兼容旧调用：只要合并后的配置 */
@@ -218,6 +240,11 @@ export function mergePageConfig(
   frontmatter: Record<string, unknown> | null | undefined,
 ): PageConfig {
   return applyFrontmatter(defaults, frontmatter).config
+}
+
+/** 已降级键提示文案（说明"为什么不生效"） */
+export function deprecatedKeyHint(list: DeprecatedKey[]): string {
+  return list.map((d) => `${d.key}：${d.reason}`).join('；')
 }
 
 /** 未识别键提示文案（界面/控制台共用；无可建议键时省略"是否想写"） */

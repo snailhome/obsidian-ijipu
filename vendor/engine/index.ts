@@ -22,7 +22,24 @@ export { computeRowTops, computeRowGuides, dragDelta, clamp, metaAreaH, GUIDE_IT
 export { metaAnchorOf, metaAnchorPt, clampMetaPos } from './layout/metaAnchors'
 export { splitNoteDur, digitSlotW, dotBodyW, augBodyW, slideBodyW, bracketBodyW, noteBodyW, nonDurGap, accidentalBodyW, hxBodyW } from './layout/spaceLayout'
 export type { NoteDurSplit } from './layout/spaceLayout'
-export { extractJpsConfig, mergeJpsConfig, writeJpsConfig, JPS_CONFIG_PREFIX } from './settings'
+export { extractJpsConfig, mergeJpsConfig, writeJpsConfig, extractLegacyEditorPrefs, JPS_CONFIG_PREFIX } from './settings'
+export type { JpsConfigWriteMode } from './settings'
+// 字体策略（跨机尽量有 / 适合简谱 / 保证有可用字体）+ 分层归属：
+// 编辑器偏好属「用户个性」（L1，不进谱面），谱面字体属「谱面级」（L2）
+export {
+  SYS_FONT,
+  SCORE_FONT_OPTIONS,
+  SCORE_FONT_FIELDS,
+  EDITOR_FONT_OPTIONS,
+  EDITOR_FONT_SIZE_RANGE,
+  normalizeFontStack,
+  defaultEditorPrefs,
+  clampEditorFontSize,
+  defaultFontOverride,
+  applyFontOverride,
+} from './fonts'
+export type { FontOption, EditorPrefs, FontOverride } from './fonts'
+
 export type { GuideDragSpec } from './layout/guides'
 export type { NoteIdParts } from './cursorMap'
 export type { AudioBackend, BackendKind, PlayEvent, PlaySequence, InstrumentId, InstrumentPreset, SamplerLibrary, SamplerCache, NetworkClass, NetworkInfo, ParsedVoiceRef, MidiExportOptions } from './playback'

@@ -7,6 +7,8 @@
  * 本文件只包含纯类型定义，无任何运行时逻辑，是 parser / layout / render /
  * playback 各模块的共同契约。引擎保持零 React 依赖，可独立单测。
  */
+// 字体策略（跨机尽量有 / 适合简谱 / 保证有可用字体）集中在 fonts.ts，此处只用其默认栈常量
+import { SYS_FONT } from './fonts'
 
 // ============================================================
 // 源码位置
@@ -620,10 +622,6 @@ export interface PageConfig {
   noteSpaceLayout: NoteSpaceLayout
   /** adj303：是否显示乐器名注释（@乐器名 / @@ 切换后的下一个音符上方；缺省 false 不显示） */
   showInstrument?: boolean
-  /** 编辑器字体（谱面级，adj221：随 # jps-config 保存；缺省回退全局/默认） */
-  editorFont?: string
-  /** 编辑器字号（px，谱面级，adj221；缺省回退全局/默认） */
-  editorFontSize?: number
   /**
    * 描述头自定义位置：相对各自锚点的偏移（adj16）。
    * title/subtitle_i → 描述区上边中点；author_i → 右下角；keyline/tempo → 左下角。
@@ -635,9 +633,6 @@ export interface PageConfig {
   /** 按页覆盖的行距（key: 页码；[quci, cici, ciqu, shengbu, ciquLyric?]，adj79 末位可选兼容旧存储） */
   heights?: Record<string, [number, number, number, number, number?]>
 }
-
-/** adj194：谱面默认系统字体栈（不附带字体文件，减小体积；与 META_GLYPH_W 比例宽度估算匹配） */
-const SYS_FONT = "'Microsoft YaHei', 'PingFang SC', 'Noto Sans CJK SC', sans-serif"
 
 export const defaultPageConfig: PageConfig = {
   page: 'A4',

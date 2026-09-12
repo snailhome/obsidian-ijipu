@@ -16,8 +16,8 @@ import { SpessaSynthBackend, HqCache, getHqLibrary, loadHqBank } from './soundba
  * 实现移到 `frontmatter.ts`（零 Obsidian 依赖、可单测）：键名兼容 snake_case / camelCase、
  * 值按默认值类型转换、未识别键返回建议。此处仅做转出，保持既有 `from './render'` 引用可用。
  */
-export { applyFrontmatter, mergePageConfig, frontmatterKey, unknownKeyHint, FRONTMATTER_PREFIX } from './frontmatter'
-export type { AppliedOverride, UnknownKey, FrontmatterResult } from './frontmatter'
+export { applyFrontmatter, mergePageConfig, frontmatterKey, unknownKeyHint, deprecatedKeyHint, FRONTMATTER_PREFIX } from './frontmatter'
+export type { AppliedOverride, UnknownKey, DeprecatedKey, FrontmatterResult } from './frontmatter'
 export { resolvePageConfig } from './config'
 export type { ResolvedConfig } from './config'
 
