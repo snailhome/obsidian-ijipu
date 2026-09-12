@@ -1,3 +1,30 @@
+# 爱记谱 iJipu（未发布）
+
+## 修复：frontmatter 覆盖失效 / 键名写法兼容 / 未识别键不再静默忽略
+
+- **可选字段的键此前被静默忽略（这是"设置了没生效"的主因）**：引擎 `defaultPageConfig` 只含 28 个"有默认值"的字段，而 `lyricShrink` / `showInstrument`（正是设置面板里的两项）等 6 个**可选字段**不在其中。原实现按 `ijipu_<字段名>` 去 `defaultPageConfig` 查表，于是 `ijipu_showInstrument: true`、`ijipu_lyricShrink: true` 被判成"未识别键"**直接丢弃**。现显式列出 `PageConfig` 全部 **34 个字段**，并加**编译期完整性断言**（引擎增删字段时 `tsc` 直接报错提醒同步）。
+- **键名写法兼容**：比较键名时去掉下划线/连字符并统一小写 → `ijipu_note_size`、`ijipu_noteSize`、`ijipu_note_space_layout`、`IJIPU_NOTE_SIZE` 都能识别（此前按 README 旧示例写的 `ijipu_note_space_layout` / `ijipu_show_instrument` / `ijipu_paper` 全部无效，README 示例已同步修正）。
+- **值按字段类型转换**：Properties 面板常把数字存成字符串、布尔写成中文或 0/1，现统一转换（`"15"`→15、`是`→true、`否`→false）；空值/无法转换的值视为"未设置"回落默认，且不计入"已生效"（避免徽标虚报）。
+- **改动即时生效**：谱面改为 `MarkdownRenderChild`，监听 `metadataCache.on('changed')` 与插件设置变更 → 改 frontmatter（Properties 面板或 YAML）或改设置面板后**立刻重渲染**，重渲染时自动停止进行中的试听并清空 DOM（此前必须重开笔记，这也是"设置好像没生效"的常见观感）。
+- **不再静默失效**：谱面工具栏显示「**frontmatter 覆盖 N 项**」徽标（悬停列出每个键与值）；无法识别的 `ijipu_*` 键在谱面下方提示并给出**最近键名建议**（`ijipu_paper` → "是否想写 ijipu_page？"）。
+
+## 新增：frontmatter 键名一键复制
+
+- 设置面板每项下方的键名（如 `ijipu_note_size`）**点击即复制**（支持键盘 Enter/Space，悬停提示，复制后弹 Notice 确认）。
+- 面板顶部新增「**复制全部键名**」（34 个键，每行一个）与「**复制 frontmatter 模板**」（带当前生效值的 YAML + 分组注释，可直接粘贴到笔记顶部 `---` 之间）。
+- 剪贴板优先 Clipboard API，失败回退 `execCommand`（桌面/移动端均可用）。
+
+## 引擎同步 adj381：试听末音符后的增时线没有色块
+
+- 同步 `@ijipu/engine`（`vendor/engine/playback/index.ts`）：`schedulePlay` 的 `totalMs` 改为取**所有事件尾端**（`atMs + durationMs`）的最大值 + 100ms 余量 + 准备延迟。此前只取末事件**起声时刻**，末音符时值跨多拍（如末尾 `6,---` 共 4 拍）时，收尾定时器在该音符刚起声就把色块轨道清空 → **末音符后面的增时线永远没有色块**，且显示总时长与实播时长不一致。与主项目 0.12.18 同步。
+
+## 验证
+
+- 新增 `npm run smoke`（esbuild 打包 `scripts/smoke-frontmatter.mts` → `dist-smoke/`，node 执行）：**39 项断言全绿**，覆盖键名写法兼容、值类型转换、可选字段识别、未识别键建议、优先级、字段表完整性（含"引擎全部 34 个字段都能被同名键命中"）。
+- `npm run build`（`tsc -noEmit -skipLibCheck` + esbuild production）通过；产物 `main.js` 已确认含新逻辑（`MarkdownRenderChild` + `metadataCache.on('changed')`、覆盖徽标、未识别提示、键名复制）。
+
+---
+
 # 爱记谱 iJipu 0.3.15
 
 ## 引擎同步 adj361：跳跃演奏无缝衔接

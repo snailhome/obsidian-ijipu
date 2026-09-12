@@ -86,6 +86,51 @@
   white-space: pre-wrap;
 }
 
+/* frontmatter 覆盖徽标（谱面工具栏内：点了哪些键、值是什么，悬停可见） */
+.ijipu-fm-badge {
+  font-size: 0.72em;
+  padding: 1px 6px;
+  border-radius: 10px;
+  color: var(--text-on-accent);
+  background: var(--interactive-accent);
+  cursor: help;
+}
+
+/* 未识别的 frontmatter 键提示（含最近键名建议） */
+.ijipu-fm-warn {
+  margin: 0 0 6px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 0.8em;
+  color: var(--text-warning);
+  background: rgba(var(--color-yellow-rgb, 255, 200, 87), 0.12);
+  border: 1px solid rgba(var(--color-yellow-rgb, 255, 200, 87), 0.35);
+}
+
+/* 设置面板：frontmatter 键名（点击即复制） */
+.ijipu-fm-key {
+  margin-left: 4px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.85em;
+  cursor: pointer;
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+  border: 1px solid var(--background-modifier-border);
+}
+.ijipu-fm-key:hover {
+  color: var(--text-on-accent);
+  background: var(--interactive-accent);
+  border-color: var(--interactive-accent);
+}
+.ijipu-fm-key:active {
+  transform: translateY(1px);
+}
+.ijipu-fm-key:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 1px;
+}
+
 /* 插件设置页头部 */
 .ijipu-settings-header {
   margin-bottom: 1em;

@@ -1,7 +1,11 @@
 import { App, Notice, PluginSettingTab, Setting } from 'obsidian'
 import { defaultPageConfig, type PageConfig } from '@ijipu/engine'
+import { frontmatterKey } from './frontmatter'
 import { GM_VOICE_OPTIONS, DEFAULT_HQ_ENABLED, HqCache, getHqLibrary, prefetchHqLibraryProgress } from './soundbank'
 import type IJipuPlugin from './main'
+
+// frontmatter 键的唯一约定（= `ijipu_` + 引擎 PageConfig 字段名）在 frontmatter.ts 定义，此处转出供外部复用
+export { frontmatterKey }
 
 type FieldKey = keyof PageConfig
 type FieldValue = PageConfig[FieldKey]
@@ -72,8 +76,50 @@ const DEFS: SettingDef[] = [
     { label: '平顶', value: '2' } ] },
 ]
 
-export function frontmatterKey(key: FieldKey): string {
-  return `ijipu_${key}`
+/** 复制文本到剪贴板（优先 Clipboard API；失败回退 execCommand，桌面/移动端均可用） */
+async function copyText(text: string, okTip: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text)
+    new Notice(okTip)
+    return
+  } catch {
+    /* 回退到 execCommand */
+  }
+  try {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.setAttribute('style', 'position:fixed;left:-9999px;top:0;opacity:0;')
+    document.body.appendChild(ta)
+    ta.select()
+    const ok = document.execCommand('copy')
+    ta.remove()
+    new Notice(ok ? okTip : '复制失败，请手动选中复制', ok ? 3000 : 5000)
+  } catch {
+    new Notice('复制失败，请手动选中复制', 5000)
+  }
+}
+
+/** YAML 标量：数字/布尔直出，字符串含特殊字符（字体名里的单引号、逗号）时加双引号 */
+function yamlScalar(v: unknown): string {
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v)
+  const s = String(v ?? '')
+  return /^[A-Za-z0-9_./-]+$/.test(s) ? s : `"${s.replace(/"/g, '\\"')}"`
+}
+
+/**
+ * 生成可直接粘贴到笔记顶部的 frontmatter 模板（含当前生效值，按设置面板分组加注释）。
+ * @param valueOf 取某项当前值（插件设置或默认值）
+ */
+function frontmatterTemplate(valueOf: (def: SettingDef) => unknown): string {
+  const lines: string[] = ['---']
+  for (const group of GROUPS) {
+    const items = DEFS.filter((d) => d.group === group)
+    if (items.length === 0) continue
+    lines.push(`# ${group}`)
+    for (const def of items) lines.push(`${frontmatterKey(def.key)}: ${yamlScalar(valueOf(def))}`)
+  }
+  lines.push('---')
+  return lines.join('\n')
 }
 
 function getDefault(def: SettingDef): FieldValue {
@@ -111,15 +157,36 @@ export class IJipuSettingTab extends PluginSettingTab {
     a3.setAttr('target', '_blank')
     head.createEl('div')
 
+    // —— frontmatter 键：一键复制（点每项下方的键名复制单个；此处整批复制）——
+    new Setting(containerEl)
+      .setName('frontmatter 键（一键复制）')
+      .setDesc('每项设置下方的键名**可点击复制**；也可一次复制全部键名，或复制一份带当前值的 frontmatter 模板（粘贴到笔记顶部 `---` 之间即可生效）。')
+      .addButton((b) =>
+        b
+          .setButtonText('复制全部键名')
+          .setTooltip(`复制 ${DEFS.length} 个 ijipu_* 键名（每行一个）`)
+          .onClick(() => void copyText(DEFS.map((d) => frontmatterKey(d.key)).join('\n'), `已复制 ${DEFS.length} 个 frontmatter 键名`)),
+      )
+      .addButton((b) =>
+        b
+          .setButtonText('复制 frontmatter 模板')
+          .setTooltip('带当前值的 YAML，可直接粘贴到笔记顶部')
+          .onClick(() =>
+            void copyText(
+              frontmatterTemplate((d) => this.plugin.settings[d.key] ?? getDefault(d)),
+              '已复制 frontmatter 模板：粘贴到笔记顶部（--- 之间）即可生效',
+            ),
+          ),
+      )
+
     for (const group of GROUPS) {
       const items = DEFS.filter((d) => d.group === group)
       if (items.length === 0) continue
       new Setting(containerEl).setName(group).setHeading()
       for (const def of items) {
         const cur = this.plugin.settings[def.key] ?? getDefault(def)
-        const row = new Setting(containerEl)
-          .setName(def.label)
-          .setDesc(`frontmatter 键：${frontmatterKey(def.key)}`)
+        const row = new Setting(containerEl).setName(def.label)
+        row.setDesc(this.keyDesc(def.key))
         this.addControl(row, def, cur)
       }
     }
@@ -178,6 +245,28 @@ export class IJipuSettingTab extends PluginSettingTab {
     )
     void hqCache.has(hqLib.id).then((ok) => {
       cacheSetting.setDesc(ok ? '✓ 已缓存（约 30MB，离线可用）' : '未缓存——点击「下载并缓存」（约 30MB）后试听即可用。')
+    })
+  }
+
+  /**
+   * 「frontmatter 键：<code>ijipu_xxx</code>」描述——**点键名即复制**（键盘 Enter/Space 亦可）。
+   * 诉求来源：手抄 `ijipu_note_size` 这类键名容易写错，而写错会被静默忽略。
+   */
+  private keyDesc(key: FieldKey): DocumentFragment {
+    const k = frontmatterKey(key)
+    return createFragment((frag) => {
+      frag.appendText('frontmatter 键：')
+      const chip = frag.createEl('code', { cls: 'ijipu-fm-key', text: k })
+      chip.setAttr('title', `点击复制：${k}`)
+      chip.setAttr('role', 'button')
+      chip.setAttr('tabindex', '0')
+      chip.addEventListener('click', () => void copyText(k, `已复制 ${k}`))
+      chip.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          void copyText(k, `已复制 ${k}`)
+        }
+      })
     })
   }
 

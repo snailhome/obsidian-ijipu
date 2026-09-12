@@ -37,21 +37,25 @@ C: 两只老虎 两只老虎 跑得快 跑得快
 默认(defaultPageConfig)  <  插件默认设置（设置面板）  <  笔记 frontmatter（ijipu_*）
 ```
 
-- 插件「设置」里的每一项即 **全局默认**。
-- 单个笔记可用 **frontmatter** 覆盖，覆盖项见下表（键名前缀统一 `ijipu_`，便于记忆/反查；设置界面每项下方也显示对应键）。
+- 插件「设置」里的每一项即 **全局默认**；**改设置后打开中的谱面会立刻按新设置重渲染**（无需重开笔记）。
+- 单个笔记可用 **frontmatter** 覆盖，覆盖项见下表（键名前缀统一 `ijipu_`，便于记忆/反查；设置界面每项下方的键名**点一下即可复制**）。
+- **改动即时生效**：在 Properties 面板或 YAML 里改 `ijipu_*` 后，谱面**立刻重渲染**（此前要重开笔记才生效）。
+- **写法宽松**：键名大小写不敏感，`ijipu_note_size` / `ijipu_noteSize`（驼峰）/ `ijipu_note_space_layout` 都能识别；数字与布尔也可以写成字符串（`"15"`、`是/否`、`1/0`）。
+- **不会静默失效**：生效的覆盖项会在谱面工具栏显示「**frontmatter 覆盖 N 项**」徽标（悬停列出每个键的值）；写成无法识别的键（如 `ijipu_paper`）会给出提示与**最近键名建议**（"是否想写 ijipu_page？"）。
 
 ### frontmatter 覆盖示例
 ```yaml
-ijipu_paper: A4_horizontal
+ijipu_page: A4_horizontal
 ijipu_note_size: 15
-ijipu_note_space_layout: space
+ijipu_noteSpaceLayout: space
 ijipu_lianyinxian_type: 1
-ijipu_show_instrument: true
+ijipu_showInstrument: true
 ```
 
 ## Frontmatter 键对照表
 
-> 键 = `ijipu_` + iJipu 引擎 `PageConfig` 字段名。`boolean` 用 `true/false`，`枚举` 用所给值。
+> 键 = `ijipu_` + iJipu 引擎 `PageConfig` 字段名。`boolean` 用 `true/false`（也可写 `是/否`、`1/0`），`枚举` 用所给值。
+> 设置面板每项下方的键名**可点击复制**；面板顶部还有「**复制全部键名**」与「**复制 frontmatter 模板**」（带当前值、可直接粘贴到笔记顶部）两个按钮。
 
 ### 页面
 | 设置项 | frontmatter 键 | 类型 | 取值 / 默认 |

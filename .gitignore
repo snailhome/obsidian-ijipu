@@ -19,3 +19,4 @@ doc/
 # 构建临时产物
 build *.bat
 dist-*.js
+dist-smoke/

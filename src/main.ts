@@ -1,5 +1,5 @@
-import { Notice, Plugin } from 'obsidian'
-import { mergePageConfig, renderScore, playScore } from './render'
+import { Events, MarkdownRenderChild, Notice, Plugin } from 'obsidian'
+import { applyFrontmatter, renderScore, playScore, unknownKeyHint } from './render'
 import { IJipuSettingTab } from './settings'
 import type { IJipuSettings } from './types'
 import type { PlayheadSeg } from './render'
@@ -8,6 +8,8 @@ import workletCode from '../spessasynth_processor.min.js'
 
 type ViewMode = 'page' | 'full' | 'score'
 const MODE_LABEL: Record<ViewMode, string> = { page: '整页', full: '满宽', score: '谱面' }
+/** 插件内事件广播：设置面板保存后触发，打开中的 jps 代码块据此即时重渲染 */
+export const SETTINGS_CHANGED = 'settings-changed'
 /** 与 iJipu 应用一致的播放色块配色（按声部半透明；voice1 红，延续单声部红块） */
 const PLAYHEAD_COLORS = [
   'rgba(255, 93, 108,',
@@ -25,7 +27,9 @@ const PLAYHEAD_COLORS = [
  */
 export default class IJipuPlugin extends Plugin {
   settings: IJipuSettings = {}
-  /** 所有进行中试听的停止函数（切换笔记时统一停止） */
+  /** 插件内事件广播（当前用于设置变更 → 打开中的谱面即时重渲染） */
+  readonly events = new Events()
+  /** 所有进行中试听的停止函数（切换笔记/卸载时统一停止） */
   private playStops: (() => void)[] = []
   /** 内置 SpessaSynth worklet URL（worklet 代码内联进 main.js → Blob URL，随插件单文件分发） */
   private workletUrl = ''
@@ -34,22 +38,37 @@ export default class IJipuPlugin extends Plugin {
     await this.loadSettings()
     this.workletUrl = this.makeWorkletUrl()
     this.addSettingTab(new IJipuSettingTab(this.app, this))
+    // 代码块交给 MarkdownRenderChild：块被移除/正文重渲染时能注销监听、停止试听并清空 DOM
     this.registerMarkdownCodeBlockProcessor('jps', (source, el, ctx) => {
-      this.renderBlock(source, el, ctx.sourcePath)
+      ctx.addChild(new IJipuBlock(this, source, el, ctx.sourcePath))
     })
     // 切换笔记时自动结束所有试听（避免试听继续却失去控制）
-    this.registerEvent(
-      this.app.workspace.on('active-leaf-change', () => {
-        for (const stop of this.playStops) stop()
-        this.playStops = []
-      }),
-    )
+    this.registerEvent(this.app.workspace.on('active-leaf-change', () => this.stopAll()))
   }
 
   onunload(): void {
     // 插件卸载（禁用/重载）时兜底停止所有试听
+    this.stopAll()
+  }
+
+  /** 停止所有进行中的试听 */
+  stopAll(): void {
     for (const stop of this.playStops) stop()
     this.playStops = []
+  }
+
+  /** 登记/注销一个试听停止函数（供 active-leaf-change 与卸载时统一停止） */
+  registerPlay(stop: () => void): void {
+    this.playStops.push(stop)
+  }
+
+  unregisterPlay(stop: () => void): void {
+    this.playStops = this.playStops.filter((f) => f !== stop)
+  }
+
+  /** 内置 worklet 的 Blob URL（供试听时 addModule） */
+  getWorkletUrl(): string {
+    return this.workletUrl
   }
 
   async loadSettings(): Promise<void> {
@@ -58,6 +77,8 @@ export default class IJipuPlugin extends Plugin {
 
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings)
+    // 设置面板改动后广播：打开中的谱面即时按新设置重渲染（此前要重开笔记才生效）
+    this.events.trigger(SETTINGS_CHANGED)
   }
 
   /** 由内嵌 worklet 代码构造 Blob URL（不再依赖插件目录单独文件；供 audioWorklet.addModule） */
@@ -69,12 +90,59 @@ export default class IJipuPlugin extends Plugin {
       return ''
     }
   }
+}
 
-  private renderBlock(source: string, el: HTMLElement, sourcePath: string): void {
-    const frontmatter = this.app.metadataCache.getCache(sourcePath)?.frontmatter ?? {}
-    const pageConfig = mergePageConfig(this.settings, frontmatter)
-    const container = el.createDiv({ cls: 'ijipu-score' })
-    const { svgs, error } = renderScore(source, pageConfig)
+/**
+ * 一个 jps 代码块的渲染组件。
+ *
+ * 关键：**随 frontmatter 与插件设置变化即时重渲染**。此前渲染只在代码块首次挂载时读一次
+ * frontmatter，于是「在 Properties 里改 `ijipu_note_size` 谱面没反应」——Obsidian 不会因为
+ * frontmatter 变化重新执行代码块处理器，必须自己监听 `metadataCache.on('changed')`。
+ * 另：把生效的覆盖项与未识别的键显示出来，避免"设置了却不知道有没有生效"。
+ */
+class IJipuBlock extends MarkdownRenderChild {
+  private stopPlay: (() => void) | null = null
+  private rafId = 0
+
+  constructor(
+    private plugin: IJipuPlugin,
+    private source: string,
+    containerEl: HTMLElement,
+    private sourcePath: string,
+  ) {
+    super(containerEl)
+  }
+
+  onload(): void {
+    this.render()
+    // ① 笔记 frontmatter 变化（Properties 面板编辑 / 直接改 YAML）→ 即时重渲染
+    this.registerEvent(
+      this.plugin.app.metadataCache.on('changed', (file) => {
+        if (file.path === this.sourcePath) this.render()
+      }),
+    )
+    // ② 插件设置面板改动 → 即时重渲染
+    this.registerEvent(this.plugin.events.on(SETTINGS_CHANGED, () => this.render()))
+  }
+
+  onunload(): void {
+    this.teardown()
+  }
+
+  /** 清掉上一次渲染（停止试听 + 清空容器），避免重渲染后残留两个谱面或继续播放 */
+  private teardown(): void {
+    this.stopPlay?.()
+    this.stopPlay = null
+    cancelAnimationFrame(this.rafId)
+    this.containerEl.empty()
+  }
+
+  private render(): void {
+    this.teardown()
+    const fm = this.plugin.app.metadataCache.getCache(this.sourcePath)?.frontmatter ?? null
+    const { config: pageConfig, applied, unknown } = applyFrontmatter(this.plugin.settings, fm)
+    const container = this.containerEl.createDiv({ cls: 'ijipu-score' })
+    const { svgs, error } = renderScore(this.source, pageConfig)
 
     if (error) {
       container.createDiv({ cls: 'ijipu-error', text: `⚠ 简谱解析失败：\n${error}` })
@@ -83,10 +151,17 @@ export default class IJipuPlugin extends Plugin {
 
     const toolbar = container.createDiv({ cls: 'ijipu-score-toolbar' })
     toolbar.createSpan({ cls: 'ijipu-page-label', text: `${svgs.length} 页` })
+    // frontmatter 覆盖可见化：改了哪些键、值是什么（悬停标题里列全）
+    if (applied.length > 0) {
+      const badge = toolbar.createSpan({
+        cls: 'ijipu-fm-badge',
+        text: `frontmatter 覆盖 ${applied.length} 项`,
+      })
+      badge.setAttr('title', applied.map((a) => `${a.key} = ${String(a.value)}`).join('\n'))
+    }
 
     // —— 试听（播放/停止 + RAF 驱动整曲行色块跟随，与 iJipu 一致）——
     let playing: { cancel: () => void; totalMs: number; track: PlayheadSeg[] } | null = null
-    let rafId = 0
     let playStart = 0
     const playBtn = toolbar.createEl('button', { cls: 'ijipu-play', text: '▶ 试听' })
     const svgEls: SVGSVGElement[] = []
@@ -143,6 +218,15 @@ export default class IJipuPlugin extends Plugin {
       svgEl.appendChild(rect)
     }
 
+    const stopPlay = (): void => {
+      playing?.cancel()
+      playing = null
+      cancelAnimationFrame(this.rafId)
+      clearPlayBlock()
+      playBtn.setText('▶ 试听')
+      this.plugin.unregisterPlay(stopPlay)
+    }
+
     const tick = (): void => {
       const currentMs = performance.now() - playStart - 200 // 与 iJipu 一致的 200ms 起播延迟
       const noteSize = pageConfig.note_size ?? 13
@@ -162,42 +246,40 @@ export default class IJipuPlugin extends Plugin {
         clearPlayBlock()
         playing = null
         playBtn.setText('▶ 试听')
-        this.playStops = this.playStops.filter((f) => f !== stopPlay)
+        this.plugin.unregisterPlay(stopPlay)
         return
       }
-      rafId = requestAnimationFrame(tick)
+      this.rafId = requestAnimationFrame(tick)
     }
 
-    const stopPlay = (): void => {
-      playing?.cancel()
-      playing = null
-      cancelAnimationFrame(rafId)
-      clearPlayBlock()
-      playBtn.setText('▶ 试听')
-      this.playStops = this.playStops.filter((f) => f !== stopPlay) // 从全局停止列表移除
-    }
+    this.stopPlay = stopPlay
 
     playBtn.addEventListener('click', () => {
       if (playing) {
         stopPlay()
         return
       }
-      void playScore(source, pageConfig, { hqVoice: this.settings.hqVoice, workletUrl: this.workletUrl }).then((r) => {
-        if (!r) {
-          playBtn.setText('▶ 试听')
-          return
-        }
-        playing = r
-        playStart = performance.now()
-        playBtn.setText('⏹ 停止')
-        cancelAnimationFrame(rafId)
-        rafId = requestAnimationFrame(tick)
-        this.playStops.push(stopPlay) // 登记为可全局停止（切换笔记时自动结束）
-      }).catch((e) => {
-        // adj353：试听失败原因可见（不再静默无声）
-        playBtn.setText('▶ 试听')
-        new Notice(`试听失败：${e instanceof Error ? e.message : String(e)}`, 6000)
+      void playScore(this.source, pageConfig, {
+        hqVoice: this.plugin.settings.hqVoice,
+        workletUrl: this.plugin.getWorkletUrl(),
       })
+        .then((r) => {
+          if (!r) {
+            playBtn.setText('▶ 试听')
+            return
+          }
+          playing = r
+          playStart = performance.now()
+          playBtn.setText('⏹ 停止')
+          cancelAnimationFrame(this.rafId)
+          this.rafId = requestAnimationFrame(tick)
+          this.plugin.registerPlay(stopPlay) // 登记为可全局停止（切换笔记时自动结束）
+        })
+        .catch((e) => {
+          // adj353：试听失败原因可见（不再静默无声）
+          playBtn.setText('▶ 试听')
+          new Notice(`试听失败：${e instanceof Error ? e.message : String(e)}`, 6000)
+        })
     })
 
     // —— 显示模式切换（整页 / 满宽 / 谱面，下拉选择）——
@@ -210,6 +292,14 @@ export default class IJipuPlugin extends Plugin {
     modeSel.value = 'score'
     modeSel.addEventListener('change', () => setMode(modeSel.value as ViewMode))
     modeWrap.createEl('span', { cls: 'ijipu-mode-caret', text: '▼' })
+
+    // 未识别的 ijipu_* 键：显式提示 + 最近键名建议（此前静默忽略 → "设置了没反应"）
+    if (unknown.length > 0) {
+      container.createDiv({
+        cls: 'ijipu-fm-warn',
+        text: `⚠ 未识别的 frontmatter 键：${unknownKeyHint(unknown)}`,
+      })
+    }
 
     // —— 逐页插入 SVG（存元素，供色块定位与谱面 viewBox 裁剪）——
     const svgWrap = container.createDiv({ cls: 'ijipu-svgs ijipu-mode-score' })

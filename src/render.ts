@@ -12,24 +12,11 @@ import { SpessaSynthBackend, HqCache, getHqLibrary, loadHqBank } from './soundba
 
 /**
  * 合并设置（优先级：默认 < 插件默认设置 < 笔记 frontmatter）。
- * frontmatter 键统一 `ijipu_<PageConfig字段>`（snake_case，与 iJipu 引擎字段一致，便于反查）。
+ * 实现移到 `frontmatter.ts`（零 Obsidian 依赖、可单测）：键名兼容 snake_case / camelCase、
+ * 值按默认值类型转换、未识别键返回建议。此处仅做转出，保持既有 `from './render'` 引用可用。
  */
-export function mergePageConfig(
-  defaults: Partial<PageConfig>,
-  frontmatter: Record<string, unknown>,
-): PageConfig {
-  const cfg: PageConfig = { ...defaultPageConfig, ...defaults }
-  for (const [key, value] of Object.entries(frontmatter)) {
-    if (!key.startsWith('ijipu_')) continue
-    const field = key.slice('ijipu_'.length) as keyof PageConfig
-    if (value === undefined || value === null) continue
-    if (field in cfg) {
-      // 直接写入（frontmatter 的 YAML 类型与字段语义一致：number/string/boolean）
-      ;(cfg as unknown as Record<string, unknown>)[field as string] = value
-    }
-  }
-  return cfg
-}
+export { applyFrontmatter, mergePageConfig, frontmatterKey, unknownKeyHint, FRONTMATTER_PREFIX } from './frontmatter'
+export type { AppliedOverride, UnknownKey, FrontmatterResult } from './frontmatter'
 
 /** 渲染 .jps → 每页 SVG 字符串（解析失败返回 error 信息） */
 export function renderScore(

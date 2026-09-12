@@ -5,7 +5,8 @@
   "main": "main.js",
   "scripts": {
     "dev": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs",
-    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "smoke": "esbuild scripts/smoke-frontmatter.mts --bundle --platform=node --format=esm --target=node20 --log-level=warning --alias:@ijipu/engine=./vendor/engine/index.ts --outfile=dist-smoke/smoke.mjs && node dist-smoke/smoke.mjs"
   },
   "keywords": ["obsidian", "简谱", "jps", "ijipu"],
   "license": "AGPL-3.0",
