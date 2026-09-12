@@ -20,3 +20,5 @@ doc/
 build *.bat
 dist-*.js
 dist-smoke/
+# adj390：发布正文临时产物（scripts/release-body.mjs 生成，只含当前版本）
+release-body.md

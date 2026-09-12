@@ -29,11 +29,17 @@ jobs:
       # 用 esbuild 产单一 main.js（不拆 chunk，避免 Obsidian 插件目录缺 dist-*.js 报 Cannot find module）
       - run: node esbuild.config.mjs production
 
+      # adj390：Release 正文**只取当前版本**——RELEASE-NOTES.md 里若混入历史版本，
+      # 直接当 body_path 会把之前所有版本的内容一起发出去（用户反馈过这个问题）。
+      # 脚本按 manifest.json 的 version 截取"当前版本那一节"写入 release-body.md。
+      - name: Build release body (current version only)
+        run: node scripts/release-body.mjs
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
-          body_path: docs/RELEASE-NOTES.md
+          body_path: release-body.md
           files: |
             main.js
             manifest.json
