@@ -19,7 +19,7 @@ const SW_THIN = '1.5'
 
 /** 建一个描边图标（与 iJipu 应用顶栏图标同规格：currentColor + 圆角线帽，配色由主题决定） */
 function strokeIcon(
-  build: (add: (tag: 'rect' | 'path', attrs: Record<string, string>) => void) => void,
+  build: (add: (tag: 'rect' | 'path' | 'circle', attrs: Record<string, string>) => void) => void,
   size = 14,
 ): SVGSVGElement {
   const svg = document.createElementNS(NS, 'svg')
@@ -49,6 +49,20 @@ export function layoutIcon(size = 15): SVGSVGElement {
     add('rect', { x: '2', y: '2', width: '10', height: '10' })
     add('path', { d: 'M 7 2 V 12' })
     add('path', { d: 'M 2 7 H 12' })
+  }, size)
+}
+
+/**
+ * 「页面设置」图标：三条滑杆（设置/调整的通用意象，与「排版（田字格）」明确区分）。
+ */
+export function settingsIcon(size = 15): SVGSVGElement {
+  return strokeIcon((add) => {
+    add('path', { d: 'M 2 3.6 H 12', 'stroke-width': SW_THIN })
+    add('path', { d: 'M 2 7 H 12', 'stroke-width': SW_THIN })
+    add('path', { d: 'M 2 10.4 H 12', 'stroke-width': SW_THIN })
+    add('circle', { cx: '5', cy: '3.6', r: '1.5' })
+    add('circle', { cx: '9', cy: '7', r: '1.5' })
+    add('circle', { cx: '6', cy: '10.4', r: '1.5' })
   }, size)
 }
 

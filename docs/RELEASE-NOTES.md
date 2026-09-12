@@ -9,14 +9,21 @@
 - **`![[我的谱.jps]]` 嵌入**：新增嵌入处理器（`src/embed.ts`）。Obsidian 若已用 .jps 视图渲染嵌入则不重复渲染（先标记 + 延迟 100ms 确认），否则自己 `cachedRead` 后用同一面板内联渲染（紧凑形态）。链接写法支持 `#子标题`/`|别名`（`jpsLinkpath` 纯函数已加断言）；文件不存在时原位提示"找不到谱面文件"。
 - 三种入口（代码块 / 文件视图 / 嵌入）共用同一个渲染面板 `src/scorePane.ts`（试听色块、显示模式、来源徽标、排版、设置变更重渲染全部一致），避免各写一份漂移。
 
-## 新增：谱面内「排版」对话框（阶段 2，改这一份谱并写回源码）
+## 新增：谱面内「排版」＝排版辅助虚线（可拖动调版面）
 
-- 谱面工具栏新增**排版**按钮（图标 = **田字格**，与 iJipu 应用顶栏「排版」按钮同一形状：方框 + 一竖一横，见 `src/icons.ts` 内联 SVG），打开 `src/configDialog.ts` 对话框：与 iJipu 排版对话框同构的四组字段（页面/字体/行距/渲染），字段与控件**与设置面板共用一份定义**（`src/defs.ts` 的 `DEFS` + `addConfigControl`，杜绝两处漂移）。
+- **「排版」按钮（田字格图标，与 iJipu 顶栏同一形状）＝ 显示/隐藏排版辅助虚线**，与 iJipu 语义一致（此前误解为"打开设置对话框"，已纠正）。
+- **拖动虚线直接调版面**：四边距（上/下/左/右）、描述头区下沿线（`descAreaH`）、第 1 行曲部线（`body_margin_top`）、多声部第 2+ 声部行线（`height_shengbu`）、其他曲部行线（上一行有歌词 → `height_ciqu_lyric`，否则 `height_ciqu`）、歌词行线（第 1 行 `height_quci`、后续行 `height_cici`）——判定规则与 iJipu 预览层**同一套**。
+- 拖拽语义与 iJipu 相同：**拖动中只预览（不落盘），松手即写入该谱源码的 `# jps-config` 行**（代码块写回笔记正文、文件/嵌入写回 `.jps`），并弹 Notice 显示保存的字段与新值。
+- 开启时若当前是「谱面」视图会自动切到「整页」（否则边距线在裁剪区外看不见），关闭时恢复原视图；虚线层为绝对定位覆盖层，命中热区加宽 ±3px，描述头中线为纯标注（不可拖）。
+- 新增纯逻辑模块 `src/guides.ts`（`computeGuideLines` / `cropRectFor` / `guideLimits` / `guidePlacement`，零 Obsidian 依赖），直接复用引擎的 `computeRowGuides`/`metaAreaH`/`dragDelta`/`clamp`/`GUIDE_LIMITS*`，兼容三种显示模式（按裁剪框换算百分比与拖拽比例）；`render.ts` 新增 `renderScoreFull`（同时返回 layout，虚线几何需要）。
+
+## 新增：谱面内「设置」对话框（页面设置，改这一份谱并写回源码）
+
+- 原「排版」按钮的对话框独立为**「设置」**（图标 = 三滑杆，`src/icons.ts` 的 `settingsIcon`）：与 iJipu 排版对话框同构的四组字段（页面/字体/行距/渲染），字段与控件**与设置面板共用一份定义**（`src/defs.ts` 的 `DEFS` + `addConfigControl`），用于设置**不可拖动**的项（字体、字号、渲染开关等）。
 - 保存去向两条：
   - 「**保存到谱面**」（主）：用引擎 `writeJpsConfig` 写回**当前曲谱**源码的 `# jps-config` 行——代码块写回笔记正文（优先 `editor.replaceRange` 保留撤销栈，阅读模式回退 `vault.process` 整文件事务写，纯函数 `replaceCodeBlockBody` 已加断言），文件/嵌入写回 `.jps` 文件；
   - 「保存为插件默认」（次）：只把对话框里编辑的字段写入插件设置（全局默认）；
   - 另有「恢复默认」「取消」（取消不改任何东西）。
-- 排版后新配置**立即生效**并弹 Notice 确认；工具栏绿色「谱面自带设置 N 项」徽标同步更新。
 
 ## 新增：直接复用 iJipu 的谱面设置（`# jps-config`），复制 .jps 即渲染一致
 
@@ -51,7 +58,7 @@
 
 ## 验证
 
-- 新增 `npm run smoke`（esbuild 打包 `scripts/smoke-frontmatter.mts` → `dist-smoke/`，node 执行）：**65 项断言全绿**，覆盖键名写法兼容、值类型转换、可选字段识别、未识别键建议、优先级、字段表完整性（含"引擎全部 34 个字段都能被同名键命中"）、**源内 `# jps-config` 优先级**（源内 > frontmatter > 插件设置、部分设置行、以及"插件解析结果与 iJipu 源内配置逐字段一致"的端到端核对），以及**写回源码的纯函数**（代码块正文替换保持围栏/区间非法原样返回/CRLF 归一、`jpsLinkpath` 链接解析）。
+- 新增 `npm run smoke`（esbuild 打包 `scripts/smoke-frontmatter.mts` → `dist-smoke/`，node 执行）：**90 项断言全绿**，覆盖键名写法兼容、值类型转换、可选字段识别、未识别键建议、优先级、字段表完整性（含"引擎全部 34 个字段都能被同名键命中"）、**源内 `# jps-config` 优先级**（源内 > frontmatter > 插件设置、部分设置行、以及"插件解析结果与 iJipu 源内配置逐字段一致"的端到端核对）、**写回源码的纯函数**（代码块正文替换保持围栏/区间非法原样返回/CRLF 归一、`jpsLinkpath` 链接解析），以及**排版辅助虚线几何**（四边距/描述头/行线/词线的位置与 key、可调范围、三种显示模式的裁剪框与百分比定位、拖拽换算自洽）。
 - `npm run build`（`tsc -noEmit -skipLibCheck` + esbuild production）通过；产物 `main.js` 已确认含新逻辑（`MarkdownRenderChild` + `metadataCache.on('changed')`、覆盖徽标、未识别提示、键名复制）。
 
 ---

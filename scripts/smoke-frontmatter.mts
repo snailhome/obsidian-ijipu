@@ -5,10 +5,11 @@
  * 断言来源：用户反馈「在 frontmatter 里设置像 `ijipu_note_size` 好像没生效」——
  * 覆盖键名写法兼容、值类型转换、未识别键提示、优先级四类。
  */
-import { defaultPageConfig, writeJpsConfig } from '@ijipu/engine'
+import { defaultPageConfig, dragDelta, layoutScore, parseJps, writeJpsConfig } from '@ijipu/engine'
 import { applyFrontmatter, frontmatterKey, mergePageConfig, unknownKeyHint, PAGE_CONFIG_FIELDS } from '../src/frontmatter'
 import { resolvePageConfig } from '../src/config'
 import { codeBlockBody, jpsLinkpath, replaceCodeBlockBody } from '../src/sourceEdit'
+import { computeGuideLines, cropRectFor, guideLimits, guidePlacement } from '../src/guides'
 
 let pass = 0
 let fail = 0
@@ -171,6 +172,63 @@ console.log('[8] 写回源码的纯函数（阶段 2：「⚙ 排版」保存到
   check('jpsLinkpath 去掉 |别名与尺寸', jpsLinkpath('a/谱.jps|别名') === 'a/谱.jps')
   check('jpsLinkpath 大小写不敏感', jpsLinkpath('X.JPS') === 'X.JPS')
   check('jpsLinkpath 非 jps 返回 null', jpsLinkpath('笔记.md') === null && jpsLinkpath('图.png|200') === null)
+}
+
+console.log('[9] 排版辅助虚线的几何（纯逻辑：线集合/位置/范围/拖拽换算）')
+{
+  const src = ['V: 1.0', 'B: t', 'D: C', 'P: 4/4', '', 'Q: 1 2 3 4 |', 'C: 一 二 三 四', ''].join('\n')
+  const r = parseJps(src)
+  const cfg = { ...defaultPageConfig }
+  const lay = layoutScore(r, cfg)
+  const page = lay.pages[0]
+  const lines = computeGuideLines(lay, cfg, 0)
+  const byKind = (k: string) => lines.filter((l) => l.kind === k)
+  const find = (kind: string, key: string) => lines.find((l) => l.kind === kind && l.key === key)
+
+  check('四边距虚线齐备', byKind('margin').length === 4, String(byKind('margin').length))
+  const mt = find('margin', 'margin_top')
+  const mb = find('margin', 'margin_bottom')
+  const ml = find('margin', 'margin_left')
+  const mr = find('margin', 'margin_right')
+  check('上边距线 y = margin_top', mt?.pos === cfg.margin_top, String(mt?.pos))
+  check('下边距线 y = page.height − margin_bottom', mb?.pos === page.height - cfg.margin_bottom, String(mb?.pos))
+  check('左边距线 x = margin_left', ml?.pos === cfg.margin_left, String(ml?.pos))
+  check('右边距线 x = page.width − margin_right', mr?.pos === page.width - cfg.margin_right, String(mr?.pos))
+  check('上下线为水平虚线（dir=v，跨整页宽）', mt?.dir === 'v' && mt.from === 0 && mt.to === page.width)
+  check('左右线为竖直虚线（dir=h，跨整页高）', ml?.dir === 'h' && ml.from === 0 && ml.to === page.height)
+  check('下/右线 invert（拖动方向相反）', mb?.invert === true && mr?.invert === true && mt?.invert === undefined)
+
+  const desc = find('desc', 'descAreaH')!
+  check('描述头下沿线 y = margin_top + descAreaH', desc.pos === cfg.margin_top + cfg.descAreaH, String(desc.pos))
+  check('描述头线只跨内容区（不跨页边距）', desc.from === cfg.margin_left && Math.abs(desc.to - (page.width - cfg.margin_right)) < 1e-6)
+  check('描述头中线为纯标注（不可拖）', lines.some((l) => l.kind === 'desc' && l.readonly === true && l.dir === 'h'))
+
+  const row = byKind('row')
+  check('有曲部行虚线', row.length >= 1, String(row.length))
+  check('第 1 行曲部线拖 body_margin_top', row[0]?.key === 'body_margin_top', String(row[0]?.key))
+  check('有歌词时存在词部行虚线（第 1 行拖 height_quci）', byKind('lyric').length >= 1 && byKind('lyric')[0]?.key === 'height_quci', String(byKind('lyric')[0]?.key))
+  check('行/词虚线均为水平线且跨内容区', [...row, ...byKind('lyric')].every((l) => l.dir === 'v' && l.from === cfg.margin_left))
+
+  check('可调范围：边距 [20,400]', JSON.stringify(guideLimits('margin_left')) === '[20,400]', JSON.stringify(guideLimits('margin_left')))
+  check('可调范围：descAreaH [40,400]', JSON.stringify(guideLimits('descAreaH')) === '[40,400]', JSON.stringify(guideLimits('descAreaH')))
+  check('可调范围：允许负值的 height_ciqu_lyric [-80,120]', JSON.stringify(guideLimits('height_ciqu_lyric')) === '[-80,120]', JSON.stringify(guideLimits('height_ciqu_lyric')))
+
+  // 显示模式裁剪框 + 百分比定位 + 拖拽换算
+  const full = cropRectFor('page', cfg, page.width, page.height)
+  check('整页模式裁剪框 = 整页', full.x === 0 && full.y === 0 && full.w === page.width && full.h === page.height)
+  const crop = cropRectFor('score', cfg, page.width, page.height)
+  check('谱面模式裁剪框 = 内容区（裁掉四边距）', crop.x === cfg.margin_left && crop.y === cfg.margin_top && Math.abs(crop.w - (page.width - cfg.margin_left - cfg.margin_right)) < 1e-6, JSON.stringify(crop))
+  const boxW = 600 // 假定显示宽 600px
+  const placeFull = guidePlacement(ml!, full, page.width, page.height, boxW)
+  check('整页下左边距线 left% = margin_left/页宽', Math.abs(parseFloat(placeFull.style.left) - (cfg.margin_left / page.width) * 100) < 0.01, placeFull.style.left)
+  check('scale = 显示像素 / 页面单位', Math.abs(placeFull.scale - boxW / page.width) < 1e-9, String(placeFull.scale))
+  const placeCrop = guidePlacement(ml!, crop, page.width, page.height, boxW)
+  check('谱面模式下左边距线落在裁剪框左缘（0%）', Math.abs(parseFloat(placeCrop.style.left)) < 0.01, placeCrop.style.left)
+  // 拖拽换算：在整页模式下把线向右拖「显示宽」的距离 = 页面宽（scale 换算自洽）
+  const delta = dragDelta({ key: 'margin_left', dir: 'h' }, 0, 0, boxW, 0, placeFull.scale)
+  check('拖拽换算：拖一个显示宽 = 一个页面宽', Math.abs(delta - page.width) < 1e-6, String(delta))
+  const deltaInv = dragDelta({ key: 'margin_right', dir: 'h', invert: true }, 0, 0, boxW, 0, placeFull.scale)
+  check('反向项（右边距）拖动方向取反', Math.abs(deltaInv + page.width) < 1e-6, String(deltaInv))
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

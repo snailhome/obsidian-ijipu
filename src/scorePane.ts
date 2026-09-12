@@ -1,19 +1,26 @@
 /**
  * scorePane.ts — 谱面面板：**代码块 / .jps 文件视图 / ![[x.jps]] 嵌入** 共用的渲染与交互
  *
- * 抽出来的原因：这三种入口需要完全一致的行为（试听色块、显示模式、来源徽标、⚙ 排版、
- * frontmatter/设置变更即时重渲染、渲染失败提示），各写一份必然漂移。
+ * 抽出来的原因：这三种入口需要完全一致的行为（试听色块、显示模式、排版辅助虚线、来源徽标、
+ * 页面设置、frontmatter/设置变更即时重渲染、渲染失败提示），各写一份必然漂移。
+ *
+ * 工具条两枚图标按钮（与 iJipu 顶栏一致）：
+ *  · **排版**（田字格）＝ 开关**排版辅助虚线**，显示后可**拖动虚线**调边距/行距，
+ *    松手即写回谱面源码的 `# jps-config`（与 iJipu「拖动结束即持久化」一致）；
+ *  · **页面设置**（滑杆）＝ 打开对话框按字段精确设值（字体/字号等不可拖项）。
  *
  * 渲染管线与 iJipu 应用一致：`resolvePageConfig`（含源内 # jps-config）→ `layoutScore`
  * → `renderScoreToSvg`；试听走 `@ijipu/engine` 的 `buildPlaySequence` + SpessaSynth。
  */
 import { Notice } from 'obsidian'
-import { writeJpsConfig } from '@ijipu/engine'
-import { renderScore, playScore, unknownKeyHint, type PlayheadSeg } from './render'
+import { writeJpsConfig, dragDelta, clamp, type PageConfig } from '@ijipu/engine'
+import { renderScoreFull, playScore, unknownKeyHint, type PlayheadSeg } from './render'
 import { resolvePageConfig } from './config'
 import { ConfigDialog } from './configDialog'
 import { DEFS } from './defs'
-import { layoutIcon, modeIcon } from './icons'
+import { layoutIcon, modeIcon, settingsIcon } from './icons'
+import { computeGuideLines, cropRectFor, guideLimits, guidePlacement, type GuideLine } from './guides'
+import { GUIDES_CHANGED, SETTINGS_CHANGED } from './main'
 import type IJipuPlugin from './main'
 
 type ViewMode = 'page' | 'full' | 'score'
@@ -41,35 +48,40 @@ export type ScorePaneHost = {
   getSource: () => string
   /** 笔记 frontmatter（.jps 文件视图与嵌入传 null） */
   getFrontmatter?: () => Record<string, unknown> | null
-  /** 把新源码写回（「排版 → 保存到谱面」用）；不提供则不给该入口 */
+  /** 把新源码写回（「排版」拖拽结束 / 「页面设置」保存到谱面时调用）；不提供则无写回入口 */
   writeSource?: (next: string) => void | Promise<void>
   /** 嵌入模式：更紧凑（隐藏页数标签等） */
   embedded?: boolean
 }
 
 export type ScorePaneHandle = {
-  /** 卸下（停止试听 + 清空容器 + 注销设置监听） */
+  /** 卸下（停止试听/结束拖拽 + 清空容器 + 注销监听） */
   destroy: () => void
   /** 重新解析并重画（frontmatter/源码变化时由宿主调用） */
   refresh: () => void
 }
 
-/**
- * 挂载一个谱面面板。
- * @returns 句柄：`refresh()` 重画，`destroy()` 卸下
- */
+/** 挂载一个谱面面板（详见文件头说明） */
 export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
   const { plugin, container } = host
   let stopPlay: (() => void) | null = null
   let rafId = 0
+  let rafPending = false
+  // —— 面板级状态（跨重画保持）——
+  let paneMode: ViewMode = 'score'
+  let modeBeforeGuides: ViewMode = 'page'
+  /** 拖拽中的草稿配置（拖完写回源码后清空） */
+  let draft: PageConfig | null = null
+  /** 当前拖拽的 window 监听清理函数 */
+  let endDragListeners: (() => void) | null = null
 
-  /** 清掉本次渲染的运行时状态（试听/RAF/色块），不碰容器 */
   const stopRuntime = (): void => {
     stopPlay?.()
     stopPlay = null
     cancelAnimationFrame(rafId)
   }
 
+  /** 全量重画（工具条 + 谱面 + 辅助虚线）；拖拽期间按帧节流 */
   const paint = (): void => {
     stopRuntime()
     container.empty()
@@ -79,36 +91,37 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     const source = host.getSource()
     const fm = host.getFrontmatter?.() ?? null
     // 优先级：默认 < 插件设置 < frontmatter < 源内 # jps-config（源内最高）
-    const { config: pageConfig, applied, unknown, sourceFields } = resolvePageConfig(source, plugin.settings, fm)
-    const { svgs, error } = renderScore(source, pageConfig)
+    const resolved = resolvePageConfig(source, plugin.settings, fm)
+    const cfg = draft ?? resolved.config
+    const { svgs, layout: layoutMaybe, error } = renderScoreFull(source, cfg)
 
-    if (error) {
-      container.createDiv({ cls: 'ijipu-error', text: `⚠ 简谱解析失败：\n${error}` })
+    if (error || !layoutMaybe) {
+      container.createDiv({ cls: 'ijipu-error', text: `⚠ 简谱解析失败：\n${error ?? '无排版结果'}` })
       return
     }
+    // 收窄为常量：闭包（虚线层/拖拽）里也要用，TS 不会跨函数保留 null 判定
+    const layout = layoutMaybe
 
     // —— 工具条 ——
     const toolbar = container.createDiv({ cls: 'ijipu-score-toolbar' })
     if (!host.embedded) toolbar.createSpan({ cls: 'ijipu-page-label', text: `${svgs.length} 页` })
-    // 源内设置徽标：这份谱自带 # jps-config（优先级最高，覆盖插件设置与 frontmatter）
-    if (sourceFields.length > 0) {
+    if (resolved.sourceFields.length > 0) {
       const badge = toolbar.createSpan({
         cls: 'ijipu-fm-badge ijipu-src-badge',
-        text: `谱面自带设置 ${sourceFields.length} 项`,
+        text: `谱面自带设置 ${resolved.sourceFields.length} 项`,
       })
       badge.setAttr(
         'title',
-        `来自源码 # jps-config 行（优先级最高，覆盖插件设置与 frontmatter）：\n${sourceFields
-          .map((f) => `${f} = ${String((pageConfig as unknown as Record<string, unknown>)[f])}`)
+        `来自源码 # jps-config 行（优先级最高，覆盖插件设置与 frontmatter）：\n${resolved.sourceFields
+          .map((f) => `${f} = ${String((resolved.config as unknown as Record<string, unknown>)[f])}`)
           .join('\n')}`,
       )
     }
-    // frontmatter 覆盖可见化（只对源内未写的键生效）
-    if (applied.length > 0) {
-      const badge = toolbar.createSpan({ cls: 'ijipu-fm-badge', text: `frontmatter 覆盖 ${applied.length} 项` })
+    if (resolved.applied.length > 0) {
+      const badge = toolbar.createSpan({ cls: 'ijipu-fm-badge', text: `frontmatter 覆盖 ${resolved.applied.length} 项` })
       badge.setAttr(
         'title',
-        `来自笔记 frontmatter（只对谱面未自带设置的键生效）：\n${applied
+        `来自笔记 frontmatter（只对谱面未自带设置的键生效）：\n${resolved.applied
           .map((a) => `${a.key} = ${String(a.value)}`)
           .join('\n')}`,
       )
@@ -183,7 +196,7 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
 
     const tick = (): void => {
       const currentMs = performance.now() - playStart - 200 // 与 iJipu 一致的 200ms 起播延迟
-      const noteSize = pageConfig.note_size ?? 13
+      const noteSize = cfg.note_size ?? 13
       const track = playing?.track ?? []
       clearPlayBlock()
       if (currentMs > 0 && track.length) {
@@ -213,7 +226,7 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
         stopPlayFn()
         return
       }
-      void playScore(source, pageConfig, { hqVoice: plugin.settings.hqVoice, workletUrl: plugin.getWorkletUrl() })
+      void playScore(source, cfg, { hqVoice: plugin.settings.hqVoice, workletUrl: plugin.getWorkletUrl() })
         .then((r) => {
           if (!r) {
             playBtn.setText('▶ 试听')
@@ -224,7 +237,7 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
           playBtn.setText('⏹ 停止')
           cancelAnimationFrame(rafId)
           rafId = requestAnimationFrame(tick)
-          plugin.registerPlay(stopPlayFn) // 可全局停止（切换笔记时自动结束）
+          plugin.registerPlay(stopPlayFn)
         })
         .catch((e) => {
           playBtn.setText('▶ 试听')
@@ -232,36 +245,59 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
         })
     })
 
-    // —— 排版（改这一份谱：写回源码 # jps-config；也可存为插件默认）——
-    // 图标用**田字格**（与 iJipu 应用顶栏「排版」按钮同一形状），不用齿轮 emoji
+    // —— 排版（田字格）：开关"排版辅助虚线"，显示后可拖动虚线调边距/行距 ——
+    const guidesBtn = toolbar.createEl('button', { cls: 'ijipu-play ijipu-guides-btn' })
+    guidesBtn.setAttr(
+      'title',
+      plugin.showGuides
+        ? '排版：隐藏辅助虚线（虚线可直接拖动调整边距/行距）'
+        : '排版：显示辅助虚线（拖动虚线调整边距/行距，松手即写入谱面设置；自动切到整页视图）',
+    )
+    guidesBtn.appendChild(layoutIcon(15))
+    guidesBtn.createSpan({ text: '排版' })
+    guidesBtn.classList.toggle('is-active', plugin.showGuides)
+    guidesBtn.addEventListener('click', () => {
+      const on = plugin.toggleGuides()
+      if (on) {
+        // 边距在「谱面（裁掉边距）」模式下看不见，故显示虚线时切到整页视图，关闭后恢复
+        modeBeforeGuides = paneMode
+        if (paneMode === 'score') paneMode = 'page'
+      } else if (paneMode !== modeBeforeGuides) {
+        paneMode = modeBeforeGuides
+      }
+      paint()
+    })
+
+    // —— 页面设置（滑杆）：对话框按字段精确设值（字体/字号等不可拖项） ——
     if (host.writeSource) {
       const cfgBtn = toolbar.createEl('button', { cls: 'ijipu-play ijipu-config-btn' })
-      cfgBtn.setAttr('title', '排版：调整这一份谱的设置（保存到源码 # jps-config 行，与 iJipu 一致）')
-      cfgBtn.appendChild(layoutIcon(15))
-      cfgBtn.createSpan({ text: '排版' })
+      cfgBtn.setAttr('title', '页面设置：按字段精确设值（字体/字号/行距/渲染开关；可保存到谱面或存为插件默认）')
+      cfgBtn.appendChild(settingsIcon(15))
+      cfgBtn.createSpan({ text: '设置' })
       cfgBtn.addEventListener('click', () => {
         new ConfigDialog(plugin.app, {
-          current: pageConfig,
-          hasSourceConfig: sourceFields.length > 0,
-          onApply: (target, cfg) => {
+          current: resolved.config,
+          hasSourceConfig: resolved.sourceFields.length > 0,
+          onApply: (target, next) => {
             if (target === 'plugin') {
-              // 只把对话框里编辑的字段写入插件设置（全局默认），不夹带其它键
               const bag = plugin.settings as unknown as Record<string, unknown>
-              const src = cfg as unknown as Record<string, unknown>
+              const src = next as unknown as Record<string, unknown>
               for (const def of DEFS) bag[def.key as string] = src[def.key as string]
               void plugin.saveSettings().then(() => new Notice('已保存为插件默认（对未自带设置的谱生效）'))
               return
             }
-            const next = writeJpsConfig(host.getSource(), cfg)
-            void Promise.resolve(host.writeSource?.(next))
-              .then(() => new Notice('已写入谱面 # jps-config（该谱自带设置，优先级最高）'))
+            void Promise.resolve(host.writeSource?.(writeJpsConfig(host.getSource(), next)))
+              .then(() => {
+                new Notice('已写入谱面 # jps-config（该谱自带设置，优先级最高）')
+                paint()
+              })
               .catch((e) => new Notice(`写入谱面失败：${e instanceof Error ? e.message : String(e)}`, 6000))
           },
         }).open()
       })
     }
 
-    // —— 显示模式切换（整页 / 满宽 / 谱面：图标表意 + 悬停说明，互斥选中态）——
+    // —— 显示模式（整页 / 满宽 / 谱面）——
     const modeWrap = toolbar.createDiv({ cls: 'ijipu-mode-group' })
     const modeBtns = new Map<ViewMode, HTMLButtonElement>()
     for (const mode of Object.keys(MODE_LABEL) as ViewMode[]) {
@@ -273,13 +309,18 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       modeBtns.set(mode, btn)
     }
 
-    // 未识别的 ijipu_* 键：显式提示 + 最近键名建议（不再静默忽略）
-    if (unknown.length > 0) {
-      container.createDiv({ cls: 'ijipu-fm-warn', text: `⚠ 未识别的 frontmatter 键：${unknownKeyHint(unknown)}` })
+    if (resolved.unknown.length > 0) {
+      container.createDiv({ cls: 'ijipu-fm-warn', text: `⚠ 未识别的 frontmatter 键：${unknownKeyHint(resolved.unknown)}` })
+    }
+    if (plugin.showGuides) {
+      container.createDiv({
+        cls: 'ijipu-guide-hint',
+        text: '排版：拖动虚线调整边距/行距（松手即写入谱面设置）',
+      })
     }
 
-    // —— 逐页插入 SVG ——
-    const svgWrap = container.createDiv({ cls: 'ijipu-svgs ijipu-mode-score' })
+    // —— 逐页插入 SVG + 辅助虚线 ——
+    const svgWrap = container.createDiv({ cls: `ijipu-svgs ijipu-mode-${paneMode}` })
     svgs.forEach((svg, i) => {
       if (svgs.length > 1 && !host.embedded) {
         container.createDiv({ cls: 'ijipu-page-label', text: `第 ${i + 1} / ${svgs.length} 页` })
@@ -287,45 +328,128 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       const wrap = svgWrap.createDiv({ cls: 'ijipu-page-svg' })
       wrap.innerHTML = svg
       const svgEl = wrap.querySelector('svg') as SVGSVGElement | null
-      if (svgEl) svgEls.push(svgEl)
+      if (!svgEl) return
+      svgEls.push(svgEl)
+      applyViewBox(svgEl, paneMode, cfg)
+      if (plugin.showGuides) addGuideLayer(wrap, svgEl, i, cfg)
     })
 
-    const setMode = (next: ViewMode): void => {
-      svgWrap.setAttribute('class', `ijipu-svgs ijipu-mode-${next}`)
-      // 选中态（图标按钮组互斥）
-      for (const [m, btn] of modeBtns) btn.classList.toggle('is-active', m === next)
-      // 谱面模式：把 viewBox 裁到页边距内（只显示内容区），再撑满容器宽
-      for (const svgEl of svgEls) {
-        const orig = svgEl.dataset.origVb || svgEl.getAttribute('viewBox') || ''
-        svgEl.dataset.origVb = orig
-        if (next === 'score') {
-          const [, , w, h] = orig.split(/[\s,]+/).map(Number)
-          const ml = pageConfig.margin_left ?? 0
-          const mt = pageConfig.margin_top ?? 0
-          const mr = pageConfig.margin_right ?? 0
-          const mb = pageConfig.margin_bottom ?? 0
-          svgEl.setAttribute('viewBox', `${ml} ${mt} ${Math.max(1, w - ml - mr)} ${Math.max(1, h - mt - mb)}`)
-          svgEl.removeAttribute('width')
-          svgEl.removeAttribute('height')
-        } else {
-          svgEl.setAttribute('viewBox', orig)
-        }
+    /** 按显示模式设置 viewBox（'score' 裁到内容区并去掉纸张宽高，交给 CSS 撑满） */
+    function applyViewBox(svgEl: SVGSVGElement, mode: ViewMode, c: typeof cfg): void {
+      const orig = svgEl.dataset.origVb || svgEl.getAttribute('viewBox') || ''
+      svgEl.dataset.origVb = orig
+      if (mode === 'score') {
+        const [, , w, h] = orig.split(/[\s,]+/).map(Number)
+        const ml = c.margin_left ?? 0
+        const mt = c.margin_top ?? 0
+        const mr = c.margin_right ?? 0
+        const mb = c.margin_bottom ?? 0
+        svgEl.setAttribute('viewBox', `${ml} ${mt} ${Math.max(1, w - ml - mr)} ${Math.max(1, h - mt - mb)}`)
+        svgEl.removeAttribute('width')
+        svgEl.removeAttribute('height')
+      } else {
+        svgEl.setAttribute('viewBox', orig)
       }
     }
 
-    // 默认显示模式：谱面（消除边距，最大化有效观看面积）
-    setMode('score')
+    function setMode(next: ViewMode): void {
+      paneMode = next
+      svgWrap.setAttribute('class', `ijipu-svgs ijipu-mode-${next}`)
+      for (const [m, btn] of modeBtns) btn.classList.toggle('is-active', m === next)
+      for (const svgEl of svgEls) applyViewBox(svgEl, next, cfg)
+    }
+
+    /** 生成一页的辅助虚线层（可拖拽） */
+    function addGuideLayer(wrap: HTMLElement, svgEl: SVGSVGElement, pageIndex: number, c: typeof cfg): void {
+      const page = layout.pages[pageIndex]
+      if (!page) return
+      const layer = wrap.createDiv({ cls: 'ijipu-guide-layer' })
+      const lines = computeGuideLines(layout, c, pageIndex)
+      const boxW = svgEl.getBoundingClientRect().width || page.width
+      const crop = cropRectFor(paneMode, c, page.width, page.height)
+      for (const line of lines) {
+        const { style, scale } = guidePlacement(line, crop, page.width, page.height, boxW)
+        const el = layer.createDiv({
+          cls: `ijipu-guide-line ${line.dir === 'v' ? 'ijipu-guide-h' : 'ijipu-guide-v'}${line.readonly ? ' is-readonly' : ''}`,
+        })
+        for (const [k, v] of Object.entries(style)) el.style.setProperty(k, v)
+        el.setAttr('title', line.title)
+        if (line.readonly) continue
+        el.addEventListener('mousedown', (e) => startGuideDrag(e, line, scale))
+      }
+    }
+
+    /**
+     * 拖动虚线：按下记初值 → 移动按 `dragDelta` 改草稿并即时重画 → 松手写回谱面源码
+     * （与 iJipu 一致：拖动中不落盘，松手才持久化到 `# jps-config`）。
+     */
+    function startGuideDrag(e: MouseEvent, line: GuideLine, scale: number): void {
+      if (line.readonly || !host.writeSource) return
+      e.preventDefault()
+      e.stopPropagation()
+      endDragListeners?.()
+      const base = draft ?? resolved.config
+      const startValue = Number((base as unknown as Record<string, unknown>)[line.key] ?? 0)
+      const startX = e.clientX
+      const startY = e.clientY
+      const [min, max] = guideLimits(line.key)
+      const onMove = (ev: MouseEvent): void => {
+        const delta = dragDelta({ key: line.key, dir: line.dir, invert: line.invert }, startX, startY, ev.clientX, ev.clientY, scale)
+        const value = clamp(Math.round((startValue + delta) * 10) / 10, min, max)
+        draft = { ...(draft ?? base), [line.key]: value } as typeof base
+        schedulePaint()
+      }
+      const onUp = (): void => {
+        endDragListeners?.()
+        endDragListeners = null
+        const finalCfg = draft
+        draft = null
+        if (!finalCfg) return
+        void Promise.resolve(host.writeSource?.(writeJpsConfig(host.getSource(), finalCfg)))
+          .then(() => {
+            new Notice(`排版已保存：${line.key} = ${String((finalCfg as unknown as Record<string, unknown>)[line.key])}`, 2500)
+            paint()
+          })
+          .catch((err) => {
+            new Notice(`保存失败：${err instanceof Error ? err.message : String(err)}`, 6000)
+            paint()
+          })
+      }
+      endDragListeners = () => {
+        window.removeEventListener('mousemove', onMove)
+        window.removeEventListener('mouseup', onUp)
+      }
+      window.addEventListener('mousemove', onMove)
+      window.addEventListener('mouseup', onUp)
+    }
+
+    /** 拖拽期间的按帧节流重画 */
+    function schedulePaint(): void {
+      if (rafPending) return
+      rafPending = true
+      requestAnimationFrame(() => {
+        rafPending = false
+        paint()
+      })
+    }
+
+    // 初始显示模式
+    setMode(paneMode)
   }
 
-  // 插件设置变更 → 本面板重画（不必等宿主重渲染）
-  const settingsRef = plugin.events.on('settings-changed', () => paint())
+  // 插件设置 / 排版虚线开关变化 → 本面板重画
+  const settingsRef = plugin.events.on(SETTINGS_CHANGED, () => paint())
+  const guidesRef = plugin.events.on(GUIDES_CHANGED, () => paint())
   paint()
 
   return {
     refresh: () => paint(),
     destroy: () => {
       stopRuntime()
+      endDragListeners?.()
+      endDragListeners = null
       plugin.events.offref(settingsRef)
+      plugin.events.offref(guidesRef)
       container.empty()
     },
   }

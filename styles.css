@@ -23,7 +23,7 @@
   padding: 2px 10px;
   cursor: pointer;
 }
-/* 排版按钮：田字格图标 + 文字（图标与 iJipu 应用顶栏「排版」同一形状；深色主题下用 --text-normal 保证对比） */
+/* 页面设置按钮（滑杆图标 + 文字；深色主题下用 --text-normal 保证对比） */
 .ijipu-config-btn {
   display: inline-flex;
   align-items: center;
@@ -33,6 +33,78 @@
 .ijipu-config-btn svg {
   display: block;
   flex: 0 0 auto;
+}
+/* 排版按钮（田字格）：开启辅助虚线时为选中态；排版用主题强调色描边与设置按钮区分 */
+.ijipu-guides-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.ijipu-guides-btn.is-active {
+  color: var(--text-on-accent);
+  background: var(--interactive-accent);
+  border-color: var(--interactive-accent);
+}
+.ijipu-guides-btn svg {
+  display: block;
+  flex: 0 0 auto;
+}
+
+/* ---------- 排版辅助虚线（可拖拽） ---------- */
+.ijipu-page-svg {
+  position: relative;
+}
+.ijipu-guide-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 4; /* 压在 SVG 层之上，但只让虚线本体可命中 */
+}
+.ijipu-guide-line {
+  position: absolute;
+  pointer-events: auto;
+}
+.ijipu-guide-h {
+  height: 0;
+  border-top: 1px dashed var(--interactive-accent);
+  cursor: ns-resize;
+  opacity: 0.85;
+}
+.ijipu-guide-v {
+  width: 0;
+  border-left: 1px dashed var(--interactive-accent);
+  cursor: ew-resize;
+  opacity: 0.85;
+}
+.ijipu-guide-line:hover {
+  opacity: 1;
+  border-color: var(--text-accent);
+  border-width: 2px;
+}
+.ijipu-guide-line.is-readonly {
+  border-color: var(--text-faint);
+  opacity: 0.5;
+  pointer-events: none;
+  cursor: default;
+}
+/* 虚线太细不好抓：用透明加宽的热区（±3px）扩大命中范围 */
+.ijipu-guide-line::after {
+  content: '';
+  position: absolute;
+  inset: -3px 0;
+}
+.ijipu-guide-v::after {
+  inset: 0 -3px;
+}
+.ijipu-guide-hint {
+  margin: 0 0 6px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 0.78em;
+  color: var(--text-muted);
+  background: var(--background-secondary);
+  border: 1px dashed var(--background-modifier-border);
 }
 
 /* 显示模式切换：三个表意图标（整页/满宽/谱面），互斥选中态；图标含义见 title 提示 */

@@ -7,6 +7,7 @@ import {
   schedulePlay,
   defaultPageConfig,
   type PageConfig,
+  type ScoreLayout,
 } from '@ijipu/engine'
 import { SpessaSynthBackend, HqCache, getHqLibrary, loadHqBank } from './soundbank'
 
@@ -32,6 +33,23 @@ export function renderScore(
   }
   const layout = layoutScore(parsed, pageConfig)
   return { svgs: renderScoreToSvg(layout) }
+}
+
+/**
+ * 渲染并**一并返回排版结果**（`layout`）——排版辅助虚线的几何（行顶/歌词行/描述头）
+ * 需要 layout，不能在只拿 SVG 字符串后反推。
+ */
+export function renderScoreFull(
+  source: string,
+  pageConfig: PageConfig,
+): { svgs: string[]; layout: ScoreLayout | null; error?: string } {
+  const parsed = parseJps(source)
+  if (parsed.errors.length > 0) {
+    const msg = parsed.errors.map((e) => (e as { message?: string }).message ?? String(e)).join('\n')
+    return { svgs: [], layout: null, error: msg }
+  }
+  const layout = layoutScore(parsed, pageConfig)
+  return { svgs: renderScoreToSvg(layout), layout }
 }
 
 /**

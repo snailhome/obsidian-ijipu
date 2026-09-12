@@ -10,6 +10,8 @@ import workletCode from '../spessasynth_processor.min.js'
 
 /** 插件内事件广播：设置面板保存后触发，打开中的谱面据此即时重渲染 */
 export const SETTINGS_CHANGED = 'settings-changed'
+/** 插件内事件广播：「排版辅助虚线」开关变化（所有面板同步） */
+export const GUIDES_CHANGED = 'guides-changed'
 
 /**
  * obsidian-ijipu —— 在 Obsidian 笔记里用 ```jps 代码块渲染可视化简谱并可试听。
@@ -25,10 +27,19 @@ export default class IJipuPlugin extends Plugin {
   settings: IJipuSettings = {}
   /** 插件内事件广播（当前用于设置变更 → 打开中的谱面即时重渲染） */
   readonly events = new Events()
+  /** 「排版辅助虚线」是否显示（与 iJipu 顶栏「排版」按钮同一个开关；所有面板共享、不落盘） */
+  showGuides = false
   /** 所有进行中试听的停止函数（切换笔记/卸载时统一停止） */
   private playStops: (() => void)[] = []
   /** 内置 SpessaSynth worklet URL（worklet 代码内联进 main.js → Blob URL，随插件单文件分发） */
   private workletUrl = ''
+
+  /** 切换排版辅助虚线（显示后可拖动虚线调边距/行距），并通知所有面板重画 */
+  toggleGuides(): boolean {
+    this.showGuides = !this.showGuides
+    this.events.trigger(GUIDES_CHANGED)
+    return this.showGuides
+  }
 
   async onload(): Promise<void> {
     await this.loadSettings()
