@@ -10,6 +10,8 @@
  * 修改间距只需改本文件常量，全部渲染/布局自动生效。
  */
 
+import type { BarlineType } from '../types'
+
 // ---- 基础度量 ----
 /** 数字字高与字号的比值（雅黑实测 ≈0.8em） */
 export const DIGIT_HEIGHT_RATIO = 0.8
@@ -44,10 +46,99 @@ export const BARLINE_DOT_OFF = 4
 export const BARLINE_DOT_R = 1.2
 /** 小节线反复点与最近细线的水平空白设计值（px，adj104 由 1.5 调小；实际 ×s） */
 export const BARLINE_DOT_GAP = 1.2
-/** 小节线细线宽设计值（px，adj104 由 1.1 调小；线宽不随字号，避免占位连锁） */
-export const BARLINE_W_THIN = 0.9
-/** 小节线粗线宽设计值（px，adj104 由 1.8 调小；线宽不随字号） */
-export const BARLINE_W_THICK = 1.4
+/** 小节线细线宽（px，adj391 用户规则由 0.9 调为 1；线宽不随字号，避免占位连锁） */
+export const BARLINE_W_THIN = 1
+/** 小节线粗线宽（px，adj391 用户规则由 1.4 调为 2；线宽不随字号） */
+export const BARLINE_W_THICK = 2
+/**
+ * 线与线的水平间距（px，adj391）：恢复 adj55 的 1px 原意——
+ * adj104 缩小线宽时"线左缘固定、右缘内收"，使线与线间距意外变成 1.2。
+ */
+export const BARLINE_LINE_GAP = 1
+
+/** 线组元素：line 给相对线组中心的左缘偏移与宽、dot 给相对线组中心的圆心偏移 */
+export interface BarlineGeometry {
+  lines: { off: number; w: number }[]
+  dots: number[]
+  /** 线组总宽（设计值，s=1）：布局占位与"右缘 = 中心 + total/2"均以此为准 */
+  total: number
+}
+
+/**
+ * 各类型小节线的元素序列（左→右）。
+ * `|*` 与 `|` 同序：**不绘制但占位**；`|/` 空序：不绘制也不占位。
+ */
+const BARLINE_SEQ: Record<BarlineType, ({ kind: 'line'; w: number } | { kind: 'dot' })[]> = {
+  '|': [{ kind: 'line', w: BARLINE_W_THIN }],
+  '||': [
+    { kind: 'line', w: BARLINE_W_THIN },
+    { kind: 'line', w: BARLINE_W_THICK },
+  ],
+  '||/': [
+    { kind: 'line', w: BARLINE_W_THIN },
+    { kind: 'line', w: BARLINE_W_THIN },
+  ],
+  '||:': [
+    { kind: 'line', w: BARLINE_W_THIN },
+    { kind: 'line', w: BARLINE_W_THIN },
+    { kind: 'dot' },
+  ],
+  '|:': [{ kind: 'line', w: BARLINE_W_THICK }, { kind: 'line', w: BARLINE_W_THIN }, { kind: 'dot' }],
+  ':|': [{ kind: 'dot' }, { kind: 'line', w: BARLINE_W_THIN }, { kind: 'line', w: BARLINE_W_THICK }],
+  ':|:': [
+    { kind: 'dot' },
+    { kind: 'line', w: BARLINE_W_THIN },
+    { kind: 'line', w: BARLINE_W_THICK },
+    { kind: 'line', w: BARLINE_W_THIN },
+    { kind: 'dot' },
+  ],
+  '|*': [{ kind: 'line', w: BARLINE_W_THIN }],
+  '|/': [],
+}
+
+/**
+ * 小节线线组几何（adj391）：**线组整体以小节线中心 x 对称**（渲染与布局占位共用这一份定义）。
+ *
+ * 此前渲染里写死一套偏移、布局里另写一份总宽表，两处靠人工同步——adj104 缩小线宽时只改了
+ * 渲染（且"左缘固定"），占位表仍按旧线宽算，于是线组整体偏左、预留宽度比实际宽 0.2~3px
+ * （`||` 的线间距也从注释里的 1px 变成 1.2px）。现在只有这一处定义，改线宽/间距自动全链路一致。
+ *
+ * 间距规则：线与线 `BARLINE_LINE_GAP`；线与点、点与线 `BARLINE_DOT_GAP`（点径 `BARLINE_DOT_R×2`，
+ * 设计值 s=1，实际绘制时点的半径按字号缩放、线宽不缩放）。
+ */
+export function barlineGeometry(type: BarlineType): BarlineGeometry {
+  const seq = BARLINE_SEQ[type] ?? []
+  const dotD = BARLINE_DOT_R * 2
+  const gapBefore = (i: number): number =>
+    seq[i - 1]?.kind === 'dot' || seq[i]?.kind === 'dot' ? BARLINE_DOT_GAP : BARLINE_LINE_GAP
+
+  let total = 0
+  for (let i = 0; i < seq.length; i++) {
+    if (i > 0) total += gapBefore(i)
+    const it = seq[i]
+    if (it) total += it.kind === 'dot' ? dotD : it.w
+  }
+
+  const lines: { off: number; w: number }[] = []
+  const dots: number[] = []
+  let cursor = -total / 2 // 从左缘起累加，起点取 -total/2 → 整体对称
+  for (let i = 0; i < seq.length; i++) {
+    if (i > 0) cursor += gapBefore(i)
+    const it = seq[i]
+    if (!it) continue
+    if (it.kind === 'dot') {
+      dots.push(cursor + dotD / 2)
+      cursor += dotD
+    } else {
+      lines.push({ off: cursor, w: it.w })
+      cursor += it.w
+    }
+  }
+  return { lines, dots, total }
+}
+
+/** 小节线线组总宽（px，设计值）：布局占位用（等价 `barlineGeometry(type).total`） */
+export const barlineTotalW = (type: BarlineType): number => barlineGeometry(type).total
 /**
  * 小节线两侧净间距（px，adj314 用户规则：按 1/4 音符字体宽度——
  * 不随音符占宽(W)放大，宽松时避免"空上加空"、压缩时仍区分小节；

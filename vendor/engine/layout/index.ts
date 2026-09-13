@@ -28,7 +28,7 @@ import type {
   ScorePageMeta,
   VoiceBlock,
 } from '../types'
-import { DIGIT_HEIGHT_RATIO, LAYER_GAP, SLUR_W, octaveTopY, BRACKET_PAD, H_GAP, noteScaleOf, GRACE_SIZE_RATIO, GRACE_SLOT_RATIO, GRACE_SLOT_RATIO_MULTI, VOLTA_BAR_GAP, VOLTA_RAISE, DYN_HALF_H, barlinePad, DOT_AFTER_DIGIT_GAP, DOT_R } from './spacing'
+import { DIGIT_HEIGHT_RATIO, LAYER_GAP, SLUR_W, octaveTopY, BRACKET_PAD, H_GAP, noteScaleOf, GRACE_SIZE_RATIO, GRACE_SLOT_RATIO, GRACE_SLOT_RATIO_MULTI, VOLTA_BAR_GAP, VOLTA_RAISE, DYN_HALF_H, barlinePad, barlineTotalW, DOT_AFTER_DIGIT_GAP, DOT_R } from './spacing'
 // adj284：空间优先布局的度量（本体宽 / 时值拆分 / 非时值元素间距）
 import { splitNoteDur, noteBodyW, augBodyW, dotBodyW, accidentalBodyW, markBodyW, digitSlotW, hxBodyW } from './spaceLayout'
 // adj303：乐器名标注需要用 parseInstrumentRef / 库名（@乐器名 / @@ 后下一个音符）
@@ -111,36 +111,15 @@ const BAR_PAD = 6
 /** 拍与拍之间间距（px，adj41：原 8 调为 4） */
 const NOTE_GAP = 4
 /**
- * 小节线最小占位空间（px，adj50）：单线宽 1.1 + 两侧与音符各 4px = 9.1。
+ * 小节线最小占位空间（px）：单线宽 1（adj391）+ 两侧与音符各 4px = 9。
  * 小节线空间 = max(bar_gap, 线组总宽 + 8)，保证线与两侧音符至少 4px 间距；
- * 各类型线组宽度不同（粗线 1.8、细线 1.1、点 r=1.8），占位随类型变化。
+ * 各类型线组宽度不同（adj391 起由 `spacing.ts` 的 `barlineTotalW` 统一给出：细 1、粗 2、点径 2.4），
+ * 占位与渲染共用同一份几何定义（此前两处各写一份，adj104 缩线宽时占位表未同步）。
  * |/ 隐藏小节线1：不显示也不占位（空间 0）。
  * adj86：临时节拍（|"P:2/4" / |"p:2/4"）在小节线右侧画分数 → 占位含
  * 分数半宽 + 2px 间距，保证分数不压到下一小节音符。
  */
-const MIN_BARLINE_SPACE = 9.1
-/** 小节线类型 → 线组总宽（px；细线 1.1、粗线 1.8、点 r=1.5；adj55 间距：线与线 1、线与点 1.5；adj58 点径 3.0） */
-function barlineTotalW(type: BarlineType): number {
-  switch (type) {
-    case '|':
-      return 1.1
-    case '||':
-      return 3.9 // 细 1.1 + 1 + 粗 1.8
-    case '||/':
-      return 3.2 // 1.1 + 1 + 1.1
-    case '|:':
-    case ':|':
-      return 8.4 // 粗 1.8 + 1 + 细 1.1 + 1.5 + 点 3.0
-    case ':|:':
-      return 15.0 // 点 3.0 + 1.5 + 细 1.1 + 1 + 粗 1.8 + 1 + 细 1.1 + 1.5 + 点 3.0
-    case '||:':
-      return 7.7 // 双细线 + 右点（1.1 + 1 + 1.1 + 1.5 + 点 3.0）
-    case '|*':
-      return 1.1 // 隐藏但占位（同单线）
-    default:
-      return 0 // |/ 不占位
-  }
-}
+const MIN_BARLINE_SPACE = 9
 /** 临时节拍分数半宽（与 render 中一致：字号 = 音符字号，数字 0.32em/位 + 1.5×s 留空） */
 function meterCommentHalfW(comment: string, noteSize: number): number | null {
   const pm = /^p:\s*(\d+)\s*\/\s*(\d+)$/i.exec(comment)

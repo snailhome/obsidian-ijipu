@@ -25,9 +25,8 @@ import {
   INNER_GAP,
   BEAM_H,
   BARLINE_DOT_R,
-  BARLINE_DOT_GAP,
-  BARLINE_W_THIN,
-  BARLINE_W_THICK,
+  BARLINE_DOT_OFF,
+  barlineGeometry,
   COMMENT_FONT_RATIO,
   NOTE_COMMENT_FONT_RATIO,
   DESC_RATIO,
@@ -374,8 +373,9 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
   const oct = t.kind === 'note' ? t.octaveShift : 0
   if (oct !== 0) {
     const n = Math.abs(oct)
-    // 数字槽宽中心：高音点左移 1px×s（adj19）；低音点不偏移（adj22：原左移 1 再右移 1）
-    const dotCx = x + digitW / 2 - (oct > 0 ? s : 0)
+    // 数字槽宽中心：高/低八度点一律取「数字槽中心」（adj391 用户规则：高八度点与音符水平居中，
+    // 取消 adj19 的左移 1px——项目中其它居中元素（增时线/上方修饰符/注释）也都用这一中心）
+    const dotCx = x + digitW / 2
     const dc = t.diminishCount
     for (let i = 0; i < n; i++) {
       const cy = oct > 0 ? octaveDotY(y, i, size) : lowDotY(y, i, dc, size)
@@ -774,58 +774,27 @@ function renderBarline(bar: PlacedBarline, noteSize = 18, noteFontFamily = FONT_
     `<rect x="${x + off}" y="${yTop}" width="${w}" height="${h}" fill="#1b1b1b"/>`
   // adj69：小节线高度/反复点随曲部字号缩放（线宽与占位保持，避免布局占位连锁变化）
   const s = noteScaleOf(noteSize)
-  // 反复点（r=BARLINE_DOT_R×s，adj58/104 调小），off 为相对中心 x 的偏移；
-  // 垂直对称于小节线中心 ±4×s；点与最近细线水平空白 BARLINE_DOT_GAP（adj104 由 1.5 调小）
+  // 反复点（r=BARLINE_DOT_R×s，adj58/104 调小），off 为几何给出的圆心偏移；
+  // 垂直对称于小节线中心 ±BARLINE_DOT_OFF×s
   const dotR = BARLINE_DOT_R * s
   const dots = (off: number) => {
     const midY = (yTop + yBottom) / 2
     return (
-      `<circle cx="${x + off}" cy="${(midY - 4 * s).toFixed(1)}" r="${r1n(dotR)}" fill="#1b1b1b"/>` +
-      `<circle cx="${x + off}" cy="${(midY + 4 * s).toFixed(1)}" r="${r1n(dotR)}" fill="#1b1b1b"/>`
+      `<circle cx="${x + off}" cy="${(midY - BARLINE_DOT_OFF * s).toFixed(1)}" r="${r1n(dotR)}" fill="#1b1b1b"/>` +
+      `<circle cx="${x + off}" cy="${(midY + BARLINE_DOT_OFF * s).toFixed(1)}" r="${r1n(dotR)}" fill="#1b1b1b"/>`
     )
   }
-  // 线宽（adj104 调小：细 0.9、粗 1.4；线左缘位置保持，右缘相应内收）
-  const wThin = BARLINE_W_THIN
-  const wThick = BARLINE_W_THICK
-  switch (bar.type) {
-    case '|':
-      parts.push(draw(-0.55, wThin))
-      break
-    case '||':
-      // 双小节线：左细线右粗线（细 wThin、粗 wThick），间距 1px（adj55）
-      parts.push(draw(-1.95, wThin), draw(0.15, wThick))
-      break
-    case '||/':
-      // 双小节线（双细线）：间距 1px（adj55）
-      parts.push(draw(-1.6, wThin), draw(0.5, wThin))
-      break
-    case '||:':
-      // 双细线 + 右 :（线距 1px；点距右细线右缘 BARLINE_DOT_GAP，adj55/58/104）
-      parts.push(draw(-1.6, wThin), draw(0.5, wThin), dots(0.5 + wThin + BARLINE_DOT_GAP + dotR))
-      break
-    case '|:':
-      // 左反复线：左粗线、中细线、右 :，线距 1px、点线距 BARLINE_DOT_GAP（adj55/58/104）
-      parts.push(draw(-4.5, wThick), draw(-1.7, wThin), dots(-1.7 + wThin + BARLINE_DOT_GAP + dotR))
-      break
-    case ':|':
-      // 右反复线：左 :、中细线、右粗线，点线距 BARLINE_DOT_GAP、线距 1px（adj55/58/104）
-      parts.push(dots(0.6 - BARLINE_DOT_GAP - dotR), draw(0.6, wThin), draw(2.7, wThick))
-      break
-    case ':|:':
-      // 两边反复线：: 细线 粗线 细线 :，线距 1px、点线距 BARLINE_DOT_GAP（adj55/58/104）
-      parts.push(
-        dots(-1.5 - BARLINE_DOT_GAP - dotR),
-        draw(-1.5, wThin),
-        draw(0.6, wThick),
-        draw(2.4, wThin),
-        dots(2.4 + wThin + BARLINE_DOT_GAP + dotR),
-      )
-      break
-    case '|/':
-    case '|*':
-      // 隐藏小节线：不绘制
-      break
+  // adj391：线组几何统一由 spacing.ts 的 barlineGeometry 产出——**以小节线中心 x 对称**，
+  // 线宽 细 1 / 粗 2（用户规则）、线与线 1px、线与点 1.2px；渲染与布局占位共用同一份定义。
+  // `|/` 不绘制也不占位；`|*` 不绘制但占位（几何同 `|`）。
+  if (bar.type !== '|/' && bar.type !== '|*') {
+    const geom = barlineGeometry(bar.type)
+    for (const ln of geom.lines) parts.push(draw(ln.off, ln.w))
+    for (const cx of geom.dots) parts.push(dots(cx))
   }
+
+  // 线组右缘（相对中心 x）：临时节拍分数、小节线修饰符都以此起排（adj391 改用几何，不再写死偏移表）
+  const barRightEdge = barlineGeometry(bar.type).total / 2
 
   // 小节线备注；adj67：|"P:2/4" 临时节拍 → 小节线右侧画分数（上下数字+横线，整体高度与小节线等高，随字号 adj69）
   // adj86：|"p:2/4" 与 |"P:2/4" 等效（大小写不敏感）
@@ -841,7 +810,7 @@ function renderBarline(bar: PlacedBarline, noteSize = 18, noteFontFamily = FONT_
       const numY = lineY - 2 * s - size * 0.05
       const denY = lineY + 2 * s + size * 0.85
       // 分数中心：左缘 = 小节线右缘 + 2px×s（adj68：左右留空），即 fx = 右缘 + 2s + halfW
-      const fx = x + ({ '|': 0.55, '||': 1.95, '||/': 1.6, '|:': 4.2, ':|': 4.2, ':|:': 8.1, '||:': 3.85, '|*': 0.55, '|/': 0.55 }[bar.type] ?? 0.55) + 2 * s + halfW
+      const fx = x + barRightEdge + 2 * s + halfW
       parts.push(
         `<g transform="translate(0,${midY.toFixed(1)}) scale(1,${hScale}) translate(0,${(-midY).toFixed(1)})">` +
           `<text x="${fx.toFixed(1)}" y="${numY.toFixed(1)}" text-anchor="middle" font-weight="bold" font-size="${size}" font-family="${noteFontFamily}" fill="#1b1b1b">${pm[1]}</text>` +
@@ -861,7 +830,8 @@ function renderBarline(bar: PlacedBarline, noteSize = 18, noteFontFamily = FONT_
   // adj206：同一条小节线可叠加多个修饰符（如 |&ty&ds）——全部渲染；
   // 正上方记号（ty/hs）横向依次排开，正下方文本（fine/dc/ds）也横向排开
   if (bar.marks?.length) {
-    const mx = x + ({ '|': 0.55, '||': 1.95, '||/': 1.6, '|:': 4.2, ':|': 4.2, ':|:': 8.1, '||:': 3.85, '|*': 0.55, '|/': 0.55 }[bar.type] ?? 0.55) / 2
+    // adj391：横排基准沿用原式（线组右缘的一半 = 总宽/4），右缘由几何给出，不再写死偏移表
+    const mx = x + barRightEdge / 2
     // 上方记号组（ty/hs）
     const upMarks = bar.marks.filter((m) => m === 'ty' || m === 'hs')
     upMarks.forEach((m, idx) => {
