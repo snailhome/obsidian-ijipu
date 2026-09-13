@@ -206,6 +206,50 @@
   white-space: pre-wrap;
 }
 
+/* adj394：语法告警（warning 级）——不阻断渲染，在谱面下方给出可展开的提示
+   此前插件把任何解析 errors（含 warning）都当致命错误 → 一条告警就整页不渲染 */
+.ijipu-warn {
+  margin: 4px 0 0;
+  font-size: 0.82em;
+  color: var(--text-warning, var(--color-orange, #d08b00));
+}
+.ijipu-warn-head {
+  cursor: pointer;
+  user-select: none;
+  font-weight: 600;
+}
+.ijipu-warn-list {
+  display: none;
+  margin: 2px 0 0;
+  padding-left: 1.2em;
+  color: var(--text-muted);
+}
+.ijipu-warn-list.is-open {
+  display: block;
+}
+.ijipu-warn-list > li {
+  margin: 1px 0;
+  line-height: 1.35;
+}
+
+/* adj394：正确语法规则（引擎 hint）——错误/告警下方的「正确写法：…」，可换行不截断 */
+.ijipu-hint {
+  display: block;
+  margin: 1px 0 3px;
+  color: var(--text-muted);
+  font-size: 0.95em;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.ijipu-warn-item {
+  margin: 2px 0;
+}
+
+.ijipu-warn-text {
+  display: block;
+}
+
 /* frontmatter 覆盖徽标（谱面工具栏内：点了哪些键、值是什么，悬停可见）
    adj389：给强调色/前景色都加兜底——某些主题（浅色主题或自定义主题）里 --interactive-accent
    可能很浅、--text-on-accent 又是白色，会出现"白底白字/白图标"看不出内容的情况。 */

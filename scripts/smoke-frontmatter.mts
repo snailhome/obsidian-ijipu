@@ -10,6 +10,7 @@ import { applyFrontmatter, deprecatedKeyHint, frontmatterKey, mergePageConfig, u
 import { resolvePageConfig } from '../src/config'
 import { codeBlockBody, jpsLinkpath, replaceCodeBlockBody } from '../src/sourceEdit'
 import { computeGuideLines, cropRectFor, guideLimits, guidePlacement } from '../src/guides'
+import { splitParseIssues } from '../src/parseIssues'
 
 let pass = 0
 let fail = 0
@@ -256,6 +257,58 @@ console.log('[10] 设置分层：编辑器偏好不再随谱 / 差量写入 / �
   check(`插件字体候选（${SCORE_FONT_OPTIONS.length} 项）都以通用族兜底`, SCORE_FONT_OPTIONS.every((o) => /sans-serif|serif|monospace|system-ui/.test(o.value)), SCORE_FONT_OPTIONS.map((o) => o.label).join(','))
   const legacyFont = `V: 1.0\nB: t\nD: G\nP: 4/4\nQ: 1 2 3 4 |\n\n# jps-config:{"geci_font":"SimSun"}\n`
   check('旧谱面裸字体名（SimSun）读取时自动补 serif', resolvePageConfig(legacyFont, {}, {}).config.geci_font === 'SimSun, serif', String(resolvePageConfig(legacyFont, {}, {}).config.geci_font))
+}
+
+// ---- 11. 解析问题分级：warning 不阻断渲染（adj394）----
+console.log('[11] 解析问题分级（warning 不阻断）')
+{
+  // 引擎同时产出 error 与 warning；插件此前用 errors.length>0 判定失败 → 一条告警就整页不渲染
+  const onlyWarn = parseJps('V: 1.0\nB: t\nD: C\nP: 4/4\nQ: 1 2 3 < ! 4 5 6 |\n')
+  const splitWarn = splitParseIssues(onlyWarn)
+  check('仅告警的谱面：errors 为空（可正常渲染）', splitWarn.errors.length === 0, JSON.stringify(splitWarn))
+  check('仅告警的谱面：warnings 含具体消息与行列', splitWarn.warnings.length >= 1 && /第5行/.test(splitWarn.warnings[0].text), JSON.stringify(splitWarn.warnings))
+  // adj394：每条问题都带「正确语法规则」（hint），端侧据此显示「正确写法」
+  check('adj394 告警带正确写法（hint，含示例）', splitWarn.warnings.every((w) => !!w.hint && w.hint.includes('`')), JSON.stringify(splitWarn.warnings.map((w) => w.hint)))
+
+  const withErr = parseJps('V: 1.0\nB: t\nD: C\nP: 4/4\nQ: 1"未闭合 2 |\n')
+  const splitErr = splitParseIssues(withErr)
+  check('含错误的谱面：errors 非空（阻断渲染）', splitErr.errors.length >= 1, JSON.stringify(splitErr))
+  check('adj394 错误带正确写法（hint：引号成对）', splitErr.errors.every((e) => !!e.hint && e.hint.includes('引号')), JSON.stringify(splitErr.errors.map((e) => e.hint)))
+
+  const clean = splitParseIssues(parseJps('V: 1.0\nB: t\nD: C\nP: 4/4\nQ: 1 2 3 4 |\n'))
+  check('正常谱面：errors 与 warnings 均为空', clean.errors.length === 0 && clean.warnings.length === 0, JSON.stringify(clean))
+
+  // 渐强/渐弱跨行的告警也属 warning（不阻断），并带正确写法
+  const crossLine = splitParseIssues(parseJps('V: 1.0\nB: t\nD: C\nP: 4/4\nQ: 1 2 3 < 4 |\nQ: 5 6 7 ! |\n'))
+  check('跨行渐强/渐弱属 warning（不阻断渲染）', crossLine.errors.length === 0 && crossLine.warnings.some((w) => w.text.includes('不能跨行')), JSON.stringify(crossLine))
+  check(
+    'adj394 跨行渐强/渐弱的告警带正确写法（同一行内配对）',
+    crossLine.warnings.every((w) => !!w.hint && w.hint.includes('同一行')),
+    JSON.stringify(crossLine.warnings.map((w) => w.hint)),
+  )
+  // adj394：所有报错点都必须带正确写法（逐个场景扫一遍，防止新增报错时漏挂 hint）
+  {
+    const badSources: [string, string][] = [
+      ['多空格', 'V: 1.0\nB: t\nD: C\nP: 4/4\nQ: 1  2 |\n'],
+      ['孤立 &', 'V: 1.0\nB: t\nD: C\nP: 4/4\nQ: 1 & 2 |\n'],
+      ['无法识别的符号', 'V: 1.0\nB: t\nD: C\nP: 4/4\nQ: 1 % 2 |\n'],
+      ['引号未闭合', 'V: 1.0\nB: t\nD: C\nP: 4/4\nQ: 1"未闭合 2 |\n'],
+      ['渐强起止同音符', 'V: 1.0\nB: t\nD: C\nP: 4/4\nQ: 1 2 3 < ! 4 |\n'],
+      ['渐强跨行', 'V: 1.0\nB: t\nD: C\nP: 4/4\nQ: 1 2 < 3 |\nQ: 4 5 ! |\n'],
+      ['渐强未结束又新起', 'V: 1.0\nB: t\nD: C\nP: 4/4\nQ: 1 2 < 3 4 > 5 |\n'],
+      ['跳房子写错位置', 'V: 1.0\nB: t\nD: C\nP: 4/4\nQ: [ "1." 1 2 3 |\n'],
+      ['C 行缺曲行', 'V: 1.0\nB: t\nD: C\nP: 4/4\nC: 孤零零的歌词\n'],
+      ['未识别行', 'V: 1.0\nB: t\nD: C\nP: 4/4\nX: 这是啥\nQ: 1 2 3 4 |\n'],
+    ]
+    const missing: string[] = []
+    for (const [name, src] of badSources) {
+      const issues = splitParseIssues(parseJps(src))
+      const all = [...issues.errors, ...issues.warnings]
+      if (all.length === 0) missing.push(`${name}(未产生任何问题)`)
+      else if (all.some((i) => !i.hint)) missing.push(`${name}(${all.filter((i) => !i.hint).map((i) => i.message).join('/')})`)
+    }
+    check('adj394 十类语法问题全部带正确写法（无漏挂 hint）', missing.length === 0, missing.join('；'))
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

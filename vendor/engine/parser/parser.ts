@@ -105,7 +105,7 @@ function parseLyricContent(content: string, line: number): { chars: LyricChar[];
         note += content[k] === '_' ? ' ' : content[k]
         k++
       }
-      if (k >= n) errors.push(errAt('歌词引号注释未闭合', line, i, 'warning'))
+      if (k >= n) errors.push(errAt('歌词引号注释未闭合', line, i, 'warning', '歌词注释也要成对闭合，如 `C: 一 二"副歌_部分" 三`（注释内空格用 `_`）'))
       noteBuf = note
       i = k + 1
       continue
@@ -131,7 +131,7 @@ function parseLyricContent(content: string, line: number): { chars: LyricChar[];
         }
         i = k + 1
       } else {
-        errors.push(errAt('连字符号 "~" 后缺少文字', line, i, 'warning'))
+        errors.push(errAt('连字符号 "~" 后缺少文字', line, i, 'warning', '`~` 用于把两个字连到同一个音符上，后面必须跟字，如 `C: 啊~呀 唱`'))
         i++
       }
       continue
@@ -264,7 +264,7 @@ export function parseJps(source: string): ParseResult {
       const prefixLen = trimmed.length - (musicMatch[3] ?? '').length
       for (const t of tokens) {
         if (t.kind === 'instrument' && t.legacy && t.name) {
-          errors.push(errAt(`旧乐器写法 @${t.name}，建议改用 @${t.name}@`, pos.line, prefixLen + t.pos, 'warning'))
+          errors.push(errAt(`旧乐器写法 @${t.name}，建议改用 @${t.name}@`, pos.line, prefixLen + t.pos, 'warning', `乐器用 \`@…@\` 包裹（可带显示名与音色库前缀）：\`@${t.name}@\`、\`@${t.name}"显示名"@\`、\`generaluser_gs:${t.name}@\`；\`@@\` 表示切回默认乐器`))
         }
       }
       const ml: MusicLine = {
@@ -298,14 +298,14 @@ export function parseJps(source: string): ParseResult {
           if (g) g.lyrics.push(ll)
         }
       } else {
-        errors.push(errAt('歌词行缺少对应的曲行（C 行必须跟在 Q 行之后）', lineNo, 0))
+        errors.push(errAt('歌词行缺少对应的曲行（C 行必须跟在 Q 行之后）', lineNo, 0, 'error', '`C:` 歌词行要紧跟在对应的 `Q:` 曲行之后；多声部写同号，如 `Q1: 1 2 3 |` 配 `C1: 一 二 三`'))
       }
       continue
     }
 
     // 其他：未识别行
     lines.push({ kind: 'unknown', pos, raw })
-    errors.push(errAt(`无法识别的行 "${trimmed.slice(0, 20)}${trimmed.length > 20 ? '…' : ''}"`, lineNo, 0, 'warning'))
+    errors.push(errAt(`无法识别的行 "${trimmed.slice(0, 20)}${trimmed.length > 20 ? '…' : ''}"`, lineNo, 0, 'warning', '行首必须是：描述头（`V:` 版本 / `B:` 标题 / `Z:` 作者 / `D:` 调式 / `P:` 拍号 / `J:` 节拍 / `Y:` 乐器 / `S:` 说明）、曲行 `Q:`、词行 `C:`、`#` 注释行、`[fenye]` 分页标记或 `# jps-config:{...}` 设置行（详见「语法速查」）'))
   }
 
   // ---- 平均连音组 (y...) 时值均分（多连音线）：组内音符时值 = 组总时值 / 组内音符数 ----

@@ -31,6 +31,7 @@ import type {
 import { DIGIT_HEIGHT_RATIO, LAYER_GAP, SLUR_W, octaveTopY, BRACKET_PAD, H_GAP, noteScaleOf, GRACE_SIZE_RATIO, GRACE_SLOT_RATIO, GRACE_SLOT_RATIO_MULTI, VOLTA_BAR_GAP, VOLTA_RAISE, DYN_HALF_H, barlinePad, barlineTotalW, DOT_AFTER_DIGIT_GAP, DOT_R } from './spacing'
 // adj284：空间优先布局的度量（本体宽 / 时值拆分 / 非时值元素间距）
 import { splitNoteDur, noteBodyW, augBodyW, dotBodyW, accidentalBodyW, markBodyW, digitSlotW, hxBodyW } from './spaceLayout'
+import { hairpinEvents, resolveHairpins, type DynEvent, type NoteAnchors } from './hairpins'
 // adj303：乐器名标注需要用 parseInstrumentRef / 库名（@乐器名 / @@ 后下一个音符）
 import { parseInstrumentRef, INSTRUMENT_LIB_NAMES } from '../playback/instruments'
 
@@ -693,21 +694,22 @@ export function layoutScore(
     const yBottomBar = r1(barNoteY + 4.5 * bs)
     let x = config.margin_left
     let slotIndex = slotStart
-    let openDyn: { type: 'crescendo' | 'decrescendo'; x: number; plus: number } | null = null
-    const finishDyn = (endX: number) => {
-      if (openDyn) {
-        page.dynamics.push({
-          x1: r1(openDyn.x),
-          x2: r1(endX),
-          // adj：渐强渐弱 hairpin 中心 y 贴近行音符数字顶（间距对齐连音线，不再固定 -26）
-          // 数字顶 = yTop + noteSize×0.3（音符基线 yTop+1.1×noteSize - 0.8×noteSize）
-          y: r1(yTop + m.noteSize * 0.3 - (LAYER_GAP + DYN_HALF_H + SLUR_W / 2) * bs),
-          type: openDyn.type,
-          // adj：渐强渐弱 "+" 提升级数（>+ / <++）；无则 0 缺省
-          plus: openDyn.plus > 0 ? openDyn.plus : undefined,
-        })
-        openDyn = null
+    // adj393：渐强/渐弱改为「行级事件流 + 共用解析」（layout/hairpins.ts）——
+    // 与空间优先路径同一套语义；noteCenters 相应改为**行级**（此前每小节重置）
+    const dynEvents: DynEvent[] = []
+    // adj394：每个音符的停靠点——center = 数字槽中心（起点/普通终点）；
+    // end = 该音符末时值元素（增时线/附点）右缘，供「`!` 写在 `-`/`.` 之后」时定位
+    const dynAnchors: NoteAnchors[] = []
+    const dynFallbackX = x + BAR_PAD
+    const dynY = yTop + m.noteSize * 0.3 - (LAYER_GAP + DYN_HALF_H + SLUR_W / 2) * bs
+    const finishDyn = (rowEndX: number) => {
+      // adj393：未写 `!` 时收尾于行尾——行尾游标可能小于末音符中心（拍级路径的撑满/自然宽行），
+      // 取二者较大值，避免产出反向（起止颠倒）的头发夹
+      const endX = Math.max(rowEndX, dynAnchors[dynAnchors.length - 1]?.end ?? rowEndX)
+      for (const s of resolveHairpins(dynEvents, (i) => dynAnchors[i], dynFallbackX, endX)) {
+        page.dynamics.push({ x1: r1(s.x1), x2: r1(s.x2), y: r1(dynY), type: s.type, plus: s.plus })
       }
+      dynEvents.length = 0 // 解析后清空：该函数在 frag 分支与行尾两处都可能被调用
     }
 
     if (row.kind === 'frag') {
@@ -1063,9 +1065,8 @@ export function layoutScore(
       const barStartX = beatStart[segBeatFloor] + (segBeat - segBeatFloor) * pbFloor
 
       let slotIdx = 0 // 小节内音符数
-      // adj：渐强渐弱定位用——按小节音符顺序记录每个音符的数字槽中心 x
-      // （渐强渐弱 < > 起点 / ! 终点取「其所跟音符」的槽中心，而非小节末音符）
-      const noteCenters: number[] = []
+      // adj393：noteCenters 为**行级**（声明在行首，供行级事件流解析取值）；
+      // 渐强渐弱 < > 起点 / ! 终点取「其所跟音符」的槽中心，而非小节末音符
       // 渲染该小节音符（按音符聚合段，段起点逐段累计拍内偏移；音符间 8px，adj38）
       let curP = -1
       let offInBeat = 0
@@ -1120,10 +1121,11 @@ export function layoutScore(
         const bpRaw = rs.notePos - segBeat
         const bp = Math.abs(bpRaw - Math.round(bpRaw)) < 1e-3 ? Math.round(bpRaw) : bpRaw
         placeNoteAt(rs.note, segments, yTop, pageIndex, groupIndex, voice, slotIndex, lyricMaps, geciSize, sp, bp, b)
-        // 记录该音符数字槽中心（渐强渐弱 < > 起点 / ! 终点定位用）
-        const placedX = pages[pageIndex].notes[pages[pageIndex].notes.length - 1].x
-        noteCenters.push(placedX + halfDigitW(m.noteSize))
-        lastRightAbs = pages[pageIndex].notes[pages[pageIndex].notes.length - 1].rightX ?? 0
+        // adj394：记录该音符的两个停靠点（数字槽中心 / 末时值元素右缘）——渐强渐弱起止定位用
+        const justPlaced = pages[pageIndex].notes[pages[pageIndex].notes.length - 1]
+        const placedX = justPlaced.x
+        dynAnchors.push({ center: placedX + halfDigitW(m.noteSize), end: justPlaced.rightX ?? placedX + digitSlotW(m.noteSize) })
+        lastRightAbs = justPlaced.rightX ?? 0
         // adj294：渲染本音符源码之前的 bracket（紧贴本音符左缘，从远到近排列）
         for (let pi = 0; pi < pendingBrackets.length; pi++) {
           const bk = pendingBrackets[pi]
@@ -1159,26 +1161,9 @@ export function layoutScore(
         }
         tokIdx++
       }
-      // 渐强/渐弱（adj：起点 / 终点取 < > ! 所跟音符的「数字槽中心」；
-      // 用 noteCenters 顺序游标 nk 对齐所跟音符，避免此前误取小节末音符位置）
-      let nk = 0
-      for (const t of seg.notes) {
-        if (t.kind === 'note' || t.kind === 'rest' || t.kind === 'rhythm') {
-          nk++
-          continue
-        }
-        if (t.kind !== 'decoration') continue
-        // "+" 数量 = 抬升级数（<+ / >++，每级抬升，类似跳房子）
-        let plus = 0
-        for (const ch of t.code) if (ch === '+') plus++
-        if (t.dynamics === 'crescendo' || t.dynamics === 'decrescendo') {
-          const startX = noteCenters[nk - 1] ?? x + BAR_PAD
-          openDyn = { type: t.dynamics, x: startX, plus }
-        } else if (t.dynamics === 'end') {
-          const endX = noteCenters[nk - 1] ?? x + BAR_PAD
-          finishDyn(endX)
-        }
-      }
+      // adj393：渐强/渐弱事件按源码顺序并入**行级**事件流（起止语义与空间优先路径共用
+      // layout/hairpins.ts；此前在本处直接算 x，导致另一条路径漏实现 → 默认布局下记号不显示）
+      dynEvents.push(...hairpinEvents(seg.notes))
       // 小节线：画在小节内容右端（+BAR_PAD 不重叠音符，adj36），并在小节间距内居中（adj25）；
       // 占位空间随线组类型变化（|/ 隐藏线不占位）
       const bar = seg.bar
@@ -1318,6 +1303,14 @@ export function layoutScore(
       }
       if (seg.bar) barList.push({ bar: seg.bar, atEnd: b === row.end - 1 })
     }
+
+    // adj393：渐强/渐弱（`<`/`>`/`!`）——本路径此前**完全不处理**装饰 token，
+    // 而默认配置 noteSpaceLayout='space' 走的正是这里 → 默认设置下记号静默不显示。
+    // 现按行内小节顺序喂事件流，放置后再解析起止（语义见 layout/hairpins.ts）。
+    const dynEvents: DynEvent[] = []
+    for (let b = row.start; b < row.end; b++) dynEvents.push(...hairpinEvents(segs[b].notes))
+    /** 行内第 i 个音符的停靠点（放置时按序 push；adj394：center=数字槽中心、end=末时值元素右缘） */
+    const dynAnchors: NoteAnchors[] = []
 
     // ---- 总时值 / 带时值本体宽和 / 可分配宽 W ----
     let totalDur = 0
@@ -1487,7 +1480,10 @@ export function layoutScore(
             // &hx（滑音箭头）无时值元素：依附其前的带时值元素之后，本体宽占位
             if (n.hasHx) xCursor += hxBodyW(m.noteSize)
             // 段左缘 blockX；数字左缘右移 变音角标(accW)+前倚音(leftExt)，给角标/倚音腾位
-            placeNoteSpace(n.t, segments, blockX + n.accW + n.leftExt, actualW, rightX, n.slotPos, n.beatPos, b)
+            const digitLeft = blockX + n.accW + n.leftExt
+            placeNoteSpace(n.t, segments, digitLeft, actualW, rightX, n.slotPos, n.beatPos, b)
+            // adj394：记录该音符的停靠点（数字槽中心 / 末时值元素右缘；rightX 已含增时线与附点占宽）
+            dynAnchors.push({ center: r1(digitLeft) + halfDigitW(m.noteSize), end: r1(rightX) })
             curX = xCursor
           } else if (tok.kind === 'bracket') {
             // adj294：&zkh/&ykh 独立括号标记——占宽、按源码序列序插位、不影响音符
@@ -1543,6 +1539,12 @@ export function layoutScore(
         curX += gapL + barlineTotalW(bk.bar.type) + gapR
         barCursor++
       }
+    }
+    // adj393/adj394：行尾解析渐强/渐弱（起点取所跟音符数字槽中心；`!` 写在 `-`/`.` 后则取该元素右缘；
+    // 未写 `!` 者收尾于行末）
+    const dynY = yTop + m.noteSize * 0.3 - (LAYER_GAP + DYN_HALF_H + SLUR_W / 2) * noteScaleOf(m.noteSize)
+    for (const s of resolveHairpins(dynEvents, (i) => dynAnchors[i], config.margin_left + BAR_PAD, curX)) {
+      page.dynamics.push({ x1: r1(s.x1), x2: r1(s.x2), y: r1(dynY), type: s.type, plus: s.plus })
     }
     return measureContentW
   }
@@ -1840,11 +1842,16 @@ export function layoutScore(
       voiceYTop.push(voiceY)
       let x = blockStartX
       let slotIndex = 0
+      // adj393/adj394：本声部行的渐强/渐弱事件流与各音符停靠点（语义见 layout/hairpins.ts；
+      // 此前多声部块完全不处理装饰 token → 多声部里写 `<`/`>`/`!` 静默不显示）
+      const dynEvents: DynEvent[] = []
+      const dynAnchors: NoteAnchors[] = []
       for (let b = 0; b < numBars; b++) {
         // adj248：beatAcc 必须是**小节内**拍位置（0 起），每小节重置——
         // 此前跨小节累计使 segments.x 漂移、音符 x 逐小节超出页面（多声部音符未全显示）
         let beatAcc = 0
         const seg = p.segs[b] ?? { notes: [], bar: null }
+        dynEvents.push(...hairpinEvents(seg.notes))
         const barStartB = barStartBeat[b]
         for (const t of seg.notes) {
           if (t.kind === 'note' || t.kind === 'rest' || t.kind === 'rhythm') {
@@ -1895,13 +1902,25 @@ export function layoutScore(
                 hxW: t.kind === 'note' && t.symbols.includes('hx') ? hxBodyW(m.noteSize) : 0,
               }
             }
+            const nIdxBefore = pages[pageIndex].notes.length
             const dur2 = placeNoteAt(t, segments, voiceY, pageIndex, p.groupIndex, p.voice, slotIndex, p.lyricMaps, geciSize, sp, beatAcc, b, space)
+            // adj394：记录本音符停靠点（数字槽中心 / 末时值元素右缘）
+            const placedNote = pages[pageIndex].notes[nIdxBefore]
+            dynAnchors.push({
+              center: (placedNote?.x ?? x) + halfDigitW(m.noteSize),
+              end: placedNote?.rightX ?? (placedNote?.x ?? x) + digitSlotW(m.noteSize),
+            })
             beatAcc += dur2
             slotIndex++
           }
         }
         // 小节右端（下一小节起点）：本小节拍宽累计（去尾拍间距）+ 小节间距
         x += (useSpace ? (mspBarRelW[b] ?? 0) : ((beatStartX[barStartB + barBeats[b]] ?? 0) - (beatStartX[barStartB] ?? 0))) + (b < numBars - 1 ? gapSpaces[b] : 0)
+      }
+      // adj393/adj394：本声部行尾解析渐强/渐弱（起止取该声部所跟音符的停靠点；未写 `!` 者收尾于本声部行末）
+      const dynY393 = voiceY + m.noteSize * 0.3 - (LAYER_GAP + DYN_HALF_H + SLUR_W / 2) * noteScaleOf(m.noteSize)
+      for (const s of resolveHairpins(dynEvents, (i) => dynAnchors[i], blockStartX + BAR_PAD, x)) {
+        pages[pageIndex].dynamics.push({ x1: r1(s.x1), x2: r1(s.x2), y: r1(dynY393), type: s.type, plus: s.plus })
       }
       voiceY += voiceHeights[vi] + (vi < parts.length - 1 ? sp.shengbu : 0)
     }

@@ -158,6 +158,10 @@ export interface NoteToken {
   gracenotes?: { after: boolean; notes: GracenoteNote[] }
   /** 音符注释（音符后引号内容），如 1"渐强" */
   comment?: string
+  /** 注释抬升级数（adj392：紧接注释引号后的 `+` 个数，每级 NOTE_COMMENT_RAISE px） */
+  commentPlus?: number
+  /** 注释降低级数（adj392：紧接注释引号后的 `-` 个数，每级 NOTE_COMMENT_RAISE px） */
+  commentMinus?: number
   /** 该 token 在行内的起始字符偏移 */
   pos: number
   /** 原始文本 */
@@ -190,6 +194,10 @@ export interface RestToken {
   /** 装饰符号编码列表（& 开头，如 zkh/ykh 括号等，adj84） */
   symbols: string[]
   comment?: string
+  /** 注释抬升级数（adj392，同音符） */
+  commentPlus?: number
+  /** 注释降低级数（adj392，同音符） */
+  commentMinus?: number
   pos: number
   raw: string
 }
@@ -205,6 +213,10 @@ export interface RhythmToken {
   /** 装饰符号编码列表（& 开头，如 zkh/ykh 括号等，adj84） */
   symbols: string[]
   comment?: string
+  /** 注释抬升级数（adj392，同音符） */
+  commentPlus?: number
+  /** 注释降低级数（adj392，同音符） */
+  commentMinus?: number
   pos: number
   raw: string
 }
@@ -270,6 +282,13 @@ export interface DecorationToken {
   code: string
   /** 渐强渐弱起止：crescendo | decrescendo | end（!） */
   dynamics?: 'crescendo' | 'decrescendo' | 'end'
+  /**
+   * adj394：`!` 的**终点停靠处**——`!` 可以写在任意「有时值的元素」之后：
+   *  - `note`：默认，紧跟在音符（/休止符/节奏符）数字后 → 结束于该音符数字槽中心；
+   *  - `aug`：紧跟在增时线 `-` 之后 → 结束于该音符**末增时线的右缘**；
+   *  - `dot`：紧跟在附点 `.` 之后 → 结束于该音符**附点的右缘**。
+   */
+  dynamicsEndOn?: 'note' | 'aug' | 'dot'
   pos: number
   raw: string
 }
@@ -364,6 +383,11 @@ export interface ParseError {
   col: number
   message: string
   severity: 'error' | 'warning'
+  /**
+   * adj394：**正确语法规则**（含最小示例）——用于端侧在告警信息下方直接给出「正确写法」，
+   * 而不是只告诉用户"哪里错了"。缺省表示该问题无需额外说明。
+   */
+  hint?: string
 }
 
 /** 曲行 + 其附属歌词行（词依附于上一个曲行；一行曲可对多行词） */

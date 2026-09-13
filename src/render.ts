@@ -10,6 +10,7 @@ import {
   type ScoreLayout,
 } from '@ijipu/engine'
 import { SpessaSynthBackend, HqCache, getHqLibrary, loadHqBank } from './soundbank'
+import { splitParseIssues, type ParseIssue } from './parseIssues'
 
 /**
  * 合并设置（优先级：默认 < 插件默认设置 < 笔记 frontmatter）。
@@ -21,18 +22,23 @@ export type { AppliedOverride, UnknownKey, DeprecatedKey, FrontmatterResult } fr
 export { resolvePageConfig } from './config'
 export type { ResolvedConfig } from './config'
 
-/** 渲染 .jps → 每页 SVG 字符串（解析失败返回 error 信息） */
+/**
+ * 解析结果的严重级别拆分（adj394）——实现见 `parseIssues.ts`（纯逻辑、可单测）：
+ * 引擎同时产出 `error`（阻断渲染）与 `warning`（提示，不阻断）。
+ */
+export { splitParseIssues } from './parseIssues'
+export type { ParseIssues, ParseIssue } from './parseIssues'
+
+/** 渲染 .jps → 每页 SVG 字符串（**错误**才返回 error 信息；告警随 `warnings` 一并返回，不阻断） */
 export function renderScore(
   source: string,
   pageConfig: PageConfig,
-): { svgs: string[]; error?: string } {
+): { svgs: string[]; error?: string; warnings?: ParseIssue[] } {
   const parsed = parseJps(source)
-  if (parsed.errors.length > 0) {
-    const msg = parsed.errors.map((e) => (e as { message?: string }).message ?? String(e)).join('\n')
-    return { svgs: [], error: msg }
-  }
+  const { errors, warnings } = splitParseIssues(parsed)
+  if (errors.length > 0) return { svgs: [], error: errors.map((e) => e.text).join('\n'), warnings }
   const layout = layoutScore(parsed, pageConfig)
-  return { svgs: renderScoreToSvg(layout) }
+  return { svgs: renderScoreToSvg(layout), warnings: warnings.length > 0 ? warnings : undefined }
 }
 
 /**
@@ -42,14 +48,14 @@ export function renderScore(
 export function renderScoreFull(
   source: string,
   pageConfig: PageConfig,
-): { svgs: string[]; layout: ScoreLayout | null; error?: string } {
+): { svgs: string[]; layout: ScoreLayout | null; error?: string; warnings?: ParseIssue[]; errorIssues?: ParseIssue[] } {
   const parsed = parseJps(source)
-  if (parsed.errors.length > 0) {
-    const msg = parsed.errors.map((e) => (e as { message?: string }).message ?? String(e)).join('\n')
-    return { svgs: [], layout: null, error: msg }
+  const { errors, warnings } = splitParseIssues(parsed)
+  if (errors.length > 0) {
+    return { svgs: [], layout: null, error: errors.map((e) => e.text).join('\n'), warnings, errorIssues: errors }
   }
   const layout = layoutScore(parsed, pageConfig)
-  return { svgs: renderScoreToSvg(layout), layout }
+  return { svgs: renderScoreToSvg(layout), layout, warnings: warnings.length > 0 ? warnings : undefined }
 }
 
 /**
@@ -74,7 +80,9 @@ export async function playScore(
   opts?: { hqVoice?: number | null; workletUrl?: string },
 ): Promise<{ cancel: () => void; totalMs: number; track: PlayheadSeg[] } | null> {
   const parsed = parseJps(source)
-  if (parsed.errors.length > 0) throw new Error(`谱面解析失败：${parsed.errors.map((e) => String((e as { message?: string })?.message ?? e)).join('；')}`)
+  // adj394：只有 error 级才阻断试听；warning（如渐强/渐弱写得不够完整）照常播放
+  const fatal = parsed.errors.filter((e) => e.severity === 'error')
+  if (fatal.length > 0) throw new Error(`谱面解析失败：${fatal.map((e) => String(e.message ?? e)).join('；')}`)
   // buildPlaySequence 需 layout（排版）与 bpm（速度，可由描述头推断）
   const layout = layoutScore(parsed, pageConfig)
   const bpm = inferBpm(parsed)

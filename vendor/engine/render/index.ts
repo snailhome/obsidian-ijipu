@@ -29,6 +29,7 @@ import {
   barlineGeometry,
   COMMENT_FONT_RATIO,
   NOTE_COMMENT_FONT_RATIO,
+  NOTE_COMMENT_RAISE,
   DESC_RATIO,
   VOLTA_BAR_GAP,
   VOLTA_RAISE,
@@ -720,6 +721,9 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
   // 减时线由 computeBeams 按拍分组绘制（M3：同一拍内相连）
   // 音符备注（引号注释，adj62）—— 字号 = 音符字体高度的一半（0.5×note_size）；
   // 置于上方最高层之上（高八度点/装饰符号之后），数字中心居中
+  // adj392：紧接注释引号后的 + / - 逐级抬升/降低注释文本（每级 NOTE_COMMENT_RAISE px，
+  // 与跳房子 [+/[-、连音线 (+/(- 同一套记法）；其余元素不动，供用户手动避让
+  const commentRaise = (t.commentPlus ?? 0) - (t.commentMinus ?? 0)
   if (t.comment) {
     const cfs = Math.max(7, Math.round(size * NOTE_COMMENT_FONT_RATIO))
     // 注释层顶：装饰符号处理后的层顶（无符号则高八度点层顶/数字顶）
@@ -730,7 +734,7 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
       const nTop = t.symbols.length
       aboveTop -= nTop * (SYM_FS * (DIGIT_HEIGHT_RATIO + DESC_RATIO) + LAYER_GAP * s)
     }
-    const base = aboveTop - LAYER_GAP * s - cfs * DESC_RATIO // 注释文字底距上层元素顶 LAYER_GAP×s
+    const base = aboveTop - LAYER_GAP * s - cfs * DESC_RATIO - commentRaise * NOTE_COMMENT_RAISE // 注释文字底距上层元素顶 LAYER_GAP×s
     parts.push(
       `<text x="${r1n(x + digitW / 2)}" y="${r1n(base)}" text-anchor="middle" font-size="${cfs}" font-family="${FONT_CN}" fill="#555">${xmlEsc(t.comment)}</text>`,
     )
@@ -750,6 +754,7 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
     if (t.comment) {
       const cfs = Math.max(7, Math.round(size * NOTE_COMMENT_FONT_RATIO))
       iTop -= LAYER_GAP * s + cfs * DESC_RATIO + cfs // 注释占位高
+      iTop -= commentRaise * NOTE_COMMENT_RAISE // adj392：注释被 +/- 抬降后，其上的乐器名随之同向平移
     }
     const ibase = iTop - LAYER_GAP * s - ifs * DESC_RATIO
     parts.push(

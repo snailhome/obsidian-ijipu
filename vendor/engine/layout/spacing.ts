@@ -159,6 +159,11 @@ export const VOLTA_COMMENT_FONT_RATIO = 0.4
 export const COMMENT_FONT_RATIO = 0.8
 /** 音符注释字号与音符字号的比值（adj62：音符字体高度的一半，0.5×18=9） */
 export const NOTE_COMMENT_FONT_RATIO = 0.3
+/**
+ * 音符注释抬升/降低每级位移（px，adj392）：紧接注释引号后的 `+`/`-` 各算一级，
+ * `+` 向上（抬升）、`-` 向下（降低），与跳房子 `[+`/`[-`、连音线 `(+`/`(-` 同一套记法与步长。
+ */
+export const NOTE_COMMENT_RAISE = 2
 /** 文字 descender 与字号比值（SVG 基线下方延伸，估算 0.2em） */
 export const DESC_RATIO = 0.2
 

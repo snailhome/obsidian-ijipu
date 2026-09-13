@@ -27,7 +27,41 @@ export function tokenizeMusicLine(
   const n = content.length
   const rawAt = (start: number, end: number) => content.slice(start, end)
 
+  // adj393：渐强/渐弱配对的辅助查询（`<`/`>` 后到 `!` 之前为区间；`!` 必须有同一行内的起点）
+  /** 行内最后一条渐强/渐弱起点 token 的下标；没有返回 -1 */
+  const lastHairpinStart = (): number => {
+    for (let k = tokens.length - 1; k >= 0; k--) {
+      const t = tokens[k]
+      if (t.kind === 'decoration' && (t.dynamics === 'crescendo' || t.dynamics === 'decrescendo')) return k
+      if (t.kind === 'decoration' && t.dynamics === 'end') return -1 // 已被 `!` 收尾，之前的起点不算
+    }
+    return -1
+  }
+  /** 行内是否存在「已开始但未用 `!` 结束」的渐强/渐弱 */
+  const pendingHairpin = (): boolean => {
+    for (let k = tokens.length - 1; k >= 0; k--) {
+      const t = tokens[k]
+      if (t.kind === 'decoration' && t.dynamics === 'end') return false
+      if (t.kind === 'decoration' && (t.dynamics === 'crescendo' || t.dynamics === 'decrescendo')) return true
+    }
+    return false
+  }
+
   // ---- 块间空格提示（adj23）：空格仅用于格式化，缺空格合法；多空格提示规范为单空格 ----
+  /** adj394：常用「正确写法」提示文案（与 docs/JPS-SPEC.md 对应条目一致） */
+  const HINT_SPACE = '块与块之间用**恰好一个空格**分隔，如 `1 2 3 | 4 5 6 |`（空格只影响格式，不影响解析）'
+  const HINT_QUOTE = '引号要成对闭合，如 `1"渐强" 2`；注释里的空格用 `_` 表示（`1"渐强_稍快"`）'
+  const HINT_HAIRPIN_OPEN = '一个渐强/渐弱要先用 `!` 结束，再写下一个记号，如 `1 < 2 3 ! 4 > 5 6 !`'
+  const HINT_HAIRPIN_MATCH = '`!` 必须与**同一行内**的 `<`/`>` 配对（渐强/渐弱不跨行），如 `1 2 3 < 4 5 6 !`'
+  const HINT_HAIRPIN_SPAN =
+    '起止之间至少要有音符：`1 2 3 < 4 ! 5`；`!` 也可写在该音符的增时线/附点之后，如 `1 2 3 < 4- ! 5`、`1 2 3 < 4. ! 5`'
+  const HINT_AMP = '`&` 后要跟修饰符编码（字母），如 `&tr` 颤音、`&mp` 力度、`&tu` 吐音；独立标记 `&zkh`/`&ykh`/`&hx` 两侧各留一个空格'
+  const HINT_GRACE = '倚音用 `[` `]` 紧贴音符成对书写，括号内只允许高低音点 `\'` `,`、变音 `#` `$` `=`、减时线 `/`：前倚音 `1[65]`、后倚音 `1[h6/5]`'
+  const HINT_SLUR_ATTACHED =
+    '连音线 `(` 与音符之间**应有空格**（与虚音符 `(1)` 区分）；`(` 后的 `+`/`-` 是**连音线的高度级数**（`(+` 抬升、`(-` 降低，每级 2px），**不是**前一个音符的增时线——要给音符增时请写在音符旁，如 `1- (- 2 3)`'
+  const HINT_VOLTA = '跳房子 `[` 要紧跟在小节线之后；行首跳房子请先用隐藏小节线 `|/`，如 `|/ ["1." 1 2 3 |]`'
+  const HINT_SYMBOL =
+    '音符用 `1`-`7`、休止 `0`（隐藏休止 `8`）、节奏 `9`；时值 `-` `/` `.`；高低音点 `\'` `,`；变音 `#` `$` `=`；装饰 `&编码`（如 `&tr`）；注释 `"文字"`；小节线与反复 `|` `||` `|:` `:|`；跳房子 `[` `]`；渐强渐弱 `<` `>` `!`（详见「语法速查」）'
   let lastBlockEnd = -1 // 上一个音符块/小节线块的结束字符偏移
   let lastBlockCounts = false // 上一个块是否参与校验
   const checkBlockGap = (blockStart: number) => {
@@ -38,7 +72,7 @@ export function tokenizeMusicLine(
         err('音符块与小节线块之间应只有一个空格', {
           line: pos.line,
           col: pos.col + blockStart,
-        }, 'warning'),
+        }, 'warning', HINT_SPACE),
       )
     }
   }
@@ -70,7 +104,7 @@ export function tokenizeMusicLine(
         const close = content.indexOf('"', k + 1)
         if (close === -1) {
           comment = content.slice(k + 1)
-          errors.push(err('引号注释未闭合', { line: pos.line, col: pos.col + k }))
+          errors.push(err('引号注释未闭合', { line: pos.line, col: pos.col + k }, 'error', HINT_QUOTE))
           k = n
         } else {
           comment = content.slice(k + 1, close)
@@ -84,10 +118,19 @@ export function tokenizeMusicLine(
   }
 
   // 收集一个 token 的公共后缀：变音/减时线/增时线/附点/高低音点/装饰/注释
-  const collectSuffix = (
-    start: number,
-    base: { accidental: '#' | '$' | '=' | null; augmentCount: number; diminishCount: number; dots: number; octaveShift: number; symbols: string[]; comment?: string },
-  ): number => {
+  // （adj392：注释引号后的 + / - 归注释，故一并放进这份后缀基类型）
+  type SuffixBase = {
+    accidental: '#' | '$' | '=' | null
+    augmentCount: number
+    diminishCount: number
+    dots: number
+    octaveShift: number
+    symbols: string[]
+    comment?: string
+    commentPlus?: number
+    commentMinus?: number
+  }
+  const collectSuffix = (start: number, base: SuffixBase): number => {
     let j = start
     while (j < n) {
       const c = content[j]
@@ -129,11 +172,23 @@ export function tokenizeMusicLine(
         const close = content.indexOf('"', j + 1)
         if (close === -1) {
           base.comment = content.slice(j + 1).replace(/_/g, ' ')
-          errors.push(err('引号注释未闭合', { line: pos.line, col: pos.col + j }))
+          errors.push(err('引号注释未闭合', { line: pos.line, col: pos.col + j }, 'error', HINT_QUOTE))
           j = n
         } else {
           base.comment = content.slice(j + 1, close).replace(/_/g, ' ')
           j = close + 1
+          // adj392：**紧接**注释引号后的 + / - 用于抬升/降低注释文本（与跳房子 [+/[-、
+          // 连音线 (+/(- 同一套记法与步长，每级 NOTE_COMMENT_RAISE=2px）。
+          // 由此「注释后紧贴的 -」不再算增时线——增时线请写在注释之前（1-"注释"）或与注释间留空格。
+          let cPlus = 0
+          let cMinus = 0
+          while (j < n && (content[j] === '+' || content[j] === '-')) {
+            if (content[j] === '+') cPlus++
+            else cMinus++
+            j++
+          }
+          if (cPlus > 0) base.commentPlus = cPlus
+          if (cMinus > 0) base.commentMinus = cMinus
         }
         // 注释不固定为块末：注释后的 & 等修饰符仍继续收集（对「修饰符在注释后」的写法健壮）；
         // 遇非法字符（数字等）由下方 else break 停止
@@ -183,6 +238,14 @@ export function tokenizeMusicLine(
         plus: plus > 0 ? plus : undefined,
         minus: minus > 0 ? minus : undefined,
       })
+      // adj394：`(` **紧贴**在音符块后（如 `1(- 2 3`）且带 `+`/`-` 时给出提示——
+      // 此时 `-` 是**连音线的降低级数**，不是音符 1 的增时线；规范要求 `(` 与音符之间留空格
+      // （与虚音符 `(1)` 区分），紧贴会让人误以为 `-` 在给前一个音符增时。
+      if (plus + minus > 0 && i > 0 && /[0-9\-/.,'#$=]/.test(content[i - 1] ?? '')) {
+        errors.push(
+          err('连音线 "(" 紧贴在音符后且带 "＋/－" 时，符号属于连音线（不是前一个音符的增时线）', { line: pos.line, col: pos.col + i }, 'warning', HINT_SLUR_ATTACHED),
+        )
+      }
       i = j
       continue
     }
@@ -201,6 +264,17 @@ export function tokenizeMusicLine(
         j++
       }
       const code = content.slice(i, j)
+      // adj394（语法约定，**不报错**）：渐强/渐弱只有 `+` 抬升，没有 `-` 降低——`-` 在语法里
+      // 始终是增时线，写在 `<`/`>` 后会计入前一个音符（如 `3<- 4` = 音符 3 增时一拍，
+      // 而 `3<---!` 是"音符 3 增时 3 拍 + 渐强收在其末增时线右缘"的合法写法）。
+      // 二者在源码上无法区分"想降低"还是"想增时"，因此这里**不能**发告警（否则误伤合法写法），
+      // 只在 docs/JPS-SPEC.md、编辑器提示与「语法速查」里写明。
+      // adj393：同一行内上一个渐强/渐弱还没用 "!" 结束就来了新记号——后写的会替换前一个（提示而非报错）
+      if (pendingHairpin()) {
+        errors.push(
+          err('渐强/渐弱尚未用 "!" 结束就遇到新的记号（前一个将被替换）', { line: pos.line, col: pos.col + i }, 'warning', HINT_HAIRPIN_OPEN),
+        )
+      }
       tokens.push({
         kind: 'decoration',
         code,
@@ -212,7 +286,33 @@ export function tokenizeMusicLine(
       continue
     }
     if (c === '!') {
-      tokens.push({ kind: 'decoration', code: '!', dynamics: 'end', pos: i, raw: '!' })
+      // adj394：`!` 可结束于任意「有时值的元素」之后（音符/增时线 `-`/附点 `.`）——
+      // 由紧邻其前的非空格字符判定停靠处，供 layout 决定终点取「数字槽中心」还是「该元素右缘」
+      let k = i - 1
+      while (k >= 0 && (content[k] === ' ' || content[k] === '\t')) k--
+      const prevCh = k >= 0 ? content[k] : ''
+      const endOn: 'note' | 'aug' | 'dot' = prevCh === '-' ? 'aug' : prevCh === '.' ? 'dot' : 'note'
+      // adj393：`!` 找不到同一行内的起点（含起点写在上一行＝渐强/渐弱跨行），或起止之间没有音符
+      // ——两种写法都会「什么都不显示」，此前完全静默；这里给出 warning 说明原因
+      const openIdx = lastHairpinStart()
+      if (openIdx < 0) {
+        errors.push(
+          err('"!" 缺少同一行内的起始记号 "<" 或 ">"（渐强/渐弱不能跨行）', { line: pos.line, col: pos.col + i }, 'warning', HINT_HAIRPIN_MATCH),
+        )
+      } else {
+        // adj394：退化判定必须比较**起止锚点**，不能数「`<` 之后的音符」——
+        // 起点音符写在 `<` **之前**（如 `3<---!`：起点=音符 3、终点=该音符末增时线右缘，合法且有宽度）。
+        // 仅当 `!` 直接跟在音符后（endOn='note'）且与起点落在**同一音符**时才是零宽度退化写法。
+        const notesBefore = (upto: number): number =>
+          tokens.slice(0, upto).filter((t) => t.kind === 'note' || t.kind === 'rest' || t.kind === 'rhythm').length
+        const sameAnchorNote = endOn === 'note' && notesBefore(openIdx) === notesBefore(tokens.length)
+        if (sameAnchorNote) {
+          errors.push(
+            err('渐强/渐弱起止之间没有音符（起止落在同一音符），不会渲染', { line: pos.line, col: pos.col + i }, 'warning', HINT_HAIRPIN_SPAN),
+          )
+        }
+      }
+      tokens.push({ kind: 'decoration', code: '!', dynamics: 'end', dynamicsEndOn: endOn, pos: i, raw: '!' })
       i++
       continue
     }
@@ -243,7 +343,7 @@ export function tokenizeMusicLine(
       } else {
         // adj178：孤立 &（输入中未完成）降为 warning——避免预览在 error 时整页阻断、
         // 输入过程中在正确预览与错误提示间闪动（error 仅用于真正破坏结构的错误）
-        errors.push(err(`孤立的 "&" 符号（输入中未完成？）`, { line: pos.line, col: pos.col + i }, 'warning'))
+        errors.push(err(`孤立的 "&" 符号（输入中未完成？）`, { line: pos.line, col: pos.col + i }, 'warning', HINT_AMP))
         i++
       }
       continue
@@ -368,7 +468,7 @@ export function tokenizeMusicLine(
             const close = content.indexOf('"', j + 1)
             if (close === -1) {
               t.comment = content.slice(j + 1)
-              errors.push(err('引号注释未闭合', { line: pos.line, col: pos.col + j }))
+              errors.push(err('引号注释未闭合', { line: pos.line, col: pos.col + j }, 'error', HINT_QUOTE))
               j = n
             } else {
               t.comment = content.slice(j + 1, close)
@@ -451,14 +551,14 @@ export function tokenizeMusicLine(
             notes.push(gn)
           } else {
             errors.push(
-              err('倚音内不支持的符号', { line: pos.line, col: pos.col + k }, 'warning'),
+              err('倚音内不支持的符号', { line: pos.line, col: pos.col + k }, 'warning', HINT_GRACE),
             )
             k++
           }
         }
         if (!closed) {
           errors.push(
-            err('倚音括号 "]" 未闭合', { line: pos.line, col: pos.col + i }, 'warning'),
+            err('倚音括号 "]" 未闭合', { line: pos.line, col: pos.col + i }, 'warning', HINT_GRACE),
           )
         }
         last.gracenotes = { after, notes }
@@ -490,7 +590,7 @@ export function tokenizeMusicLine(
             err('跳房子 "[" 应写在小节线后（行首请用 |/ 或小节线，adj26）', {
               line: pos.line,
               col: pos.col + i,
-            }, 'warning'),
+            }, 'warning', HINT_VOLTA),
           )
         }
         // 其余（行首 [ 等无小节线可依）：纯跳房子起点（voltaOnly，不画小节线竖线）
@@ -532,8 +632,8 @@ export function tokenizeMusicLine(
     // 音符 / 休止符 / 节奏音符
     if (c >= '1' && c <= '7') {
       const start = i
-      const base = {
-        accidental: null as '#' | '$' | '=' | null,
+      const base: SuffixBase = {
+        accidental: null,
         augmentCount: 0,
         diminishCount: 0,
         dots: 0,
@@ -555,7 +655,7 @@ export function tokenizeMusicLine(
     }
     if (c === '0' || c === '8') {
       const start = i
-      const base: { accidental: null; augmentCount: number; diminishCount: number; dots: number; octaveShift: number; symbols: string[]; comment?: string } = { accidental: null, augmentCount: 0, diminishCount: 0, dots: 0, octaveShift: 0, symbols: [] as string[] }
+      const base: SuffixBase = { accidental: null, augmentCount: 0, diminishCount: 0, dots: 0, octaveShift: 0, symbols: [] as string[] }
       const end = collectSuffix(i + 1, base)
       tokens.push({
         kind: 'rest',
@@ -566,6 +666,9 @@ export function tokenizeMusicLine(
         symbols: base.symbols,
         // adj209：休止符注释（0"转调"）此前漏传——collectSuffix 已解析但未挂到 token
         comment: base.comment,
+        // adj392：注释抬升/降低级数同样要挂到 token（否则解析了但渲染收不到）
+        commentPlus: base.commentPlus,
+        commentMinus: base.commentMinus,
         pos: i,
         raw: rawAt(start, end),
       })
@@ -575,7 +678,7 @@ export function tokenizeMusicLine(
     }
     if (c === '9') {
       const start = i
-      const base: { accidental: null; augmentCount: number; diminishCount: number; dots: number; octaveShift: number; symbols: string[]; comment?: string } = { accidental: null, augmentCount: 0, diminishCount: 0, dots: 0, octaveShift: 0, symbols: [] as string[] }
+      const base: SuffixBase = { accidental: null, augmentCount: 0, diminishCount: 0, dots: 0, octaveShift: 0, symbols: [] as string[] }
       const end = collectSuffix(i + 1, base)
       tokens.push({
         kind: 'rhythm',
@@ -585,6 +688,9 @@ export function tokenizeMusicLine(
         symbols: base.symbols,
         // adj209：节奏符注释（9"…"）同休止符，此前漏传
         comment: base.comment,
+        // adj392：注释抬升/降低级数（同休止符）
+        commentPlus: base.commentPlus,
+        commentMinus: base.commentMinus,
         pos: i,
         raw: rawAt(start, end),
       })
@@ -636,7 +742,7 @@ export function tokenizeMusicLine(
     }
 
     // 未知字符：保留原文作为装饰 token，并给出警告
-    errors.push(err(`无法识别的符号 "${c}"`, { line: pos.line, col: pos.col + i }, 'warning'))
+    errors.push(err(`无法识别的符号 "${c}"`, { line: pos.line, col: pos.col + i }, 'warning', HINT_SYMBOL))
     tokens.push({ kind: 'decoration', code: c, pos: i, raw: c })
     i++
   }

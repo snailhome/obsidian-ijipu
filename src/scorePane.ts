@@ -93,11 +93,35 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     // 优先级：默认 < 插件设置 < frontmatter < 源内 # jps-config（源内最高）
     const resolved = resolvePageConfig(source, plugin.settings, fm)
     const cfg = draft ?? resolved.config
-    const { svgs, layout: layoutMaybe, error } = renderScoreFull(source, cfg)
+    const { svgs, layout: layoutMaybe, error, warnings, errorIssues } = renderScoreFull(source, cfg)
 
     if (error || !layoutMaybe) {
-      container.createDiv({ cls: 'ijipu-error', text: `⚠ 简谱解析失败：\n${error ?? '无排版结果'}` })
+      // adj394：错误也给出「正确写法」（引擎 hint）——不只告诉用户哪里错了
+      const errBox = container.createDiv({ cls: 'ijipu-error', text: `⚠ 简谱解析失败：\n${error ?? '无排版结果'}` })
+      for (const e of errorIssues ?? []) {
+        if (e.hint) errBox.createDiv({ cls: 'ijipu-hint', text: `正确写法：${e.hint}` })
+      }
       return
+    }
+    // adj394：告警（warning 级）不阻断渲染，但要在谱面下方看得见——
+    // 此前插件把任何 errors 都当致命（`errors.length > 0`），一条告警就整页不渲染
+    if (warnings && warnings.length > 0) {
+      const warnBox = container.createDiv({ cls: 'ijipu-warn' })
+      const head = warnBox.createDiv({ cls: 'ijipu-warn-head', text: `⚠ ${warnings.length} 条语法告警（不影响显示）` })
+      const list = warnBox.createEl('ul', { cls: 'ijipu-warn-list' })
+      for (const w of warnings) {
+        const li = list.createEl('li', { cls: 'ijipu-warn-item' })
+        li.createSpan({ cls: 'ijipu-warn-text', text: w.text })
+        // adj394：告警下方给出正确语法规则（引擎 hint，含最小示例）
+        if (w.hint) li.createSpan({ cls: 'ijipu-hint', text: `正确写法：${w.hint}` })
+      }
+      let open = false
+      list.toggleClass('is-open', open)
+      head.onclick = () => {
+        open = !open
+        list.toggleClass('is-open', open)
+      }
+      head.setAttr('title', '点击展开/收起告警明细（含正确写法）')
     }
     // 收窄为常量：闭包（虚线层/拖拽）里也要用，TS 不会跨函数保留 null 判定
     const layout = layoutMaybe
