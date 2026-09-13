@@ -53,16 +53,63 @@ export function layoutIcon(size = 15): SVGSVGElement {
 }
 
 /**
- * 「页面设置」图标：三条滑杆（设置/调整的通用意象，与「排版（田字格）」明确区分）。
+ * 「页面设置」图标：**齿轮**（与 iJipu 应用顶栏「页面设置」按钮同一形状）。
+ *
+ * 形状逐点取自应用：`ijipu/src/ui/TopBar.tsx` 的 `case 'pageConfig'` ——
+ * 轮环（r=3.1）+ 一圈 8 根轮齿（正交 4 + 对角 4）+ 中心轮毂（r=1.3）。
+ * 此前这里是"三条滑杆"，与应用不一致，故改为齿轮。
+ * 线宽沿用本插件的既定约定（深色主题下 1.4 的细笔画会糊）：轮环/轮毂用基准 1.8，轮齿用 1.5。
  */
 export function settingsIcon(size = 15): SVGSVGElement {
   return strokeIcon((add) => {
-    add('path', { d: 'M 2 3.6 H 12', 'stroke-width': SW_THIN })
-    add('path', { d: 'M 2 7 H 12', 'stroke-width': SW_THIN })
-    add('path', { d: 'M 2 10.4 H 12', 'stroke-width': SW_THIN })
-    add('circle', { cx: '5', cy: '3.6', r: '1.5' })
-    add('circle', { cx: '9', cy: '7', r: '1.5' })
-    add('circle', { cx: '6', cy: '10.4', r: '1.5' })
+    add('circle', { cx: '7', cy: '7', r: '3.1' })
+    add('circle', { cx: '7', cy: '7', r: '1.3' })
+    // 8 根轮齿：正交方向 4 根 + 对角方向 4 根，长短与间隙同应用一致
+    add('path', { d: 'M 7 1.5 V 3.2', 'stroke-width': SW_THIN })
+    add('path', { d: 'M 7 10.8 V 12.5', 'stroke-width': SW_THIN })
+    add('path', { d: 'M 1.5 7 H 3.2', 'stroke-width': SW_THIN })
+    add('path', { d: 'M 10.8 7 H 12.5', 'stroke-width': SW_THIN })
+    add('path', { d: 'M 3.1 3.1 L 4.3 4.3', 'stroke-width': SW_THIN })
+    add('path', { d: 'M 9.7 9.7 L 10.9 10.9', 'stroke-width': SW_THIN })
+    add('path', { d: 'M 10.9 3.1 L 9.7 4.3', 'stroke-width': SW_THIN })
+    add('path', { d: 'M 4.3 9.7 L 3.1 10.9', 'stroke-width': SW_THIN })
+  }, size)
+}
+
+/**
+ * 「试听」图标：实心三角。
+ *
+ * 这里用实心而非描边——14px 下描边三角的三条边会糊成一团小三角形，
+ * 实心三角一眼就是"播放"；「停止」同理用实心方块。
+ * 有实心图标，"试听"按钮的文字在窄容器里才可以安全隐藏（见 styles.css 的 @container 规则）。
+ */
+export function playIcon(size = 15): SVGSVGElement {
+  return strokeIcon((add) => {
+    add('path', { d: 'M 4.4 3 L 11.4 7 L 4.4 11 Z', fill: 'currentColor', 'stroke-width': SW_THIN })
+  }, size)
+}
+
+/** 「停止」图标：实心方块 */
+export function stopIcon(size = 15): SVGSVGElement {
+  return strokeIcon((add) => {
+    add('rect', { x: '3.9', y: '3.9', width: '6.2', height: '6.2', rx: '1', fill: 'currentColor', 'stroke-width': SW_THIN })
+  }, size)
+}
+
+/**
+ * 「打开谱面文件」图标：链条（链接的通用意象）。
+ *
+ * 两节 45° 斜置的圆角环，各自开口朝向中心，中间一段连接杆把它们串起来 ——
+ * 与链条款图标同构，但在 14×14、线宽 1.8 下每节只留两条边 + 一个圆头，不会糊成一团。
+ */
+export function linkIcon(size = 15): SVGSVGElement {
+  return strokeIcon((add) => {
+    // 右上那一节：开口朝左下
+    add('path', { d: 'M 6.1 4.5 L 8.1 2.5 A 2.5 2.5 0 0 1 11.5 5.9 L 9.5 7.9' })
+    // 左下那一节：开口朝右上（与上一节关于图标中心点对称）
+    add('path', { d: 'M 7.9 9.5 L 5.9 11.5 A 2.5 2.5 0 0 1 2.5 8.1 L 4.5 6.1' })
+    // 中间的连接杆
+    add('path', { d: 'M 5.9 8.1 L 8.1 5.9' })
   }, size)
 }
 

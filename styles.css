@@ -21,11 +21,59 @@
   align-items: center;
   gap: 8px;
   margin-bottom: 6px;
+  /* 嵌在窄容器里（右侧栏、分栏）时按钮换行，而不是溢出被裁掉 */
+  flex-wrap: wrap;
+  /* 让"打开谱面文件"的文字是否隐藏，按**工具栏自身**宽度判断而不是窗口宽度
+     （否则侧栏里的嵌入会判断错误）——见下方 @container 规则 */
+  container-type: inline-size;
+  container-name: ijipu-toolbar;
+  /* 工具栏内所有控件（试听/排版/设置/视图/链接）共用同一个高度；
+     图标态下四个按钮还共用同一个宽度，见 --ijipu-ctl-w 与 @container 规则 */
+  --ijipu-ctl-h: 24px;
+  --ijipu-ctl-w: 36px;
+}
+/* 移动端 Obsidian 会给 button 套触控尺寸（--touch-size-*），而「视图」是 div 外壳、
+   不吃那套尺寸 → 两者不等高。移动端统一跟到 Obsidian 的小号触控尺寸。 */
+.is-mobile .ijipu-score-toolbar {
+  --ijipu-ctl-h: var(--touch-size-xs, 30px);
+}
+/* 嵌入形态更紧凑；移动端仍用触控尺寸，免得手指点不到 */
+.ijipu-embedded .ijipu-score-toolbar {
+  --ijipu-ctl-h: 21px;
+  --ijipu-ctl-w: 32px;
+}
+.is-mobile .ijipu-embedded .ijipu-score-toolbar {
+  --ijipu-ctl-h: var(--touch-size-xxs, 24px);
+}
+/* 统一控件高度：选择器带 .ijipu-score-toolbar 前缀，压过主题/移动端对 button 的高度约束 */
+.ijipu-score-toolbar .ijipu-play,
+.ijipu-score-toolbar .ijipu-mode-select-wrap,
+.ijipu-score-toolbar .ijipu-embed-link {
+  box-sizing: border-box;
+  height: var(--ijipu-ctl-h);
+  min-height: var(--ijipu-ctl-h);
+  max-height: var(--ijipu-ctl-h);
+  align-items: center;
+  line-height: 1;
 }
 .ijipu-play {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 0.85em;
   padding: 2px 10px;
   cursor: pointer;
+}
+/* 按钮内部的图标与文字分成两段：容器窄时可以只隐藏文字、留下图标
+   （见文件末尾的 @container 规则；文字段独立成 span 是能隐藏的前提） */
+.ijipu-btn-icon,
+.ijipu-btn-icon svg {
+  display: block;
+  flex: 0 0 auto;
+  stroke: currentColor;
+}
+.ijipu-btn-label {
+  white-space: nowrap;
 }
 /* adj389：工具栏按钮配色**显式化**——此前依赖 Obsidian 默认按钮样式，个别主题的
    `--interactive-normal` 偏浅，叠加 `--text-normal` 为浅色文字/图标 → "白底白图标"看不出形状。
@@ -132,43 +180,54 @@
   border: 1px dashed var(--background-modifier-border);
 }
 
-/* 显示模式切换：三个表意图标（整页/满宽/谱面），互斥选中态；图标含义见 title 提示 */
-.ijipu-mode-group {
+/* 显示模式：下拉列表（整页 / 满宽 / 谱面）。
+   普通按钮 + Obsidian 菜单（**不用原生 select**）：可见部分只有"图标 + 文字 + 箭头"，
+   宽度严格等于这三部分之和；弹层配色交给 Obsidian 菜单（跟随主题）。
+   图标含义见 icons.ts 的 modeIcon。 */
+.ijipu-mode-select-wrap {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
-  padding: 1px;
-  border-radius: 6px;
+  /* 内容紧凑左对齐：不被任何上下文（主题/嵌入容器）分散开 */
+  justify-content: flex-start;
+  gap: 3px;
+  padding: 2px 6px 2px 8px;
+  border-radius: 5px;
   border: 1px solid var(--background-modifier-border);
   background: var(--background-modifier-hover);
-}
-.ijipu-mode-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 22px;
-  padding: 0;
-  cursor: pointer;
-  border: none;
-  border-radius: 4px;
-  /* adj：深色主题下 --text-muted 偏暗，细笔画图标看不清 → 用 --text-normal */
   color: var(--text-normal);
-  background: transparent;
+  font-family: inherit;
+  font-size: 0.85em;
   box-shadow: none;
+  cursor: pointer;
+  /* 宽度只由内容决定：不参与拉伸/压缩（嵌入容器里曾被撑成两倍多宽）。
+     图标态下由 @container 规则改成四个按钮等宽。 */
+  flex: 0 0 auto;
+  width: max-content;
 }
-.ijipu-mode-btn:hover {
-  color: var(--text-normal);
+.ijipu-mode-select-wrap:hover {
   background: var(--background-modifier-active-hover, var(--background-modifier-hover));
 }
-.ijipu-mode-btn.is-active {
-  /* adj389：强调色缺失/过浅的主题下，白图标落在浅底上会"看不见" → 两处都加兜底 */
-  color: var(--text-on-accent, var(--text-normal));
-  background: var(--interactive-accent, var(--color-accent, #4c6ef5));
+.ijipu-mode-select-wrap:focus-visible {
+  outline: 2px solid var(--interactive-accent, var(--color-accent, #4c6ef5));
+  outline-offset: 1px;
 }
-.ijipu-mode-btn svg {
+.ijipu-mode-icon {
+  display: flex;
+  flex: 0 0 auto;
+  color: currentColor;
+}
+.ijipu-mode-icon svg {
   display: block;
   flex: 0 0 auto;
+  stroke: currentColor;
+}
+.ijipu-mode-text {
+  white-space: nowrap;
+}
+.ijipu-mode-caret {
+  font-size: 0.7em;
+  line-height: 1;
+  color: var(--text-muted);
 }
 
 /* 三种显示模式 */
@@ -262,11 +321,8 @@
   cursor: help;
 }
 
-/* 源内 # jps-config 徽标（优先级最高的设置来源，用另一色与 frontmatter 徽标区分） */
-.ijipu-src-badge {
-  color: var(--text-on-accent, var(--text-normal));
-  background: var(--interactive-success, var(--color-green, #2f9e44));
-}
+/* 注：源内 # jps-config 的「谱面自带设置 N 项」徽标已不再挂工具栏，
+   改在「设置」对话框里展示（见 .ijipu-config-src），此处保留的只有 frontmatter 徽标。 */
 
 /* 未识别的 frontmatter 键提示（含最近键名建议） */
 .ijipu-fm-warn {
@@ -323,6 +379,29 @@
 .ijipu-config-hint-sub {
   margin-top: 4px;
   color: var(--text-faint);
+}
+/* 「谱面自带设置 N 项」——原先挂在谱面工具栏上（挤占按钮位置、详情只能悬停看），
+   现在放在对话框里：一眼看到是哪几项、值多少，也解释了下面控件初值的来源 */
+.ijipu-config-src {
+  margin: 0 0 1em;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--background-secondary);
+  border-inline-start: 3px solid var(--interactive-success, var(--color-green, #2f9e44));
+}
+.ijipu-config-src-head {
+  font-size: 0.85em;
+  font-weight: 600;
+  color: var(--text-normal);
+}
+.ijipu-config-src-list {
+  margin: 4px 0 0;
+  padding-inline-start: 1.3em;
+  font-size: 0.8em;
+  color: var(--text-muted);
+}
+.ijipu-config-src-list > li {
+  margin: 0;
 }
 .ijipu-config-footer {
   display: flex;
@@ -384,6 +463,9 @@
 }
 
 /* ---------- ![[xxx.jps]] 嵌入 ---------- */
+/* 插件接管 .internal-embed 后自己渲染谱面（详见 src/embed.ts 头部说明）。
+   `is-loaded` 由插件在 post-processor 里打上，宿主据此跳过这个嵌入，
+   因此这里不会出现 Obsidian 的 .file-embed.mod-generic 占位块。 */
 .ijipu-embed {
   display: block;
   padding: 2px 0;
@@ -391,6 +473,70 @@
 .ijipu-embed .ijipu-score {
   margin: 0.2em 0;
   padding: 0.2em;
+}
+/* 工具栏右侧的「打开谱面文件」（仅嵌入模式）：链接图标 + 谱面名。
+   `margin-inline-start:auto` 把它推到工具栏这一行的右端；容器窄时只留图标。 */
+.ijipu-embed-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-inline-start: auto;
+  min-width: 0;
+  padding: 2px 6px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-faint);
+  font-size: 0.78em;
+  cursor: var(--cursor-link);
+}
+.ijipu-embed-link:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+.ijipu-embed-link svg {
+  display: block;
+  flex: 0 0 auto;
+  stroke: currentColor;
+}
+.ijipu-embed-link-text {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 容器变窄时按宽度**逐级**退让，顺序刻意如此：
+   ① 先把「试听 / 排版 / 设置 / 视图」图标化（图标含义明确，悬停还有说明）；
+   ② 只有窄到实在放不下，才把「打开谱面文件」的谱面名图标化
+      —— 文件名是"这份谱是什么"的唯一标识，优先保住它。
+   阈值按工具栏自身宽度（不是窗口宽度），侧栏/分栏里的嵌入也判断正确。 */
+@container ijipu-toolbar (max-width: 400px) {
+  .ijipu-btn-label {
+    display: none;
+  }
+  .ijipu-mode-text {
+    display: none;
+  }
+  /* 四个按钮等宽（不是各自贴合内容）——「视图」带下拉箭头，天然比另外三个宽，
+     单独留着会显得参差。宽度以最宽的那个（图标 + 箭头）为准，其余三个图标居中，
+     一排等宽方块视觉最整齐。 */
+  .ijipu-score-toolbar .ijipu-play,
+  .ijipu-score-toolbar .ijipu-mode-select-wrap {
+    width: var(--ijipu-ctl-w);
+    padding-inline: 0;
+    justify-content: center;
+  }
+}
+@container ijipu-toolbar (max-width: 250px) {
+  .ijipu-embed-link-text {
+    display: none;
+  }
+  .ijipu-embed-link {
+    padding: 2px 4px;
+  }
 }
 /* 嵌入/文件视图的紧凑形态：工具条更小、不占垂直空间 */
 .ijipu-embedded .ijipu-score-toolbar {
@@ -401,9 +547,9 @@
   font-size: 0.75em;
   padding: 1px 6px;
 }
-.ijipu-embedded .ijipu-mode-btn {
-  width: 22px;
-  height: 20px;
+.ijipu-embedded .ijipu-mode-select-wrap {
+  padding: 1px 4px 1px 6px;
+  font-size: 0.75em;
 }
 
 /* 插件设置页头部 */

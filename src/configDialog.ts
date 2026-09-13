@@ -19,8 +19,10 @@ export type ConfigTarget = 'score' | 'score-full' | 'plugin'
 export interface ConfigDialogOptions {
   /** 当前生效配置（默认 < 插件设置 < frontmatter < 源内）——对话框的初值 */
   current: PageConfig
-  /** 该谱是否已自带 `# jps-config` 行（用于提示文案） */
-  hasSourceConfig: boolean
+  /** 谱面源码 `# jps-config` 行里显式写了的字段（优先级最高） */
+  sourceFields: string[]
+  /** 与 `sourceFields` 对应的取值（用于列表展示） */
+  sourceValues: Record<string, unknown>
   /** 关闭后回调（点「取消」不触发） */
   onApply: (target: ConfigTarget, config: PageConfig) => void
 }
@@ -45,10 +47,27 @@ export class ConfigDialog extends Modal {
     hint.createDiv({ text: '优先级：引擎默认 < 插件设置 < 笔记 frontmatter < 谱面自带 # jps-config' })
     hint.createDiv({
       cls: 'ijipu-config-hint-sub',
-      text: this.opts.hasSourceConfig
-        ? '本谱已自带 # jps-config 行：保存会**原位更新**它（优先级最高，覆盖插件设置与 frontmatter）。'
-        : '「保存到谱面」会在源码末尾写入 # jps-config 行（优先级最高，此后改插件设置不影响这一份谱）。',
+      text:
+        this.opts.sourceFields.length > 0
+          ? '本谱已自带 # jps-config 行：保存会**原位更新**它（优先级最高，覆盖插件设置与 frontmatter）。'
+          : '「保存到谱面」会在源码末尾写入 # jps-config 行（优先级最高，此后改插件设置不影响这一份谱）。',
     })
+
+    // 「谱面自带设置 N 项」——原先挂在谱面工具栏上（挤占按钮位置、详情只能悬停看），
+    // 移到对话框里：既能一眼看到哪几项、值是多少，也正好解释下面控件的初值从哪来。
+    if (this.opts.sourceFields.length > 0) {
+      const box = contentEl.createDiv({ cls: 'ijipu-config-src' })
+      box.createDiv({
+        cls: 'ijipu-config-src-head',
+        text: `谱面自带设置 ${this.opts.sourceFields.length} 项（来自源码 # jps-config 行，优先级最高）`,
+      })
+      const list = box.createEl('ul', { cls: 'ijipu-config-src-list' })
+      for (const key of this.opts.sourceFields) {
+        const def = DEFS.find((d) => (d.key as string) === key)
+        const value = this.opts.sourceValues[key]
+        list.createEl('li', { text: `${def ? def.label : key}：${value === undefined ? '—' : String(value)}` })
+      }
+    }
 
     for (const group of GROUPS) {
       const items = DEFS.filter((d) => d.group === group)

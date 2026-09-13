@@ -12,13 +12,13 @@
  * 渲染管线与 iJipu 应用一致：`resolvePageConfig`（含源内 # jps-config）→ `layoutScore`
  * → `renderScoreToSvg`；试听走 `@ijipu/engine` 的 `buildPlaySequence` + SpessaSynth。
  */
-import { Notice } from 'obsidian'
+import { Menu, Notice } from 'obsidian'
 import { writeJpsConfig, dragDelta, clamp, type PageConfig } from '@ijipu/engine'
 import { renderScoreFull, playScore, unknownKeyHint, deprecatedKeyHint, type PlayheadSeg } from './render'
 import { resolvePageConfig } from './config'
 import { ConfigDialog } from './configDialog'
 import { DEFS } from './defs'
-import { layoutIcon, modeIcon, settingsIcon } from './icons'
+import { layoutIcon, modeIcon, settingsIcon, linkIcon, playIcon, stopIcon } from './icons'
 import { computeGuideLines, cropRectFor, guideLimits, guidePlacement, type GuideLine } from './guides'
 import { GUIDES_CHANGED, SETTINGS_CHANGED } from './main'
 import type IJipuPlugin from './main'
@@ -52,6 +52,14 @@ export type ScorePaneHost = {
   writeSource?: (next: string) => void | Promise<void>
   /** 嵌入模式：更紧凑（隐藏页数标签等） */
   embedded?: boolean
+  /**
+   * 嵌入模式下的谱面名（显示在工具栏**右端**，前置链接图标，点击打开该 .jps）。
+   * 插件接管 `![[x.jps]]` 的 `.internal-embed` 后，宿主原本那个"点开文件"的占位块不再出现，
+   * 由这里补回入口；容器窄时只留图标（见 styles.css 的 @container 规则）。
+   */
+  embedTitle?: string
+  /** 点击嵌入标题时调用（打开被嵌入的 .jps 文件） */
+  onOpenFile?: () => void
 }
 
 export type ScorePaneHandle = {
@@ -127,20 +135,9 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     const layout = layoutMaybe
 
     // —— 工具条 ——
+    // 注：「谱面自带设置 N 项」不再占工具栏位置 —— 移到「设置」对话框里（见 ConfigDialog）
     const toolbar = container.createDiv({ cls: 'ijipu-score-toolbar' })
     if (!host.embedded) toolbar.createSpan({ cls: 'ijipu-page-label', text: `${svgs.length} 页` })
-    if (resolved.sourceFields.length > 0) {
-      const badge = toolbar.createSpan({
-        cls: 'ijipu-fm-badge ijipu-src-badge',
-        text: `谱面自带设置 ${resolved.sourceFields.length} 项`,
-      })
-      badge.setAttr(
-        'title',
-        `来自源码 # jps-config 行（优先级最高，覆盖插件设置与 frontmatter）：\n${resolved.sourceFields
-          .map((f) => `${f} = ${String((resolved.config as unknown as Record<string, unknown>)[f])}`)
-          .join('\n')}`,
-      )
-    }
     if (resolved.applied.length > 0) {
       const badge = toolbar.createSpan({ cls: 'ijipu-fm-badge', text: `frontmatter 覆盖 ${resolved.applied.length} 项` })
       badge.setAttr(
@@ -154,7 +151,18 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     // —— 试听（播放/停止 + RAF 驱动色块跟随，与 iJipu 一致）——
     let playing: { cancel: () => void; totalMs: number; track: PlayheadSeg[] } | null = null
     let playStart = 0
-    const playBtn = toolbar.createEl('button', { cls: 'ijipu-play', text: '▶ 试听' })
+    // 试听按钮：图标 + 文字（窄容器里文字由 @container 规则隐藏，只留图标）
+    const playBtn = toolbar.createEl('button', { cls: 'ijipu-play' })
+    const playIconEl = playBtn.createSpan({ cls: 'ijipu-btn-icon' })
+    const playLabel = playBtn.createSpan({ cls: 'ijipu-btn-label', text: '试听' })
+    /** 切换试听按钮的「图标 + 文字 + 悬停说明」（三者必须同步换，否则窄容器下会显示错） */
+    const setPlayState = (isPlaying: boolean): void => {
+      playIconEl.empty()
+      playIconEl.appendChild(isPlaying ? stopIcon(15) : playIcon(15))
+      playLabel.setText(isPlaying ? '停止' : '试听')
+      playBtn.setAttr('title', isPlaying ? '停止试听' : '试听这一份谱（可边听边看高亮色块）')
+    }
+    setPlayState(false)
     const svgEls: SVGSVGElement[] = []
 
     const clearPlayBlock = (): void => {
@@ -214,7 +222,7 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       playing = null
       cancelAnimationFrame(rafId)
       clearPlayBlock()
-      playBtn.setText('▶ 试听')
+      setPlayState(false)
       plugin.unregisterPlay(stopPlayFn)
     }
 
@@ -236,7 +244,7 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       if (currentMs >= total) {
         clearPlayBlock()
         playing = null
-        playBtn.setText('▶ 试听')
+        setPlayState(false)
         plugin.unregisterPlay(stopPlayFn)
         return
       }
@@ -253,18 +261,18 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       void playScore(source, cfg, { hqVoice: plugin.settings.hqVoice, workletUrl: plugin.getWorkletUrl() })
         .then((r) => {
           if (!r) {
-            playBtn.setText('▶ 试听')
+            setPlayState(false)
             return
           }
           playing = r
           playStart = performance.now()
-          playBtn.setText('⏹ 停止')
+          setPlayState(true)
           cancelAnimationFrame(rafId)
           rafId = requestAnimationFrame(tick)
           plugin.registerPlay(stopPlayFn)
         })
         .catch((e) => {
-          playBtn.setText('▶ 试听')
+          setPlayState(false)
           new Notice(`试听失败：${e instanceof Error ? e.message : String(e)}`, 6000)
         })
     })
@@ -278,7 +286,7 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
         : '排版：显示辅助虚线（拖动虚线调整边距/行距，松手即写入谱面设置；自动切到整页视图）',
     )
     guidesBtn.appendChild(layoutIcon(15))
-    guidesBtn.createSpan({ text: '排版' })
+    guidesBtn.createSpan({ cls: 'ijipu-btn-label', text: '排版' })
     guidesBtn.classList.toggle('is-active', plugin.showGuides)
     guidesBtn.addEventListener('click', () => {
       const on = plugin.toggleGuides()
@@ -297,11 +305,13 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       const cfgBtn = toolbar.createEl('button', { cls: 'ijipu-play ijipu-config-btn' })
       cfgBtn.setAttr('title', '页面设置：按字段精确设值（字体/字号/行距/渲染开关；可保存到谱面或存为插件默认）')
       cfgBtn.appendChild(settingsIcon(15))
-      cfgBtn.createSpan({ text: '设置' })
+      cfgBtn.createSpan({ cls: 'ijipu-btn-label', text: '设置' })
       cfgBtn.addEventListener('click', () => {
         new ConfigDialog(plugin.app, {
           current: resolved.config,
-          hasSourceConfig: resolved.sourceFields.length > 0,
+          // 「谱面自带设置 N 项」不再挂工具栏，改写进对话框（含具体是哪几项、值是什么）
+          sourceFields: resolved.sourceFields,
+          sourceValues: resolved.config as unknown as Record<string, unknown>,
           onApply: (target, next) => {
             if (target === 'plugin') {
               const bag = plugin.settings as unknown as Record<string, unknown>
@@ -323,16 +333,40 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       })
     }
 
-    // —— 显示模式（整页 / 满宽 / 谱面）——
-    const modeWrap = toolbar.createDiv({ cls: 'ijipu-mode-group' })
-    const modeBtns = new Map<ViewMode, HTMLButtonElement>()
-    for (const mode of Object.keys(MODE_LABEL) as ViewMode[]) {
-      const btn = modeWrap.createEl('button', { cls: 'ijipu-mode-btn' })
-      btn.setAttr('title', `${MODE_LABEL[mode]}：${MODE_HINT[mode]}`)
-      btn.setAttr('aria-label', MODE_LABEL[mode])
-      btn.appendChild(modeIcon(mode, 15))
-      btn.addEventListener('click', () => setMode(mode))
-      modeBtns.set(mode, btn)
+    // —— 显示模式：下拉列表（整页 / 满宽 / 谱面）——
+    // 用普通按钮 + Obsidian 的 Menu，而**不是**原生 <select>：
+    //  · 原生 select 会给下拉箭头预留内边距、宽度收不紧（在嵌入容器等上下文里还会参与布局，
+    //    导致按钮比"图标 + 文字 + 箭头"宽一截）；
+    //  · 它的弹层底色/文字色由平台决定，深色主题下会变成浅底浅字。
+    // 自绘这三部分后宽度严格等于内容，菜单则完全跟随主题配色（且自带当前项勾选）。
+    const modeWrap = toolbar.createEl('button', { cls: 'ijipu-mode-select-wrap' })
+    modeWrap.setAttr('type', 'button')
+    modeWrap.setAttr('aria-label', '显示模式')
+    modeWrap.setAttr('aria-haspopup', 'menu')
+    const modeIconEl = modeWrap.createSpan({ cls: 'ijipu-mode-icon' })
+    modeIconEl.appendChild(modeIcon(paneMode, 15))
+    const modeTextEl = modeWrap.createSpan({ cls: 'ijipu-mode-text', text: MODE_LABEL[paneMode] })
+    modeWrap.createSpan({ cls: 'ijipu-mode-caret', text: '▼' })
+    modeWrap.addEventListener('click', () => {
+      const rect = modeWrap.getBoundingClientRect()
+      const menu = new Menu()
+      for (const mode of Object.keys(MODE_LABEL) as ViewMode[]) {
+        menu.addItem((item) =>
+          item.setTitle(MODE_LABEL[mode]).setChecked(paneMode === mode).onClick(() => setMode(mode)),
+        )
+      }
+      // 按按钮下沿对齐展开（鼠标点、键盘 Enter 都适用）
+      menu.showAtPosition({ x: rect.left, y: rect.bottom })
+    })
+
+    // —— 工具栏右端：打开谱面文件（仅嵌入模式；容器窄时只留链接图标）——
+    if (host.embedded && host.embedTitle) {
+      const link = toolbar.createEl('button', { cls: 'ijipu-embed-link' })
+      link.setAttr('title', `打开谱面文件：${host.embedTitle}`)
+      link.setAttr('aria-label', `打开谱面文件：${host.embedTitle}`)
+      link.appendChild(linkIcon(15))
+      link.createSpan({ cls: 'ijipu-embed-link-text', text: host.embedTitle })
+      link.addEventListener('click', () => host.onOpenFile?.())
     }
 
     if (resolved.unknown.length > 0) {
@@ -385,7 +419,11 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     function setMode(next: ViewMode): void {
       paneMode = next
       svgWrap.setAttribute('class', `ijipu-svgs ijipu-mode-${next}`)
-      for (const [m, btn] of modeBtns) btn.classList.toggle('is-active', m === next)
+      // 按钮上的文字、图标、悬停说明跟着走（图标三种形状见 icons.ts，与菜单项一一对应）
+      modeTextEl.setText(MODE_LABEL[next])
+      modeIconEl.empty()
+      modeIconEl.appendChild(modeIcon(next, 15))
+      modeWrap.setAttr('title', `显示模式：${MODE_LABEL[next]}（${MODE_HINT[next]}）`)
       for (const svgEl of svgEls) applyViewBox(svgEl, next, cfg)
     }
 
