@@ -31,7 +31,7 @@ import type IJipuPlugin from './main'
  *
  * @returns 清理函数（务必在重画/关闭时调用）
  */
-function fitEditorToVisibleArea(contentEl: HTMLElement, ta: HTMLTextAreaElement, diag?: HTMLElement): () => void {
+function fitEditorToVisibleArea(contentEl: HTMLElement, ta: HTMLTextAreaElement): () => void {
   if (!Platform.isMobile) return () => {}
   const appContainer = contentEl.closest('.app-container') as HTMLElement | null
   /** 无键盘时的布局视口高（观测到过的最大值；WebView 里除键盘/旋转外不会变） */
@@ -87,11 +87,8 @@ function fitEditorToVisibleArea(contentEl: HTMLElement, ta: HTMLTextAreaElement,
     // —— 这些 height/max-height 会盖掉 flex 撑高与我们的高度赋值（实测 118px 正是"设的下限 120 减边框"）。
     // 故对容器与源码框逐条用 inline + !important 反制（inline important 优先于任何样式表规则），
     // 高度也不再估算，而是**实测**：源码框顶（getBoundingClientRect）→ 可视区底。
-    // adj409：**真凶是宿主的 padding-bottom**。Obsidian 本体规则
-    //   `.workspace-leaf-content .view-content { padding-bottom: max(var(--safe-area-inset-bottom), var(--size-4-8)) }`
-    // 而真机上 `--safe-area-inset-bottom` 等于**键盘高**（用户机实测 padB=319 = --keyboard-height）——
-    // 我们的容器内容盒子因此正好矮一个键盘高，源码框再撑也撑不出那 319px（前三轮都在改容器高度，方向错了）。
-    // 容器高度已按可视区钉好，这段"键盘内边距"完全不需要 → 用 inline important 改回我们自己的 8px。
+    // adj409：**真凶是宿主的 padding-bottom**（诊断阶段已确认并修复，见脚本 `adj409` 提交）。
+    // 容器高度已按可视区钉好，不需要宿主那段"键盘内边距" → 用 inline important 改回我们自己的 8px。
     contentEl.style.setProperty('padding-bottom', '8px', 'important')
     contentEl.style.setProperty('height', `${want}px`, 'important')
     contentEl.style.setProperty('display', 'flex', 'important')
@@ -99,29 +96,16 @@ function fitEditorToVisibleArea(contentEl: HTMLElement, ta: HTMLTextAreaElement,
     contentEl.style.setProperty('overflow', 'hidden', 'important')
     contentEl.style.setProperty('max-height', 'none', 'important')
     contentEl.style.setProperty('position', 'relative', 'important')
-    const barEl = contentEl.firstElementChild instanceof HTMLElement ? contentEl.firstElementChild : null
-    const barH = barEl ? Math.round(barEl.getBoundingClientRect().height) : 0
-    const cs = getComputedStyle(contentEl)
-    const padBottom = parseFloat(cs.paddingBottom) || 0
-    let taH = 0
     if (ta) {
+      // adj408：宿主有 `textarea { height:100%; min-height:50vh; max-height:20vh|80vh }`，会盖掉撑高与赋值
       ta.style.setProperty('flex', '0 0 auto', 'important')
       ta.style.setProperty('min-height', '0', 'important')
       ta.style.setProperty('max-height', 'none', 'important')
       ta.style.setProperty('height', 'auto', 'important') // 先复位，量出源码框真实顶部
       const taTop = ta.getBoundingClientRect().top
-      taH = Math.max(120, Math.round(bottom - taTop - padBottom))
+      const padBottom = parseFloat(getComputedStyle(contentEl).paddingBottom) || 0
+      const taH = Math.max(120, Math.round(bottom - taTop - padBottom))
       ta.style.setProperty('height', `${taH}px`, 'important')
-    }
-    // adj407（临时诊断）：把真实数字打在源码视图里——真机上"少一个键盘高"的成因只能靠这些数值定位，
-    // 修好即移除（绝对定位于容器底部，不占布局空间）。
-    if (diag) {
-      const v = window.visualViewport
-      diag.setText(
-        `诊断 want=${want} top=${Math.round(top)} bottom=${Math.round(bottom)} padB=${Math.round(padBottom)} bar=${barH} taH=${taH} ` +
-          `ta=${ta ? Math.round(ta.clientHeight) : -1} kb=${Math.round(keyboardVar())} appC=${appContainer ? appContainer.clientHeight : -1} ` +
-          `innerH=${Math.round(window.innerHeight)} vvH=${v ? Math.round(v.height) : 'n/a'} lifted=${lifted ? 1 : 0}`,
-      )
     }
   }
   const onVv = () => requestAnimationFrame(fit)
@@ -269,8 +253,9 @@ export class IJipuFileView extends TextFileView {
       ta.focus()
       // adj404：钉住「可视区域」——真机上宿主（WebView + Obsidian）的键盘机制有两种，见函数头注释；
       // adj407：同时把真实数值打到下面的诊断行，便于真机定位"少一个键盘高"到底是哪一环
-      const diag = Platform.isMobile ? contentEl.createDiv({ cls: 'ijipu-source-diag' }) : undefined
-      this.unfixHeight = fitEditorToVisibleArea(contentEl, ta, diag)
+      ta.focus()
+      // adj404/408/409：钉住「可视区域」——真机上宿主的键盘机制与样式都反制过了，见函数头注释
+      this.unfixHeight = fitEditorToVisibleArea(contentEl, ta)
       return
     }
 

@@ -335,7 +335,7 @@ console.log('[12] .jps 文件视图：源码态填满窗口（adj402）')
   // adj404：真机上 WebView（随键盘缩布局视口）与 Obsidian（`--keyboard-height` 再扣一次）双重扣减，
   // 源码框会比可视区矮一个键盘高 → 按 visualViewport 实测定高，必要时临时解除 .app-container 上限。
   // 断言这两件事都在（并都有还原），防止后人"简化"掉导致真机回归。
-  check('adj404 源码框按 visualViewport 实测定高', view.includes('visualViewport') && view.includes('vv.offsetTop + vv.height'))
+  check('adj404 源码框按可视区域实测定高（visualViewport + 键盘高补偿）', view.includes('visualViewport') && view.includes('vv.offsetTop + vv.height') && view.includes('keyboardVar'))
   check('adj404 必要时解除 .app-container 上限并还原（不留副作用）', view.includes("style.maxHeight = 'none'") && view.includes('teardownHeightFit') && view.includes('Platform.isMobile'))
   // adj407：设置页显示「构建 日期 时间 @commit」——同一版本号会有多个本地构建，没有指纹就无法判断
   // 手机上装的到底是哪一份（复测时反复踩过）。这条断言防的是"以后有人把指纹去掉"。
@@ -343,12 +343,12 @@ console.log('[12] .jps 文件视图：源码态填满窗口（adj402）')
   const pkgJson = JSON.parse(readFileSync('package.json', 'utf8')) as { scripts?: Record<string, string> }
   check('adj407 设置页显示构建指纹（日期 时间 + commit）', settingsSrc.includes('BUILD_STAMP') && settingsSrc.includes('GIT_COMMIT') && settingsSrc.includes('构建 '))
   check('adj407 build/smoke 前置生成构建信息（gen:info → src/gen/buildInfo.ts，已 gitignore）', (pkgJson.scripts?.build ?? '').includes('gen:info') && (pkgJson.scripts?.smoke ?? '').includes('gen:info') && readFileSync('.gitignore', 'utf8').includes('src/gen/'))
-  check('adj407 移动端源码态带诊断行（真机数值，修好即移除）', view.includes('ijipu-source-diag') && readFileSync('styles.css', 'utf8').includes('.ijipu-source-diag'))
-  // adj409：真凶是宿主的 `.view-content { padding-bottom: max(var(--safe-area-inset-bottom), …) }`，
-  // 而真机上该变量等于键盘高（实测 padB=319）→ 内容盒子矮一个键盘高。必须 inline important 改回自有内边距。
-  check('adj409 反制宿主的键盘 padding-bottom', view.includes("setProperty('padding-bottom', '8px', 'important')"))
-  // adj408：宿主 textarea 规则（height:100% / min-height:50vh / max-height:20vh|80vh）会盖掉撑高与赋值
+  // adj408/adj409：真机上"源码框少一个键盘高"的两条真凶（都在宿主的样式里，且都用 inline+important 反制）——
+  // ① 宿主 textarea 的 height/min-height/max-height；② `.view-content` 的 padding-bottom = 键盘高。
+  // 这两条最容易被人"顺手简化"掉，而回归只在真机上暴露，故用断言钉住。
   check('adj408 反制宿主 textarea 的 height/min/max-height', view.includes("setProperty('max-height', 'none', 'important')") && view.includes("setProperty('min-height', '0', 'important')") && readFileSync('styles.css', 'utf8').includes('max-height: none'))
+  check('adj409 反制宿主的键盘 padding-bottom（真凶）', view.includes("setProperty('padding-bottom', '8px', 'important')"))
+  check('adj409 源码框高度按实测位置算（不再用 offsetHeight 估算）', view.includes("ta.getBoundingClientRect().top") && view.includes("setProperty('height', 'auto', 'important')"))
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

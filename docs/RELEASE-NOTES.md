@@ -7,51 +7,51 @@
      3) 同步 manifest.json / package.json / versions.json（+ package-lock.json）的版本号；
      4) 提交 → 打 tag → 推送；CI 会用 release-body.md（只含当前版本）作为 Release 正文。 -->
 
-# 爱记谱 iJipu 0.7.1
+# 爱记谱 iJipu 0.7.2
 
-> 本版修移动端「**切到源码后窗格缩两次、还填不满窗口**」——手机上一打开源码编辑，
-> 键盘弹出缩一次、紧接着又缩一次，而且缩完之后并没有占满可用高度。
-> 根因是两套尺寸机制在打架：视图容器自己会滚（`height:100%` + `overflow:auto`），
-> 源码框又写死了 `min-height: 240px`；键盘/移动端工具栏先后改变可用高度时，
-> 两者叠加就表现为"缩两次"，且收缩后不等于"窗口剩余高度"。
-> 现已改为：**源码框永远等于窗口剩余高度**，容器自己不再滚动。
+> 本版修移动端「**点「✎ 源码」后，源码框下方空出一大截（约一个键盘的高度）**」——
+> 输入法弹出后源码框没有填满可视区，看起来像"被多缩了一次"。
+> 真凶**不在键盘高度上**，而在宿主的两处样式：
+> ① `.workspace-leaf-content .view-content { padding-bottom: max(var(--safe-area-inset-bottom), …) }`
+> —— 真机上该变量等于**键盘高**（实测 319 = `--keyboard-height`），于是容器内容盒子正好矮一个键盘高；
+> ② `textarea { height: 100%; min-height: 50vh; max-height: 20vh|80vh }` —— 会盖掉"撑满"的高度赋值。
+> 现在对这两处逐条用 inline + `!important` 反制，并按**实测位置**算出源码框高度（可视区底 − 源码框顶）。
+> 另外设置页补上了**构建指纹**，便于判断设备上装的到底是哪一份构建。
 
-## 修复：`✎ 源码` 窗格缩两次、不填满窗口（adj402）
+## 修复：源码框下方空出约一个键盘的高度（adj404 / adj408 / adj409）
 
-- **现象**（用户反馈，移动端）：在 `.jps` 文件视图里点「✎ 源码」——输入法刚打开时源码窗格先变小，
-  接着**又进一步缩小**；后一次缩小没有必要，且窗格没有占满可用空间。
-- **根因**：`.ijipu-file-view` 用 `height:100%` + `overflow:auto`（自己会滚动），
-  `.ijipu-source-editor` 又写了 `flex:1 1 auto` + `min-height:240px`（硬下限）。
-  可用高度被键盘改变时，容器滚动与内容收缩两套机制叠加，于是出现二次缩小，
-  且 `240px` 下限让窗格在矮视口下不再等于"剩余高度"。
+- **现象**（用户真机反馈，多轮复现）：输入法未打开时源码框满屏正确；一打开输入法，源码框下方空出一大截，
+  空出的高度约等于一个键盘。
+- **定位过程**（真机读数，非推断）：先按"视口会不会随键盘缩"两条路都试过（`visualViewport` / `min(vv, innerHeight)`），
+  在用户机上视口**根本不缩**（`innerH=vvH=914`），故这条路无效；随后在源码视图里加了一行临时诊断输出
+  （`appC=595`、`box=502`、`ta=119`、**`padB=319`**），一步定位：
+  - `appC=595` = `914 − 319` → Obsidian 自己的容器高度**正确**（只扣一次键盘）；
+  - `box=502` = 容器高度也**正确**（顶部文件头 93 + 502 = 595 = 键盘上沿）；
+  - **`padB=319`** → 容器自身的 `padding-bottom` 正好等于键盘高，内容盒子因此少了一个键盘高；
+  - `ta=119` → 还叠加了宿主 `textarea` 的 `height/min-height/max-height` 规则把高度赋值盖掉。
 - **修复**：
-  1. 视图容器 `flex` 列 + `min-height:0` + `box-sizing:border-box`——允许随父级一起收缩；
-  2. 源码态给容器加 `.ijipu-file-editing` → 容器**不自己滚动**（`overflow:hidden`），滚动交给源码框，
-     避免两套机制叠加；
-  3. 源码框去掉 `240px` 硬下限（`min-height:0`）+ `flex:1`——**永远等于窗口剩余高度**；
-     桌面端仍保留 `resize: vertical` 手动拉高。
-- **顺带**：文件级工具条固定为 `flex:0 0 auto`，不会被源码框挤压换行。
+  1. **反制宿主的键盘内边距**（`adj409`，真凶）：容器上 inline `padding-bottom: 8px !important`
+     ——容器高度已按可视区钉好，不需要宿主那段留白；
+  2. **反制宿主 textarea 规则**（`adj408`）：源码框上 inline `flex:0 0 auto` / `min-height:0` /
+     `max-height:none` / `height`（按实测算）全部 `!important`，样式文件里再按类名压一层作双保险；
+  3. **容器尺寸同样用 inline important 钉死**（`height` / `display:flex` / `flex-direction` /
+     `overflow:hidden` / `max-height:none` / `position:relative`），不再依赖 CSS 级联；
+  4. 高度**实测**：先 `height:auto` 复位 → 量源码框真实顶部 → 高度 = 可视区底 − 源码框顶 − 内边距；
+  5. 键盘高度仍按双信号补偿（`min(innerHeight, visualViewport 底) − 未扣足的键盘高`），并在需要时
+     临时解除 `.app-container` 的 `max-height`；切走 / 关闭 / 重画时逐条还原，不留副作用；
+  6. 桌面端不挂载这套逻辑（`Platform.isMobile` 判定），行为完全不变。
+- **结果**：源码框从工具条一直延伸到键盘上沿，内容填满、滚动条正常（用户真机确认）。
+
+## 新增：设置页显示构建指纹（adj407）
+
+- 设置页头部显示 **`版本 v0.7.2 · 构建 2026-09-14 23:48 @cc88804e · 作者 蜗牛🐌`**。
+- 由 `scripts/gen-build-info.mjs` 在 `npm run build` 前生成（`src/gen/buildInfo.ts`，已 gitignore）。
+- 意义：同一版本号会有多个本地构建，没有指纹就无法判断设备上装的是哪一份——本轮复测时反复踩过这个坑。
 
 ## 验证
 
-- 插件 `npm run smoke` 新增 **4 条断言**（第 12 节：容器 `height:100%+min-height:0+border-box`、
-  源码态容器 `overflow:hidden`、源码框无 `240px` 硬下限且 `flex:1`、`fileView.ts` 确实加了
-  `.ijipu-file-editing` 类）——**共 112 项全绿**，用来防止"以后又把 240px 加回来 / 忘了加类"
-  （这种回归在桌面端看不出来，只有手机上才暴露）。
+- 用户真机逐轮读数确认：修复前 `padB=319 / ta=119`（源码框下方空一个键盘高）→ 修复后源码框填满到键盘上沿 ✓。
+- 插件 `npm run smoke` **119 项全绿**（第 12 节新增 adj408 / adj409 / adj404 / adj407 共 7 条断言，
+  专门钉住这几处"只在真机上暴露"的反制逻辑，防止后人顺手简化掉）。
 - `tsc -noEmit -skipLibCheck` + `npm run build` 通过；`main.js` 为构建产物、不入库。
-- 引擎未变动（本版只改插件侧 CSS/视图），因此 `vendor/engine` 与 0.7.0 一致。
-
-<!-- 未发布（测试中，真机确认后再定版本号并挪到上面当版）：
-     adj404 源码框按「可视区」定高——真机上宿主的键盘处理有两套机制且都可能出现：
-     ① 视口自己缩（Android WebView adjustResize：innerHeight 与 visualViewport 都变小）；
-     ② 视口不缩、由 Obsidian 原生侧把键盘高写进 `--keyboard-height`
-        （`body.is-mobile .app-container { max-height: calc(100vh - var(--keyboard-height)) }`）。
-     两者叠加 → .app-container = 屏高 − 2×键盘高，源码框因此比可视区矮一截；
-     `keyboard-animating` 期间先不扣、动画结束才扣，即"缩两次"来源。
-     修法：fitEditorToVisibleArea() 取
-       visible = min(innerHeight, visualViewport 底) − max(0, 键盘高 − 视口已缩掉的部分)
-     把容器钉到「visible − 容器顶」，必要时临时解除 .app-container 的 max-height
-     （切走/关闭全部还原），仅 Platform.isMobile 挂载。
-     ★ 第一版只按 visualViewport 判定 → 在"视口不缩"的真机上量不到键盘、仍少一截（用户复测反馈），
-       故改为两个信号都取；并加了 500ms 定时兜底（--keyboard-height 变化不一定伴随 resize 事件）。
-     验证：smoke 新增 2 条断言（共 114 项全绿）；tsc -noEmit + build 通过。 -->
+- 引擎未变动（本版只改插件侧视图逻辑与设置页），`vendor/engine` 与 0.7.1 一致。
