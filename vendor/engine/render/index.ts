@@ -1238,10 +1238,7 @@ interface Beam {
 
 /**
  * 计算减时线横线组：
- * 第 n 条横线连接「同一组内连续且减时线数 ≥ n」的音符。
- * 分组键 = 平均连音组号（adj395：(y...) 组内音符的减时线**始终连成一条**，
- *   即使该组跨越拍边界——等时值连音是"平分一段总时值"，不能被拍线切断）；
- *   非连音组音符仍按「同一拍内（floor(beatPos) 相同）」相连。
+ * 第 n 条横线连接「相邻且减时线数 ≥ n」的音符（相邻判定见 linked）。
  * 例：1/2/ → 1 条（整拍连）；1/2/3/4/ → 拍 1 连、拍 2 连（中间断开）；
  *     1//2//3//4// → 2 条（各整拍连）；1//2//3/ → 第 1 条全连、第 2 条连 1//2//
  */
@@ -1250,9 +1247,19 @@ function computeBeams(notes: PlacedToken[], noteSize = 18): Beam[] {
   const digitW = noteSize * 0.62
   // adj219：近整数归整——浮点拍位（0.9999…）误判拍边界（同布局 adj217/218）
   const beatOf = (v: number) => (Math.abs(v - Math.round(v)) < 1e-3 ? Math.round(v) : Math.floor(v))
-  /** 减时线分组键：连音组号优先，否则按拍 */
-  const bucketOf = (n: PlacedToken) =>
-    n.token.tupletGroup !== undefined ? `t${n.token.tupletGroup}` : `b${beatOf(n.beatPos)}`
+  /**
+   * adj397：相邻两音符是否共用同一条减时线（**逐对判定**，不再按"分组桶"比较）：
+   *  ① 同属一个等时值连音组 `(y...)` → 相连（跨拍也不断开，adj395 保留）；
+   *  ② 否则只要落在**同一拍**内 → 相连。
+   * 旧实现「组号优先」把连音组音符与同拍组外音符分到两个桶里，于是
+   * `2/. 3// 5/ (y5// 6// 5//) …` 中 5/（拍 2 起点）与组首音（拍 2 内）各自成线、
+   * 减时线在谱面上断开——而二者本在同一拍内，按拍相连才是简谱的书写习惯。
+   */
+  const linked = (a: PlacedToken, b: PlacedToken): boolean => {
+    const ga = a.token.tupletGroup
+    if (ga !== undefined && ga === b.token.tupletGroup) return true
+    return beatOf(a.beatPos) === beatOf(b.beatPos)
+  }
   const groups = new Map<string, PlacedToken[]>()
   for (const n of notes) {
     const key = `${n.y}|${n.barIndex}`
@@ -1270,13 +1277,8 @@ function computeBeams(notes: PlacedToken[], noteSize = 18): Beam[] {
           i++
           continue
         }
-        const bucket = bucketOf(list[i])
         let j = i
-        while (
-          j + 1 < list.length &&
-          bucketOf(list[j + 1]) === bucket &&
-          list[j + 1].token.diminishCount >= level
-        ) {
+        while (j + 1 < list.length && linked(list[j], list[j + 1]) && list[j + 1].token.diminishCount >= level) {
           j++
         }
         beams.push({

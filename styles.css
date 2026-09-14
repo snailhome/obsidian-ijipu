@@ -559,6 +559,19 @@
 .ijipu-settings-header h2 {
   margin: 0 0 0.3em;
 }
+/* 版本 / 作者信息行（标题下） */
+.ijipu-settings-meta {
+  margin: 0 0 0.6em;
+  font-size: 0.85em;
+  color: var(--text-faint);
+}
+.ijipu-settings-meta a {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+.ijipu-settings-meta a:hover {
+  color: var(--text-accent);
+}
 .ijipu-settings-header p {
   margin: 0 0 0.6em;
   line-height: 1.55;

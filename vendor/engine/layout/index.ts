@@ -155,6 +155,18 @@ const barlineSpace = (gap: number, type: BarlineType = '|', comment?: string, no
   return base
 }
 
+/**
+ * adj398：临时节拍分数（`|"p:2/4"`）在小节线**右侧**的净占位宽——
+ * 分数整宽（2×半宽）+ 起始 2×s + 右侧末距 2px。分数画在线右缘之后，与下一小节音符之间需要这段空白。
+ * **预算与放置必须同源**：`placeMusicRowSpace` 的 `nonDurPad`（行可分配宽 W 的扣除项）与
+ * 放置处的 `gapR` 曾是两套算法（预算按 barlinePad×2，放置按分数宽），差出的 `分数宽 − barlinePad`
+ * 无人买单 → 行内容整体右溢（用户谱 `… |"p:2/4" 0 5 |"p:4/4" 6-- …` 右溢 19.2px，E-2026-138）。
+ */
+function meterGapRight(comment: string | undefined, noteSize: number): number | null {
+  const halfW = comment ? meterCommentHalfW(comment, noteSize) : null
+  return halfW === null ? null : 2 * noteScaleOf(noteSize) + 2 * halfW + 2
+}
+
 /** 小节内每拍信息（adj106：倚音占位按拍记录，不再整小节最大 extra 应用到所有拍——会高估行宽导致早断行） */
 function segBeatMap(seg: BarSeg, noteSize = 18): Map<number, { minDur: number; extra: number }> {
   const byBeat = new Map<number, { minDur: number; extra: number }>()
@@ -1201,9 +1213,12 @@ export function layoutScore(
               ? x
               : x + BAR_PAD + segBarW + barlineSpace(config.bar_gap, bar.type, bar.comment, m.noteSize) / 2 + Math.floor(segBeat + segBeats(seg)) * NOTE_GAP
           const halfW = barlineTotalW(bar.type) / 2
+          // adj398：行末小节线右缘贴右边距，而临时节拍分数画在**线右缘之后**——
+          // 右钳制须再让出分数占位，否则分数越出右边距（`… |"p:2/4"` 收尾时越 12px，E-2026-138）
+          const meterGapD = meterGapRight(bar.comment, m.noteSize) ?? 0
           const lineX = Math.min(
             Math.max(lineX0, config.margin_left + halfW),
-            page.width - config.margin_right - halfW,
+            page.width - config.margin_right - halfW - meterGapD,
           )
           const bid: LayoutId = { page: pageIndex, voice, group: groupIndex, index: barCounter }
           page.barlines.push({
@@ -1349,7 +1364,10 @@ export function layoutScore(
       // adj314：预算与放置一致——小节线占位 = 线自身宽 + 两侧净间距 barlinePad(noteSize)。
       // 之前用 barlineSpace(含固定 +8 空隙) / 0.5×音符宽 做预算，高估占位→ W 被挤小→ 拍内音符过密。
       const lineW = barlineTotalW(bk.bar.type)
-      nonDurPad += lineW + bp * 2
+      // adj398：带临时节拍分数的小节线，右侧间距取 max(barlinePad, 分数占位)——与放置处 gapR 同源；
+      // 无分数时保持 lineW + 2×barlinePad 原值不变（既有排版零影响）
+      const meterGap = meterGapRight(bk.bar.comment, m.noteSize)
+      nonDurPad += lineW + bp + Math.max(bp, meterGap ?? bp)
     }
     // adj294：&zkh/&ykh 为独立括号标记（无时值元素）——占位从行宽扣（A 方案）
     // adj375：&hx 呼吸记号同为独立标记，宽度按 code 取
@@ -1536,15 +1554,19 @@ export function layoutScore(
         let gapR = bk.atEnd ? 0 : barGapSide()
         // adj357：临时节拍（|"P:2/4"）在小节线右侧画分数——右侧占位须含「分数半宽×2 + 2×s 起始 + 2px 末距」，
         // 空间优先路径原用固定 barGapSide（不含分数宽），导致分数压到下一小节音符；此处补足。
-        const meterHalf = bk.bar.comment ? meterCommentHalfW(bk.bar.comment, m.noteSize) : undefined
-        if (meterHalf != null) gapR = Math.max(gapR, 2 * noteScaleOf(m.noteSize) + 2 * meterHalf + 2)
+        // adj398：该间距同时计入上方 nonDurPad 预算（同源函数 meterGapRight），否则行内容右溢。
+        const meterGap = meterGapRight(bk.bar.comment, m.noteSize)
+        if (meterGap != null) gapR = Math.max(gapR, meterGap)
         // adj314：小节线占位用「线自身宽 + 两侧动态间距」，不再叠加 barlineSpace 固定 +8 空隙——
         // 否则一侧间距被撑到 ~8.5px，超过半个音符宽（4.03px）导致小节线间距过大。
         // 行首小节线（该侧无音符）：线左缘贴边（用线自身半宽）。
         const barHalf = segLastPb[b] === undefined ? barlineTotalW(bk.bar.type) / 2 : barlineTotalW(bk.bar.type) / 2
         // 行末小节线（atEnd）：撑满时右缘贴右边距，右侧不设间距；否则按左间距 + 中心推算（自然宽行尾留白）
+        // adj398：行末线带临时节拍分数时，分数画在线右缘之后 → 线整体左移「分数占位」，分数右缘贴右边距
         let lineX = curX + gapL + barHalf
-        if (bk.atEnd && stretch) lineX = page.width - config.margin_right - barlineTotalW(bk.bar.type) / 2
+        if (bk.atEnd && stretch) {
+          lineX = page.width - config.margin_right - barlineTotalW(bk.bar.type) / 2 - (meterGap ?? 0)
+        }
         const bid: LayoutId = { page: pageIndex, voice, group: groupIndex, index: barCounter }
         page.barlines.push({
           id: bid,

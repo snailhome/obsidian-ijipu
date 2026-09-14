@@ -66,9 +66,23 @@ export class IJipuSettingTab extends PluginSettingTab {
     const { containerEl } = this
     containerEl.empty()
 
-    // 插件头部：标题 + 说明 + 链接
+    // 插件头部：标题 + 版本/作者 + 说明 + 链接
     const head = containerEl.createDiv({ cls: 'ijipu-settings-header' })
     head.createEl('h2', { text: '爱记谱（iJipu）' })
+
+    // 版本 / 作者：一律读 manifest.json（发布时自动同步，避免手写版本号漂移）
+    const { version, author, authorUrl } = this.plugin.manifest
+    const meta = head.createDiv({ cls: 'ijipu-settings-meta' })
+    meta.createEl('span', { cls: 'ijipu-settings-version', text: `版本 v${version}` })
+    meta.createEl('span', { cls: 'ijipu-settings-sep', text: ' · ' })
+    const authorEl = meta.createEl(authorUrl ? 'a' : 'span', { cls: 'ijipu-settings-author' })
+    if (authorUrl) {
+      authorEl.setAttr('href', authorUrl)
+      authorEl.setAttr('target', '_blank')
+      authorEl.setAttr('title', `作者主页：${authorUrl}`)
+    }
+    authorEl.setText(`作者 ${author}`)
+
     head.createEl('p', {
       text: '在 Obsidian 笔记中用 ```jps 代码块把 .jps 简谱脚本渲染为可视化简谱，支持试听（播放时色块跟进音符）与「整页 / 满宽 / 谱面」三种显示模式；设置项与 iJipu 应用一脉传承（页面 / 字体 / 行距 / 渲染）。优先级：引擎默认 < 本页设置 < 笔记 frontmatter（ijipu_*）< 谱面源码内的 # jps-config 行——把 iJipu 里带设置行的 .jps 直接复制进来，即渲染成一模一样。',
     })
