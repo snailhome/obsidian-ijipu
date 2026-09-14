@@ -87,6 +87,12 @@ function fitEditorToVisibleArea(contentEl: HTMLElement, ta: HTMLTextAreaElement,
     // —— 这些 height/max-height 会盖掉 flex 撑高与我们的高度赋值（实测 118px 正是"设的下限 120 减边框"）。
     // 故对容器与源码框逐条用 inline + !important 反制（inline important 优先于任何样式表规则），
     // 高度也不再估算，而是**实测**：源码框顶（getBoundingClientRect）→ 可视区底。
+    // adj409：**真凶是宿主的 padding-bottom**。Obsidian 本体规则
+    //   `.workspace-leaf-content .view-content { padding-bottom: max(var(--safe-area-inset-bottom), var(--size-4-8)) }`
+    // 而真机上 `--safe-area-inset-bottom` 等于**键盘高**（用户机实测 padB=319 = --keyboard-height）——
+    // 我们的容器内容盒子因此正好矮一个键盘高，源码框再撑也撑不出那 319px（前三轮都在改容器高度，方向错了）。
+    // 容器高度已按可视区钉好，这段"键盘内边距"完全不需要 → 用 inline important 改回我们自己的 8px。
+    contentEl.style.setProperty('padding-bottom', '8px', 'important')
     contentEl.style.setProperty('height', `${want}px`, 'important')
     contentEl.style.setProperty('display', 'flex', 'important')
     contentEl.style.setProperty('flex-direction', 'column', 'important')
@@ -136,7 +142,7 @@ function fitEditorToVisibleArea(contentEl: HTMLElement, ta: HTMLTextAreaElement,
       vv.removeEventListener('scroll', onVv)
     }
     restoreCap()
-    for (const prop of ['height', 'display', 'flex-direction', 'overflow']) contentEl.style.removeProperty(prop)
+    for (const prop of ['height', 'display', 'flex-direction', 'overflow', 'max-height', 'position', 'padding-bottom']) contentEl.style.removeProperty(prop)
     if (ta) {
       ta.style.removeProperty('height')
       ta.style.removeProperty('flex')

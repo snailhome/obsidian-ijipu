@@ -344,6 +344,11 @@ console.log('[12] .jps 文件视图：源码态填满窗口（adj402）')
   check('adj407 设置页显示构建指纹（日期 时间 + commit）', settingsSrc.includes('BUILD_STAMP') && settingsSrc.includes('GIT_COMMIT') && settingsSrc.includes('构建 '))
   check('adj407 build/smoke 前置生成构建信息（gen:info → src/gen/buildInfo.ts，已 gitignore）', (pkgJson.scripts?.build ?? '').includes('gen:info') && (pkgJson.scripts?.smoke ?? '').includes('gen:info') && readFileSync('.gitignore', 'utf8').includes('src/gen/'))
   check('adj407 移动端源码态带诊断行（真机数值，修好即移除）', view.includes('ijipu-source-diag') && readFileSync('styles.css', 'utf8').includes('.ijipu-source-diag'))
+  // adj409：真凶是宿主的 `.view-content { padding-bottom: max(var(--safe-area-inset-bottom), …) }`，
+  // 而真机上该变量等于键盘高（实测 padB=319）→ 内容盒子矮一个键盘高。必须 inline important 改回自有内边距。
+  check('adj409 反制宿主的键盘 padding-bottom', view.includes("setProperty('padding-bottom', '8px', 'important')"))
+  // adj408：宿主 textarea 规则（height:100% / min-height:50vh / max-height:20vh|80vh）会盖掉撑高与赋值
+  check('adj408 反制宿主 textarea 的 height/min/max-height', view.includes("setProperty('max-height', 'none', 'important')") && view.includes("setProperty('min-height', '0', 'important')") && readFileSync('styles.css', 'utf8').includes('max-height: none'))
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)
