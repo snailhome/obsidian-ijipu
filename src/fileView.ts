@@ -81,32 +81,40 @@ function fitEditorToVisibleArea(contentEl: HTMLElement, ta: HTMLTextAreaElement,
       restoreCap()
     }
     // adj408：**不再依赖 CSS 级联**。真机诊断（用户截图）显示：容器高度算对了（box=502 = 到键盘上沿），
-    // 但里面的 textarea 只有几十像素高、下面留一大片空白——宿主（Obsidian 移动端）的样式把这几个
-    // 声明压掉了（`display:flex` / textarea 的 flex 撑高没生效），所以前两轮改容器高度毫无效果。
-    // 现在把容器与源码框的尺寸**用 inline + !important 直接钉死**（inline important 优先于任何样式表），
-    // 并按「容器高 − 工具条 − 诊断行 − 内边距」显式算出源码框高度，不走 flex 撑高。
+    // 但里面的源码框（textarea）只有 118px、下面留一大片空白——用户看到的"多缩一个键盘高"就是这片空白。
+    // 原因在 Obsidian 本体的 textarea 规则（已在 obsidian.asar 中确认存在）：
+    //   `textarea { height: 100%; min-height: 50vh; max-height: 80vh }` / `textarea { height: 300px; max-height: 20vh }`
+    // —— 这些 height/max-height 会盖掉 flex 撑高与我们的高度赋值（实测 118px 正是"设的下限 120 减边框"）。
+    // 故对容器与源码框逐条用 inline + !important 反制（inline important 优先于任何样式表规则），
+    // 高度也不再估算，而是**实测**：源码框顶（getBoundingClientRect）→ 可视区底。
     contentEl.style.setProperty('height', `${want}px`, 'important')
     contentEl.style.setProperty('display', 'flex', 'important')
     contentEl.style.setProperty('flex-direction', 'column', 'important')
     contentEl.style.setProperty('overflow', 'hidden', 'important')
+    contentEl.style.setProperty('max-height', 'none', 'important')
+    contentEl.style.setProperty('position', 'relative', 'important')
     const barEl = contentEl.firstElementChild instanceof HTMLElement ? contentEl.firstElementChild : null
-    const barH = barEl ? barEl.offsetHeight + (parseFloat(getComputedStyle(barEl).marginBottom) || 0) : 0
-    const diagH = diag ? diag.offsetHeight + (parseFloat(getComputedStyle(diag).marginTop) || 0) : 0
+    const barH = barEl ? Math.round(barEl.getBoundingClientRect().height) : 0
     const cs = getComputedStyle(contentEl)
-    const padV = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0)
+    const padBottom = parseFloat(cs.paddingBottom) || 0
+    let taH = 0
     if (ta) {
       ta.style.setProperty('flex', '0 0 auto', 'important')
-      ta.style.setProperty('height', `${Math.max(120, want - padV - barH - diagH)}px`, 'important')
+      ta.style.setProperty('min-height', '0', 'important')
+      ta.style.setProperty('max-height', 'none', 'important')
+      ta.style.setProperty('height', 'auto', 'important') // 先复位，量出源码框真实顶部
+      const taTop = ta.getBoundingClientRect().top
+      taH = Math.max(120, Math.round(bottom - taTop - padBottom))
+      ta.style.setProperty('height', `${taH}px`, 'important')
     }
     // adj407（临时诊断）：把真实数字打在源码视图里——真机上"少一个键盘高"的成因只能靠这些数值定位，
-    // 修好即移除（用户截图/照抄即可）。
+    // 修好即移除（绝对定位于容器底部，不占布局空间）。
     if (diag) {
       const v = window.visualViewport
-      const appH = appContainer ? appContainer.clientHeight : -1
       diag.setText(
-        `诊断 innerH=${Math.round(window.innerHeight)} vvH=${v ? Math.round(v.height) : 'n/a'} vvTop=${v ? Math.round(v.offsetTop) : 'n/a'} ` +
-          `kb=${Math.round(keyboardVar())} appC=${appH} box=${Math.round(contentEl.clientHeight)} ta=${ta ? Math.round(ta.clientHeight) : -1} ` +
-          `bar=${Math.round(barH)} disp=${cs.display} lifted=${lifted ? 1 : 0}`,
+        `诊断 want=${want} top=${Math.round(top)} bottom=${Math.round(bottom)} padB=${Math.round(padBottom)} bar=${barH} taH=${taH} ` +
+          `ta=${ta ? Math.round(ta.clientHeight) : -1} kb=${Math.round(keyboardVar())} appC=${appContainer ? appContainer.clientHeight : -1} ` +
+          `innerH=${Math.round(window.innerHeight)} vvH=${v ? Math.round(v.height) : 'n/a'} lifted=${lifted ? 1 : 0}`,
       )
     }
   }
