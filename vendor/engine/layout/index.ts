@@ -30,7 +30,7 @@ import type {
 } from '../types'
 import { DIGIT_HEIGHT_RATIO, LAYER_GAP, SLUR_W, octaveTopY, BRACKET_PAD, H_GAP, noteScaleOf, GRACE_SIZE_RATIO, GRACE_SLOT_RATIO, GRACE_SLOT_RATIO_MULTI, VOLTA_BAR_GAP, VOLTA_RAISE, DYN_HALF_H, barlinePad, barlineTotalW, DOT_AFTER_DIGIT_GAP, DOT_R } from './spacing'
 // adj284：空间优先布局的度量（本体宽 / 时值拆分 / 非时值元素间距）
-import { splitNoteDur, noteBodyW, augBodyW, dotBodyW, accidentalBodyW, markBodyW, digitSlotW, hxBodyW } from './spaceLayout'
+import { splitNoteDur, noteBodyW, augBodyW, dotBodyW, accidentalBodyW, markBodyW, digitSlotW, hxBodyW, graceAtTail } from './spaceLayout'
 import { hairpinEvents, resolveHairpins, type DynEvent, type NoteAnchors } from './hairpins'
 // adj303：乐器名标注需要用 parseInstrumentRef / 库名（@乐器名 / @@ 后下一个音符）
 import { parseInstrumentRef, INSTRUMENT_LIB_NAMES } from '../playback/instruments'
@@ -87,12 +87,12 @@ const minNoteW = (noteSize: number, extra = 0) => noteSize * 0.62 + H_GAP + extr
 /** 数字槽半宽（0.31×noteSize，歌词/高低音点对齐基准） */
 const halfDigitW = (noteSize: number) => noteSize * 0.31
 /**
- * 倚音占位额外宽（adj98：倚音计入音符占位宽度——前倚音向左、后倚音向右扩展）。
- * 倚音字号 = 主音符 × 0.4（adj101 由 0.3 调大），每音占宽 0.62×0.4×noteSize；
- * 多音符（≥2）数字间距缩小为 0.5×0.4×noteSize（adj103，与渲染一致）；
- * 组内 n 个倚音线性叠加 + 左侧 2px 间距。
+ * 倚音组占宽（adj98：倚音计入音符占位宽度，前倚音向左、后倚音向右扩展）。
+ * 倚音字号 = 主音符 × 0.5（adj105），每音占宽 0.62×0.5×noteSize；
+ * 多音符（≥2）数字间距缩小为 0.5×0.5×noteSize（adj103，与渲染一致）；
+ * 组内 n 个倚音线性叠加 + 左右各 2px 间距（共 4px）。
  */
-function graceExtraW(t: Extract<MusicToken, { kind: 'note' }> | undefined, noteSize: number): number {
+function graceGroupW(t: Extract<MusicToken, { kind: 'note' }> | undefined, noteSize: number): number {
   if (!t || t.kind !== 'note' || !t.gracenotes || t.gracenotes.notes.length === 0) return 0
   const n = t.gracenotes.notes.length
   const gW = noteSize * GRACE_SIZE_RATIO * GRACE_SLOT_RATIO // 单音槽宽
@@ -100,12 +100,27 @@ function graceExtraW(t: Extract<MusicToken, { kind: 'note' }> | undefined, noteS
   return (n - 1) * gapW + gW + 4 // 组总宽 + 4px 间距（左右各 2px）
 }
 /**
+ * 紧贴数字的倚音占位宽（前倚音，以及无增时线/附点的后倚音）。
+ * adj396：带增时线/附点的后倚音改排到时值尾部（见 graceTailW），此处为 0。
+ */
+function graceInlineW(t: Extract<MusicToken, { kind: 'note' }> | undefined, noteSize: number): number {
+  return graceAtTail(t) ? 0 : graceGroupW(t, noteSize)
+}
+/**
+ * 排在音符时值尾部（**增时线/附点之后**）的倚音占位宽（adj396）。
+ * `3-[h5/]` 的倚音画在 `-` 右侧，占位也必须排在增时线元素之后，否则会与 `-` 重叠。
+ */
+function graceTailW(t: Extract<MusicToken, { kind: 'note' }> | undefined, noteSize: number): number {
+  return graceAtTail(t) ? graceGroupW(t, noteSize) : 0
+}
+/**
  * 音符最小额外占宽（adj287：时值优先也计入，防变音角标/前倚音与相邻元素重叠）
- * = 倚音组宽 graceExtraW（前倚音向左、后倚音向右）+ 变音角标左扩展 accidentalBodyW。
+ * = 倚音组宽 graceGroupW（前倚音向左、后倚音向右）+ 变音角标左扩展 accidentalBodyW。
  * 空间优先路径已分别用 grW/accW 单独处理，不引用本函数。
+ * adj396：这里只关心**总宽**（行宽/拍宽的最小需求），inline/tail 拆分不影响合计。
  */
 function noteExtraW(t: Extract<MusicToken, { kind: 'note' }> | undefined, noteSize: number): number {
-  return (t ? graceExtraW(t, noteSize) : 0) + (t && t.accidental ? accidentalBodyW(noteSize) : 0)
+  return (t ? graceGroupW(t, noteSize) : 0) + (t && t.accidental ? accidentalBodyW(noteSize) : 0)
 }
 /** 小节内左右留白（px） */
 const BAR_PAD = 6
@@ -441,9 +456,11 @@ function breakRowsSpace(segs: BarSeg[], availW: number, noteSize: number): Layou
       if (t.kind === 'note' || t.kind === 'rest' || t.kind === 'rhythm') {
         const s = splitNoteDur(t)
         const accW = t.kind === 'note' && t.accidental ? accidentalBodyW(noteSize) : 0
-        const grW = t.kind === 'note' ? graceExtraW(t, noteSize) : 0
+        // adj396：带增时线/附点的后倚音占位排在时值元素之后（inline 与 tail 拆分，合计不变）
+        const grW = t.kind === 'note' ? graceInlineW(t, noteSize) : 0
+        const grTailW = t.kind === 'note' ? graceTailW(t, noteSize) : 0
         durSum +=
-          noteBodyW(noteSize, grW) + accW + (t.dots > 0 ? dotBodyW(noteSize) : 0) + s.augCount * augBodyW(noteSize)
+          noteBodyW(noteSize, grW) + accW + (t.dots > 0 ? dotBodyW(noteSize) : 0) + s.augCount * augBodyW(noteSize) + grTailW
       }
     }
     // adj294/adj375：独立标记（&zkh/&ykh 括号、&hx 呼吸记号）按 token 计数占位宽。
@@ -1259,6 +1276,8 @@ export function layoutScore(
       accW: number
       /** 前倚音左扩展宽（[ 组），仅前倚音非 0 */
       leftExt: number
+      /** adj396：排在时值尾部（增时线/附点之后）的倚音占位宽，无则 0 */
+      grTailW: number
       /** 是否带 &hx（滑音箭头，右侧，无时值元素，依附音符/增时线之后） */
       hasHx: boolean
       /** 该音符的每拍时值宽（分配宽/时值），供小节线间距自适应收紧；预计算后填充 */
@@ -1276,7 +1295,9 @@ export function layoutScore(
           if (t.kind === 'note' || t.kind === 'rest' || t.kind === 'rhythm') {
             const s = splitNoteDur(t)
             const accW = t.kind === 'note' && t.accidental ? accidentalBodyW(m.noteSize) : 0
-            const grW = t.kind === 'note' ? graceExtraW(t, m.noteSize) : 0
+            // adj396：inline（紧贴数字）/ tail（增时线·附点之后）拆分——合计不变，仅换位置
+            const grW = t.kind === 'note' ? graceInlineW(t, m.noteSize) : 0
+            const grTailW = t.kind === 'note' ? graceTailW(t, m.noteSize) : 0
             const gn = t.kind === 'note' ? t.gracenotes : undefined
             // 前倚音向左扩展、后倚音向右扩展；只有前倚音影响「数字左缘」
             const leftExt = gn && !gn.after ? grW : 0
@@ -1292,6 +1313,7 @@ export function layoutScore(
               hasDot: t.dots > 0,
               noteBodyW: noteBodyW(m.noteSize, grW) + accW,
               dotBodyW: t.dots > 0 ? dotBodyW(m.noteSize) * t.dots : 0,
+              grTailW,
               accW,
               leftExt,
               hasHx: t.symbols.includes('hx'),
@@ -1318,7 +1340,8 @@ export function layoutScore(
     for (const n of noteList) {
       const noteElDur = n.noteDur + (n.hasDot ? n.dotDur : 0)
       totalDur += noteElDur + n.augCount * n.augDur
-      durBodySum += n.noteBodyW + (n.hasDot ? n.dotBodyW : 0) + n.augCount * augBodyW(m.noteSize)
+      // adj396：尾部倚音占位计入本体宽和（排在增时线/附点之后，总量与拆分前一致）
+      durBodySum += n.noteBodyW + (n.hasDot ? n.dotBodyW : 0) + n.augCount * augBodyW(m.noteSize) + n.grTailW
     }
     let nonDurPad = 0
     const bp = barlinePad(m.noteSize)
@@ -1357,7 +1380,7 @@ export function layoutScore(
     if (!stretch) {
       for (const n of noteList) {
         const noteElDur = n.noteDur + (n.hasDot ? n.dotDur : 0)
-        segNatW[n.barIdx] += n.noteBodyW + (n.hasDot ? n.dotBodyW : 0) + n.augCount * augBodyW(m.noteSize)
+        segNatW[n.barIdx] += n.noteBodyW + (n.hasDot ? n.dotBodyW : 0) + n.augCount * augBodyW(m.noteSize) + n.grTailW
         segDurSum[n.barIdx] += noteElDur + n.augCount * n.augDur
       }
       for (let b = row.start; b < row.end; b++) {
@@ -1473,8 +1496,10 @@ export function layoutScore(
               segments.push({ x: r1(xCursor), perBeat: r1(augElW / n.augDur), beats: n.augDur, el: 'aug' })
               xCursor += augElW
             }
+            // adj396：带增时线/附点的后倚音排在**增时线/附点之后**——占位接在尾部（渲染同位置）
+            xCursor += n.grTailW
             measureContentW[b - row.start] += xCursor - curX
-            // 音符实际占位宽（不含括号）：音符块段（含附点三段留空）+ 增时线
+            // 音符实际占位宽（不含括号）：音符块段（含附点三段留空）+ 增时线 + 尾部倚音
             const actualW = xCursor - curX
             const rightX = xCursor // 音符实际占位右端
             // &hx（滑音箭头）无时值元素：依附其前的带时值元素之后，本体宽占位
@@ -1673,9 +1698,11 @@ export function layoutScore(
             if (t.kind === 'note' || t.kind === 'rest' || t.kind === 'rhythm') {
               const s = splitNoteDur(t)
               const accW = t.kind === 'note' && t.accidental ? accidentalBodyW(m.noteSize) : 0
-              const grW = t.kind === 'note' ? graceExtraW(t, m.noteSize) : 0
+              // adj396：inline（紧贴数字）/ tail（增时线·附点之后）拆分——合计不变
+              const grW = t.kind === 'note' ? graceInlineW(t, m.noteSize) : 0
+              const grTailW = t.kind === 'note' ? graceTailW(t, m.noteSize) : 0
               const bodyW0 = noteBodyW(m.noteSize, grW) + accW
-              sum += bodyW0 + (t.dots > 0 ? dotBodyW(m.noteSize) : 0) + s.augCount * augBodyW(m.noteSize)
+              sum += bodyW0 + (t.dots > 0 ? dotBodyW(m.noteSize) : 0) + s.augCount * augBodyW(m.noteSize) + grTailW
             }
             // 独立括号标记 / &hx 滑音箭头为非时值元素——不计入本体宽，由 nonDurPad 占位
           }
@@ -1713,8 +1740,10 @@ export function layoutScore(
             if (t.kind === 'note' || t.kind === 'rest' || t.kind === 'rhythm') {
               const s = splitNoteDur(t)
               const accW = t.kind === 'note' && t.accidental ? accidentalBodyW(m.noteSize) : 0
-              const grW = t.kind === 'note' ? graceExtraW(t, m.noteSize) : 0
-              const bodyW0 = noteBodyW(m.noteSize, grW) + accW + (t.dots > 0 ? dotBodyW(m.noteSize) : 0) + s.augCount * augBodyW(m.noteSize)
+              // adj396：inline/tail 拆分（尾部倚音占位接在增时线/附点之后，合计不变）
+              const grW = t.kind === 'note' ? graceInlineW(t, m.noteSize) : 0
+              const grTailW = t.kind === 'note' ? graceTailW(t, m.noteSize) : 0
+              const bodyW0 = noteBodyW(m.noteSize, grW) + accW + (t.dots > 0 ? dotBodyW(m.noteSize) : 0) + s.augCount * augBodyW(m.noteSize) + grTailW
               const dur = tokenDuration(t)
               // 音符本体宽均分到它覆盖的拍（跨拍增时线/附点按拍均分）
               const startBeat = Math.floor(beatAcc + 1e-9)
@@ -1888,7 +1917,9 @@ export function layoutScore(
             let space: { noteBodyW: number; dotBodyW: number; accW: number; leftExt: number; hasDot: boolean; augW: number; hxW: number } | undefined
             if (useSpace) {
               const accW = t.kind === 'note' && t.accidental ? accidentalBodyW(m.noteSize) : 0
-              const grW = t.kind === 'note' ? graceExtraW(t, m.noteSize) : 0
+              // adj396：inline/tail 拆分——尾部倚音占位接在增时线/附点之后（渲染同位置）
+              const grW = t.kind === 'note' ? graceInlineW(t, m.noteSize) : 0
+              const grTailW = t.kind === 'note' ? graceTailW(t, m.noteSize) : 0
               const gn = t.kind === 'note' ? t.gracenotes : undefined
               const leftExt = gn && !gn.after ? grW : 0
               space = {
@@ -1898,7 +1929,8 @@ export function layoutScore(
                 leftExt,
                 hasDot: t.dots > 0,
                 // ★ adj319：增时线/hx 占宽累加进 noteRightX（与单声部 actualW 对齐）
-                augW: t.kind === 'note' ? splitNoteDur(t).augCount * augBodyW(m.noteSize) : 0,
+                // adj396：尾部倚音占位一并累加（排在增时线/附点之后）
+                augW: (t.kind === 'note' ? splitNoteDur(t).augCount * augBodyW(m.noteSize) : 0) + grTailW,
                 hxW: t.kind === 'note' && t.symbols.includes('hx') ? hxBodyW(m.noteSize) : 0,
               }
             }

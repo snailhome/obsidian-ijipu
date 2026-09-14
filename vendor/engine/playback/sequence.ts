@@ -11,6 +11,7 @@
 import type { BarlineMark, BarlineType, ParseResult, PlacedBarline, PlacedToken, ScoreLayout } from '../types'
 import { tokenDuration } from '../duration'
 import { parseKey, pitchToName } from '../layout/index'
+import { graceNoteBeats } from '../layout/spaceLayout'
 import { parseInstrumentRef } from './instruments'
 
 /**
@@ -451,6 +452,10 @@ export function buildPlaySequence(
   // 当前音符若与上一个音高相同、同属某连音线且中间无音符（索引相邻），则时值并入前一事件
   let lastEventNoteIdx = -1
   let lastEventPitch: string | null | undefined = undefined
+  // adj396：上一个音符的**主音符事件**下标（连音合并要并到主音符上，而非其后追加的倚音事件）
+  let lastMainEvIdx = -1
+  /** adj396：上一个音符是否带倚音（带倚音的音符不参与连音合并） */
+  let lastEventHadGrace = false
   /**
    * adj375：呼吸换气（&hx）——待结算的事件下标。
    * 语义：`&hx` 占**前面音符**总时值（含同音连音/增时线/附点）的 1/4，且最多 1/2 拍，作为呼吸静音：
@@ -501,20 +506,27 @@ export function buildPlaySequence(
       // (2 - | 2/) 的 2 连 2.5 拍；(2 3/ 2/ | 2) 第 3、4 个 2 连奏；
       // (2 3 | 2) 中间隔 3 不合并；**连音线外的同音符不并入**
       // （(2 - | 2) 2 → 播 3 拍再播 1 拍，不连成 4 拍）
+      // adj396：带倚音的音符不参与连音合并——倚音本身是要发声的独立事件，
+      // 合并会把倚音时值吞进长音（且合并目标必须落在**主音符事件**上，
+      // 后倚音事件排在主音符之后，旧代码用 events 末元素会并到倚音上）。
       const prevRanges = lastEventNoteIdx >= 0 ? slurOf.get(lastEventNoteIdx) : undefined
       const curRanges = slurOf.get(curNoteIdx)
       const shareSlur =
         prevRanges !== undefined &&
         curRanges !== undefined &&
         [...prevRanges].some((r) => curRanges.has(r))
+      const curHasGrace = token.kind === 'note' && (token.gracenotes?.notes.length ?? 0) > 0
       if (
         lastEventNoteIdx >= 0 &&
         curNoteIdx === lastEventNoteIdx + 1 &&
         shareSlur &&
+        !curHasGrace &&
+        !lastEventHadGrace &&
+        lastMainEvIdx >= 0 &&
         pitch !== null &&
         pitch === lastEventPitch
       ) {
-        const prev = events[events.length - 1]
+        const prev = events[lastMainEvIdx]
         prev.durationMs += durationMs
         lastEndMs = Math.max(lastEndMs, prev.atMs + prev.durationMs) // adj361：合并后当前播放时刻随之前移
         // adj300：连音合并——把被合并音符的拍段并入 prev 的播放拍段（色块可覆盖全时值，
@@ -523,6 +535,7 @@ export function buildPlaySequence(
         prev.playheadSegs = (prev.playheadSegs ?? []).concat(buildPlayheadSegs(item.note, prevBeat, rightEdgeByNoteIdx.get(item.note.id.index)))
         // adj157：合并时值；atMs 来自拍时钟（每个 event 独立），不需全局 at 累加
         lastEventNoteIdx = curNoteIdx
+        lastEventHadGrace = false
         i++
         continue
       }
@@ -532,42 +545,51 @@ export function buildPlaySequence(
         typeof voiceInst === 'string' && voiceInst.length > 0
           ? parseInstrumentRef(voiceInst).ref
           : voiceDefaultOf(placed.id.voice)
-      // 倚音（adj23）：前倚音提前于主音符、后倚音紧跟主音符，时值 1/8 拍，音高用倚音音符本身
+      // 倚音（adj23 / adj396 时值规范）：倚音**占用主音符的时值**——
+      //   ① 单个倚音实际时值 = 1/2^(括号内减时线条数 + 1) 拍（写 `2/` 即实音符的 `2//` = 1/4 拍）；
+      //   ② 前倚音依次演奏于主音符**开头**（`3[2/]`：先 1/4 拍倚音 2，再 3/4 拍主音符 3）；
+      //      后倚音依次演奏于主音符**末尾**（`3[h2/]`：先 3/4 拍主音符 3，最后 1/4 拍倚音 2）；
+      //   ③ 多倚音各占各自时值、依次排列（`3[3/2/]` = 1/4 + 1/4 倚音，主音符余 1/2 拍）；
+      //   ④ 主音符发声时值 = 总时值 − Σ倚音时值（**总时值不变**，不再向相邻音符借时间，
+      //      故布局时钟 / totalMs / 反复跳转都用同一套拍位，无需额外补偿）；
+      //   ⑤ `3 -[h5/]`：主音符先奏满增时线/附点（到总时值末尾前），最后 1/4 拍才奏后倚音。
       const gn = token.kind === 'note' ? token.gracenotes : undefined
-      const graceMs = (0.125 * 60000) / bpm
       const gracePitches =
         gn && gn.notes.length > 0
           ? gn.notes.map((g) => pitchToName(g.pitch, g.octaveShift, g.accidental, keySemitone))
           : []
+      const graceBeats = gn ? gn.notes.map((g) => graceNoteBeats(g.diminishCount)) : []
+      const graceTotalMs = (graceBeats.reduce((a, b) => a + b, 0) * 60000) / bpm
+      const graceMsAt = (gi: number) => (graceBeats[gi] * 60000) / bpm
+      /** 主音符发声起点（前倚音之后）；无前倚音即 atMs */
+      const mainAtMs = gn && !gn.after ? atMs + graceTotalMs : atMs
+      /** 主音符发声时值 = 总时值 − Σ倚音时值（不足时钳制为 0） */
+      const mainMs = Math.max(0, durationMs - graceTotalMs)
       if (gn && !gn.after && gracePitches.length > 0) {
+        let gAt = atMs
         for (let gi = 0; gi < gn.notes.length; gi++) {
-          events.push({
-            placed: item.note,
-            instrument,
-            atMs: Math.max(0, atMs - (gn.notes.length - gi) * graceMs),
-            durationMs: graceMs,
-            pitch: gracePitches[gi],
-          })
+          events.push({ placed: item.note, instrument, atMs: gAt, durationMs: graceMsAt(gi), pitch: gracePitches[gi] })
+          gAt += graceMsAt(gi)
         }
       }
       // adj375：新事件开始 → 上一个事件已完成（不会再被连音合并）→ 结算它的呼吸静音
       settleBreath()
-      events.push({ placed: item.note, instrument, atMs, durationMs, playheadSegs: buildPlayheadSegs(item.note, 0, rightEdgeByNoteIdx.get(item.note.id.index)) })
+      const mainEvIdx = events.length
+      events.push({ placed: item.note, instrument, atMs: mainAtMs, durationMs: mainMs, playheadSegs: buildPlayheadSegs(item.note, 0, rightEdgeByNoteIdx.get(item.note.id.index)) })
       // adj375：本音符是某 &hx 的作用对象 → 标记该事件待结算（连音合并会累加时值后再一起算）
-      if (hxBreathNoteIdx.has(curNoteIdx)) breathEvIdx = events.length - 1
+      if (hxBreathNoteIdx.has(curNoteIdx)) breathEvIdx = mainEvIdx
       if (gn && gn.after && gracePitches.length > 0) {
+        // 后倚音接在主音符（含增时线/附点）之后，填满本音符时值的最后一段
+        let gAt = mainAtMs + mainMs
         for (let gi = 0; gi < gn.notes.length; gi++) {
-          events.push({
-            placed: item.note,
-            instrument,
-            atMs: atMs + durationMs + gi * graceMs,
-            durationMs: graceMs,
-            pitch: gracePitches[gi],
-          })
+          events.push({ placed: item.note, instrument, atMs: gAt, durationMs: graceMsAt(gi), pitch: gracePitches[gi] })
+          gAt += graceMsAt(gi)
         }
       }
       lastEventNoteIdx = curNoteIdx
       lastEventPitch = pitch
+      lastMainEvIdx = mainEvIdx
+      lastEventHadGrace = curHasGrace
       i++
       continue
     }

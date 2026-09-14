@@ -741,6 +741,28 @@ export function tokenizeMusicLine(
       }
     }
 
+    // 独立的附点 "."（adj396）：与独立增时线同理——原站自动格式化可能把 "3." 拆成 "3 ."，
+    // 因此独立出现的 "." 归入前面最近的音符/休止符/节奏符（不跨小节线）。
+    // 这样「附点后写后倚音」可与 "3 -[h5/]" 同样分开书写：`3 .[h5/]`（等价 `3.[h5/]`）。
+    if (c === '.') {
+      let foundDot = false
+      for (let k = tokens.length - 1; k >= 0; k--) {
+        const last = tokens[k]
+        if (last.kind === 'note' || last.kind === 'rest' || last.kind === 'rhythm') {
+          last.dots++
+          last.raw += '.'
+          lastBlockEnd = i + 1
+          foundDot = true
+          break
+        }
+        if (last.kind === 'barline') break // 不跨小节线归入
+      }
+      if (foundDot) {
+        i++
+        continue
+      }
+    }
+
     // 未知字符：保留原文作为装饰 token，并给出警告
     errors.push(err(`无法识别的符号 "${c}"`, { line: pos.line, col: pos.col + i }, 'warning', HINT_SYMBOL))
     tokens.push({ kind: 'decoration', code: c, pos: i, raw: c })

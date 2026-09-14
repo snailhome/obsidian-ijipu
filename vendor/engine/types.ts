@@ -150,6 +150,8 @@ export interface NoteToken {
   dots: number
   /** 平均连音组（(y...)）覆盖时值：组内音符均分括号总时值 */
   tupletDur?: number
+  /** 平均连音组（(y...)）组号（adj395）：同组音符的减时线始终相连成一条，不随拍边界断开 */
+  tupletGroup?: number
   /** 装饰符号编码列表（& 开头，如 tr、mp；< > 渐强渐弱另见 DecorationToken） */
   symbols: string[]
   /** 虚音符：(1) 括号修饰，弱奏装饰，不占额外拍（adj23） */
@@ -191,6 +193,8 @@ export interface RestToken {
   dots: number
   /** 平均连音组覆盖时值 */
   tupletDur?: number
+  /** 平均连音组组号（adj395，同 NoteToken） */
+  tupletGroup?: number
   /** 装饰符号编码列表（& 开头，如 zkh/ykh 括号等，adj84） */
   symbols: string[]
   comment?: string
@@ -210,6 +214,8 @@ export interface RhythmToken {
   dots: number
   /** 平均连音组覆盖时值 */
   tupletDur?: number
+  /** 平均连音组组号（adj395，同 NoteToken） */
+  tupletGroup?: number
   /** 装饰符号编码列表（& 开头，如 zkh/ykh 括号等，adj84） */
   symbols: string[]
   comment?: string

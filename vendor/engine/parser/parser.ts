@@ -20,6 +20,7 @@ import type {
 } from '../types'
 import { tokenizeMusicLine } from './tokenizer'
 import { tokenDuration } from '../duration'
+import { graceNoteBeats } from '../layout/spaceLayout'
 import { errAt } from './errors'
 
 const HEADER_KEYS = new Set(['V', 'B', 'Z', 'D', 'P', 'J', 'Y', 'S'])
@@ -275,6 +276,24 @@ export function parseJps(source: string): ParseResult {
         pos,
         raw,
       }
+      // adj396：倚音**占用主音符时值**——Σ倚音实际时值不得超过主音符总时值
+      // （超出时主音符被钳制为 0 拍、完全不发声，属于书写错误而非演奏取舍）
+      for (const t of tokens) {
+        if (t.kind !== 'note' || !t.gracenotes || t.gracenotes.notes.length === 0) continue
+        const graceSum = t.gracenotes.notes.reduce((a, g) => a + graceNoteBeats(g.diminishCount), 0)
+        const total = tokenDuration(t)
+        if (graceSum > total + 1e-9) {
+          errors.push(
+            errAt(
+              `倚音总时值（${graceSum.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')} 拍）超过主音符时值（${total} 拍）——主音符将没有发声时值`,
+              pos.line,
+              prefixLen + t.pos,
+              'warning',
+              '倚音实际时值 = 括号内减时线条数再减一半（`2[3]` = 1/2 拍、`2[3/]` = 1/4 拍）；总和不得超过主音符时值，请减少倚音个数（`3[3/2/]`）或给主音符增时（`3-[h5/]`）',
+            ),
+          )
+        }
+      }
       lines.push(ml)
       groups.push({ music: ml, lyrics: [], startIndex: lines.length - 1 })
       lastMusicIndex = lines.length - 1
@@ -325,11 +344,15 @@ function parseMeterBeats(meter: string | undefined): number | null {
  * 平均连音组 "(y ... )"：组内音符时值均分「组总时值」。
  * 组总时值 = 小节名义拍数 - 组外音符实际时值（不足时回退组内原始时值和）；
  * 组内音符按均分时值（tupletDur 覆盖，布局与播放共用）。
+ * adj395：同时给同组音符打**组号**（tupletGroup），供减时线按组相连
+ * （等时值连音组内的减时线是一条横线，不因跨拍边界断开）。
  */
 function applyTupletDurations(groups: MusicGroup[], meterBeats: number | null): void {
   type NoteLike = Extract<MusicToken, { kind: 'note' } | { kind: 'rest' } | { kind: 'rhythm' }>
   const isNoteLike = (t: MusicToken): t is NoteLike =>
     t.kind === 'note' || t.kind === 'rest' || t.kind === 'rhythm'
+  /** 跨小节递增的组号（同一个小节内不同组也不会撞号） */
+  let tupletGroupSeq = 0
   for (const g of groups) {
     const tokens = g.music.tokens
     // 按小节切分（| 等小节线分隔；行尾未闭合的收尾小节）
@@ -361,9 +384,12 @@ function applyTupletDurations(groups: MusicGroup[], meterBeats: number | null): 
             const per = groupTotal / n
             // adj217：末音符 tupletDur 用剩余值（groupTotal - per×(n-1)），消除浮点累加误差
             // ——1/3×3 累加得 0.9999…，布局按拍切分时误落到下一拍（minDur≈8.88e-16）
+            // adj395：组号（减时线按组相连）
+            const gid = tupletGroupSeq++
             for (let mi = 0; mi < n; mi++) {
               const m = o.members[mi]
               m.tupletDur = mi === n - 1 ? groupTotal - per * (n - 1) : per
+              m.tupletGroup = gid
             }
           }
         }

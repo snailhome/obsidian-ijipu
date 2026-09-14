@@ -52,6 +52,7 @@ import {
 } from '../layout/spacing'
 import { tempoLabel } from '../parser/parser'
 import { parseInstrumentRef } from '../playback/instruments'
+import { graceAtTail } from '../layout/spaceLayout'
 
 // ============================================================
 // 工具
@@ -398,6 +399,19 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
     )
   }
 
+  // 附点（adj71）：附点是音符的修饰符——增加前面音符一半时值（1. 总宽 1.5 拍、1/. 0.75 拍，
+  // tokenDuration 已按 ×1.5/×1.75 计算，占位宽度随之增半）；
+  // adj288：主音符与附点在 1.5 倍时值宽内平均分布（三等分）——附点圆心 = 主段（第 1 拍段）右端
+  // = 总宽 2/3 处，数字中心在主段中点 = 1/3 处；原附点紧贴数字右缘（视觉挤在左侧）
+  // adj396：附点圆心提前算好——附点绘制与「后倚音排到时值尾部」都要用（不重复推导）
+  const rDot = DOT_R_DOT * s
+  const dotMainDur = tokenDuration({ diminishCount: t.diminishCount, augmentCount: t.augmentCount, dots: 0 })
+  const dotSeg0 = note.segments?.[0]
+  // adj284：空间优先给附点生成独立段（el==='dot'），其 x = 附点圆心；
+  // 优先读取该显式位置，否则回退「主段右端（1.5 倍时值三等分点）」推算（时值优先路径）
+  const dotSeg = note.segments?.find((sg) => sg.el === 'dot')
+  const dotX0 = dotSeg ? dotSeg.x : dotSeg0 ? dotSeg0.x + dotMainDur * dotSeg0.perBeat : x + digitW + rDot
+
   // 倚音（adj23/65/97/98/99/100/101/102/103）：前倚音 [65] 排于主音符左上角、后倚音 [h65] 排于右上角
   // 规范（用户 2026-08-22 + adj100~103 调整）：
   //  ① 倚音字号 = 主音符 × 0.5（adj105 由 0.4 调大），**加粗**（adj105，与主音符粗体一致）；
@@ -413,6 +427,10 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
   //             有低八度点 → 弧线起点 = 最低低八度点底 + LAYER_GAP×s（间距 = 点到减时线的距离）；
   //  adj103：所有固定 px 间距改为 ×s（主音符缩放因子）随字号等比缩放；多音符（≥2）数字间
   //          间距由 0.62×字号 缩为 0.5×字号（GRACE_SLOT_RATIO_MULTI），占位宽度同步
+  //  adj396：后倚音**位置规则**（用户规范）——主音符带**增时线或附点**时，
+  //          后倚音移到这些时值元素**之后**（`3 -[h5/]` 的倚音画在 `-` 右侧、
+  //          `3.[h5/]` 画在附点右侧），弧线终点同样落在该尾部元素右缘；
+  //          无增时线也无附点的后倚音仍紧贴数字右上角（既有行为不变）。
   if (t.kind === 'note' && t.gracenotes && t.gracenotes.notes.length > 0) {
     const gn = t.gracenotes
     // ①倚音字号 = 主音符 × 0.4（下限 6×s 随字号等比，adj103）
@@ -425,14 +443,28 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
     // ③ 数字底 = 首条减时线上方 0.5×s（adj101 下移 1.5px 后；间距随字号等比）
     //    基线 = mainTop - 0.5×s - 字号/9（字号/9 = 2×gs，即数字底到基线的 descender）
     const gBaseY = mainTop - 0.5 * s - gSize / 9
-    // 数字水平排列：前倚音从主音符左上角向左依次排；后倚音从主音符右上角向右依次排
+    // adj396：后倚音的锚点（组左缘基准 / 弧线终点）——尾部倚音取「末个时值元素右缘」
+    const tailGrace = graceAtTail(t)
+    let graceAnchorX = x + digitW
+    if (tailGrace) {
+      graceAnchorX = x + digitW
+      if (t.dots > 0) graceAnchorX = Math.max(graceAnchorX, dotX0 + (t.dots - 1) * rDot * 2 + rDot)
+      if (t.augmentCount > 0) {
+        // 空间优先路径的增时线段带 el 标记（点在附点段之后）；时值优先路径按段序取第 augmentCount 段
+        const augSegs = (note.segments ?? []).filter((sg) => sg.el === 'aug')
+        const lastAug = augSegs.length > 0 ? augSegs[augSegs.length - 1] : note.segments?.[t.augmentCount]
+        const augRight = lastAug ? lastAug.x + lastAug.beats * lastAug.perBeat : (note.rightX ?? x + note.width)
+        graceAnchorX = Math.max(graceAnchorX, augRight)
+      }
+    }
+    // 数字水平排列：前倚音从主音符左上角向左依次排；后倚音从锚点向右依次排
     // adj106：组右端（前倚音）固定与主音符留 1px×s——多音符时组内间距 gapW < 槽宽 gW，
     // 原公式按 gapW 排组尾会右移侵入主音符区造成重叠；后倚音原公式组左端已固定
     const gxs: number[] = []
     for (let gi = 0; gi < gn.notes.length; gi++) {
       gxs.push(
         gn.after
-          ? x + digitW + 1 * s + gi * gapW
+          ? graceAnchorX + 1 * s + gi * gapW
           : x - 1 * s - gW - (gn.notes.length - 1 - gi) * gapW,
       )
     }
@@ -498,9 +530,10 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
     const arcDrop = 3 * s // 终点比起点低（垂度，随字号等比）
     const arcW = GRACE_LINE_W * s // 弧线宽 = 减时线宽
     if (gn.after) {
-      // 后倚音（组在右）：终点 = 主音符右缘下方 → 先向下再弯向左
+      // 后倚音（组在右）：终点 = 锚点下方 → 先向下再弯向左
+      // adj396：尾部倚音的锚点 = 增时线/附点右缘（弧线随之落在这些元素之后）
       parts.push(
-        `<path d="M ${r1n(gcx)} ${r1n(arcStartY)} Q ${r1n(gcx)} ${r1n(arcStartY + arcDrop)} ${r1n(x + digitW)} ${r1n(arcStartY + arcDrop)}" fill="none" stroke="#1b1b1b" stroke-width="${arcW}"/>`,
+        `<path d="M ${r1n(gcx)} ${r1n(arcStartY)} Q ${r1n(gcx)} ${r1n(arcStartY + arcDrop)} ${r1n(graceAnchorX)} ${r1n(arcStartY + arcDrop)}" fill="none" stroke="#1b1b1b" stroke-width="${arcW}"/>`,
       )
     } else {
       // 前倚音（组在左）：终点 = 主音符数字左缘（= x）下方 → 先向下再弯向右
@@ -510,22 +543,12 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
     }
   }
 
-  // 附点（adj71）：附点是音符的修饰符——增加前面音符一半时值（1. 总宽 1.5 拍、1/. 0.75 拍，
-  // tokenDuration 已按 ×1.5/×1.75 计算，占位宽度随之增半）；
-  // adj288：主音符与附点在 1.5 倍时值宽内平均分布（三等分）——附点圆心 = 主段（第 1 拍段）右端
-  // = 总宽 2/3 处，数字中心在主段中点 = 1/3 处；原附点紧贴数字右缘（视觉挤在左侧）
+  // 附点（adj71）：圆心与半径在倚音之前已算好（adj396），此处只绘制
+  // adj291：附点圆心 = 主时值部分结束处 = 段起点 + 主时值×每拍宽
+  //（1.5 倍时值宽的三等分点，数字中心在主时值段中心 = 1/3 处）。
+  // 此前误用 segments[0] 整段右端：总时值 < 1 拍的音符（如 2/. 0.75 拍）主/附点
+  // 合并为一段，段右端 = 音符结束位置 → 附点圆点压到下一音符（如 2/. 3//）
   if (t.dots > 0) {
-    const rDot = DOT_R_DOT * s
-    // adj291：附点圆心 = 主时值部分结束处 = 段起点 + 主时值×每拍宽
-    //（1.5 倍时值宽的三等分点，数字中心在主时值段中心 = 1/3 处）。
-    // 此前误用 segments[0] 整段右端：总时值 < 1 拍的音符（如 2/. 0.75 拍）主/附点
-    // 合并为一段，段右端 = 音符结束位置 → 附点圆点压到下一音符（如 2/. 3//）
-    const seg0 = note.segments?.[0]
-    const mainDur = tokenDuration({ diminishCount: t.diminishCount, augmentCount: t.augmentCount, dots: 0 })
-    // adj284：空间优先给附点生成独立段（el==='dot'），其 x = 附点圆心；
-    // 优先读取该显式位置，否则回退「主段右端（1.5 倍时值三等分点）」推算（时值优先路径）
-    const dotSeg = note.segments?.find((sg) => sg.el === 'dot')
-    const dotX0 = dotSeg ? dotSeg.x : seg0 ? seg0.x + mainDur * seg0.perBeat : x + digitW + rDot
     for (let i = 0; i < t.dots; i++) {
       // 第 i 个附点：圆心在主时值结束处（第 2 个起紧贴前一个，间距 2×r）
       const cx = dotX0 + i * rDot * 2
@@ -1215,13 +1238,21 @@ interface Beam {
 
 /**
  * 计算减时线横线组：
- * 第 n 条横线连接「同一拍内（floor(beatPos) 相同）连续且减时线数 ≥ n」的音符。
+ * 第 n 条横线连接「同一组内连续且减时线数 ≥ n」的音符。
+ * 分组键 = 平均连音组号（adj395：(y...) 组内音符的减时线**始终连成一条**，
+ *   即使该组跨越拍边界——等时值连音是"平分一段总时值"，不能被拍线切断）；
+ *   非连音组音符仍按「同一拍内（floor(beatPos) 相同）」相连。
  * 例：1/2/ → 1 条（整拍连）；1/2/3/4/ → 拍 1 连、拍 2 连（中间断开）；
  *     1//2//3//4// → 2 条（各整拍连）；1//2//3/ → 第 1 条全连、第 2 条连 1//2//
  */
 function computeBeams(notes: PlacedToken[], noteSize = 18): Beam[] {
   const beams: Beam[] = []
   const digitW = noteSize * 0.62
+  // adj219：近整数归整——浮点拍位（0.9999…）误判拍边界（同布局 adj217/218）
+  const beatOf = (v: number) => (Math.abs(v - Math.round(v)) < 1e-3 ? Math.round(v) : Math.floor(v))
+  /** 减时线分组键：连音组号优先，否则按拍 */
+  const bucketOf = (n: PlacedToken) =>
+    n.token.tupletGroup !== undefined ? `t${n.token.tupletGroup}` : `b${beatOf(n.beatPos)}`
   const groups = new Map<string, PlacedToken[]>()
   for (const n of notes) {
     const key = `${n.y}|${n.barIndex}`
@@ -1239,15 +1270,11 @@ function computeBeams(notes: PlacedToken[], noteSize = 18): Beam[] {
           i++
           continue
         }
-        const beatRaw = list[i].beatPos
-        // adj219：近整数归整——浮点拍位（0.9999…）误判拍边界（同布局 adj217/218）
-        const beat = Math.abs(beatRaw - Math.round(beatRaw)) < 1e-3 ? Math.round(beatRaw) : Math.floor(beatRaw)
+        const bucket = bucketOf(list[i])
         let j = i
         while (
           j + 1 < list.length &&
-          (Math.abs(list[j + 1].beatPos - Math.round(list[j + 1].beatPos)) < 1e-3
-            ? Math.round(list[j + 1].beatPos)
-            : Math.floor(list[j + 1].beatPos)) === beat &&
+          bucketOf(list[j + 1]) === bucket &&
           list[j + 1].token.diminishCount >= level
         ) {
           j++

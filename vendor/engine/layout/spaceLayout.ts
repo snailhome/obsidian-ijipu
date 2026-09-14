@@ -35,16 +35,37 @@ export interface NoteDurSplit {
  * 拆分一个音符的时值为空间优先所需的各分量，保证合计 = tokenDuration(t)。
  * 依据：tokenDuration 把增时线并入 (1+augment)/2^dc，附点再按 ×1.5/×1.75 递增。
  * 故 noteDur×(1+augCount) = 基础含增时线时值，dotDur = tokenDuration − 基础含增时线时值。
- * 注意：平均连音组（tupletDur 覆盖）暂不在此拆分，由后续 P 阶段另处理。
+ *
+ * adj395：平均连音组（(y...) 的 tupletDur 覆盖）——组内音符的总时值 = tupletDur
+ * （= 组总时值 ÷ 组内音符数），不是原始减时线时值。此前本函数只按 diminishCount 算
+ * noteDur，导致空间优先布局把 `(y3/ 2/ 1/)` 当成 3×0.5 = 1.5 拍占宽（应 1 拍），
+ * 音符越出小节、拍位漂到下一拍（减时线被断开）。现按 tupletDur 等比缩放各分量
+ * （保持「减时线条数 / 增时线条数 / 附点」的书写形态不变，仅换算实际时值）。
  */
 export function splitNoteDur(t: {
   diminishCount: number
   augmentCount: number
   dots: number
+  tupletDur?: number
 }): NoteDurSplit {
-  const noteDur = 1 / Math.pow(2, t.diminishCount)
-  const augDur = noteDur
+  const base = 1 / Math.pow(2, t.diminishCount)
   const augCount = t.augmentCount
+  if (t.tupletDur !== undefined) {
+    // 原始构型总时值（同 tokenDuration，不含覆盖值）→ 缩放到 tupletDur
+    let rawDot = base
+    let raw = base * (1 + augCount)
+    for (let i = 0; i < t.dots; i++) {
+      rawDot /= 2
+      raw += rawDot
+    }
+    const k = t.tupletDur / raw
+    const noteDur = base * k
+    // 附点段吸收浮点余量，保证 noteDur×(1+augCount) + dotDur 精确等于 tupletDur
+    const dotDur = t.dots > 0 ? Math.max(0, t.tupletDur - noteDur * (1 + augCount)) : 0
+    return { noteDur, augDur: noteDur, augCount, dotDur }
+  }
+  const noteDur = base
+  const augDur = noteDur
   const total = tokenDuration(t)
   const dotDur = Math.max(0, Math.round((total - noteDur * (1 + augCount)) * 1e6) / 1e6)
   return { noteDur, augDur, augCount, dotDur }
@@ -101,3 +122,35 @@ export const hxBodyW = (noteSize: number) => 9.8 * noteScaleOf(noteSize)
  * 因此不再为它预留 V 形的额外宽度。
  */
 export const markBodyW = (_code: 'zkh' | 'ykh' | 'hx', _noteSize: number) => bracketBodyW()
+
+// ============================================================
+// 倚音（adj396：时值规则 + 尾部位置判定；layout / render / playback 共用）
+// ============================================================
+
+/**
+ * 单个倚音音符的**实际时值**（拍，adj396 用户规范）：
+ * 括号内写 n 条减时线 → 实际时值 = 1/2^(n+1) 拍（**比书写时值再减一半**）。
+ * 例：`2[3]` → 倚音 1/2 拍；`2[3/]` → 1/4 拍（= 实音符的 `3//`）；`2[3//]` → 1/8 拍。
+ * 与渲染规则自洽：倚音减时线条数 = 书写条数 + 1。
+ */
+export function graceNoteBeats(diminishCount: number): number {
+  return 1 / Math.pow(2, diminishCount + 1)
+}
+
+/** 倚音音符的形状（只取时值判定所需字段，避免与 token 类型耦合） */
+interface GraceShape {
+  augmentCount: number
+  dots: number
+  gracenotes?: { after: boolean; notes: { diminishCount: number }[] }
+}
+
+/**
+ * 后倚音是否排在音符「时值尾部」（adj396 用户规范）：
+ * `3-[h5/]` / `3 -[h5/]` / `3.[h5/]` —— 主音符带**增时线或附点**时，
+ * 后倚音画在这些时值元素**之后**（`3 -[h5/]` → 倚音画在 `-` 右侧）；
+ * 无增时线也无附点的后倚音仍紧贴数字右上角（既有行为不变）。
+ */
+export function graceAtTail(t: GraceShape | undefined): boolean {
+  if (!t || !t.gracenotes || t.gracenotes.notes.length === 0) return false
+  return t.gracenotes.after && (t.augmentCount > 0 || t.dots > 0)
+}
