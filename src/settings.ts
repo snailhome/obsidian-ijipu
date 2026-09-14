@@ -1,4 +1,5 @@
 import { App, Notice, PluginSettingTab, Setting } from 'obsidian'
+import { BUILD_STAMP, GIT_COMMIT } from './gen/buildInfo'
 import { frontmatterKey } from './frontmatter'
 // 设置项定义与控件构建由 defs.ts 统一提供（设置面板与谱面「⚙ 排版」对话框共用一份，避免两处漂移）
 import { DEFS, GROUPS, addConfigControl, getDefault, type FieldKey, type FieldValue, type SettingDef } from './defs'
@@ -71,9 +72,13 @@ export class IJipuSettingTab extends PluginSettingTab {
     head.createEl('h2', { text: '爱记谱（iJipu）' })
 
     // 版本 / 作者：一律读 manifest.json（发布时自动同步，避免手写版本号漂移）
+    // adj407：再补**构建指纹**（日期 时间 + commit）——同一版本号会有多个本地构建（反复修同一个问题时
+    // 尤其明显），用户据此才能判断手机/桌面上装的到底是哪一份，也便于复测时对齐。
     const { version, author, authorUrl } = this.plugin.manifest
     const meta = head.createDiv({ cls: 'ijipu-settings-meta' })
     meta.createEl('span', { cls: 'ijipu-settings-version', text: `版本 v${version}` })
+    meta.createEl('span', { cls: 'ijipu-settings-sep', text: ' · ' })
+    meta.createEl('span', { cls: 'ijipu-settings-build', text: `构建 ${BUILD_STAMP} @${GIT_COMMIT}` })
     meta.createEl('span', { cls: 'ijipu-settings-sep', text: ' · ' })
     const authorEl = meta.createEl(authorUrl ? 'a' : 'span', { cls: 'ijipu-settings-author' })
     if (authorUrl) {

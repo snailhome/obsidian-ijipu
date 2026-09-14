@@ -31,7 +31,7 @@ import type IJipuPlugin from './main'
  *
  * @returns 清理函数（务必在重画/关闭时调用）
  */
-function fitEditorToVisibleArea(contentEl: HTMLElement): () => void {
+function fitEditorToVisibleArea(contentEl: HTMLElement, diag?: HTMLElement): () => void {
   if (!Platform.isMobile) return () => {}
   const appContainer = contentEl.closest('.app-container') as HTMLElement | null
   /** 无键盘时的布局视口高（观测到过的最大值；WebView 里除键盘/旋转外不会变） */
@@ -81,6 +81,17 @@ function fitEditorToVisibleArea(contentEl: HTMLElement): () => void {
       restoreCap()
     }
     contentEl.style.height = `${want}px`
+    // adj407（临时诊断）：把真实数字打在源码视图里——真机上"少一个键盘高"的成因只能靠这些数值定位，
+    // 修好即移除（用户截图/照抄即可）。
+    if (diag) {
+      const vv = window.visualViewport
+      const appH = appContainer ? appContainer.clientHeight : -1
+      diag.setText(
+        `诊断 innerH=${Math.round(window.innerHeight)} vvH=${vv ? Math.round(vv.height) : 'n/a'} vvTop=${vv ? Math.round(vv.offsetTop) : 'n/a'} ` +
+          `kb=${Math.round(keyboardVar())} appC=${appH} maxH=${appContainer ? getComputedStyle(appContainer).maxHeight : 'n/a'} ` +
+          `box=${Math.round(contentEl.clientHeight)} lifted=${lifted ? 1 : 0}`,
+      )
+    }
   }
   const onVv = () => requestAnimationFrame(fit)
   const vv = window.visualViewport
@@ -221,9 +232,10 @@ export class IJipuFileView extends TextFileView {
         }
       })
       ta.focus()
-      // adj404：钉住「可视区域」——真机上宿主（WebView + Obsidian）会双重扣减键盘高度，
-      // 导致源码框比可视区矮一截；这里按 visualViewport 实测并（必要时）临时解除祖先上限
-      this.unfixHeight = fitEditorToVisibleArea(contentEl)
+      // adj404：钉住「可视区域」——真机上宿主（WebView + Obsidian）的键盘机制有两种，见函数头注释；
+      // adj407：同时把真实数值打到下面的诊断行，便于真机定位"少一个键盘高"到底是哪一环
+      const diag = Platform.isMobile ? contentEl.createDiv({ cls: 'ijipu-source-diag' }) : undefined
+      this.unfixHeight = fitEditorToVisibleArea(contentEl, diag)
       return
     }
 

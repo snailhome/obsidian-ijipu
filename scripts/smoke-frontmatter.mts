@@ -337,6 +337,13 @@ console.log('[12] .jps 文件视图：源码态填满窗口（adj402）')
   // 断言这两件事都在（并都有还原），防止后人"简化"掉导致真机回归。
   check('adj404 源码框按 visualViewport 实测定高', view.includes('visualViewport') && view.includes('vv.offsetTop + vv.height'))
   check('adj404 必要时解除 .app-container 上限并还原（不留副作用）', view.includes("style.maxHeight = 'none'") && view.includes('teardownHeightFit') && view.includes('Platform.isMobile'))
+  // adj407：设置页显示「构建 日期 时间 @commit」——同一版本号会有多个本地构建，没有指纹就无法判断
+  // 手机上装的到底是哪一份（复测时反复踩过）。这条断言防的是"以后有人把指纹去掉"。
+  const settingsSrc = readFileSync('src/settings.ts', 'utf8')
+  const pkgJson = JSON.parse(readFileSync('package.json', 'utf8')) as { scripts?: Record<string, string> }
+  check('adj407 设置页显示构建指纹（日期 时间 + commit）', settingsSrc.includes('BUILD_STAMP') && settingsSrc.includes('GIT_COMMIT') && settingsSrc.includes('构建 '))
+  check('adj407 build/smoke 前置生成构建信息（gen:info → src/gen/buildInfo.ts，已 gitignore）', (pkgJson.scripts?.build ?? '').includes('gen:info') && (pkgJson.scripts?.smoke ?? '').includes('gen:info') && readFileSync('.gitignore', 'utf8').includes('src/gen/'))
+  check('adj407 移动端源码态带诊断行（真机数值，修好即移除）', view.includes('ijipu-source-diag') && readFileSync('styles.css', 'utf8').includes('.ijipu-source-diag'))
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

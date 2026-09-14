@@ -476,6 +476,17 @@
   background: var(--background-primary);
   border: 1px solid var(--background-modifier-border);
 }
+/* adj407（临时诊断）：源码态底部一行真实尺寸数值——用于定位"键盘弹出后少一个键盘高"的成因，
+   修好即移除。移动端才会创建该元素（桌面端不显示）。 */
+.ijipu-source-diag {
+  flex: 0 0 auto;
+  margin-top: 4px;
+  font-family: var(--font-monospace);
+  font-size: 10px;
+  line-height: 1.3;
+  color: var(--text-faint);
+  word-break: break-all;
+}
 
 /* ---------- ![[xxx.jps]] 嵌入 ---------- */
 /* 插件接管 .internal-embed 后自己渲染谱面（详见 src/embed.ts 头部说明）。
