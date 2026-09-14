@@ -7,9 +7,67 @@
  *  - `![[xxx.jps]]` 嵌入：Obsidian 会把本视图嵌进笔记，自动切到紧凑形态（隐藏页数/编辑器）
  *  - 「⚙ 排版 → 保存到谱面」直接改写文件内容（`# jps-config` 行），与 iJipu 行为一致
  */
-import { TextFileView, type WorkspaceLeaf } from 'obsidian'
+import { Platform, TextFileView, type WorkspaceLeaf } from 'obsidian'
 import { mountScorePane, type ScorePaneHandle } from './scorePane'
 import type IJipuPlugin from './main'
+
+/**
+ * adj404：手机端源码框「键盘感知」——把源码框钉在**真正看得见的区域**里。
+ *
+ * 问题（用户实测）：输入法未打开时满屏正确；一打开输入法，源码框比可视区**还矮一个键盘的高度**。
+ * 根因是宿主的键盘策略在真机上**双重扣减**：
+ *   - Android WebView 随键盘缩小布局视口（adjustResize）→ `100vh` 已经不含键盘；
+ *   - Obsidian 又用它自己的变量再扣一次：
+ *     `body.is-mobile .app-container { max-height: calc(100vh - var(--keyboard-height)) }`
+ *     （而 `body.is-mobile { height: 100vh }` 说明它假定布局视口**不**随键盘变化；
+ *       键盘动画期间 `body.is-mobile.keyboard-animating .app-container { max-height: 100vh }`
+ *       先不扣、动画结束后再扣 —— 这正是"缩两次"的来源）。
+ * 于是 `.app-container` = 屏高 − 2×键盘高，我们的 `height:100%` 继承了这个过矮的高度。
+ *
+ * 做法：绕开继承链，直接按 `visualViewport` 实测：
+ *   ① 需要时临时解除 `.app-container` 的 max-height（否则我们的高度会被祖先裁掉）；
+ *   ② 容器高度 = 可视区底 − 容器顶（键盘打开时底边正好落在键盘上沿）；
+ *   ③ 键盘收起 / 视图切走 / 关闭时全部还原，不留副作用。
+ * 只在移动端挂载（`Platform.isMobile`），桌面端行为完全不变。
+ *
+ * @returns 清理函数（务必在重画/关闭时调用）
+ */
+function fitEditorToVisibleArea(contentEl: HTMLElement): () => void {
+  if (!Platform.isMobile) return () => {}
+  const vv = window.visualViewport
+  if (!vv) return () => {}
+  const appContainer = contentEl.closest('.app-container') as HTMLElement | null
+  let prevMaxHeight: string | null = null
+  let lifted = false
+  const restoreCap = () => {
+    if (lifted && appContainer) appContainer.style.maxHeight = prevMaxHeight ?? ''
+    lifted = false
+  }
+  const fit = () => {
+    const visibleBottom = vv.offsetTop + vv.height
+    const top = contentEl.getBoundingClientRect().top
+    const want = Math.max(200, Math.round(visibleBottom - top))
+    // 宿主把容器裁得比可视区还矮（真机上的双重扣减）→ 临时解除上限
+    if (appContainer && !lifted && want > appContainer.clientHeight + 8) {
+      prevMaxHeight = appContainer.style.maxHeight
+      appContainer.style.maxHeight = 'none'
+      lifted = true
+    } else if (lifted && appContainer && want <= appContainer.clientHeight + 8) {
+      restoreCap()
+    }
+    contentEl.style.height = `${want}px`
+  }
+  const onVv = () => requestAnimationFrame(fit)
+  vv.addEventListener('resize', onVv)
+  vv.addEventListener('scroll', onVv)
+  fit()
+  return () => {
+    vv.removeEventListener('resize', onVv)
+    vv.removeEventListener('scroll', onVv)
+    restoreCap()
+    contentEl.style.height = ''
+  }
+}
 
 /** 视图类型（registerView/registerExtensions 用；同时用于嵌入形态判定） */
 export const VIEW_TYPE_IJIPU = 'ijipu-jps-view'
@@ -23,6 +81,8 @@ export class IJipuFileView extends TextFileView {
   private saveTimer = 0
   /** 是否处于"源码编辑"态（默认看谱） */
   private editing = false
+  /** adj404：源码态「键盘感知」清理函数（切走/关闭时必须调用，避免留下 app-container 副作用） */
+  private unfixHeight: (() => void) | null = null
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -58,6 +118,7 @@ export class IJipuFileView extends TextFileView {
   }
 
   clear(): void {
+    this.teardownHeightFit()
     this.pane?.destroy()
     this.pane = null
     this.contentEl.empty()
@@ -65,8 +126,15 @@ export class IJipuFileView extends TextFileView {
 
   async onClose(): Promise<void> {
     if (this.saveTimer !== 0) window.clearTimeout(this.saveTimer)
+    this.teardownHeightFit()
     this.pane?.destroy()
     this.pane = null
+  }
+
+  /** adj404：撤销源码态的键盘感知（还原 app-container 的 max-height 与内联高度） */
+  private teardownHeightFit(): void {
+    this.unfixHeight?.()
+    this.unfixHeight = null
   }
 
   /** 是否被嵌入在笔记里（`![[xxx.jps]]`）——嵌入形态用紧凑布局、不显示源码编辑器 */
@@ -77,6 +145,7 @@ export class IJipuFileView extends TextFileView {
   private render(): void {
     const { contentEl } = this
     const embedded = this.embedded
+    this.teardownHeightFit() // adj404：重画前先还原上一次源码态的键盘感知
     this.pane?.destroy()
     this.pane = null
     contentEl.empty()
@@ -117,6 +186,9 @@ export class IJipuFileView extends TextFileView {
         }
       })
       ta.focus()
+      // adj404：钉住「可视区域」——真机上宿主（WebView + Obsidian）会双重扣减键盘高度，
+      // 导致源码框比可视区矮一截；这里按 visualViewport 实测并（必要时）临时解除祖先上限
+      this.unfixHeight = fitEditorToVisibleArea(contentEl)
       return
     }
 

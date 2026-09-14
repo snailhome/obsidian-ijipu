@@ -332,6 +332,11 @@ console.log('[12] .jps 文件视图：源码态填满窗口（adj402）')
   check('adj402 源码态容器不自己滚（.ijipu-file-editing → overflow:hidden）', /\.ijipu-file-view\.ijipu-file-editing\s*\{[^}]*overflow:\s*hidden/.test(css))
   check('adj402 textarea 无 240px 硬下限 + flex:1（等于窗口剩余高度）', editorBlock.includes('flex: 1 1 auto') && editorBlock.includes('min-height: 0') && !editorBlock.includes('240px'), editorBlock.replace(/\s+/g, ' ').slice(0, 80))
   check('adj402 fileView 源码态给容器加 .ijipu-file-editing', view.includes("addClass('ijipu-file-editing')"))
+  // adj404：真机上 WebView（随键盘缩布局视口）与 Obsidian（`--keyboard-height` 再扣一次）双重扣减，
+  // 源码框会比可视区矮一个键盘高 → 按 visualViewport 实测定高，必要时临时解除 .app-container 上限。
+  // 断言这两件事都在（并都有还原），防止后人"简化"掉导致真机回归。
+  check('adj404 源码框按 visualViewport 实测定高', view.includes('visualViewport') && view.includes('vv.offsetTop + vv.height'))
+  check('adj404 必要时解除 .app-container 上限并还原（不留副作用）', view.includes("style.maxHeight = 'none'") && view.includes('teardownHeightFit') && view.includes('Platform.isMobile'))
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)
