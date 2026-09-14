@@ -99,6 +99,10 @@ export class IJipuFileView extends TextFileView {
 
     // —— 源码编辑态 ——
     if (this.editing && !embedded) {
+      // adj402：源码态容器**不自己滚动**（滚动交给 textarea）——此前「容器 overflow:auto」与
+      // 「textarea min-height:240px + flex:1」两套机制叠加，移动端键盘弹出/工具栏出现时会
+      // 表现为"缩一次又缩一次"，且收缩后填不满可用空间。加这个类由 CSS 关掉容器滚动。
+      contentEl.addClass('ijipu-file-editing')
       const ta = contentEl.createEl('textarea', { cls: 'ijipu-source-editor' })
       ta.value = this.data
       ta.spellcheck = false

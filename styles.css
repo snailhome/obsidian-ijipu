@@ -430,18 +430,33 @@
 }
 
 /* ---------- .jps 文件视图 ---------- */
+/* adj402：整块**严格填满窗口**，移动端键盘弹出时只随可用高度收缩一次。
+   此前源码编辑态是「容器 height:100% + overflow:auto」＋「textarea min-height:240px」：
+   容器自己会滚、textarea 又有 240px 硬下限，两者叠加在键盘弹出（以及移动端工具栏随后出现）时
+   表现为「先缩一次、又缩一次」，而且收缩后并不填满可用空间。现在：
+   ① 容器 flex 列 + min-height:0（允许随父级一起收缩）；
+   ② 源码态容器加 .ijipu-file-editing → 容器不自己滚（overflow:hidden），滚动交给 textarea，
+      避免"容器滚动 + textarea 收缩"两套机制叠加；
+   ③ textarea 去掉 240px 硬下限（min-height:0）+ flex:1 → 永远等于「窗口剩余高度」。
+   桌面端仍保留 resize:vertical 手动拉高。 */
 .ijipu-file-view {
   display: flex;
   flex-direction: column;
+  box-sizing: border-box;
   height: 100%;
+  min-height: 0;
   overflow: auto;
   padding: 8px 10px;
+}
+.ijipu-file-view.ijipu-file-editing {
+  overflow: hidden;
 }
 .ijipu-file-bar {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-bottom: 6px;
+  flex: 0 0 auto;
 }
 .ijipu-file-score {
   flex: 1 1 auto;
@@ -449,7 +464,7 @@
 }
 .ijipu-source-editor {
   flex: 1 1 auto;
-  min-height: 240px;
+  min-height: 0;
   width: 100%;
   resize: vertical;
   font-family: var(--font-monospace);

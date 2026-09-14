@@ -6,6 +6,7 @@
  * 覆盖键名写法兼容、值类型转换、未识别键提示、优先级四类。
  */
 import { defaultPageConfig, dragDelta, layoutScore, parseJps, writeJpsConfig, SCORE_FONT_OPTIONS } from '@ijipu/engine'
+import { readFileSync } from 'node:fs'
 import { applyFrontmatter, deprecatedKeyHint, frontmatterKey, mergePageConfig, unknownKeyHint, PAGE_CONFIG_FIELDS } from '../src/frontmatter'
 import { resolvePageConfig } from '../src/config'
 import { codeBlockBody, jpsLinkpath, replaceCodeBlockBody } from '../src/sourceEdit'
@@ -309,6 +310,28 @@ console.log('[11] 解析问题分级（warning 不阻断）')
     }
     check('adj394 十类语法问题全部带正确写法（无漏挂 hint）', missing.length === 0, missing.join('；'))
   }
+}
+
+// ---- 12. .jps 文件视图：源码态严格填满窗口（adj402 回归护栏） ----
+// 用户反馈（移动端）：切到「✎ 源码」时窗格**缩两次**（键盘弹出缩一次、随后又缩一次），
+// 而且收缩后填不满可用空间。根因是两套机制叠加：容器 `height:100% + overflow:auto` 自己会滚，
+// textarea 又有 `min-height:240px` 硬下限。修法：容器 flex 列 + min-height:0、源码态容器不滚
+// （`.ijipu-file-editing` → overflow:hidden，滚动交给 textarea）、textarea 去掉硬下限 + flex:1。
+// 这几条断言防的是"以后有人把 240px 加回来 / 忘了加 editing 类"，那种回归在桌面端看不出来。
+console.log('[12] .jps 文件视图：源码态填满窗口（adj402）')
+{
+  const css = readFileSync('styles.css', 'utf8')
+  const view = readFileSync('src/fileView.ts', 'utf8')
+  const blockOf = (sel: string): string => {
+    const i = css.indexOf(`${sel} {`)
+    return i < 0 ? '' : css.slice(i, css.indexOf('}', i))
+  }
+  const viewBlock = blockOf('.ijipu-file-view')
+  const editorBlock = blockOf('.ijipu-source-editor')
+  check('adj402 视图容器 height:100% + min-height:0 + border-box（可随窗口一起收缩）', viewBlock.includes('height: 100%') && viewBlock.includes('min-height: 0') && viewBlock.includes('box-sizing: border-box'), viewBlock.replace(/\s+/g, ' '))
+  check('adj402 源码态容器不自己滚（.ijipu-file-editing → overflow:hidden）', /\.ijipu-file-view\.ijipu-file-editing\s*\{[^}]*overflow:\s*hidden/.test(css))
+  check('adj402 textarea 无 240px 硬下限 + flex:1（等于窗口剩余高度）', editorBlock.includes('flex: 1 1 auto') && editorBlock.includes('min-height: 0') && !editorBlock.includes('240px'), editorBlock.replace(/\s+/g, ' ').slice(0, 80))
+  check('adj402 fileView 源码态给容器加 .ijipu-file-editing', view.includes("addClass('ijipu-file-editing')"))
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)
