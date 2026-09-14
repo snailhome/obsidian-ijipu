@@ -15,39 +15,64 @@ import type IJipuPlugin from './main'
  * adj404：手机端源码框「键盘感知」——把源码框钉在**真正看得见的区域**里。
  *
  * 问题（用户实测）：输入法未打开时满屏正确；一打开输入法，源码框比可视区**还矮一个键盘的高度**。
- * 根因是宿主的键盘策略在真机上**双重扣减**：
- *   - Android WebView 随键盘缩小布局视口（adjustResize）→ `100vh` 已经不含键盘；
- *   - Obsidian 又用它自己的变量再扣一次：
- *     `body.is-mobile .app-container { max-height: calc(100vh - var(--keyboard-height)) }`
- *     （而 `body.is-mobile { height: 100vh }` 说明它假定布局视口**不**随键盘变化；
- *       键盘动画期间 `body.is-mobile.keyboard-animating .app-container { max-height: 100vh }`
- *       先不扣、动画结束后再扣 —— 这正是"缩两次"的来源）。
- * 于是 `.app-container` = 屏高 − 2×键盘高，我们的 `height:100%` 继承了这个过矮的高度。
+ * 真机上宿主的键盘处理有两套机制，且**都可能出现**（这也是第一次只按 visualViewport 修、仍然失败的原因）：
+ *  ① **视口自己缩**：Android WebView 随键盘缩小布局视口（adjustResize）→ `innerHeight` 与
+ *     `visualViewport.height` 都变小；此时 `100vh` 已不含键盘。
+ *  ② **视口不缩、由宿主原生侧告知**：Obsidian 把键盘高写进 `--keyboard-height`
+ *     （`body.is-mobile .app-container { max-height: calc(100vh - var(--keyboard-height)) }`）。
+ * 两者叠加时 `.app-container` = 屏高 − 2×键盘高，我们的 `height:100%` 继承了这个过矮的高度；
+ * 键盘动画期间 `keyboard-animating` 先把上限放回 `100vh`、动画结束才扣，这就是"缩两次"的来源。
+ * 而**只按 visualViewport 判定**在"视口不缩"的机器上量不到键盘（用户机上正是如此）→ 仍少一截。
  *
- * 做法：绕开继承链，直接按 `visualViewport` 实测：
- *   ① 需要时临时解除 `.app-container` 的 max-height（否则我们的高度会被祖先裁掉）；
- *   ② 容器高度 = 可视区底 − 容器顶（键盘打开时底边正好落在键盘上沿）；
- *   ③ 键盘收起 / 视图切走 / 关闭时全部还原，不留副作用。
- * 只在移动端挂载（`Platform.isMobile`），桌面端行为完全不变。
+ * 做法：两个信号都取，算出"可视区底"在布局坐标系里的位置——
+ *   visible = min(innerHeight, visualViewport 底) − max(0, 键盘高 − 视口已缩掉的部分)
+ * 再把我们的容器钉成「visible − 容器顶」；需要时临时解除 `.app-container` 的 max-height
+ * （否则我们设的高度会被祖先裁掉）。键盘收起 / 切走 / 关闭 / 重画时全部还原，桌面端不挂载。
  *
  * @returns 清理函数（务必在重画/关闭时调用）
  */
 function fitEditorToVisibleArea(contentEl: HTMLElement): () => void {
   if (!Platform.isMobile) return () => {}
-  const vv = window.visualViewport
-  if (!vv) return () => {}
   const appContainer = contentEl.closest('.app-container') as HTMLElement | null
+  /** 无键盘时的布局视口高（观测到过的最大值；WebView 里除键盘/旋转外不会变） */
+  let baseH = window.innerHeight
   let prevMaxHeight: string | null = null
   let lifted = false
+
+  /** Obsidian 原生侧给的键盘高（无键盘时为 0） */
+  const keyboardVar = (): number => {
+    try {
+      return parseFloat(getComputedStyle(document.body).getPropertyValue('--keyboard-height')) || 0
+    } catch {
+      return 0
+    }
+  }
+
+  /** 可视区底（布局坐标 y）——兼容"视口自己缩"与"宿主告知键盘高"两种机制 */
+  const visibleBottomY = (): number => {
+    const layoutH = window.innerHeight
+    if (layoutH > baseH) baseH = layoutH
+    let visible = layoutH
+    const vv = window.visualViewport
+    if (vv) visible = Math.min(visible, vv.offsetTop + vv.height)
+    const kb = keyboardVar()
+    if (kb > 0) {
+      const shrunk = Math.max(0, baseH - layoutH) // 视口已经缩掉的部分
+      const missing = Math.max(0, kb - shrunk) // 还差多少没扣
+      visible = Math.min(visible, layoutH - missing)
+    }
+    return visible
+  }
+
   const restoreCap = () => {
     if (lifted && appContainer) appContainer.style.maxHeight = prevMaxHeight ?? ''
     lifted = false
   }
   const fit = () => {
-    const visibleBottom = vv.offsetTop + vv.height
+    const bottom = visibleBottomY()
     const top = contentEl.getBoundingClientRect().top
-    const want = Math.max(200, Math.round(visibleBottom - top))
-    // 宿主把容器裁得比可视区还矮（真机上的双重扣减）→ 临时解除上限
+    const want = Math.max(200, Math.round(bottom - top))
+    // 宿主把容器裁得比可视区还矮（双重扣减）→ 临时解除上限，否则我们的高度会被祖先裁掉
     if (appContainer && !lifted && want > appContainer.clientHeight + 8) {
       prevMaxHeight = appContainer.style.maxHeight
       appContainer.style.maxHeight = 'none'
@@ -58,12 +83,22 @@ function fitEditorToVisibleArea(contentEl: HTMLElement): () => void {
     contentEl.style.height = `${want}px`
   }
   const onVv = () => requestAnimationFrame(fit)
-  vv.addEventListener('resize', onVv)
-  vv.addEventListener('scroll', onVv)
+  const vv = window.visualViewport
+  if (vv) {
+    vv.addEventListener('resize', onVv)
+    vv.addEventListener('scroll', onVv)
+  }
+  // 视口不缩的机器上只有窗口 resize 会来（键盘高变化还会改 --keyboard-height，用定时兜底跟一下）
+  window.addEventListener('resize', onVv)
+  const timer = window.setInterval(fit, 500)
   fit()
   return () => {
-    vv.removeEventListener('resize', onVv)
-    vv.removeEventListener('scroll', onVv)
+    window.clearInterval(timer)
+    window.removeEventListener('resize', onVv)
+    if (vv) {
+      vv.removeEventListener('resize', onVv)
+      vv.removeEventListener('scroll', onVv)
+    }
     restoreCap()
     contentEl.style.height = ''
   }

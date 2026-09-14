@@ -42,9 +42,16 @@
 - 引擎未变动（本版只改插件侧 CSS/视图），因此 `vendor/engine` 与 0.7.0 一致。
 
 <!-- 未发布（测试中，真机确认后再定版本号并挪到上面当版）：
-     adj404 源码框按 visualViewport 定高——真机上 WebView（随键盘缩布局视口）与 Obsidian
-     （`body.is-mobile .app-container { max-height: calc(100vh - var(--keyboard-height)) }`）
-     双重扣减 → 源码框比可视区矮一个键盘高；`keyboard-animating` 期间先不扣、动画结束才扣，
-     即"缩两次"来源。修法：fitEditorToVisibleArea() 按 visualViewport 实测把容器钉到可视区，
-     必要时临时解除 .app-container 的 max-height（切走/关闭全部还原），仅 Platform.isMobile 挂载。
+     adj404 源码框按「可视区」定高——真机上宿主的键盘处理有两套机制且都可能出现：
+     ① 视口自己缩（Android WebView adjustResize：innerHeight 与 visualViewport 都变小）；
+     ② 视口不缩、由 Obsidian 原生侧把键盘高写进 `--keyboard-height`
+        （`body.is-mobile .app-container { max-height: calc(100vh - var(--keyboard-height)) }`）。
+     两者叠加 → .app-container = 屏高 − 2×键盘高，源码框因此比可视区矮一截；
+     `keyboard-animating` 期间先不扣、动画结束才扣，即"缩两次"来源。
+     修法：fitEditorToVisibleArea() 取
+       visible = min(innerHeight, visualViewport 底) − max(0, 键盘高 − 视口已缩掉的部分)
+     把容器钉到「visible − 容器顶」，必要时临时解除 .app-container 的 max-height
+     （切走/关闭全部还原），仅 Platform.isMobile 挂载。
+     ★ 第一版只按 visualViewport 判定 → 在"视口不缩"的真机上量不到键盘、仍少一截（用户复测反馈），
+       故改为两个信号都取；并加了 500ms 定时兜底（--keyboard-height 变化不一定伴随 resize 事件）。
      验证：smoke 新增 2 条断言（共 114 项全绿）；tsc -noEmit + build 通过。 -->
