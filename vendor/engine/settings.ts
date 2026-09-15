@@ -111,7 +111,43 @@ export function extractLegacyEditorPrefs(code: string): Partial<EditorPrefs> | n
 }
 
 /**
+ * adj413：把谱面设置里的 **px 值统一取整**（四舍五入）。覆盖三类：
+ *  ① 顶层数值字段（边距 / 间距 / 字号 / 条数）——非数值字段（字符串、枚举、字体栈）原样保留；
+ *  ② 按页行距 `heights`（数组里每个数）；
+ *  ③ 描述头自定义位置 `metaPos` 的 `x` / `y`。
+ *
+ * 由来：虚线拖拽的位移天生是浮点（鼠标位移 ÷ 预览缩放），过去会把 `12.4` 这类值写进
+ * `# jps-config`（`metaPos` 更是刻意保留到 0.1px）；用户要求**设置与间距里的 px 一律整数**。
+ * 这里放在引擎层做，并在**读取（mergeJpsConfig）与写入（writeJpsConfig）两端各过一遍**：
+ * 于是旧文件里已有的小数值一读出来就是整数，新写入的也一定是整数。
+ */
+export function roundPxIntegers(cfg: PageConfig): PageConfig {
+  const out = { ...(cfg as unknown as Record<string, unknown>) }
+  for (const [k, v] of Object.entries(out)) {
+    if (typeof v === 'number' && Number.isFinite(v)) out[k] = Math.round(v)
+  }
+  if (cfg.heights) {
+    const h: Record<string, [number, number, number, number, number?]> = {}
+    for (const [k, arr] of Object.entries(cfg.heights)) {
+      // heights 每项是 [quci, cici, ciqu, shengbu, ciquLyric?]（末位可选，adj79 兼容旧存储）
+      const rounded = arr.map((n) => (typeof n === 'number' && Number.isFinite(n) ? Math.round(n) : n))
+      h[k] = rounded as [number, number, number, number, number?]
+    }
+    out.heights = h
+  }
+  if (cfg.metaPos) {
+    const p: Record<string, { x: number; y: number }> = {}
+    for (const [k, v] of Object.entries(cfg.metaPos)) {
+      p[k] = { x: Math.round(v.x), y: Math.round(v.y) }
+    }
+    out.metaPos = p
+  }
+  return out as unknown as PageConfig
+}
+
+/**
  * 合并谱面设置：源码 # jps-config 优先，其次公共设置（localStorage），兜底默认。
+ * adj413：合并结果统一取整（px 一律整数），旧文件里的小数值读出来即为整数。
  * @param code 源码
  * @param fallback 公共设置（null 表示无 → 用默认）
  */
@@ -120,11 +156,11 @@ export function mergeJpsConfig(
   fallback: PageConfig | null,
 ): PageConfig {
   const embedded = extractJpsConfig(code)
-  return {
+  return roundPxIntegers({
     ...defaultPageConfig,
     ...(fallback ?? {}),
     ...(embedded ?? {}),
-  }
+  })
 }
 
 /** 写入模式：diff = 只写与默认不同的字段（默认）｜full = 固化全部字段 */
@@ -170,7 +206,8 @@ function pickWritableConfig(cfg: PageConfig, mode: JpsConfigWriteMode): Record<s
  */
 export function writeJpsConfig(code: string, cfg: PageConfig, opts?: { mode?: JpsConfigWriteMode }): string {
   const mode: JpsConfigWriteMode = opts?.mode ?? 'diff'
-  const picked = pickWritableConfig(cfg, mode)
+  // adj413：写入前统一取整——文件里的 px 一律整数（即便调用方传了浮点）
+  const picked = pickWritableConfig(roundPxIntegers(cfg), mode)
   let raw: string
   try {
     raw = JSON.stringify(picked)
