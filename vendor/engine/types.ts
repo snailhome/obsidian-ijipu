@@ -669,8 +669,9 @@ export const defaultPageConfig: PageConfig = {
   // adj213：默认边距 80 → 40（页面留白收窄）
   margin_top: 40,
   margin_bottom: 40,
-  margin_left: 40,
-  margin_right: 40,
+  // adj418：左右边距 40 → 50（用户要求：左右留白略宽一点，行不贴边）
+  margin_left: 50,
+  margin_right: 50,
   // adj213：首行至描述头间距 40 → 20
   body_margin_top: 20,
   // adj213：描述头内容区高 87.6 → 80（与默认标题字号 20 更协调）

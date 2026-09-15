@@ -713,6 +713,8 @@ export function layoutScore(
     sp: Spacing,
     slotStart: number,
     refPerBeat?: number,
+    /** adj421：本曲部只有这一行（单行曲部）——小节数 < align_min_bars 时按槽预分整行占宽 */
+    singleRowGroup = false,
   ): number | undefined => {
     const page = pages[pageIndex]
     // 小节线高度（adj50/69）：与音符数字等高（墨迹高 ≈0.8em，上沿基线-0.8×字号、下沿基线+0.5×s）
@@ -918,11 +920,15 @@ export function layoutScore(
 
     // 行内拍序列（跨小节连续拍；行首空 seg 不占拍）
     const beatsInfo: { dur: number; minDur: number; extra: number }[] = []
+    /** adj421：每个小节占用的拍区间 [start, end)（供「按槽预分占宽」逐小节摊开用） */
+    const barBeatStart: number[] = []
+    const barBeatEnd: number[] = []
     let gBeat = 0
     for (let b = row.start; b < row.end; b++) {
       const seg = segs[b]
       const isEmptyLead = leadingEmpty === 1 && b === row.start
       if (isEmptyLead) continue
+      barBeatStart[b] = beatsInfo.length
       for (const t of seg.notes) {
         if (t.kind === 'note' || t.kind === 'rest' || t.kind === 'rhythm') {
           const dur = tokenDuration(t)
@@ -947,6 +953,7 @@ export function layoutScore(
           gBeat += dur
         }
       }
+      barBeatEnd[b] = beatsInfo.length
     }
     // 拍间距预算（adj38：拍与拍 8px）
     const noteGap = noteGapOf(beatsInfo.length)
@@ -976,6 +983,33 @@ export function layoutScore(
       !stretch && refPerBeat !== undefined && !endsByTerminal
         ? beatsInfo.map(() => refPerBeat)
         : singleRulePerBeats(beatsInfo, availW - pads - noteGap - bracketPadTotal, m.noteSize, stretch)
+
+    // adj421（用户规则，与空间优先同规则）：**单行曲部**且小节数 < align_min_bars 时，
+    // 整行占宽按 align_min_bars 个小节预分（槽宽 = availW / align_min_bars），
+    // 每小节领一个槽、槽内按拍宽比例摊开；若某小节本体（各拍宽 + 拍间距）已超过槽内容宽，
+    // 则该小节保持自然宽（不压缩、允许越出槽）。行首空小节（多声部填充）不参与。
+    if (singleRowGroup && !stretch && leadingEmpty === 0 && barCount >= 1) {
+      const slotOuter = availW / config.align_min_bars
+      for (let b = row.start; b < row.end; b++) {
+        const p0 = barBeatStart[b]
+        const p1 = (barBeatEnd[b] ?? p0) - 1
+        if (p0 === undefined || p1 < p0) continue
+        const beats = beatsInfo.slice(p0, p1 + 1)
+        const natPB = singleRulePerBeats(beats, 0, m.noteSize, false)
+        const bodyW = natPB.reduce((a, w, k) => a + w * beats[k].dur, 0)
+        const gapW = Math.max(0, beats.length - 1) * NOTE_GAP
+        if (bodyW <= 0 || bodyW + gapW >= slotOuter) continue // 本体占满/超出槽 → 自然宽
+        // 槽内容宽 = 槽宽 − 该小节的小节线占位（末小节只有行尾 BAR_PAD）− 行首 BAR_PAD
+        const barSpace =
+          b < row.end - 1
+            ? barlineSpace(config.bar_gap, segs[b].bar?.type, segs[b].bar?.comment, m.noteSize)
+            : BAR_PAD
+        const slotInner = slotOuter - barSpace - (b === row.start ? BAR_PAD : 0) - gapW
+        if (slotInner <= bodyW) continue // 槽内容宽不足 → 自然宽
+        const scale = slotInner / bodyW
+        for (let p = p0; p <= p1; p++) perBeats[p] = (perBeats[p] ?? 0) * scale
+      }
+    }
 
     // 段列表（adj36）：附点段（dots 部分）每拍宽 = 音符基础时值拍的 perBeat，
     // 不被所在拍（超拍）放大 —— 附点只占前音符时值的 0.5
@@ -1257,6 +1291,10 @@ export function layoutScore(
    * 附点依附音符块，与音符块在 1.5 倍时值段内三段留空分散对齐（模型 V2）；
    * 小节线为非时值元素，占 barlineSpace + 非时值间距。音符块/增时线/附点各自
    * 以独立段（el 标记）写入 segments，供渲染端绘制。
+   * adj421（用户规则）：**单行曲部**（本节只有这一行）+ 小节数 < `align_min_bars` 时，整行占宽按
+   * `align_min_bars` 个小节**预分槽**（槽宽 = availW / align_min_bars）：每小节领一个槽，槽内音符按
+   * 空间优先摊开；某小节「本体宽 + 小节线占位」超过槽宽时保持自然宽（不压缩、允许越出槽）。
+   * 多行曲部不适用（末行仍按 adj199/adj355 对齐前面行）。详见 docs/SPACE-LAYOUT.md §1.1b。
    */
   const placeMusicRowSpace = (
     segs: BarSeg[],
@@ -1269,6 +1307,8 @@ export function layoutScore(
     sp: Spacing,
     slotStart: number,
     refRelMeasureW?: (number | undefined)[],
+    /** adj421：本曲部只有这一行（单行曲部）——小节数 < align_min_bars 时按槽预分整行占宽 */
+    singleRowGroup = false,
   ): number[] | undefined => {
     if (row.kind !== 'bars') return undefined
     const page = pages[pageIndex]
@@ -1299,7 +1339,7 @@ export function layoutScore(
       perBeatW?: number
     }
     const noteList: NEl[] = []
-    const barList: { bar: Extract<MusicToken, { kind: 'barline' }>; atEnd: boolean }[] = []
+    const barList: { bar: Extract<MusicToken, { kind: 'barline' }>; atEnd: boolean; barIdx: number }[] = []
     let slotPos = slotStart
     for (let b = row.start; b < row.end; b++) {
       const seg = segs[b]
@@ -1338,7 +1378,7 @@ export function layoutScore(
           }
         }
       }
-      if (seg.bar) barList.push({ bar: seg.bar, atEnd: b === row.end - 1 })
+      if (seg.bar) barList.push({ bar: seg.bar, atEnd: b === row.end - 1, barIdx: b })
     }
 
     // adj393：渐强/渐弱（`<`/`>`/`!`）——本路径此前**完全不处理**装饰 token，
@@ -1360,6 +1400,8 @@ export function layoutScore(
     }
     let nonDurPad = 0
     const bp = barlinePad(m.noteSize)
+    /** adj421：每小节的小节线占位（线宽 + 两侧净间距）——槽宽判定要用，与预算同一份值 */
+    const barOuter: number[] = new Array(segs.length).fill(0)
     for (const bk of barList) {
       // adj314：预算与放置一致——小节线占位 = 线自身宽 + 两侧净间距 barlinePad(noteSize)。
       // 之前用 barlineSpace(含固定 +8 空隙) / 0.5×音符宽 做预算，高估占位→ W 被挤小→ 拍内音符过密。
@@ -1367,7 +1409,9 @@ export function layoutScore(
       // adj398：带临时节拍分数的小节线，右侧间距取 max(barlinePad, 分数占位)——与放置处 gapR 同源；
       // 无分数时保持 lineW + 2×barlinePad 原值不变（既有排版零影响）
       const meterGap = meterGapRight(bk.bar.comment, m.noteSize)
-      nonDurPad += lineW + bp + Math.max(bp, meterGap ?? bp)
+      const outer = lineW + bp + Math.max(bp, meterGap ?? bp)
+      barOuter[bk.barIdx] = outer
+      nonDurPad += outer
     }
     // adj294：&zkh/&ykh 为独立括号标记（无时值元素）——占位从行宽扣（A 方案）
     // adj375：&hx 呼吸记号同为独立标记，宽度按 code 取
@@ -1388,6 +1432,17 @@ export function layoutScore(
     const barCount = row.end - row.start - leadingEmpty
     const stretch = barCount >= config.align_min_bars
     const W = stretch ? Math.max(0, availW - durBodySum - nonDurPad) : 0
+    /**
+     * adj421（用户规则）：**单行曲部**（本节只有这一行，如新建文件/示例谱）且小节数 <
+     * `align_min_bars` 时，把整行占宽**按 align_min_bars 个小节预分**（槽宽 = availW / align_min_bars），
+     * 每小节领一个槽、槽内音符按空间优先摊开（extraWByBar 按时值比例分配）；
+     * 若某小节「本体宽 + 小节线占位」已超过槽宽，则该小节**保持自然宽**（不压缩、允许越出槽）。
+     * 行首空小节（多声部填充）不参与，沿用既有对齐规则。
+     */
+    const slotOuter =
+      singleRowGroup && !stretch && leadingEmpty === 0 && barCount >= 1
+        ? availW / config.align_min_bars
+        : 0
 
     // adj355: 自然宽行——行小节数 < align_min_bars 时各小节对齐上一行对应小节宽度（不窄于它）；
     // 若本小节自然内容宽 < 上一行对应小节内容宽，则扩到上一行宽度，小节内音符按空间布局（按时值）摊开。
@@ -1401,9 +1456,16 @@ export function layoutScore(
         segNatW[n.barIdx] += n.noteBodyW + (n.hasDot ? n.dotBodyW : 0) + n.augCount * augBodyW(m.noteSize) + n.grTailW
         segDurSum[n.barIdx] += noteElDur + n.augCount * n.augDur
       }
-      for (let b = row.start; b < row.end; b++) {
-        const refW = refRelMeasureW?.[b - row.start]
-        if (refW !== undefined && refW > segNatW[b]) extraWByBar[b] = refW - segNatW[b]
+      if (slotOuter > 0) {
+        // adj421：槽预分——每小节的富余 = 槽宽 −（本体 + 小节线占位），小于 0 即自然宽（富余 0）
+        for (let b = row.start; b < row.end; b++) {
+          extraWByBar[b] = Math.max(0, slotOuter - (segNatW[b] + barOuter[b]))
+        }
+      } else {
+        for (let b = row.start; b < row.end; b++) {
+          const refW = refRelMeasureW?.[b - row.start]
+          if (refW !== undefined && refW > segNatW[b]) extraWByBar[b] = refW - segNatW[b]
+        }
       }
     }
     // 音符/增时线在「撑满(全局 W)」或「自然+小节对齐(per-bar extra)」下的可分配宽
@@ -1635,11 +1697,13 @@ export function layoutScore(
       // 含 &zkh/&ykh 括号的行先行版回退时值优先（括号的空间优先占位后续再补）
       // adj286：空间优先已支持 &zkh/&ykh 括号占位，不再因括号回退时值优先
       const isSpace = config.noteSpaceLayout === 'space' && row.kind === 'bars'
+      // adj421：单行曲部（本曲部只有这一行）——小节数 < align_min_bars 时按槽预分整行占宽
+      const singleRowGroup = rows.length === 1
       if (isSpace) {
-        const mws = placeMusicRowSpace(segs, row, groupIndex, voice, y, lyricMaps, geciSize, sp, rowSlots[ri], prevRowMeasW)
+        const mws = placeMusicRowSpace(segs, row, groupIndex, voice, y, lyricMaps, geciSize, sp, rowSlots[ri], prevRowMeasW, singleRowGroup)
         if (mws !== undefined) prevRowMeasW = mws
       } else {
-        const pb = placeMusicRow(segs, row, groupIndex, voice, y, lyricMaps, geciSize, sp, rowSlots[ri], refPerBeat)
+        const pb = placeMusicRow(segs, row, groupIndex, voice, y, lyricMaps, geciSize, sp, rowSlots[ri], refPerBeat, singleRowGroup)
         if (row.kind === 'bars' && pb !== undefined) refPerBeat = pb
       }
       y += rowH
