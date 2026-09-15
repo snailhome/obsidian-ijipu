@@ -348,6 +348,35 @@ function renderMeterMeta(meter: string, x: number, baseline: number, mFont: stri
 // 音符绘制
 // ============================================================
 
+// ============================================================
+// 附点几何（adj411：附点绘制与减时线延伸共用同一份，避免两处各算一次）
+// ============================================================
+
+/**
+ * 首个附点的圆心 x；无附点返回 null。
+ * adj284：空间优先给附点生成独立段（`el === 'dot'`，其 x 即圆心）；
+ * adj291：否则回退「主段起点 + 主时值×每拍宽」（时值优先路径，附点落在主时值结束处）。
+ */
+function dotCenterXOf(note: PlacedToken, noteSize: number): number | null {
+  const t = note.token
+  if (t.dots <= 0) return null
+  const rDot = DOT_R_DOT * noteScaleOf(noteSize)
+  const dotSeg = note.segments?.find((sg) => sg.el === 'dot')
+  if (dotSeg) return dotSeg.x
+  const seg0 = note.segments?.[0]
+  const mainDur = tokenDuration({ diminishCount: t.diminishCount, augmentCount: t.augmentCount, dots: 0 })
+  return seg0 ? seg0.x + mainDur * seg0.perBeat : note.x + noteSize * 0.62 + rDot
+}
+
+/** 末个附点的**右缘** x（供减时线延伸用）；无附点返回 null */
+function dotRightEdgeOf(note: PlacedToken, noteSize: number): number | null {
+  const cx = dotCenterXOf(note, noteSize)
+  if (cx === null) return null
+  const rDot = DOT_R_DOT * noteScaleOf(noteSize)
+  // 第 i 个附点圆心 = cx + i·2r（两附点相切），故末个右缘 = cx + (dots−1)·2r + r
+  return cx + (note.token.dots - 1) * rDot * 2 + rDot
+}
+
 function renderNote(note: PlacedToken, config: PageConfig): string {
   const t = note.token
   const size = config.note_size
@@ -403,14 +432,9 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
   // tokenDuration 已按 ×1.5/×1.75 计算，占位宽度随之增半）；
   // adj288：主音符与附点在 1.5 倍时值宽内平均分布（三等分）——附点圆心 = 主段（第 1 拍段）右端
   // = 总宽 2/3 处，数字中心在主段中点 = 1/3 处；原附点紧贴数字右缘（视觉挤在左侧）
-  // adj396：附点圆心提前算好——附点绘制与「后倚音排到时值尾部」都要用（不重复推导）
+  // adj396/adj411：附点圆心与右缘的几何收敛到 dotCenterXOf/dotRightEdgeOf（与减时线延伸共用）
   const rDot = DOT_R_DOT * s
-  const dotMainDur = tokenDuration({ diminishCount: t.diminishCount, augmentCount: t.augmentCount, dots: 0 })
-  const dotSeg0 = note.segments?.[0]
-  // adj284：空间优先给附点生成独立段（el==='dot'），其 x = 附点圆心；
-  // 优先读取该显式位置，否则回退「主段右端（1.5 倍时值三等分点）」推算（时值优先路径）
-  const dotSeg = note.segments?.find((sg) => sg.el === 'dot')
-  const dotX0 = dotSeg ? dotSeg.x : dotSeg0 ? dotSeg0.x + dotMainDur * dotSeg0.perBeat : x + digitW + rDot
+  const dotX0 = dotCenterXOf(note, size) ?? x + digitW + rDot
 
   // 倚音（adj23/65/97/98/99/100/101/102/103）：前倚音 [65] 排于主音符左上角、后倚音 [h65] 排于右上角
   // 规范（用户 2026-08-22 + adj100~103 调整）：
@@ -1281,9 +1305,14 @@ function computeBeams(notes: PlacedToken[], noteSize = 18): Beam[] {
         while (j + 1 < list.length && linked(list[j], list[j + 1]) && list[j + 1].token.diminishCount >= level) {
           j++
         }
+        // adj411：组尾音符带附点时，减时线**延伸到附点下面**——`1//2/.` 里 2 的减时线
+        // 原本止于数字右缘，而附点画在数字右侧（一拍的后半），线在谱面上"提前断了"；
+        // 附点右缘与该音符时值宽度一致（附点属于该音符），故取两者的较大值。
+        const dotRight = dotRightEdgeOf(list[j], noteSize)
+        const digitRight = list[j].x + digitW - 1
         beams.push({
           x1: r1n(list[i].x + 1),
-          x2: r1n(list[j].x + digitW - 1),
+          x2: r1n(dotRight !== null ? Math.max(digitRight, dotRight) : digitRight),
           // adj60/69：减时线层贴数字底（LAYER_GAP×s），层内线距 INNER_GAP×s，随字号
           y: r1n(beamY(list[i].y, level, noteSize)),
         })
