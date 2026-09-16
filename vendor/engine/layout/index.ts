@@ -2814,13 +2814,23 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
       //     "下一个音符的数字位置"，若内部端点用 `rightX`（可能比它更靠右 3px），
       //     最后一个子拍就会被算短（实测 5.2px，本应 7.7px）。两端同口径后，
       //     各子拍宽 = `(zoneEnd − n.x) × (子拍时值 / 音符时值)`，均匀且无跳变。
+      // adj444：**本音符的拍区间右端 = min(下一个音符的 x, 下一个小节线的 x)**。
+      // 只用 `nextNote.x` 会**跨过小节线**：小节线另一侧的音符可能远在 ~35px 之外，
+      // 使本音符内部的拍位被整体拉宽（实测 `6, -` 的 beatToX(+1) = 261.4 而非 244.9），
+      // 段层内容随之溢出内容区右缘 ⇒ **末音被钳成 0 宽而丢弃**（用户报
+      // `{bz 8 &zkh @手风琴@ 2'/ 3'/ }` 只显示到 `2'/`、`3'/` 不见了）。
+      const nextBarXOf = (x0: number): number => {
+        let best = Number.POSITIVE_INFINITY
+        for (const a of mainBarAnchors) if (a.x > x0 + 1e-3 && a.x < best) best = a.x
+        return best
+      }
       const nextNote = k + 1 < cnt ? placed[k + 1].note : null
       // adj441：该拍的**视觉跨度 = 本音数字位置 → 下一个音的数字位置**（"数字到数字"）。
       // 不能取 `min(占位右端, next.x)`：`rightX`（含分配留白）常常**小于**下一个音的 x
       // （实测小 6.9px），此时内部插值止于 `rightX` 而边界取 `next.x` ⇒ **最后一个子拍被算宽**
       // （实测 `1/ 2// 3//` = 11.10 / 5.50 / **12.50**，合计 29.10 但该拍跨度 22.2+6.9）——
-      // 用户要求「多声部同一拍的总占宽要一致」，故两端统一用 `next.x`。
-      const zoneEnd = nextNote ? nextNote.x : noteRightOf(n)
+      // 用户要求「多声部同一拍的总占宽要一致」，故两端统一口径。
+      const zoneEnd = nextNote ? Math.min(nextNote.x, nextBarXOf(n.x)) : noteRightOf(n)
       const t = s.beats > 1e-9 ? (beat - s.startBeat) / s.beats : 0
       return n.x + Math.min(1, Math.max(0, t)) * (zoneEnd - n.x)
     }
