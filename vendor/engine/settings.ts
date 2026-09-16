@@ -142,6 +142,19 @@ export function roundPxIntegers(cfg: PageConfig): PageConfig {
     }
     out.metaPos = p
   }
+  // adj432（E-2026-172）：`segmentRowGap`（adj428 新增的**嵌套数值对象**）同样要取整——
+  // 此前只处理了 heights / metaPos，漏了它：手改的 `"segmentRowGap":{"bz":22.5}` 会原样保留小数，
+  // 与「设置与间距里的 px 一律整数」的约定不一致（应用内写入虽已取整，读入端却不归一化）。
+  // 注意：**以后新增嵌套数值字段必须在这里补一段**（无编译期断言兜底，只能靠这条注释 +
+  // smoke 断言；下面的 smoke 用例覆盖 segmentRowGap）。
+  if (cfg.segmentRowGap) {
+    const g: { bz?: number; dsb?: number } = {}
+    const bz = cfg.segmentRowGap.bz
+    const dsb = cfg.segmentRowGap.dsb
+    if (typeof bz === 'number' && Number.isFinite(bz)) g.bz = Math.round(bz)
+    if (typeof dsb === 'number' && Number.isFinite(dsb)) g.dsb = Math.round(dsb)
+    out.segmentRowGap = g
+  }
   return out as unknown as PageConfig
 }
 
