@@ -308,8 +308,9 @@ function buildPlayheadSegs(
   plc: PlacedToken,
   startBeat: number,
   endX?: number,
-  /** adj429：色块上下边界（按曲行几何动态定界）。缺省 = 默认 `[y−1.6×字号, y+0.6×字号]`。 */
-  bounds?: { yTopMin?: number; yBottomMax?: number } | null,
+  /** adj429：色块上下边界（按曲行几何动态定界）。缺省 = 默认 `[y−1.6×字号, y+0.6×字号]`。
+   *  adj442：另加 `left`（**首个**色块的左边界）——段层按段型取"左小节线 / `{`"。 */
+  bounds?: { yTopMin?: number; yBottomMax?: number; left?: number } | null,
 ): PlayheadSeg[] {
   const base = {
     pageIndex: plc.id.page,
@@ -339,7 +340,11 @@ function buildPlayheadSegs(
   for (let i = 0; i < blocks.length; i++) {
     const blk = blocks[i]
     const x1 = i < blocks.length - 1 ? blocks[i + 1].x : right
-    out.push({ beat: acc, beats: blk.beats, x: blk.x, width: Math.max(0, x1 - blk.x), ...base })
+    // adj442：**段层首个色块**的左边界可外扩到段层左界（bz=左小节线 / dsb=`{`）——
+    // 与右端（末块外扩到右界）对称：`&zkh`/括号同样是**无时值占宽元素**，
+    // 它们占据的那段图形空间在时间上仍属本段开头（用户规则「前后的小节线为界 / 大括号为界」）。
+    const bx = i === 0 && bounds?.left !== undefined ? Math.min(bounds.left, blk.x) : blk.x
+    out.push({ beat: acc, beats: blk.beats, x: bx, width: Math.max(0, x1 - bx), ...base })
     acc += blk.beats
   }
   return out
@@ -406,11 +411,18 @@ export function buildPlaySequence(
    * 供 dsb 下层色块钳制用（用户要求"色块都以大括号为界限定占宽"）。
    */
   const segRightByGroupVoice = new Map<string, number>()
+  const segLeftByGroupVoice = new Map<string, number>()
   for (const page of layout.pages) {
     for (const sb of page.segmentBrackets ?? []) {
       const k = `${page.index}|${sb.group}|${sb.voice}`
-      const cur = segRightByGroupVoice.get(k)
-      segRightByGroupVoice.set(k, cur === undefined ? sb.x2 : Math.min(cur, sb.x2))
+      // adj442（用户规则）：色块占宽边界——**bz 以前后小节线为界、dsb 以大括号为界**；
+      // 布局端已按段型写入 `blockLeft`/`blockRight`，此处只取用（旧数据无该字段时退回 x1/x2）。
+      const right = sb.blockRight ?? sb.x2
+      const left = sb.blockLeft ?? sb.x1
+      const curR = segRightByGroupVoice.get(k)
+      segRightByGroupVoice.set(k, curR === undefined ? right : Math.min(curR, right))
+      const curL = segLeftByGroupVoice.get(k)
+      segLeftByGroupVoice.set(k, curL === undefined ? left : Math.max(curL, left))
     }
   }
   {
@@ -819,12 +831,10 @@ export function buildPlaySequence(
      * adj440：段层**右界**（大括号槽 `/` 内容区右缘，来自 `segmentBrackets.x2`）。
      * 用于段内最后一个音的色块右边界——见 `edgeOf` 末尾分支。
      */
-    const segRightBound = ((): number | undefined => {
-      const first = segNotes[0]
-      return first
-        ? segRightByGroupVoice.get(`${first.id.page}|${first.id.group}|${first.id.voice}`)
-        : undefined
-    })()
+    const segBoundKey = segNotes[0] ? `${segNotes[0].id.page}|${segNotes[0].id.group}|${segNotes[0].id.voice}` : ''
+    const segRightBound = segNotes[0] ? segRightByGroupVoice.get(segBoundKey) : undefined
+    /** adj442：段层**左界**（bz=左小节线 / dsb=`{`）——首个色块左边界外扩用 */
+    const segLeftBound = segNotes[0] ? segLeftByGroupVoice.get(segBoundKey) : undefined
     const edgeOf = (n: PlacedToken): number => {
       const i = segNotes.findIndex((m) => m === n)
       const next = i >= 0 && i < segNotes.length - 1 ? segNotes[i + 1].x : Number.POSITIVE_INFINITY
@@ -865,7 +875,12 @@ export function buildPlaySequence(
         gain: gain2,
         playVoice: placed.playVoice,
         // adj429：色块按曲行几何动态定界（多声部/临时叠加段不再互相覆盖、也不压歌词）
-        playheadSegs: buildPlayheadSegs(placed, 0, edgeOf(placed), computeColorBounds(placed, pageByNoteIdx.get(placed.id.index)!, voiceBlockByNoteIdx, noteSize)).map((s) => ({ ...s, instrument: inst2, playVoice: placed.playVoice })),
+        playheadSegs: buildPlayheadSegs(placed, 0, edgeOf(placed), {
+          ...computeColorBounds(placed, pageByNoteIdx.get(placed.id.index)!, voiceBlockByNoteIdx, noteSize),
+          // adj442：**只对段内第一个音**外扩左边界（每个音符的 buildPlayheadSegs 都用 startBeat=0，
+          // 不能靠它判断"是不是首个"——否则所有块都会被拉到左界）
+          ...(segLeftBound !== undefined && segNotes[0] === placed ? { left: segLeftBound } : {}),
+        }).map((s) => ({ ...s, instrument: inst2, playVoice: placed.playVoice })),
       })
       segEndMs = Math.max(segEndMs, at2 + dur2)
     }

@@ -3243,6 +3243,11 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
         yBottom: r1(yUpper + ns * 0.4),
         // dsb：下层声部（包络内主旋律）**下沿**——供渲染画跨两层的大花括号
         yBottomLower: isDsb ? r1(lowerBaseline + ns * 0.3) : undefined,
+        // adj442（用户规则）：色块占宽边界——**bz 以前后小节线为界、dsb 以大括号为界**
+        //  - dsb：`{` / `}` 的槽位（= x1/x2，即上面的 braceLeftX/braceRightX）
+        //  - bz：包络两端的主旋律**小节线**（`barAtStart`/`barAtEnd`；缺锚点时退回内容区边界）
+        blockLeft: r1(isDsb ? (braceLeftX ?? x0) : (barAtStart?.x ?? xContent0)),
+        blockRight: r1(isDsb ? (braceRightX ?? x1) : (barAtEnd?.x ?? xContent1)),
         voice: group.music.voice,
         group: gi,
       })

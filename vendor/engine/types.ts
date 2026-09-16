@@ -641,6 +641,14 @@ export interface PlacedSegmentBracket {
    * （图 2 的 `{ … }`）；bz 无下层，不设该字段。
    */
   yBottomLower?: number
+  /**
+   * adj442：**色块占宽边界**（用户规则）——
+   *  - `bz`（临时伴奏）：以**前后的小节线**为界（`blockLeft`/`blockRight` = 包络两端的主旋律小节线 x）；
+   *  - `dsb`（临时多声部）：以大括号为界（= `x1`/`x2`，即 `{` / `}` 的槽位）。
+   * 播放色块在重叠区内按此收边（见 `playback/sequence.ts`）。
+   */
+  blockLeft?: number
+  blockRight?: number
   /** 所属声部 */
   voice: number
   /** 所属曲词分组下标（= result.groups 下标） */
