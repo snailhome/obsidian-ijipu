@@ -10,7 +10,8 @@
  *  - SpessaSynthBackend：spessasynth_lib 合成器后端（动态加载，worklet 由插件提供）
  */
 import { WorkletSynthesizer } from 'spessasynth_lib'
-import { instrumentToProgram, pitchToMidiNote } from '@ijipu/engine'
+import { instrumentToProgram, pitchToMidiNote, GmChannelAllocator, GM_VOICES } from '@ijipu/engine'
+import type { GmVoice } from '@ijipu/engine'
 
 /** 高保真音源库（SF2/SF3/DLS）元数据 */
 export interface HqSampleLibrary {
@@ -41,41 +42,12 @@ export function getHqLibrary(id?: string | null): HqSampleLibrary {
   return HQ_LIBRARIES[0]
 }
 
-/** GM 全集（program 0-127，中文名）——音色设置用（与 iJipu 一致） */
-export const GM_VOICE_OPTIONS: { program: number; label: string }[] = [
-  { program: 0, label: '0 大钢琴' }, { program: 1, label: '1 亮音钢琴' }, { program: 2, label: '2 电钢琴' }, { program: 3, label: '3 酒吧钢琴' },
-  { program: 4, label: '4 电钢琴1' }, { program: 5, label: '5 电钢琴2' }, { program: 6, label: '6 拨弦古钢琴' }, { program: 7, label: '7 击弦古钢琴' },
-  { program: 8, label: '8 钟琴' }, { program: 9, label: '9 钢片琴' }, { program: 10, label: '10 八音盒' }, { program: 11, label: '11 颤音琴' },
-  { program: 12, label: '12 马林巴' }, { program: 13, label: '13 木琴' }, { program: 14, label: '14 管钟' }, { program: 15, label: '15 杜西玛琴' },
-  { program: 16, label: '16 拉杆风琴' }, { program: 17, label: '17 打击风琴' }, { program: 18, label: '18 摇滚风琴' }, { program: 19, label: '19 教堂风琴' },
-  { program: 20, label: '20 簧风琴' }, { program: 21, label: '21 手风琴' }, { program: 22, label: '22 口琴' }, { program: 23, label: '23 探戈手风琴' },
-  { program: 24, label: '24 民谣吉他' }, { program: 25, label: '25 电吉他(清音)' }, { program: 26, label: '26 电吉他(闷音)' }, { program: 27, label: '27 电吉他(过载)' },
-  { program: 28, label: '28 电吉他(失真)' }, { program: 29, label: '29 电吉他(泛音)' }, { program: 30, label: '30 中音吉他' }, { program: 31, label: '31 爵士吉他' },
-  { program: 32, label: '32 声学贝斯' }, { program: 33, label: '33 电贝斯(指弹)' }, { program: 34, label: '34 电贝斯(拨片)' }, { program: 35, label: '35 无品贝斯' },
-  { program: 36, label: '36 击弦倍低音' }, { program: 37, label: '37 闷音电贝斯' }, { program: 38, label: '38 电贝斯1' }, { program: 39, label: '39 电贝斯2' },
-  { program: 40, label: '40 小提琴' }, { program: 41, label: '41 中提琴' }, { program: 42, label: '42 大提琴' }, { program: 43, label: '43 低音提琴' },
-  { program: 44, label: '44 拨奏弦乐' }, { program: 45, label: '45 竖琴' }, { program: 46, label: '46 定音鼓' }, { program: 47, label: '47 弦乐合奏' },
-  { program: 48, label: '48 弦乐合奏1' }, { program: 49, label: '49 弦乐合奏2' }, { program: 50, label: '50 合成弦乐1' }, { program: 51, label: '51 合成弦乐2' },
-  { program: 52, label: '52 合唱啊音' }, { program: 53, label: '53 人声"哦"音' }, { program: 54, label: '54 合成人声' }, { program: 55, label: '55 管弦打击' },
-  { program: 56, label: '56 小号' }, { program: 57, label: '57 长号' }, { program: 58, label: '58 大号' }, { program: 59, label: '59 闷音小号' },
-  { program: 60, label: '60 法国号' }, { program: 61, label: '61 铜管组' }, { program: 62, label: '62 合成铜管1' }, { program: 63, label: '63 合成铜管2' },
-  { program: 64, label: '64 高音萨克斯' }, { program: 65, label: '65 中音萨克斯' }, { program: 66, label: '66 次中音萨克斯' }, { program: 67, label: '67 上低音萨克斯' },
-  { program: 68, label: '68 双簧管' }, { program: 69, label: '69 英国号' }, { program: 70, label: '70 巴松管' }, { program: 71, label: '71 单簧管' },
-  { program: 72, label: '72 短笛' }, { program: 73, label: '73 长笛' }, { program: 74, label: '74 泛音笛' }, { program: 75, label: '75 竖笛' },
-  { program: 76, label: '76 巴乌笛' }, { program: 77, label: '77 尺八' }, { program: 78, label: '78 民族笛' }, { program: 79, label: '79 哨笛' },
-  { program: 80, label: '80 排箫' }, { program: 81, label: '81 吹瓶声' }, { program: 82, label: '82 口哨' }, { program: 83, label: '83 民族排箫' },
-  { program: 84, label: '84 尺八(合成)' }, { program: 85, label: '85 合成主音1' }, { program: 86, label: '86 合成主音2' }, { program: 87, label: '87 合成主音3' },
-  { program: 88, label: '88 合成垫音1' }, { program: 89, label: '89 合成垫音2' }, { program: 90, label: '90 合成垫音3' }, { program: 91, label: '91 合成垫音4' },
-  { program: 92, label: '92 合成垫音5' }, { program: 93, label: '93 合成垫音6' }, { program: 94, label: '94 合成垫音7' }, { program: 95, label: '95 合成垫音8' },
-  { program: 96, label: '96 合成雨声' }, { program: 97, label: '97 合成音轨' }, { program: 98, label: '98 合成水晶音' }, { program: 99, label: '99 合成氛围声' },
-  { program: 100, label: '100 合成明亮音' }, { program: 101, label: '101 合成妖精声' }, { program: 102, label: '102 合成回声' }, { program: 103, label: '103 合成科幻声' },
-  { program: 104, label: '104 西塔尔琴' }, { program: 105, label: '105 班卓琴' }, { program: 106, label: '106 三味线' }, { program: 107, label: '107 十三弦琴' },
-  { program: 108, label: '108 卡林巴' }, { program: 109, label: '109 风笛' }, { program: 110, label: '110 民族琴' }, { program: 111, label: '111 印尼锣' },
-  { program: 112, label: '112 锡塔尔' }, { program: 113, label: '113 钢鼓' }, { program: 114, label: '114 木鱼' }, { program: 115, label: '115 陶鼓' },
-  { program: 116, label: '116 民族鼓' }, { program: 117, label: '117 合成鼓' }, { program: 118, label: '118 合成镲' }, { program: 119, label: '119 民族打击' },
-  { program: 120, label: '120 吉他滑音' }, { program: 121, label: '121 呼吸声' }, { program: 122, label: '122 海浪声' }, { program: 123, label: '123 鸟鸣声' },
-  { program: 124, label: '124 电话铃' }, { program: 125, label: '125 直升机' }, { program: 126, label: '126 拍手声' }, { program: 127, label: '127 枪声' },
-]
+/**
+ * GM 全集（program 0-127，中文名）——音色设置用。
+ * adj450：表已收敛到 engine 的 `GM_VOICES`（**唯一来源**，与 iJipu 应用同一份），
+ * 避免"设置里看到的名称"与"谱面 Y: / @乐器名@ 能解析的名称"两处分叉。
+ */
+export const GM_VOICE_OPTIONS: GmVoice[] = GM_VOICES
 
 /** 默认收藏的常用音色（初次即可用）——大钢琴/八音盒/小提琴/弦乐/小号/单簧管/长笛 */
 export const DEFAULT_HQ_ENABLED: number[] = [0, 10, 40, 48, 56, 71, 73]
@@ -170,7 +142,16 @@ export class SpessaSynthBackend {
   private voiceOverride: number | null = null
   private ctx: AudioContext | null = null
   private synth: WorkletSynthesizer | null = null
-  private programSet = new Set<number>()
+  /**
+   * adj450：**一个音色独占一个 MIDI 通道**（与 iJipu 应用 adj446 同一套 `GmChannelAllocator`）。
+   * 旧实现是 `ch = program % 16`：不同音色会撞同一通道（0 与 16、4 与 20…），
+   * 而 MIDI 通道同时只能有一个 program ⇒ 后设的音色把先前声部一起改掉、且「发过就不再发」
+   * 让先设的 program 永不恢复，多声部听起来只剩一种音色；此外 `program % 16 === 9`
+   * （如 9 钢片琴）会落到 GM **打击乐通道**，音色完全走样。
+   */
+  private channels = new GmChannelAllocator()
+  /** adj450：各通道**当前已设**的 program——按触发时刻核对，避免重复 programChange */
+  private channelProgram = new Map<number, number>()
   private timers = new Set<number>()
 
   async ready(): Promise<void> {
@@ -205,16 +186,34 @@ export class SpessaSynthBackend {
       throw e
     }
   }
-  play(pitch: string | null, atMs: number, durationMs: number, gain: number, instrument?: string): void {
+  /**
+   * 播放一个音。
+   * adj450：`opts.keepInstrument`（引擎 `schedulePlay` 会对**伴奏/第二声部**与曲内 `@乐器名@`
+   * 显式音色传 true）：保留事件自带音色，不被「默认音色」覆盖——与 iJipu 应用 adj427/adj434 口径一致。
+   */
+  play(
+    pitch: string | null,
+    atMs: number,
+    durationMs: number,
+    gain: number,
+    instrument?: string,
+    _t0?: number,
+    opts?: { keepInstrument?: boolean },
+  ): void {
     const synth = this.synth
     if (!pitch || !synth || this.state !== 'ready') return
     const note = pitchToMidiNote(pitch)
-    const program = this.voiceOverride ?? instrumentToProgram(instrument)
-    const ch = program % 16
-    const key = ch * 128 + program
+    const program = opts?.keepInstrument
+      ? instrumentToProgram(instrument)
+      : (this.voiceOverride ?? instrumentToProgram(instrument))
+    const ch = this.channels.channelFor(program)
     const velocity = Math.max(1, Math.min(127, Math.round(127 * gain)))
     const onFn = () => {
-      if (!this.programSet.has(key)) { synth.programChange(ch, program); this.programSet.add(key) }
+      // 触发时刻核对「本通道当前音色」：独占通道时只发一次；通道复用（>15 音色）时逐音补发
+      if (this.channelProgram.get(ch) !== program) {
+        synth.programChange(ch, program)
+        this.channelProgram.set(ch, program)
+      }
       synth.noteOn(ch, note, velocity)
     }
     const offFn = () => synth.noteOff(ch, note)
@@ -225,10 +224,12 @@ export class SpessaSynthBackend {
     for (const t of this.timers) window.clearTimeout(t)
     this.timers.clear()
     this.synth?.stopAll(true)
-    this.programSet.clear()
+    // adj450：`stopAll(true)` 会重置合成器状态 ⇒ 已设 program 记录一起清掉，否则下次播放跳过 programChange
+    this.channelProgram.clear()
   }
   dispose(): void {
     this.stop()
+    this.channels.reset()
     this.synth?.disconnect()
     this.synth = null
     if (this.ctx) { void this.ctx.close().catch(() => {}); this.ctx = null }

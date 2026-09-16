@@ -152,7 +152,11 @@ export class IJipuSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName('音色库').setHeading()
     new Setting(containerEl)
       .setName('默认音色')
-      .setDesc('试听默认使用的高保真音色；「自动」= 按声部名 @乐器 / Y 默认路由（多声部各声部独立）。')
+      .setDesc(
+        '试听默认使用的高保真音色；「自动」= 按声部名 @乐器 / Y 默认路由（多声部各声部独立）。' +
+        // adj450：与 iJipu 应用同一口径——选定具体音色会**覆盖谱面 Y:**（用户曾据此误判「谱面 Y: 不生效」）
+        '选了具体音色会覆盖谱面里的 Y: 乐器（要按谱面各声部音色演奏，请选「自动」）。',
+      )
       .addDropdown((dd) => {
         dd.addOption('auto', '自动（按声部名）')
         GM_VOICE_OPTIONS.forEach((v) => dd.addOption(String(v.program), v.label))

@@ -351,5 +351,34 @@ console.log('[12] .jps 文件视图：源码态填满窗口（adj402）')
   check('adj409 源码框高度按实测位置算（不再用 offsetHeight 估算）', view.includes("ta.getBoundingClientRect().top") && view.includes("setProperty('height', 'auto', 'important')"))
 }
 
+// ---- adj450：与 iJipu 应用同步的音色口径（默认「自动」+ 通道独占 + 名称全量解析）----
+// 对应应用侧 adj446/adj447/adj448：插件此前自持一份 GM 音色表、后端用 `ch = program % 16` 分通道、
+// 且「默认音色」会连伴奏/`@乐器名@` 一起覆盖（应用侧 adj427/adj434 明确保留它们）。
+console.log('[adj450] plugin playback timbre parity with the app')
+{
+  const soundbankSrc = readFileSync('src/soundbank.ts', 'utf8')
+  const settingsSrcSb = readFileSync('src/settings.ts', 'utf8')
+  const renderSrc = readFileSync('src/render.ts', 'utf8')
+  // ① GM 音色表唯一来源 = engine 的 GM_VOICES（不再在插件里另存一份）
+  check('adj450 GM 音色表取自 engine 的 GM_VOICES', soundbankSrc.includes('GM_VOICE_OPTIONS: GmVoice[] = GM_VOICES'))
+  // ② 通道按**音色独占**分配（旧的 `program % 16` 会让不同音色撞同一通道，
+  //    且 program%16===9 会落到 GM 打击乐通道 ⇒ 音色走样）
+  check('adj450 通道用 GmChannelAllocator（不再 program % 16）',
+    soundbankSrc.includes('GmChannelAllocator') && !/const\s+ch\s*=\s*program\s*%\s*16/.test(soundbankSrc))
+  check('adj450 触发时刻核对通道音色（channelProgram），不再「发过就不再发」',
+    soundbankSrc.includes('channelProgram.get(ch) !== program') && !soundbankSrc.includes('programSet'))
+  check('adj450 stop() 清空通道音色记录', /stop\(\)[\s\S]{0,400}channelProgram\.clear\(\)/.test(soundbankSrc))
+  // ③ 默认音色不得覆盖伴奏/第二声部与曲内 @乐器名@（引擎 schedulePlay 会传 keepInstrument）
+  check('adj450 play() 支持 opts.keepInstrument（伴奏/@乐器名@ 保留自身音色）',
+    soundbankSrc.includes('keepInstrument') && soundbankSrc.includes('opts?.keepInstrument'))
+  // ④ 默认值 = 自动（settings.hqVoice 未设置 → null → 声部路由），且设置项说明覆盖关系
+  check('adj450 默认音色未设置时为「自动」（render 传 null）', renderSrc.includes('opts?.hqVoice ?? null'))
+  check('adj450 设置项说明写明「选具体音色会覆盖谱面 Y:」',
+    settingsSrcSb.includes('覆盖谱面里的 Y:'))
+  // ⑤ 试听走引擎的事件序列（音色由 Y:/@ 决定；被全局覆盖时才用默认音色）
+  check('adj450 试听调用引擎 schedulePlay（音色链路与应用一致）',
+    renderSrc.includes('schedulePlay(seq, backend') && !renderSrc.includes('backend.play('))
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exitCode = 1

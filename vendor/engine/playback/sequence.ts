@@ -379,18 +379,32 @@ export function buildPlaySequence(
    * adj429：按 `token.id.index` 索引该 token 所在的多声部块（若它在某块内）。
    * 直接 `Map<noteIdx, VoiceBlock>`——避免再反查（VoiceBlock 不带 group，notes 不带 voiceBlock 引用）。
    * 单声部音符不在任何 VoiceBlock 里 → 查不到 → 走单声部默认。
+   *
+   * adj449（用户报「测试多组声部时，到第二组色块跑偏到第一组的位置」）：**必须按"行归属"匹配**。
+   * 一页里可以有多组多声部块（声部号会重复出现：第 1 组的 Q1/Q2 与第 2 组的 Q1/Q2），
+   * 旧实现只按「本页第一个包含该声部号的块」匹配 ⇒ 第 2 组及之后的所有音符（乃至中间穿插的
+   * **单声部**行）都被判成第 1 组的块，`computeColorBounds` 于是拿第 1 组的 `voiceCenters` 定界，
+   * 色块整块画到第 1 组那一行去。
+   * 判据：块的纵向范围 `[yTop, yBottom]` 必须**包含**本音符（块按行依次排布、互不重叠）；
+   * 多个块都命中时取「声部中心离本音符最近」者，避免块间范围相接时的边界含糊。
    */
   const voiceBlockByNoteIdx = new Map<number, VoiceBlock>()
   for (const page of layout.pages) {
-    const voiceSetPerBlock = page.voiceBlocks.map((vb) => new Set(vb.voices.map((v) => v.voice)))
     for (const n of page.notes) {
       if (n.segment) continue // 段层音符不在多声部块里
-      for (let bi = 0; bi < page.voiceBlocks.length; bi++) {
-        if (voiceSetPerBlock[bi].has(n.id.voice)) {
-          voiceBlockByNoteIdx.set(n.id.index, page.voiceBlocks[bi])
-          break
+      let best: VoiceBlock | undefined
+      let bestDist = Number.POSITIVE_INFINITY
+      for (const vb of page.voiceBlocks) {
+        const vi = vb.voices.findIndex((v) => v.voice === n.id.voice)
+        if (vi < 0) continue
+        if (n.y < vb.yTop - 0.01 || n.y > vb.yBottom + 0.01) continue
+        const d = Math.abs(n.y - (vb.voiceCenters?.[vi] ?? n.y))
+        if (d < bestDist) {
+          bestDist = d
+          best = vb
         }
       }
+      if (best) voiceBlockByNoteIdx.set(n.id.index, best)
     }
   }
   /** adj429：`token.id.index` → `ScorePage` 反查（色块定界时按 page 拿 voiceBlocks / segmentBrackets） */
