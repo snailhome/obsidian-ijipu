@@ -925,7 +925,11 @@ export function buildPlaySequence(
       if (gn && !gn.after && gracePitches.length > 0) {
         let gAt = atMs
         for (let gi = 0; gi < gn.notes.length; gi++) {
-          events.push({ placed: item.note, instrument, atMs: gAt, durationMs: graceMsAt(gi), pitch: gracePitches[gi], gain })
+          // adj436：倚音是**独立事件**，必须**继承主音符的声部角色与音色来源**——
+          // 否则「试听音色」的全局覆盖会把 `@手风琴@` 之后的倚音（如 `3/[3/5/]`）压回主音色
+          // （用户报「演奏到 `3/[3/5/]` 处又切回主音色了，应该还是手风琴」）；
+          // 段内（bz/dsb）音符的倚音缺 `playVoice` 还会丢掉伴奏/第二声部音色。
+          events.push({ placed: item.note, instrument, atMs: gAt, durationMs: graceMsAt(gi), pitch: gracePitches[gi], gain, playVoice: playRole, ...(hasExplicitInst ? { explicitInstrument: true } : {}) })
           gAt += graceMsAt(gi)
         }
       }
@@ -947,9 +951,10 @@ export function buildPlaySequence(
       if (hxBreathNoteIdx.has(curNoteIdx)) breathEvIdx = mainEvIdx
       if (gn && gn.after && gracePitches.length > 0) {
         // 后倚音接在主音符（含增时线/附点）之后，填满本音符时值的最后一段
+        // adj436：同样继承声部角色与音色来源（同前倚音）
         let gAt = mainAtMs + mainMs
         for (let gi = 0; gi < gn.notes.length; gi++) {
-          events.push({ placed: item.note, instrument, atMs: gAt, durationMs: graceMsAt(gi), pitch: gracePitches[gi], gain })
+          events.push({ placed: item.note, instrument, atMs: gAt, durationMs: graceMsAt(gi), pitch: gracePitches[gi], gain, playVoice: playRole, ...(hasExplicitInst ? { explicitInstrument: true } : {}) })
           gAt += graceMsAt(gi)
         }
       }
