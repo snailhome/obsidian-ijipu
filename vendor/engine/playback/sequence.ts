@@ -774,10 +774,33 @@ export function buildPlaySequence(
       .map((t) => segPlacedByToken.get(t))
       .filter((n): n is PlacedToken => n !== undefined)
       .sort((a, b) => a.x - b.x)
+    /**
+     * adj438：段层**自己的小节线**也要当色块右边界——与主旋律同一规则（adj320：
+     * "一个时值元素 = 一个色块，覆盖到**下一时值元素或小节线**前"）。
+     *
+     * 旧实现只取"同段内下一个段层音符"，于是段内小节线**之前**那个音的色块会**跨过小节线**
+     * 一直盖到下一小节第一个音前（用户截图：dsb 上层 `4` 的红色块越过 `|`，看起来像 1.5 拍宽）。
+     */
+    const segBarXs: number[] = []
+    {
+      const first = segNotes[0]
+      const p0 = first ? pageByNoteIdx.get(first.id.index) : undefined
+      if (p0 && first) {
+        for (const b of p0.barlines) {
+          if (b.segment && b.id.group === first.id.group && b.id.voice === first.id.voice) segBarXs.push(b.x)
+        }
+        segBarXs.sort((a, b) => a - b)
+      }
+    }
+    const nextSegBarX = (x: number): number => segBarXs.find((v) => v > x + 1e-3) ?? Number.POSITIVE_INFINITY
     const edgeOf = (n: PlacedToken): number => {
       const i = segNotes.findIndex((m) => m === n)
       const next = i >= 0 && i < segNotes.length - 1 ? segNotes[i + 1].x : Number.POSITIVE_INFINITY
       const own = n.rightX ?? n.x + n.width
+      const barX = nextSegBarX(n.x)
+      // 小节线是**硬上限**：段层音符的"占位右端"可能越过段内小节线（槽宽含留空），
+      // 此时不能再 `max(own)`——否则钳制被盖回去、色块照样跨线。
+      if (barX !== Number.POSITIVE_INFINITY) return Math.min(barX, Math.max(next, own))
       return next === Number.POSITIVE_INFINITY ? own : Math.max(next, own)
     }
     for (const t of seg.children) {
