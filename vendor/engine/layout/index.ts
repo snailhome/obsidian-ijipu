@@ -2815,7 +2815,12 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
       //     最后一个子拍就会被算短（实测 5.2px，本应 7.7px）。两端同口径后，
       //     各子拍宽 = `(zoneEnd − n.x) × (子拍时值 / 音符时值)`，均匀且无跳变。
       const nextNote = k + 1 < cnt ? placed[k + 1].note : null
-      const zoneEnd = nextNote ? Math.min(noteRightOf(n), nextNote.x) : noteRightOf(n)
+      // adj441：该拍的**视觉跨度 = 本音数字位置 → 下一个音的数字位置**（"数字到数字"）。
+      // 不能取 `min(占位右端, next.x)`：`rightX`（含分配留白）常常**小于**下一个音的 x
+      // （实测小 6.9px），此时内部插值止于 `rightX` 而边界取 `next.x` ⇒ **最后一个子拍被算宽**
+      // （实测 `1/ 2// 3//` = 11.10 / 5.50 / **12.50**，合计 29.10 但该拍跨度 22.2+6.9）——
+      // 用户要求「多声部同一拍的总占宽要一致」，故两端统一用 `next.x`。
+      const zoneEnd = nextNote ? nextNote.x : noteRightOf(n)
       const t = s.beats > 1e-9 ? (beat - s.startBeat) / s.beats : 0
       return n.x + Math.min(1, Math.max(0, t)) * (zoneEnd - n.x)
     }
@@ -3088,7 +3093,11 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
       // （用户报「bz/dsb 上下层拍子没对齐，之前好好的」）。
       const segNaturalTotalBeat = seg.beats
       const segNaturalXStart = beatToX(envStart)
-      const segNaturalXEnd = beatToXEndOf(envStart + segNaturalTotalBeat)
+      // adj441：包络右界**不可能超过主旋律小节线**——adj441 把"音符终点"改成"下一个音的 x"后，
+      // 包络**末音**的终点会跳到包络**之外**那个音的 x（越线），使 `segNaturalW` 虚大 ⇒ `segScale`
+      // 又被触发压缩（空间优先实测漂移 39px）。钳到 `xEndBoundary` 后 `naturallyCrossesBar` 判假、
+      // `scale = 1`，各拍恢复精确对齐。
+      const segNaturalXEnd = Math.min(beatToXEndOf(envStart + segNaturalTotalBeat), xEndBoundary)
       const segNaturalW = segNaturalXEnd - segNaturalXStart
       const segContentW = xContent1 - xContent0
       /**
