@@ -22,6 +22,8 @@ import { tokenizeMusicLine } from './tokenizer'
 import { tokenDuration } from '../duration'
 import { graceNoteBeats } from '../layout/spaceLayout'
 import { errAt } from './errors'
+// adj454：设置行（`# jps-config:`）的语法校验（顶格 / JSON / 键值类型）
+import { inspectJpsConfigLine, JPS_CONFIG_PREFIX } from '../settings'
 
 const HEADER_KEYS = new Set(['V', 'B', 'Z', 'D', 'P', 'J', 'Y', 'S'])
 
@@ -205,6 +207,29 @@ export function parseJps(source: string): ParseResult {
 
     // 注释行（# 在行首）
     if (trimmed.startsWith('#')) {
+      /**
+       * adj454：`# jps-config:` 设置行是**有语法要求**的（顶格 + JSON 对象 + 键值类型），
+       * 但此前完全没有校验——JSON 坏了、值类型不对、键拼错了都**静默**按"设置丢失"处理，
+       * 用户只看到"我的设置没生效/退回了本机设置"。这里把设置行的校验结果并进 `errors`，
+       * 直接复用既有问题条（ProblemsBar）与状态栏橙点展示，带行号可点击定位。
+       * 分级用 warning 而非 error：谱面仍能正常渲染（回退本机/默认设置），不应因此阻断导出。
+       */
+      if (trimmed.startsWith(JPS_CONFIG_PREFIX)) {
+        if (!raw.startsWith(JPS_CONFIG_PREFIX)) {
+          errors.push(
+            errAt(
+              '设置行必须**顶格**写（行首不能有空格/制表符）——当前缩进导致整行设置被忽略',
+              lineNo,
+              raw.length - raw.trimStart().length,
+              'warning',
+              '把 `# jps-config:{...}` 移到行首（也可以在「设置 → 谱面」里改完点「保存设置」，应用会自动写回顶格的设置行）',
+            ),
+          )
+        }
+        for (const iss of inspectJpsConfigLine(trimmed, lineNo)) {
+          errors.push(errAt(iss.message, iss.line, iss.col, iss.severity, iss.hint))
+        }
+      }
       lines.push({ kind: 'comment', pos, raw })
       continue
     }

@@ -16,7 +16,7 @@ export { formatJps, formatLine } from './format/format'
 export { tokenDuration, durationMs } from './duration'
 export { layoutScore } from './layout'
 export { renderScoreToSvg } from './render'
-export { buildPlaySequence, inferBpm, createBackend, schedulePlay, SynthBackend, SamplerBackend, pitchToFreq, renderSynthNote, INSTRUMENT_OPTIONS, INSTRUMENT_LIB_NAMES, INSTRUMENT_PRESETS, matchInstrument, resolveInstrument, SAMPLER_LIBRARIES, getSamplerLibrary, classifyNetwork, eventsToMidi, pitchToMidiNote, instrumentToProgram, pcmToWav, GmChannelAllocator, GM_MELODIC_CHANNELS, GM_VOICES, gmVoiceProgram } from './playback'
+export { buildPlaySequence, inferBpm, countScoreInstrumentSwitches, createBackend, schedulePlay, SynthBackend, SamplerBackend, pitchToFreq, renderSynthNote, INSTRUMENT_OPTIONS, INSTRUMENT_LIB_NAMES, INSTRUMENT_PRESETS, matchInstrument, resolveInstrument, SAMPLER_LIBRARIES, getSamplerLibrary, classifyNetwork, eventsToMidi, pitchToMidiNote, instrumentToProgram, pcmToWav, GmChannelAllocator, GM_MELODIC_CHANNELS, GM_VOICES, gmVoiceProgram, gmVoiceRef } from './playback'
 export { codePosToNoteId, noteIdToCodePos, parseNoteId, buildIndexToPage } from './cursorMap'
 export { computeRowTops, computeRowGuides, dragDelta, clamp, metaAreaH, GUIDE_ITEMS, GUIDE_LIMITS, GUIDE_LIMITS_EX } from './layout/guides'
 export { metaAnchorOf, metaAnchorPt, clampMetaPos } from './layout/metaAnchors'
@@ -27,8 +27,10 @@ export { SEGMENT_ROW_GAP_DEFAULT } from './layout/spacing'
 // adj427：临时段（{bz … } / {dsb … }）拍位包络计算——layout/render 共用，纯函数
 export { computeSegments, mainSpans, mainSpansInRange, tokensBeats, segmentBarBeats, beatRatio, isDurational, segmentNoteIndexBase, segmentBarIndexBase, decodeSegmentNoteId, SEG_NOTE_ID_BASE, SEG_BAR_ID_BASE } from './layout/segments'
 export type { SegmentInfo, MainSpan } from './layout/segments'
-export { extractJpsConfig, mergeJpsConfig, writeJpsConfig, extractLegacyEditorPrefs, JPS_CONFIG_PREFIX, roundPxIntegers } from './settings'
-export type { JpsConfigWriteMode } from './settings'
+// adj454：`mergeConfigEdits` = 写回时只并入「用户本次改动」（缓存来源的值不进谱面）；
+// `inspectJpsConfig`/`inspectJpsConfigLine` = 设置行的类型校验告警（解析器已并入 ParseResult.errors）
+export { extractJpsConfig, mergeJpsConfig, writeJpsConfig, mergeConfigEdits, inspectJpsConfig, inspectJpsConfigLine, extractLegacyEditorPrefs, JPS_CONFIG_PREFIX, roundPxIntegers } from './settings'
+export type { JpsConfigWriteMode, JpsConfigIssue } from './settings'
 // 字体策略（跨机尽量有 / 适合简谱 / 保证有可用字体）+ 分层归属：
 // 编辑器偏好属「用户个性」（L1，不进谱面），谱面字体属「谱面级」（L2）
 export {

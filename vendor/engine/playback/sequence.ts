@@ -106,7 +106,7 @@ export interface PlaySequence {
   bpm: number
 }
 
-/** 从描述头 J 推断拍速（30~240），无效或缺失默认 90；数字部分优先（多条 J 时） */
+/** 从描述头 J 推断拍速（30~240），无效或缺失默认 70（adj343；函数头注释此前误写 90） */
 export function inferBpm(result: ParseResult): number {
   const t = result.header.tempoNum ?? result.header.tempo
   if (t) {
@@ -359,12 +359,39 @@ function buildPlayheadSegs(
   return out
 }
 
+/**
+ * adj455：谱面里「曲内显式音色切换」（`@乐器名@` / 旧写法 `@乐器名`）的**处数**。
+ *
+ * 用途：试听选定具体音色时是**全篇统一音色**（见 `buildPlaySequence` 的 `instrumentOverride`），
+ * 谱面里的 `@` 切换会被一起覆盖——界面据此提示"谱面里有 N 处 @ 已被试听音色覆盖，
+ * 要按谱面音色演奏请选「自动」"，避免用户误判"写了 @ 却不生效"（E-2026-174 同类误判）。
+ * `@@`（切回默认乐器，`name === null`）不计入：它没有指定具体音色。
+ */
+export function countScoreInstrumentSwitches(result: ParseResult): number {
+  const countIn = (tokens: readonly MusicToken[]): number => {
+    let n = 0
+    for (const t of tokens) {
+      if (t.kind === 'instrument') {
+        if (typeof t.name === 'string' && t.name.trim() !== '') n++
+      } else if (t.kind === 'segment') {
+        // 临时段（`{bz @手风琴@ … }`）里的切换是**子 token**——同样会被"全篇试听音色"覆盖，必须计入
+        n += countIn(t.children ?? [])
+      }
+    }
+    return n
+  }
+  let n = 0
+  for (const g of result.groups) n += countIn(g.music.tokens)
+  return n
+}
+
 export function buildPlaySequence(
   result: ParseResult,
   layout: ScoreLayout,
   bpm: number,
   startNoteId?: string | null,
   defaultInstrumentRef?: string,
+  instrumentOverride?: string,
 ): PlaySequence {
   // 0. adj88：起始音符定位——双击谱面音符试听时，从该音符（含之后）开始播放；
   //    事件延迟统一减去起点音符的 atMs，使起点音符立即播放
@@ -516,6 +543,19 @@ export function buildPlaySequence(
     if (y1 !== undefined && y1.trim() !== '') return parseInstrumentRef(y1).ref
     return ACCOMP_FALLBACK_INSTRUMENT
   }
+  /**
+   * adj455：「试听音色」**选定具体音色时 → 全篇统一音色**（用户规格，恢复 adj427/adj434 之前的语义）：
+   * 主声部、`{bz}`/`{dsb}` 伴奏/第二声部、曲内 `@乐器名@` 显式切换**全部**改用该音色。
+   *
+   * 为什么要收在**序列层**而不是播放后端：序列里的 `instrument` 同时喂给
+   * ① 音频事件（`schedulePlay` → 后端 program）与 ② 色块轨道（`playheadSegs[].instrument` → 预览色块配色）。
+   * 只在后端改，色块会与听到的音色不一致（"音频全是一个音色、色块还是五颜六色"）。
+   *
+   * 「自动」（`undefined`/空串）时**完全不介入**，仍按既有优先级路由：
+   * 曲内 `@乐器名@` > 描述头 `Y:`（按声部）> `defaultInstrumentRef`（启用音色列表第一）> 音色库第一音色。
+   */
+  const overrideRef = typeof instrumentOverride === 'string' ? instrumentOverride.trim() : ''
+  const instOr = (own: string): string => (overrideRef !== '' ? overrideRef : own)
 
   // 2. 重建交错序列（音符 + 小节线），保持源码顺序
   //    adj88：同时记录连音线 (…) 覆盖的音符区间（open slur → 当前音符起点，close → 终点），
@@ -885,11 +925,14 @@ export function buildPlaySequence(
       const dur2 = (tokenDuration(t) * 60000) / bpm
       const isSec = placed.playVoice === 'accomp' || placed.playVoice === 'second'
       const ov = overriddenByVoice.get(placed.id.voice)
-      const inst2 = isSec
-        ? accompInstrument()
-        : typeof ov === 'string' && ov.length > 0
-          ? parseInstrumentRef(ov).ref
-          : voiceDefaultOf(placed.id.voice)
+      // adj455：选定试听音色时全篇统一（instOr 包一层，伴奏/第二声部同样跟随）
+      const inst2 = instOr(
+        isSec
+          ? accompInstrument()
+          : typeof ov === 'string' && ov.length > 0
+            ? parseInstrumentRef(ov).ref
+            : voiceDefaultOf(placed.id.voice),
+      )
       const gain2 = isSec ? ACCOMP_GAIN : 1
       events.push({
         placed,
@@ -998,12 +1041,18 @@ export function buildPlaySequence(
       const isSecondaryVoice = playRole === 'accomp' || playRole === 'second'
       const voiceInst = overriddenByVoice.get(placed.id.voice)
       // adj434：`@乐器名@` 曲内显式切换 → 标记 explicit（播放端不让「试听音色」压掉它）
-      const hasExplicitInst = !isSecondaryVoice && typeof voiceInst === 'string' && voiceInst.length > 0
-      const instrument = isSecondaryVoice
-        ? accompInstrument()
-        : hasExplicitInst
-          ? parseInstrumentRef(voiceInst!).ref
-          : voiceDefaultOf(placed.id.voice)
+      // adj455：但**选定了具体试听音色**时全篇统一，此时不再认曲内 `@` 切换（也不标 explicit，
+      //   避免"标记说它有自己的音色、实际播放却是统一音色"的自相矛盾）；提示由界面负责
+      //   （PlaybackDialog 用 countScoreInstrumentSwitches 告知"谱面里的 @ 已被统一覆盖"）。
+      const hasExplicitInst =
+        overrideRef === '' && !isSecondaryVoice && typeof voiceInst === 'string' && voiceInst.length > 0
+      const instrument = instOr(
+        isSecondaryVoice
+          ? accompInstrument()
+          : hasExplicitInst
+            ? parseInstrumentRef(voiceInst!).ref
+            : voiceDefaultOf(placed.id.voice),
+      )
       const gain = isSecondaryVoice ? ACCOMP_GAIN : 1
       // 倚音（adj23 / adj396 时值规范）：倚音**占用主音符的时值**——
       //   ① 单个倚音实际时值 = 1/2^(括号内减时线条数 + 1) 拍（写 `2/` 即实音符的 `2//` = 1/4 拍）；

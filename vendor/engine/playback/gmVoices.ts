@@ -72,6 +72,19 @@ export const GM_VOICES: GmVoice[] = [
   { program: 124, label: '124 电话铃' }, { program: 125, label: '125 直升机' }, { program: 126, label: '126 拍手声' }, { program: 127, label: '127 枪声' },
 ]
 
+/**
+ * GM program → **音色名 ref**（剥掉显示编号，如 `21 手风琴` → `手风琴`）；无匹配返回 undefined。
+ *
+ * adj455：这是 `gmVoiceProgram` 的逆映射，供「试听音色」选定具体音色后作为**全篇乐器覆盖**
+ * 传给 `buildPlaySequence`（序列里的 `instrument` 字段用的是音色名 ref，不是 program）。
+ * 与 `gmVoiceProgram` 天然互逆（同一张表），smoke 对 128 项逐项断言往返一致。
+ */
+export function gmVoiceRef(program: number | null | undefined): string | undefined {
+  if (program === null || program === undefined || !Number.isFinite(program)) return undefined
+  const v = GM_VOICES.find((x) => x.program === program)
+  return v ? v.label.replace(/^\d+\s+/, '') : undefined
+}
+
 /** 音色名（含/不含显示编号）→ GM program；无匹配返回 null */
 export function gmVoiceProgram(name: string | undefined | null): number | null {
   if (!name) return null
