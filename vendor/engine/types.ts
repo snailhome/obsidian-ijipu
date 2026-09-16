@@ -344,6 +344,30 @@ export interface BracketToken {
   raw: string
 }
 
+/**
+ * 临时段（adj427）：`{bz ... }` 临时伴奏、`{dsb ... }` 临时多声部。
+ *
+ * 语法：
+ *  - `{bz 1 2 3 | 4 5}` —— bz 段：包裹范围对应的主旋律拍位确定总宽；段内内容按比例映射到该宽度；
+ *    画在主旋律**上方**，用括号包裹；段内 `|` 按自身拍位映射到该宽度内。
+ *  - `{dsb 1 2 3 | 4 5}` —— dsb 段：临时多声部；上层画段内内容（主声部），下层画主旋律该拍位的
+ *    音（伴奏），两层同一拍位垂直对齐；段内/主旋律各自的小节线**三层对齐**。
+ *
+ * `}` 是**段结束** token（与 `{bz`/`{dsb` 配对）；段内 token 通过 `children` 挂在 open token 上。
+ * 段内允许任意 MusicToken（含小节线、装饰、连音线、倚音等）；段内**不嵌套** `{bz/dsb`（嵌套时报错）。
+ */
+export interface SegmentToken {
+  kind: 'segment'
+  /** 段类型：bz 临时伴奏 / dsb 临时多声部 */
+  type: 'bz' | 'dsb'
+  /** open = `{bz` / `{dsb`（段开始）；close = `}`（段结束） */
+  dir: 'open' | 'close'
+  pos: number
+  raw: string
+  /** 段内 token（仅 open 时存在；close 时为 undefined） */
+  children?: MusicToken[]
+}
+
 /** 音乐 token 联合 */
 export type MusicToken =
   | NoteToken
@@ -354,6 +378,7 @@ export type MusicToken =
   | SlurToken
   | InstrumentToken
   | BracketToken
+  | SegmentToken
 
 // ============================================================
 // 歌词（LyricChar）
@@ -455,6 +480,20 @@ export interface PlacedToken {
   playable: boolean
   /** adj303：乐器名注释（@乐器名 / @@ 切换后的下一个音符上方显示；仅 config.showInstrument 时渲染） */
   instrumentLabel?: string
+  /**
+   * adj427：临时段叠加层标记——该音符来自 `{bz … }` / `{dsb … }` 段（不在主旋律时间轴上）。
+   * `layer`：upper = 段内容层（画在主旋律**上方**）；lower = dsb 段包络内的主旋律（下层声部，
+   * 与上层同一拍位垂直对齐）。主旋律音符不带该字段。
+   */
+  segment?: { type: 'bz' | 'dsb'; layer: 'upper' | 'lower' }
+  /**
+   * adj427：临时段重叠区的**声部角色**——供播放端决定音色与力度（用户规格）：
+   *  - `'accomp'`：bz 段的段内容层 = **伴奏声部** → 第 2 可用音色 + 0.75 力度
+   *  - `'main'`  ：dsb 段的段内容层 = **主声部** → 用该曲行声部音色（与主旋律一致、色块同色）
+   *  - `'second'`：dsb 段**包络内的主旋律音** = **第二声部** → 第 2 可用音色 + 0.75 力度
+   * 未设置 = 普通主声部（音色与力度都不变）。
+   */
+  playVoice?: 'accomp' | 'main' | 'second'
 }
 
 /** 一个定位后的歌词字符 */
@@ -492,6 +531,12 @@ export interface PlacedBarline {
   yBottom: number
   /** 小节线占宽 */
   width: number
+  /**
+   * adj427：临时段叠加层标记——该小节线来自 `{bz … }` / `{dsb … }` 段内
+   * （按段内自身拍位映射到包络内的 x；主旋律小节线不带该字段）。
+   * 渲染时用 `yTop`/`yBottom` 限制在该层高度内，避免与主旋律小节线重叠。
+   */
+  segment?: { type: 'bz' | 'dsb'; layer: 'upper' | 'lower' }
 }
 
 /** 多声部块（Q1/Q2 纵向堆叠，小节对齐），供渲染声部括弧与名称 */
@@ -566,8 +611,40 @@ export interface ScorePage {
   dynamics: PlacedDynamic[]
   /** adj294：独立括号标记（&zkh/&ykh）——按源码位置插位、占宽，不影响音符 */
   brackets: PlacedBracket[]
+  /**
+   * adj427：临时段（`{bz … }` / `{dsb … }`）叠加层的**左右大括号**。
+   * 段内容音符与小节线直接追加在 `notes` / `barlines`（带 `segment` 标记），
+   * 本字段只描述包络范围的括弧几何（可选——无临时段时不存在）。
+   */
+  segmentBrackets?: PlacedSegmentBracket[]
   /** 页面级元数据（标题/作者/调号拍号等文本元素） */
   meta: ScorePageMeta
+}
+
+/**
+ * 临时段叠加层括弧（adj427）：包住 `{bz … }` / `{dsb … }` 段内容层。
+ * 左右括号分别落在**包络起点与终点**的 x 上（包络 = [段所在拍位, +段自身拍数)）。
+ */
+export interface PlacedSegmentBracket {
+  /** 段类型：bz 临时伴奏 / dsb 临时多声部 */
+  type: 'bz' | 'dsb'
+  /** 左括号 x（包络起点） */
+  x1: number
+  /** 右括号 x（包络终点） */
+  x2: number
+  /** 层顶 y */
+  yTop: number
+  /** 层底 y */
+  yBottom: number
+  /**
+   * dsb 专用：**下层声部**（包络内的主旋律）底缘 y——供渲染画一对跨两层的大花括号
+   * （图 2 的 `{ … }`）；bz 无下层，不设该字段。
+   */
+  yBottomLower?: number
+  /** 所属声部 */
+  voice: number
+  /** 所属曲词分组下标（= result.groups 下标） */
+  group: number
 }
 
 export interface ScorePageMeta {

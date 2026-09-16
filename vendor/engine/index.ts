@@ -22,6 +22,9 @@ export { computeRowTops, computeRowGuides, dragDelta, clamp, metaAreaH, GUIDE_IT
 export { metaAnchorOf, metaAnchorPt, clampMetaPos } from './layout/metaAnchors'
 export { splitNoteDur, digitSlotW, dotBodyW, augBodyW, slideBodyW, bracketBodyW, noteBodyW, nonDurGap, accidentalBodyW, hxBodyW } from './layout/spaceLayout'
 export type { NoteDurSplit } from './layout/spaceLayout'
+// adj427：临时段（{bz … } / {dsb … }）拍位包络计算——layout/render 共用，纯函数
+export { computeSegments, mainSpans, mainSpansInRange, tokensBeats, segmentBarBeats, beatRatio, isDurational } from './layout/segments'
+export type { SegmentInfo, MainSpan } from './layout/segments'
 export { extractJpsConfig, mergeJpsConfig, writeJpsConfig, extractLegacyEditorPrefs, JPS_CONFIG_PREFIX, roundPxIntegers } from './settings'
 export type { JpsConfigWriteMode } from './settings'
 // 字体策略（跨机尽量有 / 适合简谱 / 保证有可用字体）+ 分层归属：

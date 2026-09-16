@@ -8,11 +8,16 @@
  *  - `[ ]` 跳房子：第一遍经过 [ 段，第二遍跳过
  *  - `||` / `||/`：终止线，播放到此结束
  */
-import type { BarlineMark, BarlineType, ParseResult, PlacedBarline, PlacedToken, ScoreLayout } from '../types'
+import type { BarlineMark, BarlineType, MusicToken, ParseResult, PlacedBarline, PlacedToken, ScoreLayout } from '../types'
 import { tokenDuration } from '../duration'
 import { parseKey, pitchToName } from '../layout/index'
 import { graceNoteBeats } from '../layout/spaceLayout'
 import { parseInstrumentRef } from './instruments'
+
+/** adj427：第 2 可用音色的内置默认（用户规格：第 1 = 大钢琴、第 2 = 手风琴） */
+const ACCOMP_FALLBACK_INSTRUMENT = '手风琴'
+/** adj427：伴奏 / 第二声部的力度倍率（用户规格：重叠的伴奏部分用 0.75） */
+const ACCOMP_GAIN = 0.75
 
 /**
  * 解析音符 id（"page_voice_group_index"）为全局音符序号定位起点。
@@ -36,6 +41,8 @@ export interface PlayheadSeg {
   width: number
   voice: number
   group: number
+  /** adj427：该事件所用乐器名——色块**按音色着色**（不同音色不同颜色，切换音色时能看到变色） */
+  instrument?: string
 }
 
 export interface PlayEvent {
@@ -48,6 +55,17 @@ export interface PlayEvent {
   pitch?: string | null
   /** adj257：乐器名（多声部按各自乐器同时演奏；缺省 = 通用音色） */
   instrument?: string
+  /**
+   * adj427：**力度倍率**（乘在基础增益上；缺省 1）。用户规格：重叠的伴奏/第二声部用 **0.75**。
+   * 预留给后续的力度记号（`&mp` 等）扩展使用。
+   */
+  gain?: number
+  /**
+   * adj427：该事件的**声部角色**（来自 `PlacedToken.playVoice`）。
+   * `'accomp'` / `'second'` = 伴奏 / 第二声部——播放端须让它们**保留自己的音色**，
+   * 不被「试听音色」的全局覆盖压掉（否则两个声部会听成同一种音色）。
+   */
+  playVoice?: 'accomp' | 'main' | 'second'
   /** adj300：播放拍段轨道（连音合并时含被合并音符的拍段，覆盖完整时值；普通事件 = 音符拍段） */
   playheadSegs?: PlayheadSeg[]
 }
@@ -72,12 +90,17 @@ export function inferBpm(result: ParseResult): number {
 }
 
 interface SeqItem {
-  kind: 'note' | 'bar' | 'instrument'
+  kind: 'note' | 'bar' | 'instrument' | 'segment'
   note?: PlacedToken
   /** 音符全局索引（slur 区间用；bar 项无） */
   noteIdx?: number
   /** adj301/351：乐器切换指令（@乐器名 / @@）——记录所属声部（voice），多声部各声部独立切换 */
   instr?: { name: string | null; voice: number }
+  /**
+   * adj427：临时段（`{bz … }` / `{dsb … }`）——**不占主旋律时值**，走到此处只是"打标记"；
+   * 段内容的实际事件在**下一个音符事件**处用同一个 `passMs` 补发（⇒ 反复每遍都发声）。
+   */
+  seg?: { voice: number; children: MusicToken[] }
   bar?: {
     type: BarlineType
     marks?: BarlineMark[]
@@ -141,15 +164,34 @@ export function buildPlaySequence(
   for (const page of layout.pages) {
     for (const n of page.notes) byIndex.set(n.id.index, n)
   }
+  /**
+   * adj427：段层音符的**对象身份**索引（token → 已放置音符）。
+   * 临时段的已放置音符与段内 token 是**同一对象引用**（layout 里以 `token: t` 存入），
+   * 故可直接按身份取用——不必给 `ScorePage` 增加"段→音符"的映射字段。
+   */
+  const segPlacedByToken = new Map<MusicToken, PlacedToken>()
+  for (const page of layout.pages) {
+    for (const n of page.notes) if (n.segment) segPlacedByToken.set(n.token, n)
+  }
   // ★ adj320：每个音符的色块右边界 = 同 group 内下一个时值元素左缘，或该小节线左缘（取先到者）。
   //   使色块「当前时值元素 → 下一时值元素/小节线前」连续覆盖，不依赖显示占宽右缘。
+  //   adj427：**必须排除段层音符**——它们与主旋律**同 x**（叠加对齐），若混进来排序，
+  //   主旋律音符的"下一个元素"会变成同 x 的那个段层音符（不满足 `> n.x + 1e-3`），
+  //   `nextNote` 退化为 Infinity ⇒ 边界只剩小节线 ⇒ **色块被拉长到整个小节**（用户报的现象）。
+  //   段层音符的右边界在 emitSegmentEvents 里按「同段内下一个段层音符」单独算。
   const rightEdgeByNoteIdx = new Map<number, number>()
   {
     const byGroupNotes = new Map<number, PlacedToken[]>()
     const byGroupBars = new Map<number, PlacedBarline[]>()
     for (const page of layout.pages) {
-      for (const n of page.notes) (byGroupNotes.get(n.id.group) ?? byGroupNotes.set(n.id.group, []).get(n.id.group)!).push(n)
-      for (const b of page.barlines) (byGroupBars.get(b.id.group) ?? byGroupBars.set(b.id.group, []).get(b.id.group)!).push(b)
+      for (const n of page.notes) {
+        if (n.segment) continue
+        ;(byGroupNotes.get(n.id.group) ?? byGroupNotes.set(n.id.group, []).get(n.id.group)!).push(n)
+      }
+      for (const b of page.barlines) {
+        if (b.segment) continue
+        ;(byGroupBars.get(b.id.group) ?? byGroupBars.set(b.id.group, []).get(b.id.group)!).push(b)
+      }
     }
     for (const [group, notes] of byGroupNotes) {
       const sorted = [...notes].sort((a, b) => a.x - b.x)
@@ -184,6 +226,17 @@ export function buildPlaySequence(
   const voiceDefaultOf = (voice: number): string => {
     const y = yInstruments?.[voice - 1]
     return y !== undefined ? parseInstrumentRef(y).ref : defaultInstrument
+  }
+  /**
+   * adj427：临时段（`{bz … }` / `{dsb … }`）重叠区的**第二声部音色**（用户规格）：
+   *  「可用音色 第 1 = 大钢琴、第 2 = 手风琴」——优先取脚本第 2 条 `Y:` 行；
+   *  没有第 2 条 `Y:` 就用内置默认「手风琴」。
+   *  （第 1 可用音色 = 主声部，走上面的 `voiceDefaultOf`；app 侧默认启用列表首位即「大钢琴」。）
+   */
+  const accompInstrument = (): string => {
+    const y1 = yInstruments?.[1]
+    if (y1 !== undefined && y1.trim() !== '') return parseInstrumentRef(y1).ref
+    return ACCOMP_FALLBACK_INSTRUMENT
   }
 
   // 2. 重建交错序列（音符 + 小节线），保持源码顺序
@@ -241,6 +294,13 @@ export function buildPlaySequence(
         // adj301/351：乐器切换指令纳入播放序列（不产生音符事件）——按所属声部（voice）记录，
         // 多声部各声部独立切换乐器（下一组同声部延续）
         seq.push({ kind: 'instrument', instr: { name: token.name, voice: group.music.voice } })
+      } else if (token.kind === 'segment') {
+        // adj427：临时段（{bz … } / {dsb … }）——**不占主旋律时值**，只推进段内的音符序号吗？
+        // 不：段内音符是**独立**的（children 各自成事件），主旋律的 noteIdx 完全不受影响。
+        // 这里只登记一个"待补发"标记项，实际事件在走查时补发。
+        if (token.dir === 'open' && token.children && token.children.length > 0) {
+          seq.push({ kind: 'segment', seg: { voice: group.music.voice, children: token.children } })
+        }
       } else if (token.kind === 'note' || token.kind === 'rest' || token.kind === 'rhythm') {
         const placed = byIndex.get(noteIdx)
         if (placed) seq.push({ kind: 'note', note: placed, noteIdx })
@@ -474,8 +534,68 @@ export function buildPlaySequence(
     }
     breathEvIdx = -1
   }
+  /** adj427：待补发的临时段（走到段项时记下，在下一个音符事件处用同一 passMs 补发） */
+  let pendingSegment: { voice: number; children: MusicToken[] } | null = null
+  /** adj427：段层事件的结束时刻（单独累计，**不动 lastEndMs**——它是"当前播放时刻"，动它会破坏反复/跳房子的无缝衔接） */
+  let segEndMs = 0
+  /**
+   * adj427：补发临时段（`{bz … }` / `{dsb … }`）的段层事件。
+   *
+   * 时间用**传入的 passMs**（= 下一个主旋律音符事件所用的那个）——
+   * 段层音符的 `clock` 也由自己的布局坐标算出，故与它所覆盖的主旋律**同刻发声**；
+   * 声部角色决定音色与力度：`'main'` = 该声部当前音色 + 力度 1；
+   * `'accomp'`（bz 上层）/ `'second'`（dsb 下层）= 第 2 可用音色 + 力度 0.75。
+   */
+  const emitSegmentEvents = (seg: { voice: number; children: MusicToken[] }, passMsNow: number): void => {
+    // adj427：段层内部色块右边界 = 同段内**下一个段层音符**左缘；最后一个用其占位右缘。
+    // （不能沿用主旋律那套 rightEdgeByNoteIdx——它已按设计排除段层音符，避免两套坐标互相污染。）
+    const segNotes = seg.children
+      .map((t) => segPlacedByToken.get(t))
+      .filter((n): n is PlacedToken => n !== undefined)
+      .sort((a, b) => a.x - b.x)
+    const edgeOf = (n: PlacedToken): number => {
+      const i = segNotes.findIndex((m) => m === n)
+      const next = i >= 0 && i < segNotes.length - 1 ? segNotes[i + 1].x : Number.POSITIVE_INFINITY
+      const own = n.rightX ?? n.x + n.width
+      return next === Number.POSITIVE_INFINITY ? own : Math.max(next, own)
+    }
+    for (const t of seg.children) {
+      if (t.kind !== 'note' && t.kind !== 'rest' && t.kind !== 'rhythm') continue
+      const placed = segPlacedByToken.get(t)
+      if (!placed) continue
+      const g2 = placed.id.group
+      const at2 = passMsNow + groupStartMs[g2] + (barStartMsInGroup[g2][placed.barIndex] ?? 0) + placed.beatPos * beatMs
+      const dur2 = (tokenDuration(t) * 60000) / bpm
+      const isSec = placed.playVoice === 'accomp' || placed.playVoice === 'second'
+      const ov = overriddenByVoice.get(placed.id.voice)
+      const inst2 = isSec
+        ? accompInstrument()
+        : typeof ov === 'string' && ov.length > 0
+          ? parseInstrumentRef(ov).ref
+          : voiceDefaultOf(placed.id.voice)
+      const gain2 = isSec ? ACCOMP_GAIN : 1
+      events.push({
+        placed,
+        instrument: inst2,
+        atMs: at2,
+        durationMs: dur2,
+        gain: gain2,
+        playVoice: placed.playVoice,
+        playheadSegs: buildPlayheadSegs(placed, 0, edgeOf(placed)).map((s) => ({ ...s, instrument: inst2 })),
+      })
+      segEndMs = Math.max(segEndMs, at2 + dur2)
+    }
+  }
+
   while (i < seq.length && guard++ < maxIter) {
     const item = seq[i]
+    if (item.kind === 'segment') {
+      // adj427：临时段（{bz}/{dsb}）——**不占主旋律时值**，此处只打标记；
+      // 段内容等到**下一个音符事件**时用同一个 passMs 补发（⇒ 反复每遍都发声、与主旋律同刻）。
+      pendingSegment = item.seg ?? null
+      i++
+      continue
+    }
     if (item.kind === 'instrument') {
       // adj301/351：@乐器名 切换（覆盖该声部默认）；@@（name=null）清除该声部覆盖（回声部默认）
       overriddenByVoice.set(item.instr!.voice, item.instr!.name ?? null)
@@ -500,6 +620,11 @@ export function buildPlaySequence(
         pendingJumpMs = -1
       }
       const atMs = passMs + clock
+      // adj427：若有待补发的临时段，就在这里用**同一个 passMs** 补发——它与本音符同刻开始
+      if (pendingSegment) {
+        emitSegmentEvents(pendingSegment, passMs)
+        pendingSegment = null
+      }
       lastEndMs = Math.max(lastEndMs, atMs + durationMs)
       // adj89：合并判定——与前一已发事件音高相同、索引相邻（中间无音符）、
       // 且**两者同属同一条连音线**（严格 slur 内连奏）：
@@ -532,7 +657,9 @@ export function buildPlaySequence(
         // adj300：连音合并——把被合并音符的拍段并入 prev 的播放拍段（色块可覆盖全时值，
         // 如 (1 - - - | 1) - 0 0 中 1 合并 6 拍，色块依次滑过 1 - - - 1 -）
         const prevBeat = (prev.playheadSegs ?? []).reduce((a, s) => a + s.beats, 0)
-        prev.playheadSegs = (prev.playheadSegs ?? []).concat(buildPlayheadSegs(item.note, prevBeat, rightEdgeByNoteIdx.get(item.note.id.index)))
+        prev.playheadSegs = (prev.playheadSegs ?? []).concat(
+          buildPlayheadSegs(item.note, prevBeat, rightEdgeByNoteIdx.get(item.note.id.index)).map((s) => ({ ...s, instrument: prev.instrument })),
+        )
         // adj157：合并时值；atMs 来自拍时钟（每个 event 独立），不需全局 at 累加
         lastEventNoteIdx = curNoteIdx
         lastEventHadGrace = false
@@ -540,11 +667,17 @@ export function buildPlaySequence(
         continue
       }
       // adj351：按声部取覆盖乐器（该声部最近一次 @ 结果；未设置/@@ 清空 → 用该声部 Y 默认乐器）
+      // adj427：按**声部角色**分流——'accomp'（bz 上层）/ 'second'（dsb 下层）为伴奏/第二声部：
+      //   用第 2 可用音色（色块随之换色）+ 0.75 力度；'main' / 未设置 = 主声部，音色力度都不变。
+      const playRole = placed.playVoice
+      const isSecondaryVoice = playRole === 'accomp' || playRole === 'second'
       const voiceInst = overriddenByVoice.get(placed.id.voice)
-      const instrument =
-        typeof voiceInst === 'string' && voiceInst.length > 0
+      const instrument = isSecondaryVoice
+        ? accompInstrument()
+        : typeof voiceInst === 'string' && voiceInst.length > 0
           ? parseInstrumentRef(voiceInst).ref
           : voiceDefaultOf(placed.id.voice)
+      const gain = isSecondaryVoice ? ACCOMP_GAIN : 1
       // 倚音（adj23 / adj396 时值规范）：倚音**占用主音符的时值**——
       //   ① 单个倚音实际时值 = 1/2^(括号内减时线条数 + 1) 拍（写 `2/` 即实音符的 `2//` = 1/4 拍）；
       //   ② 前倚音依次演奏于主音符**开头**（`3[2/]`：先 1/4 拍倚音 2，再 3/4 拍主音符 3）；
@@ -568,21 +701,29 @@ export function buildPlaySequence(
       if (gn && !gn.after && gracePitches.length > 0) {
         let gAt = atMs
         for (let gi = 0; gi < gn.notes.length; gi++) {
-          events.push({ placed: item.note, instrument, atMs: gAt, durationMs: graceMsAt(gi), pitch: gracePitches[gi] })
+          events.push({ placed: item.note, instrument, atMs: gAt, durationMs: graceMsAt(gi), pitch: gracePitches[gi], gain })
           gAt += graceMsAt(gi)
         }
       }
       // adj375：新事件开始 → 上一个事件已完成（不会再被连音合并）→ 结算它的呼吸静音
       settleBreath()
       const mainEvIdx = events.length
-      events.push({ placed: item.note, instrument, atMs: mainAtMs, durationMs: mainMs, playheadSegs: buildPlayheadSegs(item.note, 0, rightEdgeByNoteIdx.get(item.note.id.index)) })
+      events.push({
+        placed: item.note,
+        instrument,
+        atMs: mainAtMs,
+        durationMs: mainMs,
+        gain,
+        playVoice: playRole,
+        playheadSegs: buildPlayheadSegs(item.note, 0, rightEdgeByNoteIdx.get(item.note.id.index)).map((s) => ({ ...s, instrument })),
+      })
       // adj375：本音符是某 &hx 的作用对象 → 标记该事件待结算（连音合并会累加时值后再一起算）
       if (hxBreathNoteIdx.has(curNoteIdx)) breathEvIdx = mainEvIdx
       if (gn && gn.after && gracePitches.length > 0) {
         // 后倚音接在主音符（含增时线/附点）之后，填满本音符时值的最后一段
         let gAt = mainAtMs + mainMs
         for (let gi = 0; gi < gn.notes.length; gi++) {
-          events.push({ placed: item.note, instrument, atMs: gAt, durationMs: graceMsAt(gi), pitch: gracePitches[gi] })
+          events.push({ placed: item.note, instrument, atMs: gAt, durationMs: graceMsAt(gi), pitch: gracePitches[gi], gain })
           gAt += graceMsAt(gi)
         }
       }
@@ -699,13 +840,20 @@ export function buildPlaySequence(
 
   // adj375：走查结束——最后一个事件没有"下一个事件"来触发结算，这里补一次
   settleBreath()
+  // adj427：段落在行尾/后面没有音符时，用最后一遍的 passMs 补发（保证它仍然发声）
+  if (pendingSegment) {
+    emitSegmentEvents(pendingSegment, passMs)
+    pendingSegment = null
+  }
 
   // adj361：总时长 = 实际播放到的时刻（= 所有事件的最大结束时刻，含反复遍）
-  totalMs = lastEndMs
+  // adj427：再与段层事件末刻取最大（段落比其后主旋律长时不被截断）
+  totalMs = Math.max(lastEndMs, segEndMs)
 
   // adj88：从指定音符开始——丢弃起点之前的音符事件，其后 atMs 统一减去起点 atMs
   if (startIdxByPage !== null) {
-    const from = events.findIndex((e) => e.placed.id.index >= startIdxByPage.index)
+    // adj427：段层事件 id 在高位段（900000+），不能参与"起点音符"的定位——按主旋律音符判断
+    const from = events.findIndex((e) => !e.placed.segment && e.placed.id.index >= startIdxByPage.index)
     if (from > 0) {
       const base = events[from].atMs
       const sliced = events.slice(from).map((e) => ({ ...e, atMs: Math.max(0, e.atMs - base) }))

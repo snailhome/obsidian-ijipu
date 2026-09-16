@@ -49,7 +49,7 @@ export function createBackend(kind: BackendKind, library?: SamplerLibrary, cache
  *  这里 firstDelayMs 是事件相对 0 的额外偏移（与 t0 独立），实现"按播放后延迟 N 毫秒才开始出第一声"。
  */
 export function schedulePlay(
-  seq: { events: { placed: PlacedToken; atMs: number; durationMs: number; pitch?: string | null; instrument?: string }[] },
+  seq: { events: { placed: PlacedToken; atMs: number; durationMs: number; pitch?: string | null; instrument?: string; gain?: number; playVoice?: 'accomp' | 'main' | 'second' }[] },
   backend: AudioBackend,
   onNote?: (placed: PlacedToken) => void,
   globalInstrument?: string,
@@ -60,9 +60,14 @@ export function schedulePlay(
     const pitch = ev.pitch ?? ev.placed.audioPitch
     if (!pitch) continue
     // adj261：直接用 ev.atMs 调度（此前 bug 传 0，导致音频延迟/不响）；后端 AudioContext 按 atMs 调度，同 atMs 事件同时响
-    const instrument = globalInstrument ?? ev.instrument
+    // adj427：伴奏/第二声部**不被全局乐器覆盖**（它们用自己的音色，见 AudioBackend.play 的 opts）
+    const isSecondary = ev.playVoice === 'accomp' || ev.playVoice === 'second'
+    const instrument = isSecondary ? ev.instrument : (globalInstrument ?? ev.instrument)
+    // adj427：基础增益 0.5 上乘**按事件的力度倍率**（`gain`，缺省 1）——
+    // 重叠的伴奏/第二声部用 0.75，避免盖过主声部；该字段预留给后续力度记号扩展。
+    const gain = 0.5 * (ev.gain ?? 1)
     // play 返回 Promise — 不 await（fire-and-forget），节点已在 ctx 中排程
-    void backend.play(pitch, ev.atMs + firstDelayMs, ev.durationMs, 0.5, instrument)
+    void backend.play(pitch, ev.atMs + firstDelayMs, ev.durationMs, gain, instrument, undefined, isSecondary ? { keepInstrument: true } : undefined)
     onNote?.(ev.placed)
   }
   // adj381：totalMs 取**所有事件尾端**（atMs + durationMs）的最大值，而不是末事件的起声时刻。

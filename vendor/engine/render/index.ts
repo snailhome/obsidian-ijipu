@@ -14,7 +14,7 @@
  * TODO(M1c)：歌词 <text data-cipos>
  * TODO(M7)：跳房子/连音线/装饰符号/多声部
  */
-import type { PageConfig, PlacedBarline, PlacedDynamic, PlacedLyric, PlacedSlur, PlacedToken, ScoreLayout, ScorePage, VoiceBlock } from '../types'
+import type { PageConfig, PlacedBarline, PlacedDynamic, PlacedLyric, PlacedSegmentBracket, PlacedSlur, PlacedToken, ScoreLayout, ScorePage, VoiceBlock } from '../types'
 import { tokenDuration } from '../duration'
 import { metaAnchorOf, metaAnchorPt } from '../layout/metaAnchors'
 import {
@@ -1385,6 +1385,47 @@ function renderBracket(
   return `<text x="${r1n(b.x)}" y="${r1n(b.yTop)}" text-anchor="middle" dominant-baseline="central" font-weight="bold" font-size="${size}" font-family="${noteFont(config.shuzi_font)}" fill="#1b1b1b">${glyph}</text>`
 }
 
+/**
+ * adj427：临时段（`{bz … }` / `{dsb … }`）的**跨两层大花括号** `{ … }`（dsb 专用）。
+ *
+ * - 位置由**布局层**给出：`x1` / `x2` 是大括号所占槽位的**左缘**（已排在小节线**内侧**且留了
+ *   与小节线的净距）；`yTop` / `yBottomLower` 由布局层按**上下两层音符的外沿**给出
+ *   （上过上一行音符上沿、下过下一行音符下沿），故能真正"包住"。
+ * - 形状：**自绘描边路径**（`M/Q/L` + `stroke`）——粗细变化版本（自绘填充轮廓 / 字体字形）
+ *   经试用观感都不合适，按用户要求**先回退到这种最简绘制方式**；笔画为**细描边**。
+ *   路径只在**自己的占宽槽位内**（左 `{` 占 `[x1, x1+w]`、右 `}` 占 `[x2, x2+w]`），不外扩。
+ * - 圆括号 `( … )` 不在这里画——由布局层发成 `page.brackets`（`zkh`/`ykh` 文本字形），
+ *   与全项目其它括号同一套渲染与纵向基准（字形中心 = 数字中心）。
+ */
+function renderSegmentBracket(b: PlacedSegmentBracket, config: PageConfig): string {
+  const lo = b.yBottomLower
+  if (b.type !== 'dsb' || lo === undefined || lo <= b.yTop) return ''
+  const ns = config.note_size
+  /** 大括号横向占宽——与布局层 `braceW` 同源（`max(3, 0.32×字号)`） */
+  const w = Math.max(3, ns * 0.32)
+  /** 细描边（先不做粗细变化） */
+  const sw = Math.max(1, ns * 0.1)
+  const cw = w / 2
+  const yTop = b.yTop
+  const yBot = lo
+  const my = (yTop + yBot) / 2
+  /**
+   * 单个花括号：两端尖端在中轴一侧、中间尖角在另一侧。
+   * dir=-1 → `{`（cusp 朝左、两端朝右）→ 传 `x = 槽位右缘`，形状正好占满 `[x−w, x]`；
+   * dir=+1 → `}`（镜像）→ 传 `x = 槽位左缘`，形状占满 `[x, x+w]`。
+   */
+  const brace = (x: number, dir: 1 | -1): string =>
+    `<path d="M ${r1n(x)} ${r1n(yTop)} ` +
+    `Q ${r1n(x + dir * cw * 2)} ${r1n(yTop)} ${r1n(x + dir * cw)} ${r1n(yTop + cw)} ` +
+    `L ${r1n(x + dir * cw)} ${r1n(my - cw)} ` +
+    `Q ${r1n(x + dir * cw)} ${r1n(my)} ${r1n(x + dir * cw * 2)} ${r1n(my)} ` +
+    `Q ${r1n(x + dir * cw)} ${r1n(my)} ${r1n(x + dir * cw)} ${r1n(my + cw)} ` +
+    `L ${r1n(x + dir * cw)} ${r1n(yBot - cw)} ` +
+    `Q ${r1n(x + dir * cw)} ${r1n(yBot)} ${r1n(x)} ${r1n(yBot)}" ` +
+    `fill="none" stroke="#1b1b1b" stroke-width="${r1n(sw)}" stroke-linecap="round" data-segment-brace="${b.type}"/>`
+  return brace(b.x1 + w, -1) + brace(b.x2, 1)
+}
+
 function renderPage(page: ScorePage, config: PageConfig, pageCount: number, opts?: RenderFontMeta): string {
   const { width, height } = page
   const body: string[] = []
@@ -1398,6 +1439,8 @@ function renderPage(page: ScorePage, config: PageConfig, pageCount: number, opts
   for (const n of page.notes) body.push(renderNote(n, config))
   // adj294：&zkh/&ykh 独立括号标记——按插位画括号
   for (const b of page.brackets) body.push(renderBracket(b, config))
+  // adj427：临时段（{bz … } / {dsb … }）叠加层括弧——段内容音符已并入 page.notes 一并绘制
+  for (const sb of page.segmentBrackets ?? []) body.push(renderSegmentBracket(sb, config))
   for (const b of page.barlines) body.push(renderBarline(b, config.note_size, noteFont(config.shuzi_font)))
   for (const l of page.lyrics) body.push(renderLyric(l, config))
   for (const vb of page.voiceBlocks) body.push(renderVoiceBlocks(page, vb, config.note_size))
