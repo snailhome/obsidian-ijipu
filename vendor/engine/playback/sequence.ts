@@ -340,10 +340,11 @@ function buildPlayheadSegs(
   for (let i = 0; i < blocks.length; i++) {
     const blk = blocks[i]
     const x1 = i < blocks.length - 1 ? blocks[i + 1].x : right
-    // adj442：**段层首个色块**的左边界可外扩到段层左界（bz=左小节线 / dsb=`{`）——
-    // 与右端（末块外扩到右界）对称：`&zkh`/括号同样是**无时值占宽元素**，
-    // 它们占据的那段图形空间在时间上仍属本段开头（用户规则「前后的小节线为界 / 大括号为界」）。
-    const bx = i === 0 && bounds?.left !== undefined ? Math.min(bounds.left, blk.x) : blk.x
+    // adj442：段层**首个色块不从左括号右侧开始、而从起始音符开始**（用户规则）——
+    // 音符**左对齐**，重叠区首个音与主旋律对应音本来就对齐，色块从它起步最自然；
+    // （右端仍然外扩到段层右界：`&ykh`/右括号是**无时值占宽元素**，末音的色块要覆盖到界。）
+    // 注：`bounds.left` 保留在类型里但**不再用于外扩左端**（adj442 首版做了左端外扩，观感不对）。
+    const bx = blk.x
     out.push({ beat: acc, beats: blk.beats, x: bx, width: Math.max(0, x1 - bx), ...base })
     acc += blk.beats
   }
@@ -833,8 +834,9 @@ export function buildPlaySequence(
      */
     const segBoundKey = segNotes[0] ? `${segNotes[0].id.page}|${segNotes[0].id.group}|${segNotes[0].id.voice}` : ''
     const segRightBound = segNotes[0] ? segRightByGroupVoice.get(segBoundKey) : undefined
-    /** adj442：段层**左界**（bz=左小节线 / dsb=`{`）——首个色块左边界外扩用 */
-    const segLeftBound = segNotes[0] ? segLeftByGroupVoice.get(segBoundKey) : undefined
+    // adj442：段层**左界**（`segLeftByGroupVoice`）**不再用于色块**——用户指出色块应从
+    // **起始音符**开始（音符左对齐，重叠区首音本来就对齐），不该从 `{` / 左括号右侧起。
+    // 映射仍保留：如需"按段型取左界"的其它用途可直接取用。
     const edgeOf = (n: PlacedToken): number => {
       const i = segNotes.findIndex((m) => m === n)
       const next = i >= 0 && i < segNotes.length - 1 ? segNotes[i + 1].x : Number.POSITIVE_INFINITY
@@ -877,9 +879,8 @@ export function buildPlaySequence(
         // adj429：色块按曲行几何动态定界（多声部/临时叠加段不再互相覆盖、也不压歌词）
         playheadSegs: buildPlayheadSegs(placed, 0, edgeOf(placed), {
           ...computeColorBounds(placed, pageByNoteIdx.get(placed.id.index)!, voiceBlockByNoteIdx, noteSize),
-          // adj442：**只对段内第一个音**外扩左边界（每个音符的 buildPlayheadSegs 都用 startBeat=0，
-          // 不能靠它判断"是不是首个"——否则所有块都会被拉到左界）
-          ...(segLeftBound !== undefined && segNotes[0] === placed ? { left: segLeftBound } : {}),
+          // adj442：**左端不外扩**——色块从起始音符开始（见 buildPlayheadSegs 注释）。
+          // 原先这里给段内首个音传 `left`，会把色块拉到 `{` / 左括号之前（用户指出观感不对）。
         }).map((s) => ({ ...s, instrument: inst2, playVoice: placed.playVoice })),
       })
       segEndMs = Math.max(segEndMs, at2 + dur2)
