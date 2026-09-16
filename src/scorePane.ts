@@ -15,6 +15,7 @@
 import { Menu, Notice } from 'obsidian'
 import { writeJpsConfig, dragDelta, clamp, type PageConfig } from '@ijipu/engine'
 import { renderScoreFull, playScore, unknownKeyHint, deprecatedKeyHint, type PlayheadSeg } from './render'
+import { instrumentColorMap, playheadBaseOf, playheadPosIn, trackKeysOf, type PlayheadPos } from './playhead'
 import { resolvePageConfig } from './config'
 import { ConfigDialog } from './configDialog'
 import { DEFS } from './defs'
@@ -31,14 +32,7 @@ const MODE_HINT: Record<ViewMode, string> = {
   full: '谱面撑满笔记宽度（不留页面左右留白）',
   score: '裁掉页边距、只显示内容区（默认）',
 }
-/** 与 iJipu 应用一致的播放色块配色（按声部半透明；voice1 红，延续单声部红块） */
-const PLAYHEAD_COLORS = [
-  'rgba(255, 93, 108,',
-  'rgba(87, 170, 255,',
-  'rgba(63, 122, 46,',
-  'rgba(255, 200, 87,',
-  'rgba(138, 95, 184,',
-]
+/** 与 iJipu 应用一致的播放色块配色与定位（adj452：抽到 playhead.ts 纯函数，可单测） */
 
 export type ScorePaneHost = {
   plugin: IJipuPlugin
@@ -170,41 +164,15 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     }
 
     /** 与 iJipu PreviewPane.playheadPosOf 完全一致：按拍段定位整曲行色块（每组独立；多声部各行） */
-    const playheadPosOf = (
-      track: PlayheadSeg[],
-      currentMs: number,
-      pageIndex: number,
-      noteSize: number,
-      group: number,
-    ): { x: number; yTop: number; yBottom: number; width: number; voice: number } | null => {
-      if (track.length === 0 || currentMs <= 0) return null
-      const segs = track.filter((t) => t.group === group)
-      if (segs.length === 0) return null
-      let lo = 0
-      let hi = segs.length
-      while (lo < hi) {
-        const mid = (lo + hi) >> 1
-        if (segs[mid].atMs <= currentMs) lo = mid + 1
-        else hi = mid
-      }
-      const i = lo - 1
-      if (i < 0 || i >= segs.length) return null
-      const a = segs[i]
-      if (currentMs >= a.atMs + a.durationMs) return null
-      if (a.pageIndex !== pageIndex) return null
-      const ext = noteSize * 0.5
-      const yTop = a.y - noteSize * 1.1 - ext
-      const yBottom = a.y - noteSize * 1.1 + noteSize * 1.7 + ext
-      return { x: a.x, yTop, yBottom, width: a.width, voice: a.voice }
-    }
 
-    const addBlock = (
-      pageIndex: number,
-      pos: { x: number; yTop: number; yBottom: number; width: number; voice: number },
-    ): void => {
+    /**
+     * 绘制一个色块（adj452）：颜色优先取**声部角色**（`playVoice`：bz 伴奏蓝 / dsb 下层绿 /
+     * dsb 上层红），否则按**音色**着色（与 iJipu 应用 `playheadBaseOf` 同一规则）。
+     */
+    const addBlock = (pageIndex: number, pos: PlayheadPos, colorMap: Map<string, number>): void => {
       const svgEl = svgEls[pageIndex]
       if (!svgEl) return
-      const color = PLAYHEAD_COLORS[(pos.voice - 1) % PLAYHEAD_COLORS.length]
+      const color = playheadBaseOf(pos, colorMap)
       const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
       rect.setAttribute('class', 'ijipu-play-block')
       rect.setAttribute('x', String(pos.x))
@@ -232,12 +200,15 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       const track = playing?.track ?? []
       clearPlayBlock()
       if (currentMs > 0 && track.length) {
-        for (let pageIndex = 0; pageIndex < svgEls.length; pageIndex++) {
-          const pageGroups = [...new Set(track.filter((t) => t.pageIndex === pageIndex).map((t) => t.group))]
-          for (const g of pageGroups) {
-            const pos = playheadPosOf(track, currentMs, pageIndex, noteSize, g)
-            if (pos) addBlock(pageIndex, pos)
-          }
+        // adj452：按 (页, 曲行, 声部, 音色, 声部角色) **逐组建色块**——与 iJipu 应用同规则：
+        // 多声部各声部一块；重叠区（bz 伴奏 / dsb 上下层）在同一曲行里同时发声也各有各的块
+        // （旧实现"每个曲行只取一个当前拍段"只画得出一块，且高度用硬编码、不按音色配色）。
+        const colorMap = instrumentColorMap(track)
+        for (const [key, segs] of trackKeysOf(track)) {
+          const pageIndex = Number(key.split('|')[0])
+          if (!Number.isInteger(pageIndex) || pageIndex < 0 || pageIndex >= svgEls.length) continue
+          const pos = playheadPosIn(segs, currentMs, pageIndex, noteSize)
+          if (pos) addBlock(pageIndex, pos, colorMap)
         }
       }
       const total = playing?.totalMs ?? 0

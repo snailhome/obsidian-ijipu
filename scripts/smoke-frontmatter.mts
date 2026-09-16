@@ -5,8 +5,9 @@
  * 断言来源：用户反馈「在 frontmatter 里设置像 `ijipu_note_size` 好像没生效」——
  * 覆盖键名写法兼容、值类型转换、未识别键提示、优先级四类。
  */
-import { defaultPageConfig, dragDelta, layoutScore, parseJps, writeJpsConfig, SCORE_FONT_OPTIONS } from '@ijipu/engine'
+import { defaultPageConfig, dragDelta, layoutScore, parseJps, writeJpsConfig, SCORE_FONT_OPTIONS, buildPlaySequence } from '@ijipu/engine'
 import { readFileSync } from 'node:fs'
+import { instrumentColorMap, playheadBaseOf, playheadPosIn, trackKeysOf } from '../src/playhead'
 import { applyFrontmatter, deprecatedKeyHint, frontmatterKey, mergePageConfig, unknownKeyHint, PAGE_CONFIG_FIELDS } from '../src/frontmatter'
 import { resolvePageConfig } from '../src/config'
 import { codeBlockBody, jpsLinkpath, replaceCodeBlockBody } from '../src/sourceEdit'
@@ -385,6 +386,137 @@ console.log('[adj450] plugin playback timbre parity with the app')
   }
   check('adj451 力度变量与音频同源（引擎拍段 gain）',
     renderSrc.includes('gain: s.gain') && readFileSync('vendor/engine/playback/sequence.ts', 'utf8').includes('gain?: number'))
+}
+
+// ---- adj452：试听色块按「声部角色 / 音色 / 动态上下边界」绘制（与 iJipu 应用同规则）----
+// 用户：先按建议补上色块的 yTopMin/yBottomMax（高度）与 playVoice（声部角色），后面再考虑完善。
+// 插件此前是"每个曲行只取一个当前拍段 + 硬编码高度 + 按声部号配色"的简版。
+console.log('[adj452] playhead blocks follow playVoice / instrument / engine bounds')
+{
+  const src = 'V: 1.0\nB: t\nD: C\nP: 4/4\nY: 钢琴\nY: 弦乐\n' +
+    'Q1: 1 3 5 3 | 1 - - - |\nQ2: 5 1 3 1 | 5 - - - |\n' +
+    "Q: 3 4 {bz 1 2 3 4 | 5 6 7 1'} 5 6 7 1' | 1' 7 6 5 | 5 5 5 5 | 5 - - - |\n"
+  const pr = parseJps(src)
+  const layout = layoutScore(pr, defaultPageConfig)
+  const seq = buildPlaySequence(pr, layout, 100)
+  const noteSize = layout.config.note_size
+  /** 与 render.ts 的轨道映射同构（只取纯数据，不碰音频） */
+  const beatMs = 60000 / 100
+  const track = seq.events.flatMap((e) =>
+    (e.playheadSegs ?? []).map((s) => ({
+      atMs: e.atMs + s.beat * beatMs,
+      durationMs: s.beats * beatMs,
+      pageIndex: s.pageIndex,
+      x: s.x,
+      y: s.y,
+      width: s.width,
+      voice: s.voice,
+      group: s.group,
+      ...(s.instrument !== undefined ? { instrument: s.instrument } : {}),
+      ...(s.yTopMin !== undefined ? { yTopMin: s.yTopMin } : {}),
+      ...(s.yBottomMax !== undefined ? { yBottomMax: s.yBottomMax } : {}),
+      ...(s.playVoice !== undefined ? { playVoice: s.playVoice } : {}),
+      ...(s.gain !== undefined ? { gain: s.gain } : {}),
+    })),
+  )
+  const groups = trackKeysOf(track)
+  // ① 分组键含 playVoice：同一曲行里"主旋律 + bz 伴奏"必须是两组（旧键会把它们并成一块）
+  const bzGroup = seq.events.find((e) => e.playVoice === 'accomp')?.placed.id.group
+  const groupsOfBz = [...groups.entries()].filter(([k]) => k.startsWith(`0|${bzGroup}|`))
+  check('adj452 同一曲行内主旋律与 bz 伴奏各成一组（分组键含 playVoice）',
+    groupsOfBz.length >= 2, `键=${groupsOfBz.map(([k]) => k).join(' / ')}`)
+  // ② 重复调用命中缓存（同引用不重建）
+  check('adj452 trackKeysOf 按 track 引用缓存', trackKeysOf(track) === groups)
+  // ③ 定位：上下边界优先用引擎给的值；缺省时回退单声部默认 [y−1.6×字号, y+0.6×字号]
+  {
+    const withBounds = [...groups.values()].find((segs) => segs[0]?.yTopMin !== undefined)
+    check('adj452 存在带动态定界的组（多声部/临时段）', withBounds !== undefined)
+    const seg0 = withBounds![0]
+    const pos = playheadPosIn(withBounds!, seg0.atMs + 1, 0, noteSize)
+    check('adj452 有 yTopMin/yBottomMax 时按引擎定界绘制（不再硬编码高度）',
+      pos !== null && pos.yTop === seg0.yTopMin && pos.yBottom === seg0.yBottomMax,
+      pos ? `${pos.yTop}/${seg0.yTopMin} · ${pos.yBottom}/${seg0.yBottomMax}` : 'null')
+    // 无动态定界的组（普通单声部行）→ 默认公式
+    const plain = [...groups.values()].map((segs) => segs.find((s) => s.yTopMin === undefined)).find(Boolean)
+    if (plain) {
+      const p2 = playheadPosIn([plain], plain.atMs + 1, plain.pageIndex, noteSize)
+      check('adj452 无动态定界时回退 [y−1.6×字号, y+0.6×字号]（与应用同公式）',
+        p2 !== null && Math.abs(p2.yTop - (plain.y - noteSize * 1.6)) < 1e-9 &&
+        Math.abs(p2.yBottom - (plain.y + noteSize * 0.6)) < 1e-9,
+        p2 ? `${p2.yTop}/${p2.yBottom}` : 'null')
+    }
+    // ④ 最后一段播完 / 别的页 → 不残留旧块
+    const last = withBounds![withBounds!.length - 1]
+    check('adj452 末段播完后返回 null（段间空隙不残留）',
+      playheadPosIn(withBounds!, last.atMs + last.durationMs + 1, 0, noteSize) === null)
+    check('adj452 不是本页时返回 null', playheadPosIn(withBounds!, seg0.atMs + 1, 9, noteSize) === null)
+  }
+  // ⑤ 配色：声部角色固定色优先，其次按音色，最后按声部号
+  {
+    const cmap = instrumentColorMap(track)
+    const blue = 'rgba(87, 170, 255,'
+    const green = 'rgba(63, 122, 46,'
+    const red = 'rgba(255, 93, 108,'
+    check('adj452 bz 伴奏 = 蓝', playheadBaseOf({ voice: 1, playVoice: 'accomp' }, cmap) === blue)
+    check('adj452 dsb 下层 = 绿', playheadBaseOf({ voice: 1, playVoice: 'second' }, cmap) === green)
+    check('adj452 dsb 上层 = 红', playheadBaseOf({ voice: 1, playVoice: 'main' }, cmap) === red)
+    const v1Inst = track.find((t) => t.voice === 1 && t.playVoice === undefined)?.instrument
+    check('adj452 主旋律/单声部按音色取色（第 1 音色 = 红）',
+      playheadBaseOf({ voice: 1, instrument: v1Inst }, cmap) === red, String(v1Inst))
+    check('adj452 同一音色恒定同色（map 稳定）',
+      playheadBaseOf({ voice: 2, instrument: v1Inst }, cmap) === playheadBaseOf({ voice: 3, instrument: v1Inst }, cmap))
+  }
+  // ⑥ 多声部：Q1/Q2 是两个曲行（group），各画一块且纵向不重叠
+  {
+    const g0 = [...groups.entries()].find(([k]) => k.startsWith('0|0|'))
+    const g1 = [...groups.entries()].find(([k]) => k.startsWith('0|1|'))
+    check('adj452 Q1/Q2 两个曲行各有自己的色块组', g0 !== undefined && g1 !== undefined)
+    if (g0 && g1) {
+      const a = playheadPosIn(g0[1], 1, 0, noteSize)
+      const b = playheadPosIn(g1[1], 1, 0, noteSize)
+      check('adj452 多声部两声部色块纵向不重叠',
+        a !== null && b !== null && (a.yBottom <= b.yTop + 0.01 || b.yBottom <= a.yTop + 0.01),
+        a && b ? `[${a.yTop},${a.yBottom}] vs [${b.yTop},${b.yBottom}]` : 'null')
+    }
+  }
+  // ⑦ dsb：**同一曲行**里上下两层各一块（旧的"每曲行只取一段"只能画一块）
+  {
+    const srcDsb = 'V: 1.0\nB: t\nD: C\nP: 4/4\n' +
+      "Q: 3 4 {dsb 1 2 3 4 | 5 6 7 1'} 5 6 7 1' | 1' 7 6 5 | 5 5 5 5 | 5 - - - |\n"
+    const prD = parseJps(srcDsb)
+    const layoutD = layoutScore(prD, defaultPageConfig)
+    const seqD = buildPlaySequence(prD, layoutD, 100)
+    const trackD = seqD.events.flatMap((e) =>
+      (e.playheadSegs ?? []).map((s) => ({
+        atMs: e.atMs + s.beat * (60000 / 100),
+        durationMs: s.beats * (60000 / 100),
+        pageIndex: s.pageIndex,
+        x: s.x,
+        y: s.y,
+        width: s.width,
+        voice: s.voice,
+        group: s.group,
+        ...(s.yTopMin !== undefined ? { yTopMin: s.yTopMin } : {}),
+        ...(s.yBottomMax !== undefined ? { yBottomMax: s.yBottomMax } : {}),
+        ...(s.playVoice !== undefined ? { playVoice: s.playVoice } : {}),
+      })),
+    )
+    const gD = [...trackKeysOf(trackD).entries()].filter(([k]) => k.startsWith('0|0|'))
+    const keyMain = gD.find(([k]) => k.endsWith('|main'))
+    const keySecond = gD.find(([k]) => k.endsWith('|second'))
+    check('adj452 dsb 同一曲行上下两层各成一组（playVoice 进键；段外主旋律另算一组）',
+      keyMain !== undefined && keySecond !== undefined,
+      `键=${gD.map(([k]) => k).join(' / ')}`)
+    if (keyMain && keySecond) {
+      const ns = layoutD.config.note_size
+      // dsb 段从第 3 拍起（前面是 `3 4`），故用各层首个拍段的时刻查询
+      const a = playheadPosIn(keyMain[1], keyMain[1][0].atMs + 1, 0, ns)
+      const b = playheadPosIn(keySecond[1], keySecond[1][0].atMs + 1, 0, ns)
+      check('adj452 dsb 上（主声部）下（第二声部）色块纵向不重叠、各用各自定界',
+        a !== null && b !== null && (a.yBottom <= b.yTop + 0.01 || b.yBottom <= a.yTop + 0.01),
+        a && b ? `[${a.yTop},${a.yBottom}] vs [${b.yTop},${b.yBottom}]` : 'null')
+    }
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)
