@@ -2877,17 +2877,31 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
         return null
       }
       let beat = 0
+      // adj430：段内音 bx0/bx1 用**拍位映射**（保持 bz 上下层 / dsb 两层**拍位垂直对齐**），
+      // 当**拍位自然映射总宽 > xContent1 − xContent0**（`{bz 8 &zkh 2'/ 3'/}` 之类：
+      // 主旋律包络内只有一个 `6,-` 跨两拍，`beatToX(envStart+1)` 走 spans[1]=下一小节音符插值，
+      // 落在主旋律 `|` 右侧 ⇒ 整体拍位映射溢出 xContent1）→ **整体按比例缩放到段宽内**，
+      // 让段内音**不丢失**（用户实测 `2'/ 3'/` 不显示的根因）。
+      // 计算段内自然拍位映射总宽：
+      const segNaturalTotalBeat = seg.beats
+      const segNaturalXStart = beatToX(envStart)
+      const segNaturalXEnd = beatToX(envStart + segNaturalTotalBeat)
+      const segNaturalW = segNaturalXEnd - segNaturalXStart
+      const segContentW = xContent1 - xContent0
+      // 缩放因子：自然映射总宽 vs 内容区宽（自然宽 ≤ 内容宽 ⇒ scale=1；自然宽 > 内容宽 ⇒ 整体压缩）
+      const segScale = segNaturalW > 1e-6 ? Math.min(1, segContentW / segNaturalW) : 1
       for (const t of seg.tokens) {
         if (t.kind === 'barline' || t.kind === 'bracket') continue
         if (!isDurational(t)) continue
         const dur = tokenDuration(t)
         const beatAt = beat
-        const bx0 = beatToX(envStart + beatAt)
-        let bx1 = Math.max(bx0, beatToX(envStart + beatAt + dur))
-        // 右缘不得超过「包络右界 − 尾括号预留宽」——最后几个音不会被右括号压出去
+        // bx0/bx1 = 拍位映射，再按 segScale 缩放（以 xContent0 为原点），保证不溢出 xContent1
+        let bx0 = xContent0 + (beatToX(envStart + beatAt) - segNaturalXStart) * segScale
+        let bx1 = xContent0 + (beatToX(envStart + beatAt + dur) - segNaturalXStart) * segScale
+        // 右缘钳制到 xContent1（最后几个音不被右括号压出去）
         bx1 = Math.min(bx1, xContent1)
         beat += dur
-        if (bx1 <= bx0) continue
+        if (bx1 <= bx0 + 0.5) continue // 0.5 px 容差：挤到没空间就跳过
         // 覆盖坐标（播放用）：锚点 = 覆盖「段内该拍」的主旋律音
         const anc = anchorOf(envStart + beatAt)
         const playBarIndex = anc ? anc.note.barIndex : 0
