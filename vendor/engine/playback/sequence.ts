@@ -815,6 +815,16 @@ export function buildPlaySequence(
       }
     }
     const nextSegBarX = (x: number): number => segBarXs.find((v) => v > x + 1e-3) ?? Number.POSITIVE_INFINITY
+    /**
+     * adj440：段层**右界**（大括号槽 `/` 内容区右缘，来自 `segmentBrackets.x2`）。
+     * 用于段内最后一个音的色块右边界——见 `edgeOf` 末尾分支。
+     */
+    const segRightBound = ((): number | undefined => {
+      const first = segNotes[0]
+      return first
+        ? segRightByGroupVoice.get(`${first.id.page}|${first.id.group}|${first.id.voice}`)
+        : undefined
+    })()
     const edgeOf = (n: PlacedToken): number => {
       const i = segNotes.findIndex((m) => m === n)
       const next = i >= 0 && i < segNotes.length - 1 ? segNotes[i + 1].x : Number.POSITIVE_INFINITY
@@ -823,7 +833,14 @@ export function buildPlaySequence(
       // 小节线是**硬上限**：段层音符的"占位右端"可能越过段内小节线（槽宽含留空），
       // 此时不能再 `max(own)`——否则钳制被盖回去、色块照样跨线。
       if (barX !== Number.POSITIVE_INFINITY) return Math.min(barX, Math.max(next, own))
-      return next === Number.POSITIVE_INFINITY ? own : Math.max(next, own)
+      if (next === Number.POSITIVE_INFINITY) {
+        // adj440：段内**最后一个音**——`&ykh` / 右括号是**无时值占宽元素**（只占宽、不占拍），
+        // 所以它后面那段"图形空白"在**时间上仍属于本段末尾**，色块应当延伸到
+        // **段层右界（大括号的界限）**，而不是止于内容区右缘 `xContent1`
+        // （用户要求：「`&ykh` 不占时值，因此 `1'` 的占宽应该也要到大括号的界限为宜」）。
+        return segRightBound !== undefined ? Math.max(segRightBound, own) : own
+      }
+      return Math.max(next, own)
     }
     for (const t of seg.children) {
       if (t.kind !== 'note' && t.kind !== 'rest' && t.kind !== 'rhythm') continue
