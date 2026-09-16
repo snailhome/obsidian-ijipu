@@ -176,22 +176,27 @@ function computeColorBounds(
     // dsb upper：对侧 = 下层 baseline（row.y + dy/2）
     const lowerY = pageVoiceBaselineForSegmentLower(page, plc.id.group, plc.id.voice, noteSize)
     if (lowerY === null) return null
-    // dsb 上下两层按各自默认 `[y−1.6×ns, y+0.6×ns]` 算出的高度都比 `dy/2` 大，
-    // 直接把两块沿中线对半劈开：upper 占 [upper.y − 1.1×ns, mid − 0.5×0.5]，lower 占 [mid + 0.5×0.5, lower.y + 0.6×ns]。
-    // 两块之间留 0.5 px 视觉细缝。
-    const mid = (y + lowerY) / 2
+    // adj429：上下色块**严格等高**——把"对称中线" midEqual 从 row.y 上移 `0.25×ns`，
+    // 让 upper 用 TOP_EXT(1.1ns)、lower 用 BOT_EXT(0.6ns) 各自延伸后，两块高度相等。
+    // 视觉上"上盖减时线、下不压歌词"的设计意图保留（TOP_EXT > BOT_EXT 是覆盖减时线的代价），
+    // 但通过中线偏移把不对称性消化在**位置**而不是**高度**里 → 上下看起来完全等高。
+    // 整组随之轻微上移 0.25×ns；上一行曲部底 − quci=15 远大于此偏移，无侵入风险。
+    const offset = (TOP_EXT - BOT_EXT) / 2 // 0.25 × ns
+    const midEqual = (y + lowerY) / 2 - offset
     const yTopMin = y - TOP_EXT
-    const yBottomMax = mid - 0.25
+    const yBottomMax = midEqual
     const h = yBottomMax - yTopMin
     if (h < MIN_H) return null
     return { yTopMin, yBottomMax }
   }
   if (isDsbLower) {
     // dsb 包络内的主旋律音（下层 = 第二声部）：对侧 = 上层 baseline
+    // adj429：与 upper 共享 midEqual（中线不在 row.y，往上偏 0.25×ns），保证上下严格等高。
     const upperY = pageVoiceBaselineForSegmentUpper(page, plc.id.group, plc.id.voice)
     if (upperY === null) return null
-    const mid = (y + upperY) / 2
-    const yTopMin = mid + 0.25
+    const offset = (TOP_EXT - BOT_EXT) / 2
+    const midEqual = (y + upperY) / 2 - offset
+    const yTopMin = midEqual
     const yBottomMax = y + BOT_EXT
     const h = yBottomMax - yTopMin
     if (h < MIN_H) return null
