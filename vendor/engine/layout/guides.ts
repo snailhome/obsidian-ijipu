@@ -43,6 +43,14 @@ export interface RowGuide {
   lyricTop: number | null
   /** 最后一行歌词底部 y（无歌词为 null） */
   lyricBottom: number | null
+  /**
+   * adj432：该行是否属于**临时叠加段**（`{bz … }` / `{dsb … }`）的段内容层——
+   * 段层是叠加层（不占主旋律拍位、画在主旋律上方/上下），它的虚线**不能**拖行距，
+   * 应拖 `segmentRowGap.{bz,dsb}`（段层与主旋律的间距）。`bz` 只有上层；`dsb` 有上下两层。
+   */
+  segType?: 'bz' | 'dsb'
+  /** adj432：段层层次（upper = 段内容层 / lower = dsb 包络内被下移的主旋律） */
+  segLayer?: 'upper' | 'lower'
 }
 
 /** 计算每页每行的结构位置（供曲词间距/词曲间距虚线） */
@@ -55,10 +63,27 @@ export function computeRowGuides(
   return layout.pages.map((page) => {
     // 多声部块（adj72：用于判定声部序号 voiceIdx）
     const blocks = page.voiceBlocks.map((vb) => [vb.yTop, vb.yBottom] as const)
-    const rowMap = new Map<number, { yTop: number; lyricYs: number[] }>()
+    // adj432：行同时记录**是否属于临时叠加段**——段层虚线拖 `segmentRowGap`，不是行距
+    type RowAcc = { yTop: number; lyricYs: number[]; segType?: 'bz' | 'dsb'; segLayer?: 'upper' | 'lower' }
+    const rowMap = new Map<number, RowAcc>()
     for (const n of page.notes) {
       const yTop = Math.round((n.y - off) * 10) / 10
-      if (!rowMap.has(yTop)) rowMap.set(yTop, { yTop, lyricYs: [] })
+      const cur = rowMap.get(yTop)
+      // 段层标记来源：① 段内容层（`n.segment` 已置 type/layer）；② dsb 下层 = 被下移的主旋律
+      // （`playVoice === 'second'`，`shiftEnvelopeDown` 只设 playVoice、不设 segment）
+      const segType = n.segment?.type ?? (n.playVoice === 'second' ? 'dsb' : undefined)
+      const segLayer = n.segment?.layer ?? (n.playVoice === 'second' ? 'lower' : undefined)
+      if (!cur) {
+        rowMap.set(yTop, {
+          yTop,
+          lyricYs: [],
+          ...(segType ? { segType } : {}),
+          ...(segLayer ? { segLayer } : {}),
+        })
+      } else if (segType && !cur.segType) {
+        cur.segType = segType
+        cur.segLayer = segLayer
+      }
     }
     const tops = [...rowMap.keys()]
     for (const l of page.lyrics) {
@@ -102,6 +127,9 @@ export function computeRowGuides(
         })),
         lyricTop,
         lyricBottom: rowYs.length > 0 ? rowYs[rowYs.length - 1] + cfg.geci : null,
+        // adj432：段层标记（供预览层换色 + 拖动 `segmentRowGap.{bz,dsb}`）
+        ...(r.segType ? { segType: r.segType } : {}),
+        ...(r.segLayer ? { segLayer: r.segLayer } : {}),
       }
     })
   })
@@ -183,7 +211,6 @@ export const GUIDE_LIMITS: Record<GuideDragSpec['key'], [number, number]> = {
   height_ciqu: [0, 300],
 }
 
-/** 扩展的可拖拽项（adj10：描述头高度/曲下/词下；adj30：描述头内容区高 + 间距下限；adj72：声部间距；adj79：曲部与上一行词部间距） */
 export type GuideKeyEx =
   | 'descAreaH'
   | 'body_margin_top'
@@ -191,6 +218,8 @@ export type GuideKeyEx =
   | 'height_cici'
   | 'height_shengbu'
   | 'height_ciqu_lyric'
+  | 'segmentRowGap_bz'  // adj428：bz 段上下层间距
+  | 'segmentRowGap_dsb' // adj428：dsb 段上下层间距
 
 export const GUIDE_LIMITS_EX: Record<GuideKeyEx, [number, number]> = {
   descAreaH: [40, 400],
@@ -199,4 +228,6 @@ export const GUIDE_LIMITS_EX: Record<GuideKeyEx, [number, number]> = {
   height_cici: [0, 120],
   height_shengbu: [0, 300], // 声部行间距（adj72）
   height_ciqu_lyric: [-80, 120], // 曲部与上一行词部间距（adj79；adj105 允许负值，用户需进一步压缩行距）
+  segmentRowGap_bz: [10, 80],  // adj428：bz 段上下层间距（与 SEGMENT_ROW_GAP_DEFAULT 范围一致）
+  segmentRowGap_dsb: [10, 80], // adj428：dsb 段上下层间距
 }

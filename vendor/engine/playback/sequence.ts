@@ -50,6 +50,10 @@ export interface PlayheadSeg {
   yTopMin?: number
   /** adj429：色块**下边界**（绝对 y）。未设 = 用默认 `[y − 1.6×字号, y + 0.6×字号]`。 */
   yBottomMax?: number
+  /** adj432: voice role (inherited from PlacedToken.playVoice) — used by preview layer to color
+   *  bz upper = 'accomp' (accompaniment color), dsb lower = 'second' (second-voice color),
+   *  dsb upper = 'main' (matches primary). */
+  playVoice?: 'accomp' | 'main' | 'second'
 }
 
 export interface PlayEvent {
@@ -788,7 +792,7 @@ export function buildPlaySequence(
         gain: gain2,
         playVoice: placed.playVoice,
         // adj429：色块按曲行几何动态定界（多声部/临时叠加段不再互相覆盖、也不压歌词）
-        playheadSegs: buildPlayheadSegs(placed, 0, edgeOf(placed), computeColorBounds(placed, pageByNoteIdx.get(placed.id.index)!, voiceBlockByNoteIdx, noteSize)).map((s) => ({ ...s, instrument: inst2 })),
+        playheadSegs: buildPlayheadSegs(placed, 0, edgeOf(placed), computeColorBounds(placed, pageByNoteIdx.get(placed.id.index)!, voiceBlockByNoteIdx, noteSize)).map((s) => ({ ...s, instrument: inst2, playVoice: placed.playVoice })),
       })
       segEndMs = Math.max(segEndMs, at2 + dur2)
     }
@@ -865,7 +869,7 @@ export function buildPlaySequence(
         // 如 (1 - - - | 1) - 0 0 中 1 合并 6 拍，色块依次滑过 1 - - - 1 -）
         const prevBeat = (prev.playheadSegs ?? []).reduce((a, s) => a + s.beats, 0)
         prev.playheadSegs = (prev.playheadSegs ?? []).concat(
-          buildPlayheadSegs(item.note, prevBeat, rightEdgeByNoteIdx.get(item.note.id.index), computeColorBounds(item.note, pageByNoteIdx.get(item.note.id.index)!, voiceBlockByNoteIdx, noteSize)).map((s) => ({ ...s, instrument: prev.instrument })),
+          buildPlayheadSegs(item.note!, prevBeat, rightEdgeByNoteIdx.get(item.note!.id.index), computeColorBounds(item.note!, pageByNoteIdx.get(item.note!.id.index)!, voiceBlockByNoteIdx, noteSize)).map((s) => ({ ...s, instrument: prev.instrument, playVoice: item.note!.playVoice })),
         )
         // adj157：合并时值；atMs 来自拍时钟（每个 event 独立），不需全局 at 累加
         lastEventNoteIdx = curNoteIdx
@@ -922,7 +926,7 @@ export function buildPlaySequence(
         durationMs: mainMs,
         gain,
         playVoice: playRole,
-        playheadSegs: buildPlayheadSegs(item.note, 0, rightEdgeByNoteIdx.get(item.note.id.index), computeColorBounds(item.note, pageByNoteIdx.get(item.note.id.index)!, voiceBlockByNoteIdx, noteSize)).map((s) => ({ ...s, instrument })),
+        playheadSegs: buildPlayheadSegs(item.note!, 0, rightEdgeByNoteIdx.get(item.note!.id.index), computeColorBounds(item.note!, pageByNoteIdx.get(item.note!.id.index)!, voiceBlockByNoteIdx, noteSize)).map((s) => ({ ...s, instrument, playVoice: item.note!.playVoice })),
       })
       // adj375：本音符是某 &hx 的作用对象 → 标记该事件待结算（连音合并会累加时值后再一起算）
       if (hxBreathNoteIdx.has(curNoteIdx)) breathEvIdx = mainEvIdx
