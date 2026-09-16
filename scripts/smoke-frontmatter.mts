@@ -70,7 +70,7 @@ console.log('[3] 可选字段（无默认值）必须被识别——否则键会
   check('可选字段不再出现在"未识别"里', opt.unknown.length === 0, JSON.stringify(opt.unknown))
   const fields = Object.keys(defaultPageConfig)
   check(`字段表覆盖引擎默认字段（${fields.length} 个）`, fields.every((f) => PAGE_CONFIG_FIELDS.includes(f as never)))
-  check(`字段表字段数 = 32（引擎 34 字段去掉编辑器偏好 2 项）`, PAGE_CONFIG_FIELDS.length === 32, String(PAGE_CONFIG_FIELDS.length))
+  check(`字段表字段数 = 33（引擎 35 字段去掉编辑器偏好 2 项；adj428 新增 segmentRowGap）`, PAGE_CONFIG_FIELDS.length === 33, String(PAGE_CONFIG_FIELDS.length))
   check('字段表无重复（规范化后不冲突）', new Set(PAGE_CONFIG_FIELDS.map((f) => f.replace(/[^a-z0-9]/gi, '').toLowerCase())).size === PAGE_CONFIG_FIELDS.length)
 }
 

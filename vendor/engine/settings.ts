@@ -30,7 +30,7 @@ export const JPS_CONFIG_PREFIX = '# jps-config:'
  * 只读回 29 个，App 勾选「显示乐器名」保存后重新打开就丢（同类"设置不生效"）。
  * 下面的编译期断言保证**引擎新增可选字段时此处必须同步**（否则 tsc 报错）。
  */
-const OPTIONAL_CONFIG_FIELDS = ['heights', 'metaPos', 'lyricShrink', 'showInstrument'] as const
+const OPTIONAL_CONFIG_FIELDS = ['heights', 'metaPos', 'lyricShrink', 'showInstrument', 'segmentRowGap'] as const
 
 /** PageConfig 中的可选字段集合 */
 type OptionalConfigKey = {

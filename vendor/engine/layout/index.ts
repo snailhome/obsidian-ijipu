@@ -28,7 +28,7 @@ import type {
   ScorePageMeta,
   VoiceBlock,
 } from '../types'
-import { DIGIT_HEIGHT_RATIO, LAYER_GAP, SLUR_W, octaveTopY, BRACKET_PAD, H_GAP, noteScaleOf, GRACE_SIZE_RATIO, GRACE_SLOT_RATIO, GRACE_SLOT_RATIO_MULTI, VOLTA_BAR_GAP, VOLTA_RAISE, DYN_HALF_H, barlinePad, barlineTotalW, DOT_AFTER_DIGIT_GAP, DOT_R } from './spacing'
+import { DIGIT_HEIGHT_RATIO, LAYER_GAP, SLUR_W, octaveTopY, BRACKET_PAD, H_GAP, noteScaleOf, GRACE_SIZE_RATIO, GRACE_SLOT_RATIO, GRACE_SLOT_RATIO_MULTI, VOLTA_BAR_GAP, VOLTA_RAISE, DYN_HALF_H, barlinePad, barlineTotalW, DOT_AFTER_DIGIT_GAP, DOT_R, SEGMENT_ROW_GAP_DEFAULT } from './spacing'
 // adj284：空间优先布局的度量（本体宽 / 时值拆分 / 非时值元素间距）
 import { splitNoteDur, noteBodyW, augBodyW, dotBodyW, accidentalBodyW, markBodyW, digitSlotW, hxBodyW, graceAtTail, nonDurGap } from './spaceLayout'
 import { hairpinEvents, resolveHairpins, type DynEvent, type NoteAnchors } from './hairpins'
@@ -2844,7 +2844,12 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
       // 层间距：bz 段画在主旋律上方；dsb 段**上下两层整体下移**使整块与主旋律居中
       // （用户要求「大括号里的整体与其它主声部部分居中对齐」）——
       // 做法：包络内的主旋律整体下移 dy/2、段层抬高 dy/2，两层中线落在行基线上。
-      const dy = ns * 1.7
+      // adj428：行间距可调——`PageConfig.segmentRowGap.{bz,dsb}`（单位 px，缺省 22，
+      // 与 adj427 原硬编码 ≈`note_size × 1.7` 一致 → 旧谱零回归）。
+      const segGap = isDsb
+        ? (config.segmentRowGap?.dsb ?? SEGMENT_ROW_GAP_DEFAULT.dsb)
+        : (config.segmentRowGap?.bz ?? SEGMENT_ROW_GAP_DEFAULT.bz)
+      const dy = segGap
       const yUpper = isDsb ? row.y - dy / 2 : row.y - dy
       const idBase = 900000 + gi * 1000 + seg.openIndex * 10
       const barIdBase = 950000 + gi * 1000 + seg.openIndex * 10

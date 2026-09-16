@@ -730,6 +730,14 @@ export interface PageConfig {
   /** adj303：是否显示乐器名注释（@乐器名 / @@ 切换后的下一个音符上方；缺省 false 不显示） */
   showInstrument?: boolean
   /**
+   * adj428：临时叠加段（`{bz … }` / `{dsb … }`）上下两行之间的纵向间距（px）。
+   *  - `bz`：主旋律行不动，段层抬 `segmentRowGap.bz`。
+   *  - `dsb`：上下两层各偏移 `segmentRowGap.dsb / 2`，整块关于主旋律基线居中。
+   * 单项缺省回退 `spacing.ts` 的 `SEGMENT_ROW_GAP_DEFAULT`（22 px，与 adj427 原值 ≈`note_size × 1.7` 一致）。
+   * 谱面级设置——改它会让这份谱"长不一样"，需随 .jps 走（见 docs/SETTINGS-AUDIT.md）。
+   */
+  segmentRowGap?: { bz?: number; dsb?: number }
+  /**
    * 描述头自定义位置：相对各自锚点的偏移（adj16）。
    * title/subtitle_i → 描述区上边中点；author_i → 右下角；keyline/tempo → 左下角。
    * 区域宽/高变化时元素跟随锚点。

@@ -73,6 +73,8 @@ export const PAGE_CONFIG_FIELDS = [
   'metaPos',
   'lianyinxian_type',
   'heights',
+  // adj428：临时段上下层纵向间距（同步主项目 PAGE_CONFIG_FIELDS，frontmatter 可覆盖）
+  'segmentRowGap',
 ] as const satisfies readonly (keyof PageConfig)[]
 
 /** 编译期完整性断言：引擎新增字段而此表未同步时 tsc 报错（`never` 不可赋给 `true`） */

@@ -201,6 +201,18 @@ export const GRACE_BEAM_GAP = 1.2
 /** 倚音减时线/连接弧线线宽设计值（px，adj97；实际 ×s） */
 export const GRACE_LINE_W = 0.6
 
+// ---- 临时叠加段（adj428：{bz … } / {dsb … } 上下层纵向间距）----
+/**
+ * 临时段上下两行之间的纵向间距（px）。
+ *  - **bz**：主旋律行基线 `row.y` 不动，段层整体抬到 `row.y − segmentRowGap.bz`。
+ *  - **dsb**：主旋律在包络内下移 `segmentRowGap.dsb / 2`，段层抬 `segmentRowGap.dsb / 2`，
+ *           两层中线对齐 `row.y`（整块居中）。
+ *
+ * 默认 22 px ≈ `note_size × 1.7`（13 号字基准，与 adj427 原硬编码一致；改字号不自动按比例缩放，
+ * 由 `PageConfig.segmentRowGap` 显式覆盖）。`adj64` 精神：改间距集中在本文件。
+ */
+export const SEGMENT_ROW_GAP_DEFAULT = { bz: 22, dsb: 22 } as const
+
 // ============================================================
 // 位置计算（纯函数，供 render / layout 共用）
 // ============================================================

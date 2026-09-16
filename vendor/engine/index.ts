@@ -22,6 +22,8 @@ export { computeRowTops, computeRowGuides, dragDelta, clamp, metaAreaH, GUIDE_IT
 export { metaAnchorOf, metaAnchorPt, clampMetaPos } from './layout/metaAnchors'
 export { splitNoteDur, digitSlotW, dotBodyW, augBodyW, slideBodyW, bracketBodyW, noteBodyW, nonDurGap, accidentalBodyW, hxBodyW } from './layout/spaceLayout'
 export type { NoteDurSplit } from './layout/spaceLayout'
+// adj428：临时叠加段（{bz … } / {dsb … }）上下两行纵向间距的默认常量；UI 显示缺省值用
+export { SEGMENT_ROW_GAP_DEFAULT } from './layout/spacing'
 // adj427：临时段（{bz … } / {dsb … }）拍位包络计算——layout/render 共用，纯函数
 export { computeSegments, mainSpans, mainSpansInRange, tokensBeats, segmentBarBeats, beatRatio, isDurational } from './layout/segments'
 export type { SegmentInfo, MainSpan } from './layout/segments'
