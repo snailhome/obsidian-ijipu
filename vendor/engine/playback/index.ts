@@ -28,6 +28,8 @@ export type { SamplerCache } from './sampler-cache'
 // adj283：合成乐器预设与名称路由（多声部按各自乐器同时发声）
 export { INSTRUMENT_PRESETS, INSTRUMENT_OPTIONS, INSTRUMENT_LIB_NAMES, matchInstrument, resolveInstrument, parseInstrumentRef } from './instruments'
 export type { InstrumentId, InstrumentPreset, ParsedVoiceRef } from './instruments'
+// adj446：GM 播放通道分配（一个音色独占一个通道——多声部各音色不互相覆盖）
+export { GmChannelAllocator, GM_MELODIC_CHANNELS } from './channels'
 // adj289：MIDI 导出（复用播放序列）
 export { eventsToMidi, pitchToMidiNote, instrumentToProgram } from './midi'
 export type { MidiExportOptions } from './midi'
