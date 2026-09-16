@@ -2739,10 +2739,20 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
       const leadBrackets: BracketTok[] = []
       const tailBrackets: BracketTok[] = []
       {
-        let seenNote = false
+        // adj430：lead/tail 划分基于**用户源码顺序**（bracket 在哪个 note 前后），而非 hidden rest 位置。
+        // 原逻辑 `seenNote = true` 一旦遇到 rest 就视为"已发声"，但 `{bz 8 &zkh 2'/ 3'/}` 的 `8`
+        // 是隐藏休止符（不画、不发声），用户意图是 `&zkh` 仍是 lead bracket（紧贴 2'/ 之前）。
+        // 修复：用 `isDurational(t) && !(t.kind === 'rest' && t.hidden)` —— hidden rest 不算"已发声"。
+        let seenPlayedNote = false
+        const isPlayedNote = (t: MusicToken): boolean => {
+          if (t.kind === 'note') return true
+          if (t.kind === 'rhythm') return true
+          if (t.kind === 'rest') return !(t as { hidden?: boolean }).hidden
+          return false
+        }
         for (const t of seg.tokens) {
-          if (isDurational(t)) seenNote = true
-          else if (t.kind === 'bracket') (seenNote ? tailBrackets : leadBrackets).push(t)
+          if (isPlayedNote(t)) seenPlayedNote = true
+          else if (t.kind === 'bracket') (seenPlayedNote ? tailBrackets : leadBrackets).push(t)
         }
       }
       const wOf = (bs: BracketTok[]): number => bs.reduce((a, t) => a + markBodyW(t.code, ns), 0)
@@ -2751,6 +2761,30 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
       const bgap = nonDurGap(ns)
       const leadW = segBrackets.length > 0 ? wOf(leadBrackets) : markBodyW('zkh', ns)
       const tailW = segBrackets.length > 0 ? wOf(tailBrackets) : markBodyW('ykh', ns)
+      // adj431：定位第一个 / 最后一个**真正发声**的段内 token（跳过 hidden rest）——
+      // 段头/段尾括号应当排在它们**之前 / 之后**，而不是排在 xContent0 之前（xContent0 是
+      // 包络起点拍位的 x，可能落在 hidden rest 上）。例：`{bz 8 &zkh 2'/ 3'/}` 的 `&zkh`
+      // 应该紧贴 `2'/`（= 第一个发声音），而不是紧贴 `8`（= xContent0）。
+      // 这里只算**绝对拍位**（firstPlayedBeatAbs / lastPlayedEndBeatAbs），实际 x 在
+      // 段内音按比例缩放之后用 segScale 一起折算（避免段内压缩后括号仍贴拍位映射位置）。
+      const isPlayedToken = (tk: MusicToken): boolean => {
+        if (tk.kind === 'note' || tk.kind === 'rhythm') return true
+        if (tk.kind === 'rest') return !(tk as { hidden?: boolean }).hidden
+        return false
+      }
+      let firstPlayedBeatAbs = -1
+      let lastPlayedEndBeatAbs = -1
+      {
+        let bAcc = 0
+        for (const tk of seg.tokens) {
+          if (tk.kind === 'barline' || tk.kind === 'bracket') continue
+          if (!isDurational(tk)) continue
+          const tkDur = tokenDuration(tk)
+          if (firstPlayedBeatAbs < 0 && isPlayedToken(tk)) firstPlayedBeatAbs = envStart + bAcc
+          if (isPlayedToken(tk)) lastPlayedEndBeatAbs = envStart + bAcc + tkDur
+          bAcc += tkDur
+        }
+      }
 
       // 内容左缘 = 包络起点处主旋律音符的 x（段首音与主旋律同拍位精确对齐，**固定不动**）
       const xContent0 = beatToX(envStart)
@@ -2760,6 +2794,7 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
       const barAtStart = mainBarAnchors.find((a) => Math.abs(a.beat - envStart) < 1e-6)
       const barAtEnd = mainBarAnchors.find((a) => Math.abs(a.beat - envEnd) < 1e-6)
       const isDsb = seg.type === 'dsb'
+
       /** 大括号横向占宽（无时值元素）——渲染端 `renderSegmentBracket` 取同一公式 */
       const braceW = isDsb ? Math.max(3, ns * 0.32) : 0
 
@@ -2806,7 +2841,7 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
       // dsb：大括号 + 圆括号按槽位均分排布在小节线内侧 ~ 内容边之间。
       let leftSlots: { kind: 'brace' | 'bracket'; x: number; w: number }[] = []
       let rightSlots: { kind: 'brace' | 'bracket'; x: number; w: number }[] = []
-      let xContent1: number
+      let xContent1 = xContent0 // 兜底初值（bz/dsb 分支会覆盖）
       if (isDsb) {
         // 小节线**笔画**外侧再让 barlinePad（同一净距口径，与 bz 对称）
         const innerL = barAtStart ? barAtStart.x + barInset : xContent0 - (leadW > 0 ? leadW + bgap : 0)
@@ -2819,18 +2854,26 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
           innerR - rightTotal - (rightItems.length > 0 ? (rightItems.length + 1) * gapL2 : 0),
         )
         rightSlots = placeSlots(xContent1, innerR, rightItems)
+      }
+      // adj431：括号锚点用 **firstPlayedX / lastPlayedRightX**（跳过 hidden rest）——
+      // 例：`{bz 8 &zkh 2'/ 3'/}` 的 `&zkh` 紧贴 `2'/`（= firstPlayedX）而不是 `8`（= xContent0）。
+      // 这里只在拍位映射**未压缩**时（segScale=1）准确；若 segScale<1，下方 segScale 块后会重新计算。
+      let firstPlayedX = firstPlayedBeatAbs >= 0 ? beatToX(firstPlayedBeatAbs) : xContent0
+      let lastPlayedRightX = lastPlayedEndBeatAbs >= 0 ? beatToX(lastPlayedEndBeatAbs) : xContent1
+      if (isDsb) {
+        // dsb 大括号/括号使用上面的 leftSlots/rightSlots（仍以 xContent0/xContent1 为锚点），
+        // 跳过此处的 firstPlayedX 覆盖逻辑（dsb 的"内容左缘"=xContent0 是包络的拍位映射起点，对应 dsb 下层主旋律）。
       } else {
-        // bz：括号**紧邻内容**（留 nonDurGap）；横向位置再被「小节线内侧」钳制，
-        // 保证不会贴到/压在小节线上（`barInset` 只约束靠小节线那一侧，不占括号与音符的间距）。
+        // bz 路径：用 firstPlayedX/lastPlayedRightX 重写 leftSlots/rightSlots（让括号紧贴发声音而不是 hidden rest）
         const innerL2 = barAtStart ? barAtStart.x + barInset : Number.NEGATIVE_INFINITY
         const innerR2 = barAtEnd ? barAtEnd.x - barInset : Number.POSITIVE_INFINITY
         const tailPad = tailW > 0 && barAtEnd ? barInset + bgap + tailW : tailW > 0 ? bgap + tailW : 0
         xContent1 = Math.max(xContent0, xEndBoundary - tailPad)
         leftSlots = leadW > 0
-          ? [{ kind: 'bracket', x: Math.max(xContent0 - bgap - leadW, innerL2), w: leadW }]
+          ? [{ kind: 'bracket', x: Math.max(firstPlayedX - bgap - leadW, innerL2), w: leadW }]
           : []
         rightSlots = tailW > 0
-          ? [{ kind: 'bracket', x: Math.min(xContent1 + bgap, innerR2 - tailW), w: tailW }]
+          ? [{ kind: 'bracket', x: Math.min(lastPlayedRightX + bgap, innerR2 - tailW), w: tailW }]
           : []
       }
       const braceLeftX = leftSlots.find((s) => s.kind === 'brace')?.x
