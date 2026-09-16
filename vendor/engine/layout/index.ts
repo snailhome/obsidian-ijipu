@@ -2644,33 +2644,81 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
     /** 音符占位右端（`rightX` = 本体宽 + 两侧分配留空；缺省回退本体右缘） */
     const noteRightOf = (n: PlacedToken): number => n.rightX ?? n.x + n.width
     /**
-     * 拍位 → x：**按音符起点锚点做分段线性插值**。
+     * 拍位 → x：**在音符「自身」范围内插值**（adj433 修正）。
      *
-     * 为什么不用「音符本体宽/占位宽」插值：相邻两个音符之间可能夹着**小节线**（占宽）
-     * 或槽间留白，用前一个音符的右缘当拍位边界会落在小节线**左侧**，比后一个音符的左缘
-     * 左偏一整个小节线宽 + 间距——段内容遂整体左移、与主旋律同拍位音符对不齐
-     * （实测偏差 13px ≈ 一个 note_size）。
-     * 锚点插值保证：**任一被锚定的拍位（音符起点）映射到该音符的 x**，
-     * 从而「上下两层同一拍位垂直对齐」精确成立；音符内部的拍位线性过渡。
+     * 两条互相约束的规则：
+     *  ① **同拍位垂直对齐**：拍位正好落在某音符**起点**时必须精确返回该音符的 `x`
+     *     （否则上下两层对不齐——adj427 实测偏差 13px ≈ 一个 note_size）。
+     *  ② **音符内部**的拍位只能在该音符**自己的横向范围**内插值，**不得跨到下一个音符**：
+     *     相邻音符之间夹着**小节线占宽 + 槽间留白**，跨音符插值会把这些"视觉空隙"
+     *     也算成时值宽（实测把 2 拍的 `6,-` 映射到宽 58.5px 的区间，而它本身只占 27.9px）；
+     *     段层拿着虚大的映射总宽去做比例适配（adj430 的 `segScale`）就会被**整体压缩**
+     *     ⇒ 段内音与主旋律**拍位错位**（用户报「bz/dsb 上下层拍子没对齐，之前还好好的」）。
+     *
+     * 做法：先按 `spans[k]` 定位拍位归属的音符；若拍位在音符内部，**优先用该音符的拍段
+     * `segments`**（layout 已按拍给出每段的 x/perBeat，含增时线/附点分段）——这是最精确的
+     * 「同拍位」几何；没有拍段信息时退化为在 `[note.x, 该音符占位右端]` 内线性插值。
      */
     const beatToX = (beat: number): number => {
       if (beat <= spans[0].startBeat) return placed[0].note.x
-      for (let k = 0; k < cnt - 1; k++) {
-        const b0 = spans[k].startBeat
-        const b1 = spans[k + 1].startBeat
-        if (beat <= b1 + 1e-9) {
-          const t = b1 > b0 ? (beat - b0) / (b1 - b0) : 0
-          const x0 = placed[k].note.x
-          const x1 = placed[k + 1].note.x
-          return x0 + Math.min(1, Math.max(0, t)) * (x1 - x0)
+      // 定位所属音符：**半开区间** `[startBeat, startBeat+beats)`——拍位正好落在两个音符的
+      // 交界处时归**后一个**音符（否则会把上一音的右缘当成本拍位，段层整体左移一个音符宽）。
+      let k = -1
+      for (let j = 0; j < cnt; j++) {
+        const s = spans[j]
+        if (beat >= s.startBeat - 1e-9 && beat < s.startBeat + s.beats - 1e-9) {
+          k = j
+          break
         }
       }
-      // 末音之后：按末音自身时值线性延伸到其占位右端
-      const lastNote = placed[cnt - 1].note
-      const b0 = spans[cnt - 1].startBeat
-      const b1 = b0 + spans[cnt - 1].beats
-      const t = b1 > b0 ? (beat - b0) / (b1 - b0) : 1
-      return lastNote.x + Math.min(1, Math.max(0, t)) * (noteRightOf(lastNote) - lastNote.x)
+      if (k < 0) {
+        // 落在末音右端或之后：按末音自身时值线性延伸到其占位右端
+        const lastNote = placed[cnt - 1].note
+        const b0 = spans[cnt - 1].startBeat
+        const b1 = b0 + spans[cnt - 1].beats
+        const t = b1 > b0 ? (beat - b0) / (b1 - b0) : 1
+        return lastNote.x + Math.min(1, Math.max(0, t)) * (noteRightOf(lastNote) - lastNote.x)
+      }
+      const s = spans[k]
+      const n = placed[k].note
+      // ① 恰好落在音符起点（含浮点容差）→ 精确对齐该音符 x
+      if (beat <= s.startBeat + 1e-9) return n.x
+      // ② 音符内部 → 优先按**该音符自己的拍段**插值（各段 x 为绝对坐标）。
+      //    拍段之间同样是**半开区间**：拍位正好落在某段末端时归**下一段起点**
+      //    （例：`6, -` 的拍段的 `x` 是「数字槽」而非「该拍几何中点」，
+      //     把 `beat0 末端` 当成本拍位会落在数字槽右缘（视觉左偏），应取增时线段的起点）。
+      const segs = n.segments
+      if (segs && segs.length > 0) {
+        const rel = beat - s.startBeat // 音符内拍偏移
+        let acc = 0
+        for (let si = 0; si < segs.length; si++) {
+          const sg = segs[si]
+          const sgEnd = acc + sg.beats
+          const isLastSg = si === segs.length - 1
+          if (rel < sgEnd - 1e-9 || isLastSg) {
+            if (rel <= acc + 1e-9) return sg.x // 段起点 → 精确对齐该段 x
+            const t = sg.beats > 1e-9 ? (rel - acc) / sg.beats : 0
+            return sg.x + Math.min(1, Math.max(0, t)) * (sg.perBeat * sg.beats)
+          }
+          acc = sgEnd
+        }
+      }
+      // ③ 无拍段信息（时值优先路径的个别情况）→ 在音符自身占位内线性
+      const t = s.beats > 1e-9 ? (beat - s.startBeat) / s.beats : 0
+      return n.x + Math.min(1, Math.max(0, t)) * (noteRightOf(n) - n.x)
+    }
+    /**
+     * adj433：**包络终点**用的 x —— `beat` 正好落在音符边界时取**前一个音符的右缘**
+     * （"包络覆盖到的最后一个音的结束"语义），而不是像 `beatToX` 那样取下一个音符的起点。
+     *
+     * 为什么必须分开：段层包络右界 = 段覆盖的主旋律最后一音的**结束**；若用 `beatToX(envEnd)`
+     * 会拿到**下一小节音符**的 x（跨过小节线），使段层映射总宽虚大 ⇒ 被 `segScale` 压缩
+     * ⇒ 段内拍位全部错位（用户报「上下层拍子没对齐」）。
+     */
+    const beatToXEndOf = (beat: number): number => {
+      const eps = 1e-6
+      if (beat - eps <= spans[0].startBeat) return placed[0].note.x
+      return beatToX(beat - eps)
     }
     /** 拍位所在**行**（同页同 y 的一组音符）——取行音符 y 与行右边界 */
     const rowOf = (beat: number): { y: number; right: number; page: number } => {
@@ -2921,14 +2969,14 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
       }
       let beat = 0
       // adj430：段内音 bx0/bx1 用**拍位映射**（保持 bz 上下层 / dsb 两层**拍位垂直对齐**），
-      // 当**拍位自然映射总宽 > xContent1 − xContent0**（`{bz 8 &zkh 2'/ 3'/}` 之类：
-      // 主旋律包络内只有一个 `6,-` 跨两拍，`beatToX(envStart+1)` 走 spans[1]=下一小节音符插值，
-      // 落在主旋律 `|` 右侧 ⇒ 整体拍位映射溢出 xContent1）→ **整体按比例缩放到段宽内**，
+      // 当**拍位自然映射总宽 > xContent1 − xContent0** 时整体按比例缩放到段宽内，
       // 让段内音**不丢失**（用户实测 `2'/ 3'/` 不显示的根因）。
-      // 计算段内自然拍位映射总宽：
+      // adj433：**终点**用 `beatToXEndOf`（取"覆盖到的最后一音的结束"）——用 `beatToX(envEnd)`
+      // 会拿到**下一小节音符**的起点，使自然映射总宽虚大 ⇒ 被 segScale 压缩 ⇒ 段内拍位错位
+      // （用户报「bz/dsb 上下层拍子没对齐，之前好好的」）。
       const segNaturalTotalBeat = seg.beats
       const segNaturalXStart = beatToX(envStart)
-      const segNaturalXEnd = beatToX(envStart + segNaturalTotalBeat)
+      const segNaturalXEnd = beatToXEndOf(envStart + segNaturalTotalBeat)
       const segNaturalW = segNaturalXEnd - segNaturalXStart
       const segContentW = xContent1 - xContent0
       // 缩放因子：自然映射总宽 vs 内容区宽（自然宽 ≤ 内容宽 ⇒ scale=1；自然宽 > 内容宽 ⇒ 整体压缩）
@@ -2938,9 +2986,14 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
         if (!isDurational(t)) continue
         const dur = tokenDuration(t)
         const beatAt = beat
+        const isLastInSeg = beatAt + dur >= segNaturalTotalBeat - 1e-9
         // bx0/bx1 = 拍位映射，再按 segScale 缩放（以 xContent0 为原点），保证不溢出 xContent1
         let bx0 = xContent0 + (beatToX(envStart + beatAt) - segNaturalXStart) * segScale
-        let bx1 = xContent0 + (beatToX(envStart + beatAt + dur) - segNaturalXStart) * segScale
+        // adj433：末音的右缘取"覆盖到的最后那个音的**结束**"（`beatToXEndOf`），与包络终点同口径
+        const naturalX1 = isLastInSeg
+          ? beatToXEndOf(envStart + beatAt + dur)
+          : beatToX(envStart + beatAt + dur)
+        let bx1 = xContent0 + (naturalX1 - segNaturalXStart) * segScale
         // 右缘钳制到 xContent1（最后几个音不被右括号压出去）
         bx1 = Math.min(bx1, xContent1)
         beat += dur

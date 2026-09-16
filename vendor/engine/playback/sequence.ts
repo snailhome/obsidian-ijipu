@@ -77,6 +77,17 @@ export interface PlayEvent {
    * 不被「试听音色」的全局覆盖压掉（否则两个声部会听成同一种音色）。
    */
   playVoice?: 'accomp' | 'main' | 'second'
+  /**
+   * adj434：该事件的音色是**谱面显式指定**的（来自曲内 `@乐器名@` 切换）。
+   *
+   * 为什么要这个标记：播放端「试听音色」下拉选定具体音色时会做**全局覆盖**
+   * （`SpessaSynthBackend.voiceOverride`），把每个事件自己的音色都压掉——于是谱面里写的
+   * `@手风琴@` 在选定试听音色后**完全不生效**（用户报「到 `@手风琴@ 6/` 这里主声部没有
+   * 切换为手风琴」）。`@乐器名@` 是**曲内的、局部的、明确的**演奏指示，应当优先于
+   * 「全局默认音色」；把它标记出来，播放端据此保留自己的音色。
+   * （`Y:` 行与缺省音色**不**标记——「试听音色」仍可覆盖它们，保留试听用途。）
+   */
+  explicitInstrument?: boolean
   /** adj300：播放拍段轨道（连音合并时含被合并音符的拍段，覆盖完整时值；普通事件 = 音符拍段） */
   playheadSegs?: PlayheadSeg[]
 }
@@ -883,10 +894,12 @@ export function buildPlaySequence(
       const playRole = placed.playVoice
       const isSecondaryVoice = playRole === 'accomp' || playRole === 'second'
       const voiceInst = overriddenByVoice.get(placed.id.voice)
+      // adj434：`@乐器名@` 曲内显式切换 → 标记 explicit（播放端不让「试听音色」压掉它）
+      const hasExplicitInst = !isSecondaryVoice && typeof voiceInst === 'string' && voiceInst.length > 0
       const instrument = isSecondaryVoice
         ? accompInstrument()
-        : typeof voiceInst === 'string' && voiceInst.length > 0
-          ? parseInstrumentRef(voiceInst).ref
+        : hasExplicitInst
+          ? parseInstrumentRef(voiceInst!).ref
           : voiceDefaultOf(placed.id.voice)
       const gain = isSecondaryVoice ? ACCOMP_GAIN : 1
       // 倚音（adj23 / adj396 时值规范）：倚音**占用主音符的时值**——
@@ -926,6 +939,8 @@ export function buildPlaySequence(
         durationMs: mainMs,
         gain,
         playVoice: playRole,
+        // adj434：`@乐器名@` 显式指定 → 播放端保留该音色（不被「试听音色」全局覆盖压掉）
+        ...(hasExplicitInst ? { explicitInstrument: true } : {}),
         playheadSegs: buildPlayheadSegs(item.note!, 0, rightEdgeByNoteIdx.get(item.note!.id.index), computeColorBounds(item.note!, pageByNoteIdx.get(item.note!.id.index)!, voiceBlockByNoteIdx, noteSize)).map((s) => ({ ...s, instrument, playVoice: item.note!.playVoice })),
       })
       // adj375：本音符是某 &hx 的作用对象 → 标记该事件待结算（连音合并会累加时值后再一起算）
