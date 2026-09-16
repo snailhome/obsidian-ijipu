@@ -378,6 +378,13 @@ console.log('[adj450] plugin playback timbre parity with the app')
   // ⑤ 试听走引擎的事件序列（音色由 Y:/@ 决定；被全局覆盖时才用默认音色）
   check('adj450 试听调用引擎 schedulePlay（音色链路与应用一致）',
     renderSrc.includes('schedulePlay(seq, backend') && !renderSrc.includes('backend.play('))
+  // ⑥ adj451：色块轨道把引擎给出的「边界/音色/声部角色/**力度**」一并透传
+  //    （此前只传 x/y/width ⇒ 多声部色块退化成单声部默认高度；力度变量也没到插件侧）
+  for (const f of ['yTopMin', 'yBottomMax', 'playVoice', 'instrument', 'gain']) {
+    check(`adj451 PlayheadSeg 透传 ${f}`, renderSrc.includes(`${f}: s.${f}`))
+  }
+  check('adj451 力度变量与音频同源（引擎拍段 gain）',
+    renderSrc.includes('gain: s.gain') && readFileSync('vendor/engine/playback/sequence.ts', 'utf8').includes('gain?: number'))
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

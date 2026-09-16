@@ -72,6 +72,18 @@ export type PlayheadSeg = {
   width: number
   voice: number
   group: number
+  /**
+   * adj450：与应用同源的可选字段——引擎 `PlayheadSeg` 已经给出，插件侧此前**只透传 x/y/width**，
+   * 于是多声部/临时段的色块退化成单声部默认高度、也拿不到音色与声部角色：
+   *  - `yTopMin` / `yBottomMax`：色块按曲行几何的**上下边界**（多声部按声部中线分块、临时段按上下层分块）；
+   *  - `instrument` / `playVoice`：音色与声部角色（色块着色用）；
+   *  - `gain`（adj451）：**力度倍率**（与音频事件同源，缺省 1）——预留给强弱单（渐强/渐弱）与力度记号。
+   */
+  instrument?: string
+  yTopMin?: number
+  yBottomMax?: number
+  playVoice?: 'accomp' | 'main' | 'second'
+  gain?: number
 }
 
 export async function playScore(
@@ -103,6 +115,7 @@ export async function playScore(
   // 200ms 起播延迟（与 iJipu PLAY_FIRST_DELAY_MS 一致，声画同步）
   const control = schedulePlay(seq, backend, undefined, undefined, 200)
   // 构建播放色块轨道（与 iJipu 一致：按 playheadSegs 拍段，每段 ≤1 拍）
+  // adj450：把引擎给出的边界/音色/声部角色/力度一并透传（此前只传 x/y/width，多声部色块退化）
   const beatMs = 60000 / bpm
   const track: PlayheadSeg[] = seq.events.flatMap((e) =>
     (e.playheadSegs ?? []).map((s) => ({
@@ -114,6 +127,11 @@ export async function playScore(
       width: s.width,
       voice: s.voice,
       group: s.group,
+      ...(s.instrument !== undefined ? { instrument: s.instrument } : {}),
+      ...(s.yTopMin !== undefined ? { yTopMin: s.yTopMin } : {}),
+      ...(s.yBottomMax !== undefined ? { yBottomMax: s.yBottomMax } : {}),
+      ...(s.playVoice !== undefined ? { playVoice: s.playVoice } : {}),
+      ...(s.gain !== undefined ? { gain: s.gain } : {}),
     })),
   )
   return { ...control, track }

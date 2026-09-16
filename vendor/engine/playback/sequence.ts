@@ -54,6 +54,14 @@ export interface PlayheadSeg {
    *  bz upper = 'accomp' (accompaniment color), dsb lower = 'second' (second-voice color),
    *  dsb upper = 'main' (matches primary). */
   playVoice?: 'accomp' | 'main' | 'second'
+  /**
+   * adj451：该拍段所属事件的**力度倍率**（与 `PlayEvent.gain` 同源，缺省 1）——
+   * 色块轨道与音频事件共用同一个力度变量：目前由 adj427 写入（重叠伴奏/第二声部 0.75），
+   * **预留给强弱单（渐强/渐弱 `hairpin`）与力度记号**：后续只要在 `buildPlaySequence` 里给每个事件算出
+   * 逐音力度，音频（`schedulePlay` 的 `0.5 × gain`）与色块轨道（本字段）会自动一致，
+   * 无需再改数据结构。详见 `layout/hairpins.ts`（记号目前只参与排版，未参与发声）。
+   */
+  gain?: number
 }
 
 export interface PlayEvent {
@@ -895,7 +903,7 @@ export function buildPlaySequence(
           ...computeColorBounds(placed, pageByNoteIdx.get(placed.id.index)!, voiceBlockByNoteIdx, noteSize),
           // adj442：**左端不外扩**——色块从起始音符开始（见 buildPlayheadSegs 注释）。
           // 原先这里给段内首个音传 `left`，会把色块拉到 `{` / 左括号之前（用户指出观感不对）。
-        }).map((s) => ({ ...s, instrument: inst2, playVoice: placed.playVoice })),
+        }).map((s) => ({ ...s, instrument: inst2, playVoice: placed.playVoice, gain: gain2 })),
       })
       segEndMs = Math.max(segEndMs, at2 + dur2)
     }
@@ -971,8 +979,11 @@ export function buildPlaySequence(
         // adj300：连音合并——把被合并音符的拍段并入 prev 的播放拍段（色块可覆盖全时值，
         // 如 (1 - - - | 1) - 0 0 中 1 合并 6 拍，色块依次滑过 1 - - - 1 -）
         const prevBeat = (prev.playheadSegs ?? []).reduce((a, s) => a + s.beats, 0)
+        // adj451：并入的拍段力度取**本事件（prev）的 gain**——合并后是一个 noteOn，
+        // 音频只可能用一个力度，色块轨道必须跟着它，二者不能各说各话。
+        const prevGain = prev.gain ?? 1
         prev.playheadSegs = (prev.playheadSegs ?? []).concat(
-          buildPlayheadSegs(item.note!, prevBeat, rightEdgeByNoteIdx.get(item.note!.id.index), computeColorBounds(item.note!, pageByNoteIdx.get(item.note!.id.index)!, voiceBlockByNoteIdx, noteSize)).map((s) => ({ ...s, instrument: prev.instrument, playVoice: item.note!.playVoice })),
+          buildPlayheadSegs(item.note!, prevBeat, rightEdgeByNoteIdx.get(item.note!.id.index), computeColorBounds(item.note!, pageByNoteIdx.get(item.note!.id.index)!, voiceBlockByNoteIdx, noteSize)).map((s) => ({ ...s, instrument: prev.instrument, playVoice: item.note!.playVoice, gain: prevGain })),
         )
         // adj157：合并时值；atMs 来自拍时钟（每个 event 独立），不需全局 at 累加
         lastEventNoteIdx = curNoteIdx
@@ -1037,7 +1048,7 @@ export function buildPlaySequence(
         playVoice: playRole,
         // adj434：`@乐器名@` 显式指定 → 播放端保留该音色（不被「试听音色」全局覆盖压掉）
         ...(hasExplicitInst ? { explicitInstrument: true } : {}),
-        playheadSegs: buildPlayheadSegs(item.note!, 0, rightEdgeByNoteIdx.get(item.note!.id.index), computeColorBounds(item.note!, pageByNoteIdx.get(item.note!.id.index)!, voiceBlockByNoteIdx, noteSize)).map((s) => ({ ...s, instrument, playVoice: item.note!.playVoice })),
+        playheadSegs: buildPlayheadSegs(item.note!, 0, rightEdgeByNoteIdx.get(item.note!.id.index), computeColorBounds(item.note!, pageByNoteIdx.get(item.note!.id.index)!, voiceBlockByNoteIdx, noteSize)).map((s) => ({ ...s, instrument, playVoice: item.note!.playVoice, gain })),
       })
       // adj375：本音符是某 &hx 的作用对象 → 标记该事件待结算（连音合并会累加时值后再一起算）
       if (hxBreathNoteIdx.has(curNoteIdx)) breathEvIdx = mainEvIdx
