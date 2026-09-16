@@ -401,6 +401,18 @@ export function buildPlaySequence(
   //   `nextNote` 退化为 Infinity ⇒ 边界只剩小节线 ⇒ **色块被拉长到整个小节**（用户报的现象）。
   //   段层音符的右边界在 emitSegmentEvents 里按「同段内下一个段层音符」单独算。
   const rightEdgeByNoteIdx = new Map<number, number>()
+  /**
+   * adj439：`(页|曲行|声部)` → 该处**段层右界**（大括号/内容区右缘，取 `segmentBrackets.x2`）。
+   * 供 dsb 下层色块钳制用（用户要求"色块都以大括号为界限定占宽"）。
+   */
+  const segRightByGroupVoice = new Map<string, number>()
+  for (const page of layout.pages) {
+    for (const sb of page.segmentBrackets ?? []) {
+      const k = `${page.index}|${sb.group}|${sb.voice}`
+      const cur = segRightByGroupVoice.get(k)
+      segRightByGroupVoice.set(k, cur === undefined ? sb.x2 : Math.min(cur, sb.x2))
+    }
+  }
   {
     const byGroupNotes = new Map<number, PlacedToken[]>()
     const byGroupBars = new Map<number, PlacedBarline[]>()
@@ -430,7 +442,17 @@ export function buildPlaySequence(
         const lastSeg = segs[segs.length - 1]
         const inkRight = lastSeg ? lastSeg.x + lastSeg.perBeat * lastSeg.beats : (n.rightX ?? n.x + n.width)
         const own = Math.max(n.rightX ?? inkRight, inkRight)
-        rightEdgeByNoteIdx.set(n.id.index, edge === Infinity ? own : Math.max(edge, own))
+        const base = edge === Infinity ? own : Math.max(edge, own)
+        /**
+         * adj439：**重叠区的色块以段层右界（大括号 `}`）为界限**（用户要求）。
+         *
+         * dsb 下层（包络内的主旋律）若不钳制，右边界会取"**包络外**那个主旋律音的 x"
+         * ⇒ 色块越过 `}` 一直盖到下一小节（用户截图：下层绿块从 `5` 跨过 `}` 到最后的 `5` 前）。
+         * 上层的段层音符在 `emitSegmentEvents` 里已收在段内容区内（`xContent1` ≤ 大括号槽），
+         * 故这里只对**下层**（`playVoice === 'second'`）钳制到段层右界 `segmentBrackets.x2`。
+         */
+        const segRight = n.playVoice === 'second' ? segRightByGroupVoice.get(`${n.id.page}|${n.id.group}|${n.id.voice}`) : undefined
+        rightEdgeByNoteIdx.set(n.id.index, segRight !== undefined ? Math.min(base, segRight) : base)
       })
     }
   }
