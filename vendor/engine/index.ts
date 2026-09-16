@@ -25,7 +25,7 @@ export type { NoteDurSplit } from './layout/spaceLayout'
 // adj428：临时叠加段（{bz … } / {dsb … }）上下两行纵向间距的默认常量；UI 显示缺省值用
 export { SEGMENT_ROW_GAP_DEFAULT } from './layout/spacing'
 // adj427：临时段（{bz … } / {dsb … }）拍位包络计算——layout/render 共用，纯函数
-export { computeSegments, mainSpans, mainSpansInRange, tokensBeats, segmentBarBeats, beatRatio, isDurational } from './layout/segments'
+export { computeSegments, mainSpans, mainSpansInRange, tokensBeats, segmentBarBeats, beatRatio, isDurational, segmentNoteIndexBase, segmentBarIndexBase, decodeSegmentNoteId, SEG_NOTE_ID_BASE, SEG_BAR_ID_BASE } from './layout/segments'
 export type { SegmentInfo, MainSpan } from './layout/segments'
 export { extractJpsConfig, mergeJpsConfig, writeJpsConfig, extractLegacyEditorPrefs, JPS_CONFIG_PREFIX, roundPxIntegers } from './settings'
 export type { JpsConfigWriteMode } from './settings'

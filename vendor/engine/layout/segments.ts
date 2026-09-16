@@ -142,3 +142,56 @@ export function beatRatio(beatInSegment: number, totalBeats: number): number {
   if (totalBeats <= 0) return 0
   return Math.min(1, Math.max(0, beatInSegment / totalBeats))
 }
+
+// ============================================================
+// adj445：段内音符 / 段内小节线的 **id 命名空间编码**
+// ============================================================
+
+/**
+ * 为什么段内音符需要独立命名空间：
+ * 临时段对主旋律时间轴贡献 **0 拍**，段内音符**不在** Q 行的「全局音符序号」流里
+ * （`cursorMap.codePosToNoteId` 逐 token 计数得到的主旋律序号与段内音符完全无关）。
+ * 因此段内音符的 id 必须由「组号 + 段头 token 下标 + 段内时值序号」三元组编码，
+ * 才能由 id **反推源码位置**（光标联动的两个方向都要用），也能与主旋律序号彻底隔离。
+ *
+ * 编码：`SEG_NOTE_ID_BASE + 组号×1e6 + 段头下标×1e3 + 段内时值序号`
+ *  - 组号跨距 1e6 ⇒ 同一组内段头下标（<1000）与段内时值数（<1000）都不会越界；
+ *  - 小节线另用 `SEG_BAR_ID_BASE` 一段，两个命名空间互不重叠；
+ *  - 与主旋律 id（0 起递增的小整数）天然隔离。
+ *
+ * 注意（历史缺陷）：adj427～adj444 的旧编码是 `900000 + 组号×1000 + 段头下标×10 + 序号`，
+ * 「段头下标×10」的跨距只有 10 ⇒ **段内时值 token 超过 10 个时相邻段就会撞号**
+ * （`{bz 1 2 3 4 5 6 7 8 | 1' 2' 3' 4'}` 这类 12 音段极常见），撞号会让
+ * 「按 id 高亮/定位」命中错误音符。此处一并修正。
+ */
+export const SEG_NOTE_ID_BASE = 1e12
+export const SEG_BAR_ID_BASE = 5e12
+/** 组号跨距（一组/一行内的段 id 区块） */
+export const SEG_ID_GROUP_STRIDE = 1e6
+/** 段头 token 下标跨距（一组内的各段 id 区块） */
+export const SEG_ID_OPEN_STRIDE = 1e3
+
+/** 第 `group` 组第 `openIndex` 个段头对应的**段内音符** id 基值（+ 段内时值序号 = 音符 id） */
+export function segmentNoteIndexBase(group: number, openIndex: number): number {
+  return SEG_NOTE_ID_BASE + group * SEG_ID_GROUP_STRIDE + openIndex * SEG_ID_OPEN_STRIDE
+}
+
+/** 第 `group` 组第 `openIndex` 个段头对应的**段内小节线** id 基值（+ 段内小节线序号） */
+export function segmentBarIndexBase(group: number, openIndex: number): number {
+  return SEG_BAR_ID_BASE + group * SEG_ID_GROUP_STRIDE + openIndex * SEG_ID_OPEN_STRIDE
+}
+
+/** 段内音符 id 判定 + 解码；非段内音符 id（含段内小节线）返回 null */
+export function decodeSegmentNoteId(
+  index: number,
+): { group: number; openIndex: number; durSeq: number } | null {
+  if (!Number.isFinite(index) || index < SEG_NOTE_ID_BASE || index >= SEG_BAR_ID_BASE) return null
+  const off = index - SEG_NOTE_ID_BASE
+  const group = Math.floor(off / SEG_ID_GROUP_STRIDE)
+  const rest = off % SEG_ID_GROUP_STRIDE
+  return {
+    group,
+    openIndex: Math.floor(rest / SEG_ID_OPEN_STRIDE),
+    durSeq: rest % SEG_ID_OPEN_STRIDE,
+  }
+}

@@ -35,7 +35,13 @@ import { hairpinEvents, resolveHairpins, type DynEvent, type NoteAnchors } from 
 // adj303：乐器名标注需要用 parseInstrumentRef / 库名（@乐器名 / @@ 后下一个音符）
 import { parseInstrumentRef, INSTRUMENT_LIB_NAMES } from '../playback/instruments'
 // adj427：临时段（{bz … } / {dsb … }）叠加层的拍位包络与主旋律跨度（纯函数）
-import { computeSegments, mainSpans, isDurational } from './segments'
+import {
+  computeSegments,
+  mainSpans,
+  isDurational,
+  segmentNoteIndexBase,
+  segmentBarIndexBase,
+} from './segments'
 
 // ============================================================
 // 音高映射：简谱音级 → 音名（如 C4 / F#5）
@@ -3069,9 +3075,13 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
         : (config.segmentRowGap?.bz ?? SEGMENT_ROW_GAP_DEFAULT.bz)
       const dy = segGap
       const yUpper = isDsb ? row.y - dy / 2 : row.y - dy
-      const idBase = 900000 + gi * 1000 + seg.openIndex * 10
-      const barIdBase = 950000 + gi * 1000 + seg.openIndex * 10
-      let noteSeq = 0
+      const idBase = segmentNoteIndexBase(gi, seg.openIndex)
+      const barIdBase = segmentBarIndexBase(gi, seg.openIndex)
+      // adj445：段内时值序号 `durSeq` = token 在**段内时值 token 的源码次序**（先取自增，再判是否放得下）——
+      // 使 id **只由源码决定**，与排版压缩/挤不下被跳过无关。光标联动（cursorMap）在编辑器端
+      // 用同一套「源码次序」推算 id，才能与渲染出的 `data-notepos` 对上（旧写法只在 push 时自增，
+      // 一旦某个音被跳过，其后所有段内音 id 全部错位）。
+      let durSeq = 0
       let barSeq = 0
 
       if (isDsb) shiftEnvelopeDown(pages, gi, group.music.voice, spans, placed, cnt, envStart, envEnd, row, dy / 2)
@@ -3129,6 +3139,7 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
       for (const t of seg.tokens) {
         if (t.kind === 'barline' || t.kind === 'bracket') continue
         if (!isDurational(t)) continue
+        const seq = durSeq++
         const dur = tokenDuration(t)
         const beatAt = beat
         const isLastInSeg = beatAt + dur >= segNaturalTotalBeat - 1e-9
@@ -3167,7 +3178,7 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
           if (sp.dotDur > 0) segList.push({ x: r1(cx), perBeat: r1(((w * sp.dotDur) / total) / Math.max(sp.dotDur, 1e-6)), beats: sp.dotDur, el: 'dot' })
         }
         page.notes.push({
-          id: { page: row.page, voice: group.music.voice, group: gi, index: idBase + noteSeq++ },
+          id: { page: row.page, voice: group.music.voice, group: gi, index: idBase + seq },
           token: t,
           x: r1(bx0),
           y: r1(yUpper),

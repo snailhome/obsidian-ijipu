@@ -8,7 +8,8 @@
  *  - noteIdToCodePos：音符 id → 编辑器字符位置（点击谱面跳转）
  */
 import { tokenizeMusicLine } from './parser/tokenizer'
-import type { ScoreLayout } from './types'
+import { isDurational, decodeSegmentNoteId, segmentNoteIndexBase } from './layout/segments'
+import type { MusicToken, ScoreLayout } from './types'
 
 const Q_RE = /^Q(\d*)(?:"[^"]*")?\s*:(.*)$/
 const ID_RE = /^(\d+)_(\d+)_(\d+)_(\d+)$/
@@ -28,6 +29,66 @@ export function parseNoteId(id: string): NoteIdParts | null {
 
 const isNoteToken = (t: { kind: string }) =>
   t.kind === 'note' || t.kind === 'rest' || t.kind === 'rhythm'
+
+/**
+ * adj445：一行内临时段（`{bz …}` / `{dsb …}`）的源码位置信息。
+ *
+ * 段内 token 挂在段头 token 的 `children` 上，**不在**顶层 token 流里 ⇒ 主旋律的
+ * 「第 n 个音符」计数器完全跳过它们。光标联动要处理段内音符，就必须自己按
+ * 「段头 token 下标 + 段内时值序号」定位——与 layout 生成 id 时用的是同一套次序。
+ */
+interface SegmentSpan {
+  /** 段头（open）token 在 token 序列中的下标（= layout 的 `seg.openIndex`） */
+  openIndex: number
+  /** `{` 所在列（光标进入段的下界） */
+  openPos: number
+  /** `}` 所在列（未闭合段取行尾哨兵；光标在段内的上界） */
+  closePos: number
+  /** 段内时值 token（源码次序；序号 = 下标） */
+  notes: { pos: number }[]
+}
+
+/** 枚举一行内的临时段（按源码顺序） */
+function segmentSpansOf(tokens: MusicToken[]): SegmentSpan[] {
+  const out: SegmentSpan[] = []
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i]
+    if (t.kind !== 'segment' || t.dir !== 'open') continue
+    const next = tokens[i + 1]
+    const paired = next && next.kind === 'segment' && next.dir === 'close' && next.type === t.type
+    // 未闭合（tokenizer 兜底路径）时段内内容一直延伸到行尾 ⇒ 上界取哨兵值
+    const closePos = paired ? next.pos : Number.MAX_SAFE_INTEGER
+    const notes: { pos: number }[] = []
+    for (const c of t.children ?? []) if (isDurational(c)) notes.push(c)
+    out.push({ openIndex: i, openPos: t.pos, closePos, notes })
+  }
+  return out
+}
+
+/**
+ * 光标列 → 所在临时段内的音符（返回段头下标 + 段内时值序号）；不在任何段内返回 null。
+ *
+ * 取法与主旋律一致（「光标处或紧邻左侧的音符」）：点击段内任意位置（含音符间的空隙）
+ * 都对应它左边那个音；光标在段头 `{bz` 之前没有左邻音时取段内**第一个**音。
+ */
+function locateSegmentNote(
+  tokens: MusicToken[],
+  col: number,
+): { openIndex: number; durSeq: number } | null {
+  for (const sp of segmentSpansOf(tokens)) {
+    if (col < sp.openPos || col > sp.closePos) continue
+    if (sp.notes.length === 0) return null
+    let last = 0
+    let k = 0
+    for (const n of sp.notes) {
+      if (n.pos > col) break
+      last = k
+      k++
+    }
+    return { openIndex: sp.openIndex, durSeq: Math.min(last, sp.notes.length - 1) }
+  }
+  return null
+}
 
 /** 编辑器光标位置（0-based）→ notepos id；非 Q 行或超出范围返回 null
  *  @param indexToPage 布局时生成的「全局音符 index → 物理页 page」（自动分页一致）；缺省回退 [fenye] 计 */
@@ -73,6 +134,17 @@ export function codePosToNoteId(code: string, pos: number, indexToPage?: Map<num
       // 点击块内任意位置（含块末空隙/行尾）都对应本块
       const col = pos - lineStart - leading // 相对 trimmed 行的列
       const headLen = trimmed.length - content.length
+      const voice = m[1] === '' ? 1 : Number(m[1])
+      // adj445：光标落在临时段 `{bz …}` / `{dsb …}` 内 → **段内音符**（用户报「点 {bz} 里的音符不联动」）。
+      // 段内音符不在主旋律音符流里，必须单独定位；id 用 layout 同一套「组号 + 段头下标 + 段内时值序号」编码。
+      // 注：token 的 `pos` 相对**曲行内容**（`Q:` 之后那段），故减掉 `headLen` 再比较。
+      const hit = locateSegmentNote(tokens, col - headLen)
+      if (hit) {
+        const gIdx = segmentNoteIndexBase(group, hit.openIndex) + hit.durSeq
+        const pg = indexToPage?.get(gIdx) ?? page
+        target = `${pg}_${voice}_${group}_${gIdx}`
+        break
+      }
       let local = 0
       let last = 0
       for (const t of tokens) {
@@ -84,7 +156,6 @@ export function codePosToNoteId(code: string, pos: number, indexToPage?: Map<num
       }
       if (noteTokens.length === 0) return null
       const idx = Math.min(last, noteTokens.length - 1)
-      const voice = m[1] === '' ? 1 : Number(m[1])
       const gIdx = noteCounter + idx
       // adj291：page 用实际布局的物理页（自动分页也一致），与音符 id 的 page 对齐；无映射回退 [fenye] 计
       const pg = indexToPage?.get(gIdx) ?? page
@@ -105,6 +176,9 @@ export function noteIdToCodePos(code: string, id: string): number | null {
   let page = 0
   let noteCounter = 0
   let lineStart = 0
+  let group = -1
+  // adj445：段内音符 id（高位命名空间）→ 用「组号（= 第几个 Q 行）+ 段头下标 + 段内时值序号」定位
+  const seg = decodeSegmentNoteId(parts.index)
 
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i]
@@ -120,15 +194,31 @@ export function noteIdToCodePos(code: string, id: string): number | null {
       lineStart += raw.length + 1
       continue
     }
+    group++ // Q 行序号（与 layout 的组号 gi 同源）
     const content = m[2] ?? ''
     const { tokens } = tokenizeMusicLine(content, { line: i + 1, col: 0 })
+    const headLen = trimmed.length - content.length
+
+    // 段内音符：只在本组（本 Q 行）里找段头 token，再取段内第 durSeq 个时值 token
+    if (seg) {
+      if (group === seg.group) {
+        const open = tokens[seg.openIndex]
+        if (open && open.kind === 'segment' && open.dir === 'open') {
+          const t = (open.children ?? []).filter(isDurational)[seg.durSeq]
+          if (t) return lineStart + leading + headLen + t.pos
+        }
+        return null
+      }
+      lineStart += raw.length + 1
+      continue
+    }
+
     const noteTokens = tokens.filter(isNoteToken)
 
     if (noteCounter <= parts.index && parts.index < noteCounter + noteTokens.length) {
       // 目标音符在本行
       const local = parts.index - noteCounter
       const t = noteTokens[local]
-      const headLen = trimmed.length - content.length
       return lineStart + leading + headLen + t.pos
     }
     noteCounter += noteTokens.length
