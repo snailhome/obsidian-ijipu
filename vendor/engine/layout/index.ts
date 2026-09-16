@@ -704,6 +704,43 @@ export function layoutScore(
   /** 排布一个曲行（bars：每拍宽按行总拍数平均、小节宽=拍数×每拍宽；frag：超长小节按拍数铺满）
    *  refPerBeat：前面曲部行的平均每拍宽（adj199：未撑满行前面有曲部时按小节线对齐，
    *  每小节宽与前面行一致，而非自然宽）；返回该行平均每拍宽（供后续行对齐）。 */
+  /**
+   * adj435：临时叠加段（`{bz … }` / `{dsb … }`）在**覆盖拍**上的密度需求（按曲行缓存）。
+   *
+   * 为什么需要：段层与主旋律在包络内**上下重叠**——本质就是一个"多声部块"。多声部块的
+   * 占宽规则是**每拍取各声部的最密需求**（`segBeatMap` 的 `minDur`/`extra` →
+   * `minNoteW/minDur`，见 `allocatePerBeats`/`singleRulePerBeats` 的 `baseW`）。
+   * 此前段层只做"叠加"、不参与行宽分配：主旋律行按**自己的**密度给拍宽，于是段层比主旋律
+   * 更密的拍（例 `{bz &zkh 1/ 2// 3// 2 3 4 …}` 第 1 拍有 3 个音，而主旋律同拍只有 1 个音
+   * `5`）**拿不到额外宽度** ⇒ 段内 16 分音符被挤到 5px 互相重叠（用户报「音符挤在一起」）。
+   * 这里算出段层的"每拍最小时值 + 倚音额外宽"，供主旋律行在拍级需求里取 `min/max` 合并。
+   */
+  const segBeatNeedsCache = new Map<number, Map<number, { minDur: number; extra: number }>>()
+  const segBeatNeedsOf = (gi: number): Map<number, { minDur: number; extra: number }> => {
+    const hit = segBeatNeedsCache.get(gi)
+    if (hit) return hit
+    const out = new Map<number, { minDur: number; extra: number }>()
+    const grp = result.groups[gi]
+    if (grp) {
+      for (const s of computeSegments(grp.music.tokens)) {
+        let beat = 0
+        for (const t of s.tokens) {
+          if (t.kind !== 'note' && t.kind !== 'rest' && t.kind !== 'rhythm') continue
+          const d = tokenDuration(t)
+          // 段层包络的拍位是**曲行全局**的（段自身不占主旋律拍位）→ 直接以 startBeat 为基
+          const b = s.startBeat + (Math.abs(beat - Math.round(beat)) < 1e-3 ? Math.round(beat) : Math.floor(beat + 1e-9))
+          const e = out.get(b) ?? { minDur: Infinity, extra: 0 }
+          e.minDur = Math.min(e.minDur, d)
+          if (t.kind === 'note') e.extra = Math.max(e.extra, noteExtraW(t, m.noteSize))
+          out.set(b, e)
+          beat += d
+        }
+      }
+    }
+    segBeatNeedsCache.set(gi, out)
+    return out
+  }
+
   const placeMusicRow = (
     segs: BarSeg[],
     row: LayoutRow,
@@ -926,6 +963,15 @@ export function layoutScore(
     const barBeatStart: number[] = []
     const barBeatEnd: number[] = []
     let gBeat = 0
+    // adj435：本行起始的**曲行全局拍**（`gBeat` 是行内计数，段层包络拍位是曲行全局的）
+    let rowBeatBase = 0
+    for (let b = 0; b < row.start; b++) {
+      for (const t of segs[b]?.notes ?? []) {
+        if (t.kind === 'note' || t.kind === 'rest' || t.kind === 'rhythm') rowBeatBase += tokenDuration(t)
+      }
+    }
+    /** adj435：本曲行的段层拍需求（重叠区按多声部方式取"两层更密"的需求） */
+    const segNeedsOfRow = segBeatNeedsOf(groupIndex)
     for (let b = row.start; b < row.end; b++) {
       const seg = segs[b]
       const isEmptyLead = leadingEmpty === 1 && b === row.start
@@ -944,13 +990,23 @@ export function layoutScore(
             const piece = Math.min(rem, (nearInt ? Math.round(pos) : Math.floor(pos + 1e-9)) + 1 - pos)
             beatsInfo[p].dur += piece
             beatsInfo[p].minDur = Math.min(beatsInfo[p].minDur, piece)
+            // adj435：**重叠区按多声部方式算占宽**——该拍若被临时叠加段覆盖，且段层在同一拍
+            // 更密（minDur 更小），则拍宽按**段层**的最小时值给（`minNoteW/minDur` 更大）。
+            // 于是段内 `1/ 2// 3//` 那种"一拍三个音"能拿到足够宽度，不再互相重叠。
+            const segNeed = segNeedsOfRow.get(rowBeatBase + p)
+            if (segNeed && segNeed.minDur < beatsInfo[p].minDur) beatsInfo[p].minDur = segNeed.minDur
             pos += piece
             rem -= piece
           }
           // adj106：倚音占位记到音符起始拍（该拍分配更宽，避免倚音与相邻音符重叠）
           if (t.kind === 'note') {
             const p0 = Math.floor(gBeat + 1e-9)
-            if (beatsInfo[p0]) beatsInfo[p0].extra = Math.max(beatsInfo[p0].extra, noteExtraW(t, m.noteSize))
+            if (beatsInfo[p0]) {
+              beatsInfo[p0].extra = Math.max(beatsInfo[p0].extra, noteExtraW(t, m.noteSize))
+              // adj435：段层同拍的倚音额外宽同样取 max（与 minDur 同一套"取更密"规则）
+              const segNeed0 = segNeedsOfRow.get(rowBeatBase + p0)
+              if (segNeed0) beatsInfo[p0].extra = Math.max(beatsInfo[p0].extra, segNeed0.extra)
+            }
           }
           gBeat += dur
         }
@@ -1532,6 +1588,9 @@ export function layoutScore(
     // adj288：每音符每拍时值宽 + 每小节首/末音符每拍宽（供小节线间距自适应收紧）
     const segFirstPb: (number | undefined)[] = new Array(segs.length).fill(undefined)
     const segLastPb: (number | undefined)[] = new Array(segs.length).fill(undefined)
+    /** adj435：本曲行的段层拍需求（重叠区按多声部方式取"两层更密"的需求） */
+    const segNeedsS = segBeatNeedsOf(groupIndex)
+    const extraPercent = (w: number, elDur: number): number => (totalDur > 0 ? (elDur / totalDur) * w : 0)
     for (const n of noteList) {
       const noteElDur = n.noteDur + (n.hasDot ? n.dotDur : 0)
       const noteElW =
@@ -1539,6 +1598,67 @@ export function layoutScore(
       n.perBeatW = noteElDur > 0 ? noteElW / noteElDur : 0
       if (segFirstPb[n.barIdx] === undefined) segFirstPb[n.barIdx] = n.perBeatW
       segLastPb[n.barIdx] = n.perBeatW
+    }
+
+    /**
+     * adj435（空间优先）：**重叠区按多声部方式算占宽** —— 段层与主旋律在包络内上下重叠，
+     * 等价一个多声部块，每拍占宽应取"两层里更密那一层"的需求（时值优先路径同规则，
+     * 见 `placeMusicRow` 里 `beatsInfo[p].minDur` 的合并）。
+     *
+     * 做法：先按上面算出的基准每拍宽找出"段层更密"的拍与缺口，把缺口并入本体宽后重算一次——
+     * 因 `W = availW − durBodySum − nonDurPad`，并入缺口会让富余 `W` 等量减少
+     * ⇒ **行总宽不变、不溢出**，只是把富余从"均匀分摊"改成"优先满足密集拍"。
+     */
+    if (segNeedsS.size > 0) {
+      // 每小节的曲行起始拍（前缀和）——把 (barIdx, beatPos) 映射到**曲行全局拍**
+      const barBase: number[] = []
+      {
+        let acc = 0
+        for (let b = 0; b < segs.length; b++) {
+          barBase[b] = acc
+          for (const t of segs[b]?.notes ?? []) {
+            if (t.kind === 'note' || t.kind === 'rest' || t.kind === 'rhythm') acc += tokenDuration(t)
+          }
+        }
+      }
+      const byBeat = new Map<number, { dur: number; notes: typeof noteList }>()
+      for (const n of noteList) {
+        const gb = (barBase[n.barIdx] ?? 0) + Math.floor(n.beatPos + 1e-9)
+        const e = byBeat.get(gb) ?? { dur: 0, notes: [] }
+        e.notes.push(n)
+        e.dur += n.noteDur + (n.hasDot ? n.dotDur : 0)
+        byBeat.set(gb, e)
+      }
+      const addOfNote = new Map<(typeof noteList)[number], number>()
+      let deficitTotal = 0
+      for (const [gb, e] of byBeat) {
+        const need = segNeedsS.get(gb)
+        if (!need || !(need.minDur > 0) || e.notes.length === 0 || e.dur <= 0) continue
+        const segPerBeat = Math.max(BPW_NATURAL, minNoteW(m.noteSize, need.extra) / need.minDur)
+        const cur = Math.min(...e.notes.map((x) => x.perBeatW ?? Number.POSITIVE_INFINITY))
+        if (!Number.isFinite(cur) || segPerBeat <= cur) continue
+        const extra = (segPerBeat - cur) * e.dur
+        deficitTotal += extra
+        const per = extra / e.notes.length
+        for (const x of e.notes) addOfNote.set(x, (addOfNote.get(x) ?? 0) + per)
+      }
+      if (deficitTotal > 0) {
+        const W2 = stretch ? Math.max(0, availW - durBodySum - nonDurPad - deficitTotal) : 0
+        for (const n of noteList) {
+          const noteElDur = n.noteDur + (n.hasDot ? n.dotDur : 0)
+          const noteElW =
+            n.noteBodyW + (n.hasDot ? n.dotBodyW : 0) + (addOfNote.get(n) ?? 0) +
+            (stretch ? extraPercent(W2, noteElDur) : extraOf(n.barIdx, noteElDur))
+          n.perBeatW = noteElDur > 0 ? noteElW / noteElDur : 0
+        }
+        // 重算每小节首/末音符每拍宽（供小节线间距收紧用）
+        segFirstPb.fill(undefined)
+        segLastPb.fill(undefined)
+        for (const n of noteList) {
+          if (segFirstPb[n.barIdx] === undefined) segFirstPb[n.barIdx] = n.perBeatW
+          segLastPb[n.barIdx] = n.perBeatW
+        }
+      }
     }
     // adj314：小节线一侧间距 = 1/2 音符字体宽度 barlinePad(noteSize)（用户规则 A）——
     // 不随音符占宽(W)放大，宽松时避免"空上加空"、压缩时仍能区分小节；
@@ -2681,31 +2801,23 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
       }
       const s = spans[k]
       const n = placed[k].note
-      // ① 恰好落在音符起点（含浮点容差）→ 精确对齐该音符 x
+      // ① 恰好落在音符起点（含浮点容差）→ 精确对齐该音符**数字位置** `n.x`
       if (beat <= s.startBeat + 1e-9) return n.x
-      // ② 音符内部 → 优先按**该音符自己的拍段**插值（各段 x 为绝对坐标）。
-      //    拍段之间同样是**半开区间**：拍位正好落在某段末端时归**下一段起点**
-      //    （例：`6, -` 的拍段的 `x` 是「数字槽」而非「该拍几何中点」，
-      //     把 `beat0 末端` 当成本拍位会落在数字槽右缘（视觉左偏），应取增时线段的起点）。
-      const segs = n.segments
-      if (segs && segs.length > 0) {
-        const rel = beat - s.startBeat // 音符内拍偏移
-        let acc = 0
-        for (let si = 0; si < segs.length; si++) {
-          const sg = segs[si]
-          const sgEnd = acc + sg.beats
-          const isLastSg = si === segs.length - 1
-          if (rel < sgEnd - 1e-9 || isLastSg) {
-            if (rel <= acc + 1e-9) return sg.x // 段起点 → 精确对齐该段 x
-            const t = sg.beats > 1e-9 ? (rel - acc) / sg.beats : 0
-            return sg.x + Math.min(1, Math.max(0, t)) * (sg.perBeat * sg.beats)
-          }
-          acc = sgEnd
-        }
-      }
-      // ③ 无拍段信息（时值优先路径的个别情况）→ 在音符自身占位内线性
+      // ② 音符内部 → 从**该音符数字位置 `n.x`** 线性过渡到 `zoneEnd`。
+      //
+      // adj435：两处必须一起改，否则子拍宽忽宽忽窄：
+      //  ⓐ **基准用 `n.x` 而非 `n.segments[].x`**——`segments[].x` 是**拍槽左缘**，
+      //     而 `n.x` 是**数字位置**（数字在槽内居中，二者相差 ≈ (槽宽−数字宽)/2 ≈ 11px）；
+      //     混用会在"音符起点"处产生 11px 跳变（实测段层第 1 子拍被压成 5.9px、
+      //     第 3 个被拉成 16.1px，用户报「音符挤在一起」）。
+      //  ⓑ **端点取 `min(占位右端, 下一个音符的 x)`**——包络边界处半开区间取的是
+      //     "下一个音符的数字位置"，若内部端点用 `rightX`（可能比它更靠右 3px），
+      //     最后一个子拍就会被算短（实测 5.2px，本应 7.7px）。两端同口径后，
+      //     各子拍宽 = `(zoneEnd − n.x) × (子拍时值 / 音符时值)`，均匀且无跳变。
+      const nextNote = k + 1 < cnt ? placed[k + 1].note : null
+      const zoneEnd = nextNote ? Math.min(noteRightOf(n), nextNote.x) : noteRightOf(n)
       const t = s.beats > 1e-9 ? (beat - s.startBeat) / s.beats : 0
-      return n.x + Math.min(1, Math.max(0, t)) * (noteRightOf(n) - n.x)
+      return n.x + Math.min(1, Math.max(0, t)) * (zoneEnd - n.x)
     }
     /**
      * adj433：**包络终点**用的 x —— `beat` 正好落在音符边界时取**前一个音符的右缘**
