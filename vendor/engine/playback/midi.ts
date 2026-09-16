@@ -10,6 +10,7 @@
  */
 import type { PlayEvent } from './sequence'
 import { matchInstrument, type InstrumentId } from './instruments'
+import { gmVoiceProgram } from './gmVoices'
 
 /** 简谱音名（如 C4 / F#5）→ MIDI 音符号（C4 = 60） */
 export function pitchToMidiNote(name: string): number {
@@ -42,13 +43,20 @@ const GM_NAME_PROGRAMS: Record<string, number> = {
   萨克斯: 65, 爵士吉他: 31,
 }
 
-/** 乐器/声部名 → GM 程序号。支持 `音色名`（默认高保真 GM 路由）与 `库id:音色名`（取音色名部分）；
- *  匹配失败回退钢琴 0。 */
+/** 乐器/声部名 → GM 程序号。支持 `音色名` 与 `库id:音色名`（取音色名部分）；
+ *  adj447：**先**查 `GM_VOICES`（128 音色全表，含应用内显示名 `N 名称` 与纯编号两种写法），
+ *  再退回旧别名表 `GM_NAME_PROGRAMS`（风琴/弦乐/小提琴…这类简称），最后按乐器族关键词兜底；
+ *  全不中回退钢琴 0。
+ *  表序很重要：旧表把 `电钢琴` 映射成 4（GM 标准里 4 是「电钢琴1」、2 才是「电钢琴」），
+ *  与用户在「音色库」列表里看到的一致口径以 `GM_VOICES` 为准。 */
 export function instrumentToProgram(name: string | undefined): number {
   if (!name) return 0
   const n = name.includes(':') ? name.slice(name.indexOf(':') + 1) : name
-  const direct = GM_NAME_PROGRAMS[n.trim()]
-  if (direct !== undefined) return direct
+  const trimmed = n.trim()
+  const byVoice = gmVoiceProgram(trimmed)
+  if (byVoice !== null) return byVoice
+  const alias = GM_NAME_PROGRAMS[trimmed]
+  if (alias !== undefined) return alias
   return GM_PROGRAMS[matchInstrument(name)] ?? 0
 }
 

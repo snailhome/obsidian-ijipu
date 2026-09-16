@@ -30,6 +30,9 @@ export { INSTRUMENT_PRESETS, INSTRUMENT_OPTIONS, INSTRUMENT_LIB_NAMES, matchInst
 export type { InstrumentId, InstrumentPreset, ParsedVoiceRef } from './instruments'
 // adj446：GM 播放通道分配（一个音色独占一个通道——多声部各音色不互相覆盖）
 export { GmChannelAllocator, GM_MELODIC_CHANNELS } from './channels'
+// adj447：GM 128 音色表（音色名 ↔ program 的唯一来源）
+export { GM_VOICES, gmVoiceProgram } from './gmVoices'
+export type { GmVoice } from './gmVoices'
 // adj289：MIDI 导出（复用播放序列）
 export { eventsToMidi, pitchToMidiNote, instrumentToProgram } from './midi'
 export type { MidiExportOptions } from './midi'
