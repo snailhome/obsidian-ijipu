@@ -3091,8 +3091,22 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
       const segNaturalXEnd = beatToXEndOf(envStart + segNaturalTotalBeat)
       const segNaturalW = segNaturalXEnd - segNaturalXStart
       const segContentW = xContent1 - xContent0
-      // 缩放因子：自然映射总宽 vs 内容区宽（自然宽 ≤ 内容宽 ⇒ scale=1；自然宽 > 内容宽 ⇒ 整体压缩）
-      const segScale = segNaturalW > 1e-6 ? Math.min(1, segContentW / segNaturalW) : 1
+      /**
+       * adj437：缩放因子——**只有"真正越过小节线"时才整体压缩**。
+       *
+       * adj433 修好 `beatToX`（音符内部插值不再跨音符）之后，`segNaturalW` 已经≈主旋律覆盖区
+       * 的真实宽度；此时剩下的"溢出"通常只是 `tailPad`（尾括号预留区：`barInset + nonDurGap + 括号宽`）
+       * ——**这不是越界，而是本该留给 `)` 的空间**。此前一律压缩，于是段层逐拍漂移
+       * （用户报 `{dsb 1 2 3 4 | 5 6 7 1' }` 上下层拍子不对齐：实测每拍偏 1.95px、末拍偏 13.6px，
+       * 因为 scale=0.9435 把 8 拍整体压缩了 5.65%）。
+       *
+       * 判据：自然映射的右端若仍**落在主旋律小节线之内**（`≤ xEndBoundary`，允许 `tailPad` 余量），
+       * 就取 `scale = 1` 保证**逐拍精确对齐**，只把最后一个音的右缘钳到 `xContent1`
+       * （数字墨迹远在占位右端左侧，观感不受影响）；真的越线时才整体压缩。
+       */
+      const bracketReserve = tailW > 0 ? barInset + bgap + tailW : 0
+      const naturallyCrossesBar = segNaturalXEnd > xEndBoundary + bracketReserve + 0.5
+      const segScale = naturallyCrossesBar && segNaturalW > 1e-6 ? Math.min(1, segContentW / segNaturalW) : 1
       for (const t of seg.tokens) {
         if (t.kind === 'barline' || t.kind === 'bracket') continue
         if (!isDurational(t)) continue
