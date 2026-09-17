@@ -8,9 +8,10 @@
  *         < **谱面源码内的 `# jps-config:{...}`**（该曲谱自带设置）
  *
  * 最后一级是「把 iJipu 的 .jps 直接复制进 Obsidian 即可一模一样」的关键：
- * iJipu 在点「保存设置」时用 `writeJpsConfig` 把**整份** PageConfig 写进源码那一行
- * （实测 30 个字段：纸张/边距/各字体栈/字号/行距/布局模式/连音线样式/metaPos…），
- * 因此源内配置会覆盖插件里所有相关默认值；插件设置与 frontmatter 只对**源内没写的键**生效。
+ * iJipu 在点「保存设置」时用 `writeJpsConfig` 把**与默认不同的项**（差量）写进源码那一行，
+ * 而 adj480 起 iJipu 应用侧**不再有"本机页面设置"层**（谱面自包含）⇒ 源内配置就是它的全部面子。
+ * 插件这一侧插件设置与 frontmatter 只对**源内没写的键**生效（保留"改一处、全库统一变"的能力）；
+ * 要把这份谱复制给别人也一致，用设置对话框的「随谱固化」（= 把与引擎默认不同的全部生效项写进源码）。
  */
 import { extractJpsConfig, mergeJpsConfig, type PageConfig } from '@ijipu/engine'
 import { applyFrontmatter, type AppliedOverride, type DeprecatedKey, type UnknownKey } from './frontmatter'

@@ -14,6 +14,9 @@
  */
 import { DOT_R_DOT, BRACKET_PAD, noteScaleOf } from './spacing'
 import { tokenDuration } from '../duration'
+// adj479：滑音图形的宽高比来自矢量修饰符表（由 scripts/gen-modifier-glyphs.mjs 生成的数据文件）——
+// 只共享**图形度量**，不依赖 render 的绘制逻辑
+import { MODIFIER_GLYPHS, glyphInkAspect } from '../render/modifierGlyphs'
 
 // ============================================================
 // 时值拆分
@@ -122,6 +125,66 @@ export const hxBodyW = (noteSize: number) => 9.8 * noteScaleOf(noteSize)
  * 因此不再为它预留 V 形的额外宽度。
  */
 export const markBodyW = (_code: 'zkh' | 'ykh' | 'hx', _noteSize: number) => bracketBodyW()
+
+/**
+ * adj479：滑音（`&shy` 上滑音 / `&xhy` 下滑音）图形的**墨迹几何**——渲染与布局的唯一来源。
+ *
+ * 为什么抽到这里：滑音原先是**音符修饰符**，只由 render 摆放、布局端**完全不占宽**。
+ * 单声部空间优先有充裕留白（`W` 按比例分摊）时看不出问题；但**多声部块的每拍宽 = 各声部
+ * 本体宽的最大值（无留白）**，图形右伸的墨迹就压到后一个数字上（用户报「&shy/&xhy 与音符重叠」）。
+ * 现在渲染端按本函数摆放、布局端按 `slideExtraW` 占宽——一份几何两处消费，
+ * 避免本项目踩过的「线宽改了一处、占位表没同步」（adj104/adj391 的教训）。
+ *
+ * 几何（与 adj458 定下的画法一致，数值未变）：先按旧矢量算出**包围盒**（弧线两点 + 箭头尖 + 两翼），
+ * 再按**高度**贴合、左缘贴在数字右缘（`x + digitW`），横向占宽随图形自身比例。
+ * 返回值为**相对量**：`dx` 相对数字左缘（x）、`dy` 相对音符基线（y，向上为负）。
+ */
+export function slideGlyphInk(sym: 'shy' | 'xhy', noteSize: number): { dx: number; dy: number; w: number; h: number } {
+  const s = noteScaleOf(noteSize)
+  const digitW = digitSlotW(noteSize)
+  const sz = noteSize * 0.25 // 滑音大小 = 音符的 1/4
+  const right = sym === 'shy'
+  // 旧矢量的弧线两点（x 相对数字左缘、y 相对基线）
+  let x1: number
+  let y1: number
+  let x2: number
+  let y2: number
+  if (right) {
+    // adj231：上滑音右上角更高（终点 sz×1.4 向上）
+    x1 = digitW / 2 + 4 * s
+    y1 = -noteSize * 0.4
+    x2 = x1 + sz
+    y2 = y1 - sz * 1.4
+  } else {
+    // adj231：下滑音更靠近主音符（弧线缩短 0.8×）+ 整体上移
+    x1 = digitW
+    y1 = -noteSize * 0.95
+    x2 = x1 + sz * 0.8
+    y2 = -noteSize * 0.55
+  }
+  // 箭头（adj119：方向 = 弧线末端切线延伸方向）——只为求包围盒
+  const mx = (x1 + x2) / 2
+  const tx = x2 - mx
+  const ty = y2 - y1
+  const tLen = Math.hypot(tx, ty) || 1
+  const ux = tx / tLen
+  const uy = ty / tLen
+  const al = 3 * s // 箭头长度（弧线末端到尖）
+  const aw = 2 * s // 开度
+  const ay = y2 + uy * al
+  const oy = ux * aw
+  // 二次贝塞尔的 y 落在控制点凸包内（P1 的 y 同 y1），故 y1/y2 已覆盖曲线纵向范围
+  const ys = [y1, y2, ay, y2 + oy, y2 - oy]
+  const top = Math.min(...ys)
+  const h = Math.max(...ys) - top
+  return { dx: digitW, dy: top, w: h * glyphInkAspect(MODIFIER_GLYPHS[sym]), h }
+}
+
+/**
+ * adj479：滑音图形的**右侧额外占宽**（= 数字槽之外那一截墨迹宽）。
+ * 布局端在多声部块内把它计入音符本体宽，让后一个元素让开（单声部留白充裕，行为不变）。
+ */
+export const slideExtraW = (sym: 'shy' | 'xhy', noteSize: number) => slideGlyphInk(sym, noteSize).w
 
 // ============================================================
 // 倚音（adj396：时值规则 + 尾部位置判定；layout / render / playback 共用）

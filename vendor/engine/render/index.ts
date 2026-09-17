@@ -52,7 +52,7 @@ import {
 } from '../layout/spacing'
 import { tempoLabel } from '../parser/parser'
 import { parseInstrumentRef } from '../playback/instruments'
-import { graceAtTail } from '../layout/spaceLayout'
+import { graceAtTail, slideGlyphInk } from '../layout/spaceLayout'
 // adj458：波音/滑音改用**用户提供的矢量修饰符**（生成文件，见 scripts/gen-modifier-glyphs.mjs）
 import { MODIFIER_GLYPHS, glyphMarkup, type ModifierGlyphKey } from './modifierGlyphs'
 
@@ -675,52 +675,14 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
           )
         } else if (sym === 'shy' || sym === 'xhy') {
           // adj458（用户要求）：滑音改用**用户提供的矢量修饰符**（同上），不再手绘弧线 + 箭头。
-          // 位置沿用既有几何：先按旧矢量算出**图形包围盒**（弧线两点 + 箭头尖 + 两翼），
-          // 再按**高度**贴合、左缘**贴在数字右缘**（`x + digitW`）摆放（`fit='height'`）：
-          //   · 滑音图形近似正方，若按旧弧线那个"扁框"等比内缩会明显偏小
-          //     （首版实测：箭头只有数字高度的 1/3，像个小上标）；
-          //   · 按高度贴合后与旧矢量等高；左缘贴数字右缘可避免箭头压到数字本体
-          //     （首版居中摆放时左缘落进数字槽内约 0.8px，视觉上压字）。
-          // 宽度约 7.3×1.09 ≈ 8px，相邻音符间距约 49px，不会挤到。
-          const right = sym === 'shy'
-          const cx0 = x + digitW / 2 // 音符中部
-          const sz = size * 0.25 // 滑音大小 = 音符的 1/4
-          let x1: number
-          let y1: number
-          let x2: number
-          let y2: number
-          if (right) {
-            // adj231：上滑音右上角更高（终点 sz×1.4 向上）
-            x1 = cx0 + 4 * s
-            y1 = y - size * 0.4
-            x2 = x1 + sz
-            y2 = y1 - sz * 1.4
-          } else {
-            // adj231：下滑音更靠近主音符（弧线缩短 0.8×）+ 整体上移
-            x1 = x + digitW
-            y1 = y - size * 0.95
-            x2 = x1 + sz * 0.8
-            y2 = y - size * 0.55
-          }
-          // 箭头（adj119：方向 = 弧线末端切线延伸方向）——只为求包围盒，不再单独绘制
-          const mx = (x1 + x2) / 2
-          const tx = x2 - mx
-          const ty = y2 - y1
-          const tLen = Math.hypot(tx, ty) || 1
-          const ux = tx / tLen // 切线单位方向（末端延伸方向）
-          const uy = ty / tLen
-          const al = 3 * s // 箭头长度（弧线末端到尖）
-          const aw = 2 * s // 开度
-          // 只需箭头带来的**纵向**范围来定符号高度（横向由"左缘贴数字右缘 + 按比例"决定，不再用）
-          const ay = y2 + uy * al
-          const oy = ux * aw
-          // 二次贝塞尔的 y 落在控制点凸包内（P1 的 y 同 y1），故 y1/y2 已覆盖曲线纵向范围
-          const ys = [y1, y2, ay, y2 + oy, y2 - oy]
-          const by = Math.min(...ys)
+          // adj479：摆放几何抽到 `layout/spaceLayout.ts` 的 `slideGlyphInk`（与布局占宽**同源**）——
+          // 渲染端按它的 `dx/dy/w/h` 放置（左缘贴数字右缘、按高度贴合 `fit='height'`），
+          // 布局端按同一份宽度给音符占位，多声部里不再压到相邻数字（用户报「与音符重叠」）。
+          const ink = slideGlyphInk(sym, size)
           parts.push(
             glyphMarkup(
               MODIFIER_GLYPHS[sym as ModifierGlyphKey],
-              { x: x + digitW, y: by, w: 0, h: Math.max(...ys) - by },
+              { x: x + ink.dx, y: y + ink.dy, w: 0, h: ink.h },
               'height',
               '#1b1b1b',
             ),

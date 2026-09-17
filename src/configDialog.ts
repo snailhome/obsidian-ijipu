@@ -2,10 +2,12 @@
  * configDialog.ts — 「⚙ 排版」对话框：改**这一份谱**的设置
  *
  * 与 iJipu 应用的「排版」对话框同构（同一套四组字段，来自 `defs.ts` 的 DEFS），
- * 但保存去向不同：
- *  - **保存到谱面**（主）：用引擎 `writeJpsConfig` 把整份配置写进源码的 `# jps-config` 行
- *    → 该谱自带设置、优先级最高（与 iJipu「保存设置」行为一致，复制到 iJipu 也一模一样）
- *  - **保存为插件默认**（次）：写入插件设置，作为所有未自带设置谱面的全局默认
+ * 但保存去向更多：
+ *  - **保存到谱面**（主）：用引擎 `mergeConfigEdits` + `writeJpsConfig` 把**本次改动**写进源码
+ *    `# jps-config` 行（adj480 起与应用同口径：插件设置 / frontmatter 带来的值不会被顺手烧进谱面）
+ *  - **随谱固化**（分享/存档）：把**与引擎默认不同的全部生效项**写进谱面 ⇒ 这份谱自包含，
+ *    复制给别人（或只复制代码块到 iJipu 应用）显示一致
+ *  - **保存为插件默认**（次）：写入插件设置，作为所有未自带设置谱面的本库全局默认
  *
  * 对话框只改自己这份草稿，取消即丢弃（与 iJipu「关闭未保存则恢复快照」一致）。
  */
@@ -13,7 +15,7 @@ import { App, Modal, Setting } from 'obsidian'
 import { defaultPageConfig, type PageConfig } from '@ijipu/engine'
 import { DEFS, GROUPS, addConfigControl } from './defs'
 
-/** 保存去向：谱面源码（# jps-config，差量） / 谱面源码（全量固化） / 插件设置（全局默认） */
+/** 保存去向：谱面源码（# jps-config，只写本次改动） / 谱面源码（随谱固化 = 非默认项全量） / 插件设置（本库全局默认） */
 export type ConfigTarget = 'score' | 'score-full' | 'plugin'
 
 export interface ConfigDialogOptions {
@@ -49,8 +51,8 @@ export class ConfigDialog extends Modal {
       cls: 'ijipu-config-hint-sub',
       text:
         this.opts.sourceFields.length > 0
-          ? '本谱已自带 # jps-config 行：保存会**原位更新**它（优先级最高，覆盖插件设置与 frontmatter）。'
-          : '「保存到谱面」会在源码末尾写入 # jps-config 行（优先级最高，此后改插件设置不影响这一份谱）。',
+          ? '本谱已自带 # jps-config 行：「保存到谱面」只更新**本次改动**（原位更新，优先级最高）；要把插件设置 / frontmatter 的差异也写进去（分享给他人显示一致）用「随谱固化」。'
+          : '「保存到谱面」只会写入**本次改动**（不把插件设置 / frontmatter 顺手烧进谱面）；要把当前生效的全部非默认项写进谱面（复制给他人也一模一样）用「随谱固化」。',
     })
 
     // 「谱面自带设置 N 项」——原先挂在谱面工具栏上（挤占按钮位置、详情只能悬停看），
@@ -92,8 +94,9 @@ export class ConfigDialog extends Modal {
       this.refresh()
     })
     mk('取消', 'ijipu-btn', () => this.close())
-    mk('固化全部到谱面', 'ijipu-btn', () => {
-      // adj-font（D1）：差量写入是默认（只写与默认不同的字段）；分享/存档需要"到哪都一样"时用全量
+    mk('随谱固化（分享用）', 'ijipu-btn', () => {
+      // adj480：把"与引擎默认不同的全部生效项"写进谱面（差量模式 + 生效配置）——
+      // 只多写真正影响外观的项，既保真又不把与默认相同的项钉进文件。
       const cfg = this.draft
       this.close()
       this.opts.onApply('score-full', cfg)
@@ -104,6 +107,7 @@ export class ConfigDialog extends Modal {
       this.opts.onApply('plugin', cfg)
     })
     mk('保存到谱面', 'ijipu-btn mod-cta', () => {
+      // adj480：只写本次改动（基线 = 打开时的生效配置）
       const cfg = this.draft
       this.close()
       this.opts.onApply('score', cfg)

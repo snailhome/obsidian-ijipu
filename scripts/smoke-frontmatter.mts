@@ -5,7 +5,7 @@
  * 断言来源：用户反馈「在 frontmatter 里设置像 `ijipu_note_size` 好像没生效」——
  * 覆盖键名写法兼容、值类型转换、未识别键提示、优先级四类。
  */
-import { defaultPageConfig, dragDelta, layoutScore, parseJps, writeJpsConfig, SCORE_FONT_OPTIONS, buildPlaySequence } from '@ijipu/engine'
+import { defaultPageConfig, dragDelta, layoutScore, parseJps, writeJpsConfig, mergeConfigEdits, configCarryover, SCORE_FONT_OPTIONS, buildPlaySequence } from '@ijipu/engine'
 import { readFileSync } from 'node:fs'
 import { instrumentColorMap, playheadBaseOf, playheadPosIn, trackKeysOf } from '../src/playhead'
 import { applyFrontmatter, deprecatedKeyHint, frontmatterKey, mergePageConfig, unknownKeyHint, PAGE_CONFIG_FIELDS } from '../src/frontmatter'
@@ -259,6 +259,38 @@ console.log('[10] 设置分层：编辑器偏好不再随谱 / 差量写入 / �
   check(`插件字体候选（${SCORE_FONT_OPTIONS.length} 项）都以通用族兜底`, SCORE_FONT_OPTIONS.every((o) => /sans-serif|serif|monospace|system-ui/.test(o.value)), SCORE_FONT_OPTIONS.map((o) => o.label).join(','))
   const legacyFont = `V: 1.0\nB: t\nD: G\nP: 4/4\nQ: 1 2 3 4 |\n\n# jps-config:{"geci_font":"SimSun"}\n`
   check('旧谱面裸字体名（SimSun）读取时自动补 serif', resolvePageConfig(legacyFont, {}, {}).config.geci_font === 'SimSun, serif', String(resolvePageConfig(legacyFont, {}, {}).config.geci_font))
+}
+
+// ---- 10b. 分享保真：只写本次改动 vs 随谱固化（adj480）----
+console.log('[10b] 分享保真：本地层（插件设置 / frontmatter）不随谱走（adj480）')
+{
+  const src = 'V: 1.0\nB: t\nD: G\nP: 4/4\nQ: 1 2 3 4 |\n'
+  // 本库默认层：插件设置 note_size=15 + 笔记 frontmatter margin_left=66（都不在源码里）
+  const effective = resolvePageConfig(src, { note_size: 15 }, { ijipu_margin_left: 66 }).config
+  // ① 用户只改了 height_quci 一项 → 「保存到谱面」只应写入这一项
+  const next = { ...effective, height_quci: 21 }
+  const edits = mergeConfigEdits(src, effective, next)
+  check('adj480 保存到谱面：只含本次改动（不含插件设置/frontmatter 的项）', Object.keys(edits).join(',') === 'height_quci', Object.keys(edits).join(','))
+  const savedLine = writeJpsConfig(src, edits)
+  check('adj480 保存到谱面后：本库层仍然生效（源码没写就还会兜底）', resolvePageConfig(savedLine, { note_size: 15 }, { ijipu_margin_left: 66 }).config.note_size === 15)
+  // ② 分享保真检查：这份谱有 2 项非默认值没随谱携带
+  const gap = configCarryover(savedLine, resolvePageConfig(savedLine, { note_size: 15 }, { ijipu_margin_left: 66 }).config)
+  check('adj480 configCarryover 列出未随谱携带项（note_size / margin_left）',
+    !gap.ok && gap.missing.length === 2 && gap.missing.some((m) => m.key === 'note_size') && gap.missing.some((m) => m.key === 'margin_left'),
+    JSON.stringify(gap.missing))
+  // ③ 「随谱固化」= 差量模式写**生效配置** → 非默认项全部落盘，且不再写成全量（不出现与默认相同的项）
+  const solidified = writeJpsConfig(src, resolvePageConfig(savedLine, { note_size: 15 }, { ijipu_margin_left: 66 }).config)
+  const solidLine = solidified.split('\n').find((l) => l.startsWith('# jps-config:')) ?? ''
+  const solid = JSON.parse(solidLine.slice('# jps-config:'.length)) as Record<string, unknown>
+  check('adj480 随谱固化：非默认项全部写入（含本库层带来的）',
+    solid.note_size === 15 && solid.margin_left === 66 && solid.height_quci === 21,
+    JSON.stringify(solid))
+  check('adj480 随谱固化：与默认相同的项不写（仍是差量口径，不是全量 ~900 字符）',
+    !('page' in solid) && !('margin_top' in solid) && !('align_min_bars' in solid),
+    Object.keys(solid).join(','))
+  check('adj480 固化后该谱自包含（换到 iJipu 应用也无缺口）',
+    configCarryover(solidified, resolvePageConfig(solidified, {}, {})).ok,
+    JSON.stringify(configCarryover(solidified, resolvePageConfig(solidified, {}, {})).missing))
 }
 
 // ---- 11. 解析问题分级：warning 不阻断渲染（adj394）----

@@ -13,7 +13,7 @@
  * → `renderScoreToSvg`；试听走 `@ijipu/engine` 的 `buildPlaySequence` + SpessaSynth。
  */
 import { Menu, Notice } from 'obsidian'
-import { writeJpsConfig, dragDelta, clamp, type PageConfig } from '@ijipu/engine'
+import { writeJpsConfig, mergeConfigEdits, configCarryover, dragDelta, clamp, type PageConfig } from '@ijipu/engine'
 import { renderScoreFull, playScore, unknownKeyHint, deprecatedKeyHint, type PlayheadSeg } from './render'
 import { instrumentColorMap, playheadBaseOf, playheadPosIn, trackKeysOf, type PlayheadPos } from './playhead'
 import { resolvePageConfig } from './config'
@@ -139,6 +139,18 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
         `来自笔记 frontmatter（只对谱面未自带设置的键生效）：\n${resolved.applied
           .map((a) => `${a.key} = ${String(a.value)}`)
           .join('\n')}`,
+      )
+    }
+    // adj480：**分享保真提示**——本谱有"非默认值来自插件设置/frontmatter、但没随谱携带"的项：
+    // 在 Obsidian 里分享整篇笔记时这些值会跟着走，但只复制代码块给他人（或在 iJipu 应用里打开）就会不一致。
+    const carryover = configCarryover(host.getSource(), resolved.config)
+    if (!carryover.ok) {
+      const badge = toolbar.createSpan({ cls: 'ijipu-fm-badge', text: `未随谱携带 ${carryover.missing.length} 项` })
+      badge.setAttr(
+        'title',
+        `这些设置只在本库生效（来自插件设置 / 笔记 frontmatter），谱面源码里没有写：\n${carryover.missing
+          .map((m) => `${m.key} = ${String(m.value)}`)
+          .join('\n')}\n\n要把这份谱（或只把代码块）复制给别人也显示一致，请在「设置」里点「随谱固化」。`,
       )
     }
 
@@ -291,11 +303,21 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
               void plugin.saveSettings().then(() => new Notice('已保存为插件默认（对未自带设置的谱生效）'))
               return
             }
-            // adj-font（D1）：'score' = 差量写入（只写与默认不同）；'score-full' = 固化全部（分享/存档）
-            const full = target === 'score-full'
-            void Promise.resolve(host.writeSource?.(writeJpsConfig(host.getSource(), next, full ? { mode: 'full' } : undefined)))
+            // adj480：两个去向的口径**与应用对齐**——
+            //  · 'score'（默认）：只写**本次改动**（`mergeConfigEdits`，基线 = 对话框打开时的生效配置）——
+            //    插件设置 / frontmatter 带来的值不会被顺手烧进谱面（否则"改一处、全库统一变"的能力就没了）；
+            //  · 'score-full'（随谱固化）：把**与引擎默认不同的全部生效项**写进谱面（差量模式 + 生效配置
+            //    = 只多写"真正影响外观"的那些项），供"复制给他人也一模一样"。
+            //    此前用的是 mode:'full'（连与默认相同的项也写 ≈ 900 字符），现已收敛为差量口径。
+            const baseline = resolved.config
+            const payload = target === 'score-full' ? next : mergeConfigEdits(host.getSource(), baseline, next)
+            void Promise.resolve(host.writeSource?.(writeJpsConfig(host.getSource(), payload)))
               .then(() => {
-                new Notice(full ? '已把全部设置固化到谱面（# jps-config，全量）' : '已写入谱面 # jps-config（差量：只记录与默认不同的项）')
+                new Notice(
+                  target === 'score-full'
+                    ? '已随谱固化：与默认不同的全部设置都写进了 # jps-config（复制给他人显示一致）'
+                    : '已写入谱面 # jps-config（只记录本次改动、与默认不同的项）',
+                )
                 paint()
               })
               .catch((e) => new Notice(`写入谱面失败：${e instanceof Error ? e.message : String(e)}`, 6000))
@@ -444,7 +466,11 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
         const finalCfg = draft
         draft = null
         if (!finalCfg) return
-        void Promise.resolve(host.writeSource?.(writeJpsConfig(host.getSource(), finalCfg)))
+        // adj480：与应用同口径——只把**这次拖动的那个字段**并入源码层（`mergeConfigEdits`，
+        // 基线 = 按下时的生效配置）。此前直接把"整份生效配置"交给差量写入，于是插件设置 /
+        // frontmatter 带来的每个非默认项都会在拖动时被顺手烧进谱面。
+        const payload = mergeConfigEdits(host.getSource(), base, finalCfg as PageConfig)
+        void Promise.resolve(host.writeSource?.(writeJpsConfig(host.getSource(), payload)))
           .then(() => {
             new Notice(`排版已保存：${line.key} = ${String((finalCfg as unknown as Record<string, unknown>)[line.key])}`, 2500)
             paint()

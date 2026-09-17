@@ -207,7 +207,7 @@ function readConfigLine(raw: string, lineNo: number): { config: Partial<PageConf
         line: lineNo,
         col: 0,
         severity: 'warning',
-        message: `设置行里的 \`${k}\` 值不合法：应为${expect}，当前是 ${preview(v)}——该项已忽略，回退本机公共设置`,
+        message: `设置行里的 \`${k}\` 值不合法：应为${expect}，当前是 ${preview(v)}——该项已忽略，回退下一层设置（宿主默认 / 代码默认值）`,
         hint: CONFIG_LINE_HINT,
       })
       continue
@@ -339,6 +339,37 @@ export function mergeJpsConfig(
 
 /** 写入模式：diff = 只写与默认不同的字段（默认）｜full = 固化全部字段 */
 export type JpsConfigWriteMode = 'diff' | 'full'
+
+/**
+ * adj480：**谱面自包含检查**——列出「生效值与代码默认值不同、但谱面 `# jps-config` 没写（或写得不一样）」的字段。
+ *
+ * 为什么需要：`.jps` 要能"复制给别人也一模一样"，就必须**自包含**——凡影响外观的值都得写在谱面里。
+ * 应用侧已在 adj480 取消「本机页面设置」这一层（生效 = 代码默认 ← 谱面），所以应用里这里恒为 `ok`；
+ * **宿主侧**（如 Obsidian 插件的插件设置 / 笔记 frontmatter）仍是"隐藏默认层"，这份检查把差异显式化，
+ * 供"复制给他人前先随谱固化"的提示使用。
+ *
+ * @param code 源码
+ * @param effective 当前生效配置（宿主默认 + 谱面合并后的结果）
+ */
+export function configCarryover(
+  code: string,
+  effective: PageConfig,
+): { ok: boolean; missing: { key: string; value: unknown }[] } {
+  const embedded = (extractJpsConfig(code) ?? {}) as unknown as Record<string, unknown>
+  const eff = effective as unknown as Record<string, unknown>
+  const def = defaultPageConfig as unknown as Record<string, unknown>
+  const missing: { key: string; value: unknown }[] = []
+  for (const k of CONFIG_FIELDS) {
+    const v = eff[k]
+    if (v === undefined || v === null) continue
+    // 与代码默认值一致 → 不需要随谱携带（对方也用同一个默认值）
+    if (sameValue(v, def[k])) continue
+    // 谱面已写且与本机生效值一致 → 已随谱携带
+    if (k in embedded && sameValue(embedded[k], v)) continue
+    missing.push({ key: k, value: v })
+  }
+  return { ok: missing.length === 0, missing }
+}
 
 /** 深比较（只用于判断"是否与默认值相同"，值都是原始类型/小对象） */
 function sameValue(a: unknown, b: unknown): boolean {

@@ -99,10 +99,14 @@ export function computeRowGuides(
       if (best >= 0) rowMap.get(best)!.lyricYs.push(l.y)
     }
     // 声部序号：yTop 落在哪个多声部块内、按 yTop 升序第几个（块外 = 0）
+    // adj479：判定下限放宽 1.5×字号——声部间距允许负值后，靠后的声部行可能被压到**块顶之上**
+    // （`voiceBlocks.yTop` 是首声部行顶），原区间判定会落空并把该行误判成 0（= 单声部行），
+    // 于是拖那条虚线改的就是行距而不是声部间距。放宽量取 1.5×字号：默认行距下靠后声部
+    // 不会越出，只有把行距也调到很小、又用负声部间距压缩时才会用到这条兜底。
     const voiceIdxOf = (yTop: number): number => {
       for (const [by, bb] of blocks) {
-        if (yTop >= by - 0.5 && yTop < bb - 0.5) {
-          const inBlock = tops.filter((t) => t >= by - 0.5 && t < bb - 0.5).sort((a, b) => a - b)
+        if (yTop >= by - noteSize * 1.5 && yTop < bb - 0.5) {
+          const inBlock = tops.filter((t) => t >= by - noteSize * 1.5 && t < bb - 0.5).sort((a, b) => a - b)
           return Math.max(0, inBlock.indexOf(yTop))
         }
       }
@@ -226,7 +230,14 @@ export const GUIDE_LIMITS_EX: Record<GuideKeyEx, [number, number]> = {
   body_margin_top: [4, 400], // 与描述头下端线最小间距 4px（adj30）
   height_quci: [0, 120],
   height_cici: [0, 120],
-  height_shengbu: [0, 300], // 声部行间距（adj72）
+  // adj479（用户报）：声部行间距**允许负值**（压缩声部之间过大的空白）——
+  // 此前下限写死 0，虚线往上拖会被钳回 0，用户报「无法往负数的方向调」。
+  // 下限 −30 的依据：该间距是「声部行高之外的额外间距」，行高里已经含了行尾间距
+  // （无歌词 = `height_ciqu` 20 / 有歌词 = `height_ciqu_lyric` 10）与上一行歌词的下伸 ≈2，
+  // 故 −30 ≈ 默认配置下「上下两行的内容刚好不压字」的极限（实测：有歌词时歌词行与下一声部
+  // 数字仍有 ≈7px 净距；无歌词时两行数字刚好相切）。设置面板的输入框不限范围，
+  // 需要更极端的压缩可在设置里直接填（例如 −50，此时两行会重叠）。
+  height_shengbu: [-30, 300],
   height_ciqu_lyric: [-80, 120], // 曲部与上一行词部间距（adj79；adj105 允许负值，用户需进一步压缩行距）
   segmentRowGap_bz: [10, 80],  // adj428：bz 段上下层间距（与 SEGMENT_ROW_GAP_DEFAULT 范围一致）
   segmentRowGap_dsb: [10, 80], // adj428：dsb 段上下层间距

@@ -20,7 +20,7 @@ export { buildPlaySequence, inferBpm, countScoreInstrumentSwitches, createBacken
 export { codePosToNoteId, noteIdToCodePos, parseNoteId, buildIndexToPage } from './cursorMap'
 export { computeRowTops, computeRowGuides, dragDelta, clamp, metaAreaH, GUIDE_ITEMS, GUIDE_LIMITS, GUIDE_LIMITS_EX } from './layout/guides'
 export { metaAnchorOf, metaAnchorPt, clampMetaPos } from './layout/metaAnchors'
-export { splitNoteDur, digitSlotW, dotBodyW, augBodyW, slideBodyW, bracketBodyW, noteBodyW, nonDurGap, accidentalBodyW, hxBodyW } from './layout/spaceLayout'
+export { splitNoteDur, digitSlotW, dotBodyW, augBodyW, slideBodyW, bracketBodyW, noteBodyW, nonDurGap, accidentalBodyW, hxBodyW, slideGlyphInk, slideExtraW } from './layout/spaceLayout'
 export type { NoteDurSplit } from './layout/spaceLayout'
 // adj428：临时叠加段（{bz … } / {dsb … }）上下两行纵向间距的默认常量；UI 显示缺省值用
 export { SEGMENT_ROW_GAP_DEFAULT } from './layout/spacing'
@@ -29,7 +29,7 @@ export { computeSegments, mainSpans, mainSpansInRange, tokensBeats, segmentBarBe
 export type { SegmentInfo, MainSpan } from './layout/segments'
 // adj454：`mergeConfigEdits` = 写回时只并入「用户本次改动」（缓存来源的值不进谱面）；
 // `inspectJpsConfig`/`inspectJpsConfigLine` = 设置行的类型校验告警（解析器已并入 ParseResult.errors）
-export { extractJpsConfig, mergeJpsConfig, writeJpsConfig, mergeConfigEdits, inspectJpsConfig, inspectJpsConfigLine, extractLegacyEditorPrefs, JPS_CONFIG_PREFIX, roundPxIntegers } from './settings'
+export { extractJpsConfig, mergeJpsConfig, writeJpsConfig, mergeConfigEdits, configCarryover, inspectJpsConfig, inspectJpsConfigLine, extractLegacyEditorPrefs, JPS_CONFIG_PREFIX, roundPxIntegers } from './settings'
 export type { JpsConfigWriteMode, JpsConfigIssue } from './settings'
 // 字体策略（跨机尽量有 / 适合简谱 / 保证有可用字体）+ 分层归属：
 // 编辑器偏好属「用户个性」（L1，不进谱面），谱面字体属「谱面级」（L2）
