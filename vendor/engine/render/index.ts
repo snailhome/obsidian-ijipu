@@ -1130,6 +1130,11 @@ function renderVoltas(
 // 连音线绘制（M7c）
 // ============================================================
 
+/** adj459：测试用导出——直接调用 renderSlur，便于在不依赖布局的情况下核对路径与弧线半径 */
+export function renderSlurForTest(s: PlacedSlur, noteSize = 18): string {
+  return renderSlur(s, noteSize)
+}
+
 function renderSlur(s: PlacedSlur, noteSize = 18): string {
   const { x1, x2, y } = s
   // 平均连音组标注（adj43）：仅 (y...) 组在弧线/横线正中画数字（不透明背景）；
@@ -1153,9 +1158,15 @@ function renderSlur(s: PlacedSlur, noteSize = 18): string {
     // adj148：平顶线高度 leg 由 7 减小到 5（更贴音符）
     const leg = 5 - (s.depth > 0 ? 1 : 0)
     const barY = y - leg
-    // adj147：两侧弧线 = 标准 1/4 圆弧（SVG A 命令），半径 = 平顶线高度 leg，
-    // 从音符竖直上弯、平滑转水平接横线（真正的圆弧，非贝塞尔近似）
-    const R = Math.min(leg, Math.abs(x2 - x1) / 2 - 1)
+    // adj147：弧线 = 标准 1/4 圆弧（SVG A 命令），半径 = 平顶线高度 leg，
+    // 从音符竖直上弯、平滑转水平接横线（真正的圆弧，非贝塞尔近似）。
+    // adj459：弧线半径**统一**为 leg，与连音线总长无关——
+    //   完整连音线（无 half）：两端各占一段，R 受半段约束（span<12 时收缩，避免两弧重叠）
+    //   半条连音线（half=l/r，仅一端有弧）：R 占满整段 span-1，不再随总长收缩
+    //   → 无论跨行连音线跨多远，端点弧线都是同一个标准半径，观感统一
+    const R = s.half
+      ? Math.min(leg, Math.abs(x2 - x1) - 1)
+      : Math.min(leg, Math.abs(x2 - x1) / 2 - 1)
     if (s.half === 'l') {
       // 左半部：1/4 圆弧（音符竖直上弯转水平）+ 横线平直延伸到行末（右侧开口）
       return (

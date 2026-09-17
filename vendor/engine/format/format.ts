@@ -16,7 +16,7 @@ export function formatJps(source: string): string {
 export function formatLine(raw: string): string {
   const trimmed = raw.trim()
   if (trimmed === '') return raw
-  // adj293：描述头属性与内容之间保留且只保留一个空格（Y:钢琴 / Y:  钢琴 → Y: 钢琴）
+  // adj293：描述头属性与内容之间保留且只保留一个空格
   const headerM = /^((?:V|B|Z|D|P|J|Y|S)\s*:)\s*(.*)$/.exec(trimmed)
   if (headerM) return `${headerM[1]} ${headerM[2]}`
   if (!/^Q(\d*(?:"[^"]*")?\s*:)/.test(trimmed)) return raw
@@ -24,8 +24,9 @@ export function formatLine(raw: string): string {
   const out: string[] = []
   let inQuote = false
   let inVolta = false
+  // adj460：连音线 "(" 后的 +/- 抬降量计数区间——与后续 augment 拆开（拆了语义就变了）
+  let inSlurPrefix = false
   let lastNote = ''
-  let last = ''
 
   for (let x = 0; x < trimmed.length; x++) {
     const note = trimmed[x]
@@ -52,29 +53,70 @@ export function formatLine(raw: string): string {
         continue
       }
     }
-    // adj337：@...@ 乐器指定包裹段——整段原样保留（不补空格/不重排），确保 () 等特殊字符不被拆分
+    // adj337：@...@ 乐器指定包裹段——整段原样保留
     if (note === '@') {
       const endAt = trimmed.indexOf('@', x + 1)
       if (endAt !== -1 && endAt > x + 1) {
         out.push(trimmed.slice(x, endAt + 1))
         lastNote = ''
-        last = trimmed[endAt]
         x = endAt
         continue
       }
       out.push(note)
       continue
     }
-    // 普通区空白压缩为单空格（adj23：块间恰好一个空格；引号/跳房子内原样）
+    // 普通区空白压缩为单空格
     if (note === ' ') {
       if (out[out.length - 1] !== ' ') out.push(' ')
       continue
     }
-    // 补空格：仅当输出尾部还没有空格时补一个（adj25：避免 | ( : 等补空格造成双空格）
+
+    // adj460：连音线 "("——进入抬降量计数区间（直到第一个非 +/-/y 字符退出）
+    if (note === '(') {
+      if (upNote !== '(' && out[out.length - 1] !== ' ') out.push(' ') // 等价原 ensureSpace：与前一元素间补一个空格（已有则不补）
+      inSlurPrefix = true
+      out.push('(')
+      continue
+    }
+    // adj460：在抬降量计数区间内——+/- 与 y 原样吞下（不补空、不拆号；都属于同一连音线）。
+    // 不 break 也不补空：原 tokenizer 的 slur 前缀循环对 +/-/y 也不跳空格，我们照办以保持语义一致。
+    if (inSlurPrefix && (note === '+' || note === '-' || note === 'y' || note === 'Y')) {
+      out.push(note)
+      continue
+    }
+    // 离开抬降量计数：第一个非 +/-/y 字符（音符、空格、小节线、) 等）按正常流程处理；
+    // 落到下方 else 被原样推入。注意我们没有 reset 上一个符号（无 lastSign 变量），因为下游分支
+    // 只看 `out[out.length-1]` 而不是记号——而 `+`/`-` 变号拆开的判断正是用 prevOut。
+    if (inSlurPrefix) {
+      inSlurPrefix = false
+      // fall through 到下方的 if-else
+    }
+
+    // adj460：自由 +/-（augment 与元素间 +/-）——变号时断开为 "++++ ---"，
+    // 让 + 归前元素的抬升、- 归后元素；同号续行不拆。
+    // 判定仅看 prevOut：紧跟前一个 +/- 且符号相反 → 插一个空格。
+    //   · `5"注释"++++---` → remark 的 +/- 全部消耗后到 `---` 时 prevOut=`+`、当前 `-`、相反 → 插空
+    //   · `5++++---`      → 5 后 + 起步（prevOut=`5`、非 +/-）不插空；+++ 同号续；- 与 + 相反插空
+    //   · `(+---`         → 上一分支（inSlurPrefix）原样吞，不插空——slur 抬降量是一个语义单元
+    //   · `<++---`        → `<` 后 + 起步不插空；++ 续；- 变号插空
+    //   · `]++++---`      → `]` 后 + 起步（prevOut=`]`，非 +/-）不插空；但 `]++` 是跳房子抬升量，不该拆——
+    //     实际上 prevOut=`]`，不是 `+`/`-`，不触发本分支（条件要求 prevOut 是 `+`/`-`），所以不拆。
+    //     真正"会拆"的危险点：紧接 `]` 的 +/- 是跳房子修饰，下一字符若是不同号就拆——但跳房子
+    //     实际只有 +（不与 - 混用，adj394），所以现实里不会触发。保险起见用 `prevOut` 而不是看 lastSign。
+    if (note === '+' || note === '-') {
+      const prevOut = out[out.length - 1] ?? ''
+      if ((prevOut === '+' && note === '-') || (prevOut === '-' && note === '+')) {
+        if (out[out.length - 1] !== ' ') out.push(' ')
+      }
+      out.push(note)
+      continue
+    }
+
+    // 补空格
     const ensureSpace = () => {
       if (out[out.length - 1] !== ' ') out.push(' ')
     }
-    // adj165：数字前补空格——排除 Q/C 行头、空格、(、以及 (y 连音组（仅 upNote='y' 且其前为 '('）
+    // adj165：数字前补空格——排除 Q/C 行头、空格、(、以及 (y 连音组
     // 注：&sby/&cy 等修饰符也以 y 结尾，但修饰符后紧跟的音符必须分隔（1&sby2 → 1&sby 2）
     const isTupletY = upNote === 'y' && trimmed[x - 2] === '('
     const noSpaceBefore =
@@ -93,9 +135,6 @@ export function formatLine(raw: string): string {
     if ('0123456789'.includes(note) && !noSpaceBefore) {
       ensureSpace()
       out.push(note)
-    } else if (note === '(' && upNote !== '(') {
-      ensureSpace()
-      out.push(note)
     } else if (note === '|' && upNote !== '|' && upNote !== ':') {
       ensureSpace()
       out.push(note)
@@ -109,8 +148,6 @@ export function formatLine(raw: string): string {
       out.push(note)
     }
     if ('0123456789-|'.includes(note)) lastNote = note
-    last = note
   }
-  void last
   return out.join('')
 }
