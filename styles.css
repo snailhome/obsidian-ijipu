@@ -72,6 +72,18 @@
   flex: 0 0 auto;
   stroke: currentColor;
 }
+/* adj458：按钮图标改为「PNG + CSS mask」——只取 PNG 的 alpha 通道当形状，颜色 = 当前文字色。
+   于是亮/暗主题、悬停、以及选中态（`.ijipu-guides-btn.is-active` 把 color 换成 --text-on-accent）
+   全部自动跟随，不需要为深色主题另备一套图，也不会"黑线稿铺在深色底上隐形"。
+   手法与应用顶栏的 `.tool-icon` 一致（`ijipu/src/index.css`）。
+   注：尺寸与 data URI 由 icons.ts 内联设置（`width/height` + `--ijipu-icon`）。 */
+.ijipu-tool-icon {
+  display: block;
+  flex: 0 0 auto;
+  background-color: currentColor;
+  -webkit-mask: var(--ijipu-icon) center / contain no-repeat;
+  mask: var(--ijipu-icon) center / contain no-repeat;
+}
 .ijipu-btn-label {
   white-space: nowrap;
 }

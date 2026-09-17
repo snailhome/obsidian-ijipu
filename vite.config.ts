@@ -25,6 +25,11 @@ export default defineConfig({
     // 时清空源文件目录（Vite 8 已对 outDir=根目录加防御性警告）。
     outDir: '.',
     emptyOutDir: false,
+    // adj458：图标 PNG（vendor/icons/*.png）必须**内联**成 data URI —— 发布物只有
+    // main.js / manifest.json / styles.css 三个文件，不能再带一个图标目录（详见 src/assets.d.ts）。
+    // 现有图标都 < 1KB，Vite 默认阈值 4KB 本已覆盖；这里显式抬高到 64KB 把意图钉死：
+    // 将来万一换用更大的图标，也不会被悄悄拆成独立文件、发布后图标全空。
+    assetsInlineLimit: 65536,
     sourcemap: true,
     minify: false,
     rollupOptions: {

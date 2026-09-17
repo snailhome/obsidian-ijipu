@@ -53,6 +53,8 @@ import {
 import { tempoLabel } from '../parser/parser'
 import { parseInstrumentRef } from '../playback/instruments'
 import { graceAtTail } from '../layout/spaceLayout'
+// adj458：波音/滑音改用**用户提供的矢量修饰符**（生成文件，见 scripts/gen-modifier-glyphs.mjs）
+import { MODIFIER_GLYPHS, glyphMarkup, type ModifierGlyphKey } from './modifierGlyphs'
 
 // ============================================================
 // 工具
@@ -645,55 +647,41 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
             `<path d="M ${r1n(cx - 3.2 * s)} ${r1n(symY - 4.4 * s)} L ${r1n(cx + 3.2 * s)} ${r1n(symY - 4.4 * s)} L ${r1n(cx)} ${r1n(symY + 1.6 * s)} Z" fill="#1b1b1b"/>`,
           )
         } else if (sym === 'yc') {
-          // 延长记号：点 + 半圆弧（弧顶在上、开口朝下；adj113 下移；adj124 尺寸 ×0.8）
-          const cy0 = symY - 1.5 * s // 点中心
-          parts.push(`<circle cx="${r1n(cx)}" cy="${r1n(cy0)}" r="${r1n(1.44 * s)}" fill="#1b1b1b"/>`)
+          // adj458（用户要求）：延长记号改用**用户提供的矢量图形**（同上），不再手绘"点 + 半圆弧"。
+          // 摆放沿用旧几何：旧图形墨迹 = 宽 9.6s（cx ± 4.8s）、纵向 cy0-2.8s ~ cy0+1.6s
+          // （cy0 = symY - 1.5s，adj113 下移、adj124 尺寸 ×0.8）⇒ 墨迹中心 = symY - 2.1s。
+          // 高度交给图形自身比例（`fit='width'`）：新图宽高比 1.89，比旧手绘的 2.18 略高一点。
+          // 层顶更新仍走下方 `symY - 8.7s` 的既有分支（留有富余，不受新图高度影响）。
           parts.push(
-            `<path d="M ${r1n(cx - 4.8 * s)} ${r1n(cy0 + 1.6 * s)} Q ${r1n(cx)} ${r1n(cy0 - 7.2 * s)} ${r1n(cx + 4.8 * s)} ${r1n(cy0 + 1.6 * s)}" fill="none" stroke="#1b1b1b" stroke-width="${r1n(1.2 * s)}"/>`,
+            glyphMarkup(MODIFIER_GLYPHS.yc, { x: cx - 4.8 * s, y: symY - 2.1 * s, w: 9.6 * s, h: 0 }, 'width', '#1b1b1b'),
           )
         } else if (sym === 'sby' || sym === 'xby' || sym === 'sby+' || sym === 'xby+') {
-          // 波音：锯齿状波浪线（adj113 两齿半/三齿半；adj114：斜上细线、斜下粗线）
-          // adj115：锯齿中心与下波音竖线垂直居中；adj117：横向压缩 75%
-          // adj118：斜上细线端点与斜下粗线端点精确贴紧（峰/谷同点相接，无交叠）
-          // adj121：高度 120%（峰谷 ±1.5s → ±1.8s）；adj122：整体下移 1s
-          // adj123：宽度——上下波音 90%、加长上下波音 75%；均以数字槽中心水平居中（cx±half）
-          // adj125：波音位置再下移 1s（wy symY-3s → symY-2s）
-          const teeth = sym.endsWith('+') ? 3.5 : 2.5
+          // adj458（用户要求）：波音改用**用户提供的矢量修饰符**（`./modifierGlyphs`，由
+          // `scripts/gen-modifier-glyphs.mjs` 从 `public/icons/*.svg` 生成），不再手绘锯齿线。
+          //   · 横向占位沿用此前逐轮调好的值（2.5 齿 = 9s、3.5 齿 = 13.5s），以数字槽中心 cx 居中；
+          //   · 高度交给图形自身比例（`fit='width'`）——「复下波音」中带竖线，天生比「复上波音」高；
+          //   · 垂直中心沿用 adj125 定下的 wy（= symY - 2s）。
+          // 旧矢量实现（斜上细线 0.7 / 斜下粗线 1.8、adj113~adj125）随之移除；
+          // 需要退回旧画法时，从 git 历史取回该分支即可。
           const half = (sym.endsWith('+') ? 9 * s : 5 * s) * (sym.endsWith('+') ? 0.75 : 0.9)
           const wy = symY - 2 * s
-          const tw = (2 * half) / teeth // 齿宽
-          const ampV = 1.8 * s // 峰/谷相对中线高度（1.5s × 1.2）
-          const upLines: string[] = [] // 斜上（谷→峰）：细线
-          const downLines: string[] = [] // 斜下（峰→谷）：粗线
-          for (let t = 0; t < Math.floor(teeth); t++) {
-            const x0 = cx - half + t * tw
-            const peak = x0 + tw / 2
-            upLines.push(
-              `<line x1="${r1n(x0)}" y1="${r1n(wy + ampV)}" x2="${r1n(peak)}" y2="${r1n(wy - ampV)}" stroke="#1b1b1b" stroke-width="0.7"/>`,
-            )
-            downLines.push(
-              `<line x1="${r1n(peak)}" y1="${r1n(wy - ampV)}" x2="${r1n(x0 + tw)}" y2="${r1n(wy + ampV)}" stroke="#1b1b1b" stroke-width="1.8"/>`,
-            )
-          }
-          if (teeth % 1 !== 0) {
-            const x0 = cx - half + Math.floor(teeth) * tw
-            const peak = x0 + tw / 2
-            upLines.push(
-              `<line x1="${r1n(x0)}" y1="${r1n(wy + ampV)}" x2="${r1n(peak)}" y2="${r1n(wy - ampV)}" stroke="#1b1b1b" stroke-width="0.7"/>`,
-            )
-          }
-          parts.push(...upLines, ...downLines)
-          if (sym.startsWith('x')) {
-            // 下波音：中间细竖线 |（细线，adj116）
-            parts.push(
-              `<line x1="${r1n(cx)}" y1="${r1n(wy - 4 * s)}" x2="${r1n(cx)}" y2="${r1n(wy + 4 * s)}" stroke="#1b1b1b" stroke-width="0.8"/>`,
-            )
-          }
+          parts.push(
+            glyphMarkup(
+              MODIFIER_GLYPHS[sym as ModifierGlyphKey],
+              { x: cx - half, y: wy, w: 2 * half, h: 0 },
+              'width',
+              '#1b1b1b',
+            ),
+          )
         } else if (sym === 'shy' || sym === 'xhy') {
-          // 滑音：细线弧线 + 末端线形 > 箭头（adj119：箭头方向 = 弧线末端切线延伸方向）
-          // 上滑音：音符中部右侧起，弧线向右再弧线向上（adj119）
-          // 下滑音：音符右上角起笔，弧线向右转斜向下（adj127；终点在音符中部高度）
-          // adj121：弧线起点与音符间距加大；> 箭头从弧线末端直接张开（连接无间隙）
+          // adj458（用户要求）：滑音改用**用户提供的矢量修饰符**（同上），不再手绘弧线 + 箭头。
+          // 位置沿用既有几何：先按旧矢量算出**图形包围盒**（弧线两点 + 箭头尖 + 两翼），
+          // 再按**高度**贴合、左缘**贴在数字右缘**（`x + digitW`）摆放（`fit='height'`）：
+          //   · 滑音图形近似正方，若按旧弧线那个"扁框"等比内缩会明显偏小
+          //     （首版实测：箭头只有数字高度的 1/3，像个小上标）；
+          //   · 按高度贴合后与旧矢量等高；左缘贴数字右缘可避免箭头压到数字本体
+          //     （首版居中摆放时左缘落进数字槽内约 0.8px，视觉上压字）。
+          // 宽度约 7.3×1.09 ≈ 8px，相邻音符间距约 49px，不会挤到。
           const right = sym === 'shy'
           const cx0 = x + digitW / 2 // 音符中部
           const sz = size * 0.25 // 滑音大小 = 音符的 1/4
@@ -702,37 +690,40 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
           let x2: number
           let y2: number
           if (right) {
-            // adj231：上滑音右上角更高（终点 sz×1.4 向上，原 ×1.0）
-            x1 = cx0 + 4 * s // 中部右侧起笔（间距加大）
-            y1 = y - size * 0.4 // 音符中部
+            // adj231：上滑音右上角更高（终点 sz×1.4 向上）
+            x1 = cx0 + 4 * s
+            y1 = y - size * 0.4
             x2 = x1 + sz
-            y2 = y1 - sz * 1.4 // 终点更高
+            y2 = y1 - sz * 1.4
           } else {
-            // adj231：下滑音更靠近主音符（弧线缩短 0.8×）+ 整体上移（起点 0.95、
-            // 终点 0.55，原 0.8/0.4）
-            x1 = x + digitW // 音符右上角（数字右缘）
-            y1 = y - size * 0.95 // 数字顶部上方（上移）
-            x2 = x1 + sz * 0.8 // 更短，更贴主音符
-            y2 = y - size * 0.55 // 终点上移
+            // adj231：下滑音更靠近主音符（弧线缩短 0.8×）+ 整体上移
+            x1 = x + digitW
+            y1 = y - size * 0.95
+            x2 = x1 + sz * 0.8
+            y2 = y - size * 0.55
           }
-          const mx = (x1 + x2) / 2 // 控制点水平（先向右弯再向上/下）
-          parts.push(
-            `<path d="M ${r1n(x1)} ${r1n(y1)} Q ${r1n(mx)} ${r1n(y1)} ${r1n(x2)} ${r1n(y2)}" fill="none" stroke="#1b1b1b" stroke-width="1"/>`,
-          )
-          // > 箭头：两翼从弧线末端张开到尖（尖沿切线延伸方向，与弧线连接）
+          // 箭头（adj119：方向 = 弧线末端切线延伸方向）——只为求包围盒，不再单独绘制
+          const mx = (x1 + x2) / 2
           const tx = x2 - mx
           const ty = y2 - y1
           const tLen = Math.hypot(tx, ty) || 1
           const ux = tx / tLen // 切线单位方向（末端延伸方向）
           const uy = ty / tLen
           const al = 3 * s // 箭头长度（弧线末端到尖）
-          const aw = 2 * s // 开度（两翼到中线距离）
-          const ax = x2 + ux * al
+          const aw = 2 * s // 开度
+          // 只需箭头带来的**纵向**范围来定符号高度（横向由"左缘贴数字右缘 + 按比例"决定，不再用）
           const ay = y2 + uy * al
-          const ox = -uy * aw
           const oy = ux * aw
+          // 二次贝塞尔的 y 落在控制点凸包内（P1 的 y 同 y1），故 y1/y2 已覆盖曲线纵向范围
+          const ys = [y1, y2, ay, y2 + oy, y2 - oy]
+          const by = Math.min(...ys)
           parts.push(
-            `<path d="M ${r1n(x2 + ox)} ${r1n(y2 + oy)} L ${r1n(ax)} ${r1n(ay)} L ${r1n(x2 - ox)} ${r1n(y2 - oy)}" fill="none" stroke="#1b1b1b" stroke-width="1"/>`,
+            glyphMarkup(
+              MODIFIER_GLYPHS[sym as ModifierGlyphKey],
+              { x: x + digitW, y: by, w: 0, h: Math.max(...ys) - by },
+              'height',
+              '#1b1b1b',
+            ),
           )
         } else if (ABOVE_GLYPH[sym]) {
           // adj334：吐音/打音/叠音——音符正上方居中显示一个粗体单字（T / 扌 / 又）。
