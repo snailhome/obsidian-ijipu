@@ -20,7 +20,6 @@ import type {
 } from '../types'
 import { tokenizeMusicLine } from './tokenizer'
 import { tokenDuration } from '../duration'
-import { graceNoteBeats } from '../layout/spaceLayout'
 import { errAt } from './errors'
 // adj454：设置行（`# jps-config:`）的语法校验（顶格 / JSON / 键值类型）
 import { inspectJpsConfigLine, JPS_CONFIG_PREFIX } from '../settings'
@@ -301,24 +300,10 @@ export function parseJps(source: string): ParseResult {
         pos,
         raw,
       }
-      // adj396：倚音**占用主音符时值**——Σ倚音实际时值不得超过主音符总时值
-      // （超出时主音符被钳制为 0 拍、完全不发声，属于书写错误而非演奏取舍）
-      for (const t of tokens) {
-        if (t.kind !== 'note' || !t.gracenotes || t.gracenotes.notes.length === 0) continue
-        const graceSum = t.gracenotes.notes.reduce((a, g) => a + graceNoteBeats(g.diminishCount), 0)
-        const total = tokenDuration(t)
-        if (graceSum > total + 1e-9) {
-          errors.push(
-            errAt(
-              `倚音总时值（${graceSum.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')} 拍）超过主音符时值（${total} 拍）——主音符将没有发声时值`,
-              pos.line,
-              prefixLen + t.pos,
-              'warning',
-              '倚音实际时值 = 括号内减时线条数再减一半（`2[3]` = 1/2 拍、`2[3/]` = 1/4 拍）；总和不得超过主音符时值，请减少倚音个数（`3[3/2/]`）或给主音符增时（`3-[h5/]`）',
-            ),
-          )
-        }
-      }
+      // adj489：倚音**占用主音符的时值**，必要时向邻居借（不再死板要求 Σ ≤ principal）：
+      // - 短倚音（带减时线）组时值 = `1 / 2^(减时线条数 + 1)`，组内均分；主音符不够时**从前/后音符借**。
+      // - 长倚音（无减时线）组时值 = 主音符总时值 / 2，组内均分；主音符不够时同样向前/后借。
+      // 旧版的「`graceSum > total`」告警已删除：旧规则下短倚音是「Σ 各自时值」会偏紧，多倚音常误报。
       lines.push(ml)
       groups.push({ music: ml, lyrics: [], startIndex: lines.length - 1 })
       lastMusicIndex = lines.length - 1

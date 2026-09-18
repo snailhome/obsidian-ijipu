@@ -666,6 +666,22 @@ export function tokenizeMusicLine(
         last.gracenotes = { after, notes }
         last.raw += rawAt(i, k)
         lastBlockEnd = k // 音符块结束延展到倚音括号后
+        // adj502：**括号之后**仍可继续写块内修饰（`3[2/]&sby`）——此前这里直接 `continue`，
+        // 于是括号后的 `&sby` 被主循环当成独立 decoration，**不挂到音符的 `symbols` 上**
+        // （演奏端按 `symbols` 判波音就会漏掉它）。这里只续接"依附音符"的 `&` 编码；
+        // `&zkh/&ykh/&hx` 仍按既有规则独立化（break 留给主循环处理）。
+        while (k < n && content[k] === '&') {
+          let ek = k + 1
+          while (ek < n && /[a-zA-Z]/.test(content[ek])) ek++
+          if (content[ek] === '+') ek++
+          if (ek <= k + 1) break
+          const code = content.slice(k + 1, ek)
+          if (code === 'zkh' || code === 'ykh' || code === 'hx') break
+          last.symbols.push(code)
+          last.raw += content.slice(k, ek)
+          k = ek
+          lastBlockEnd = k
+        }
         i = k
         continue
       }

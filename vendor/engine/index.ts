@@ -31,6 +31,9 @@ export type { SegmentInfo, MainSpan } from './layout/segments'
 // `inspectJpsConfig`/`inspectJpsConfigLine` = 设置行的类型校验告警（解析器已并入 ParseResult.errors）
 export { extractJpsConfig, mergeJpsConfig, writeJpsConfig, mergeConfigEdits, configCarryover, inspectJpsConfig, inspectJpsConfigLine, extractLegacyEditorPrefs, JPS_CONFIG_PREFIX, roundPxIntegers } from './settings'
 export type { JpsConfigWriteMode, JpsConfigIssue } from './settings'
+// adj502：波音（mordent）演奏时值——纯函数，宿主（Obsidian 插件）与 smoke 都要用同一套口径
+export { MORDENT_SYMBOLS, ORNAMENT_SHORT_MIN_MS, ORNAMENT_SHORT_MAX_MS, ORNAMENT_SHORT_RATIO, mordentOf, mordentShortMs, neighborDegree, mordentPlan } from './playback/ornaments'
+export type { MordentKind, OrnamentStep, MordentPlan, PitchDegree } from './playback/ornaments'
 // 字体策略（跨机尽量有 / 适合简谱 / 保证有可用字体）+ 分层归属：
 // 编辑器偏好属「用户个性」（L1，不进谱面），谱面字体属「谱面级」（L2）
 export {

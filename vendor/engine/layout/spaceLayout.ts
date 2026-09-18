@@ -187,23 +187,69 @@ export function slideGlyphInk(sym: 'shy' | 'xhy', noteSize: number): { dx: numbe
 export const slideExtraW = (sym: 'shy' | 'xhy', noteSize: number) => slideGlyphInk(sym, noteSize).w
 
 // ============================================================
-// 倚音（adj396：时值规则 + 尾部位置判定；layout / render / playback 共用）
+// 倚音（adj396：时值规则 + 尾部位置判定；layout / render / playback 共用；
+//           adj489：用户细化时值规则——短倚音按减时线数**组时值** + 均分 + 必要时借时间）
 // ============================================================
 
 /**
- * 单个倚音音符的**实际时值**（拍，adj396 用户规范）：
+ * 单个倚音音符的**实际时值**（拍，adj396 用户规范，adj489 保留作单倚音形态下的兼容名）：
  * 括号内写 n 条减时线 → 实际时值 = 1/2^(n+1) 拍（**比书写时值再减一半**）。
  * 例：`2[3]` → 倚音 1/2 拍；`2[3/]` → 1/4 拍（= 实音符的 `3//`）；`2[3//]` → 1/8 拍。
- * 与渲染规则自洽：倚音减时线条数 = 书写条数 + 1。
+ *
+ * 多倚音情形请改用 `graceGroupBeats(token, principalOrig)` —— 组时值 + 组内均分；
+ * `graceNoteBeats` 仅在「组里只有一个倚音」时与组时值等价。
  */
 export function graceNoteBeats(diminishCount: number): number {
   return 1 / Math.pow(2, diminishCount + 1)
 }
 
+/**
+ * 倚音组的**总时值**（拍，adj489；adj505/adj507 按用户规范修订）：
+ * - 短倚音（带减时线）：**主音符因子 × 倚音因子**（adj507，用户规范）——倚音长短要跟着主音符走
+ *   （同样写 `[2/]`，主音符 1 拍还是 1/2 拍，听感完全不同）：
+ *   · 主音符因子：**不带**减时线 `1`、**有**减时线 `1/2`（只看有无，与条数无关）；
+ *   · 倚音因子：1 条 `1/4`、2 条 `1/8`、≥3 条 `1/16`（封顶 1/16）。
+ *   例：`3[2/]` = **1/4 拍**；`3/[2/]` = **1/8 拍**；`3[2//]` = 1/8 拍；`3/[2//]` = 1/16 拍；
+ *   `3[2///]` = 1/16 拍（封顶）。组内所有倚音**均分**组时值；减时线数不一致时取**最大值**（保守）。
+ * - 长倚音（无减时线）：占**主音符本体**（数字 + 附点，**不含增时线**）的
+ *   **带附点 → 2/3、不带附点 → 1/2**；组内均分（多倚音共享这一整份）。
+ *   adj505（用户规范）：① 只有带 `.` 才用 2/3；② **增时线不计入**——有增时线也只按"数字 + 附点"算。
+ *   例：`3[2]`（1 拍）→ 1/2 拍；`3.[2]`（1.5 拍）→ 2/3 × 1.5 = **1 拍**（主音余 1/2 拍）；
+ *       `3 -[2]`（2 拍）→ 1/2 × **本体 1 拍** = **1/2 拍**（增时线那 1 拍不计）；
+ *       `3. -[2]` → 2/3 × 本体 1.5 = **1 拍**；`3[32]` 共享上述整份、组内均分。
+ */
+export function graceGroupBeats(t: GraceShape, principalOrig: number): number {
+  if (!t.gracenotes || t.gracenotes.notes.length === 0) return 0
+  const beamCount = t.gracenotes.notes.reduce((m, n) => Math.max(m, n.diminishCount), 0)
+  // adj507（用户规范）：**短倚音组时值 = 主音符因子 × 倚音因子**——倚音长短要跟着主音符走
+  // （同样写 `[2/]`，主音符是 1 拍还是 1/2 拍，听感完全不同）：
+  //   · 主音符因子：**不带**减时线 → `1`；**有**减时线 → `1/2`（只按"有无"区分，与条数无关）
+  //   · 倚音因子：1 条 `1/4`、2 条 `1/8`、≥3 条 `1/16`（到 1/16 封顶，不再更短）
+  // ⇒ `3[2/]` = 1/4 拍（主音符 1 拍）；`3/[2/]` = 1/8 拍（主音符 1/2 拍）；
+  //    `3[2//]` = 1/8 拍；`3/[2//]` = 1/16 拍；`3[2///]` = 1/16 拍（封顶）。
+  if (beamCount > 0) {
+    const principalFactor = t.diminishCount > 0 ? 1 / 2 : 1
+    const graceFactor = 1 / Math.pow(2, Math.min(beamCount, 3) + 1)
+    return principalFactor * graceFactor
+  }
+  // adj505：长倚音——按"主音符**本体**"（数字 + 附点，**不含增时线**）算；带附点 2/3、不带 1/2。
+  // 本体时值直接借引擎自己的 `tokenDuration`（把 `augmentCount` 抹零），不把附点算法抄第二遍：
+  // 注意引擎口径是「附点作用在含增时线的整体上」（`3. -` = 3 拍而非 2.5 拍），所以抹零才是"不含增时线"。
+  const bodyBeats = t.tupletDur !== undefined ? principalOrig : tokenDuration({ ...t, augmentCount: 0 })
+  return bodyBeats * (t.dots > 0 ? 2 / 3 : 1 / 2)
+}
+
+/** 倚音组内**单个**倚音的实际时值（拍）= 组时值 / 数量（adj489） */
+export function gracePerNoteBeats(groupBeats: number, count: number): number {
+  return count > 0 ? groupBeats / count : 0
+}
+
 /** 倚音音符的形状（只取时值判定所需字段，避免与 token 类型耦合） */
 interface GraceShape {
+  diminishCount: number
   augmentCount: number
   dots: number
+  tupletDur?: number
   gracenotes?: { after: boolean; notes: { diminishCount: number }[] }
 }
 
