@@ -117,3 +117,34 @@ export function linkIcon(size = 15): SVGSVGElement {
   add('M 5.9 8.1 L 8.1 5.9')
   return svg
 }
+
+/**
+ * 「应用打开」图标：**一个盒子 + 右上角外跳箭头**（"交给外部应用"）。
+ *
+ * 为什么不走 `vendor/icons/` 那批 PNG（adj458 的口径）：那批是**应用顶栏**的图标集，
+ * 里面**没有**"外部打开"这个语义的图（应用自己不需要它）；这里按 `linkIcon` 的同一手法手绘，
+ * 走 `currentColor` ⇒ 亮/暗主题、悬停、选中态自动同色（避免 E-2026-234 那类"图标与文字不同色"）。
+ */
+export function appOpenIcon(size = 15): SVGSVGElement {
+  const svg = document.createElementNS(NS, 'svg')
+  svg.setAttribute('width', String(size))
+  svg.setAttribute('height', String(size))
+  svg.setAttribute('viewBox', '0 0 14 14')
+  svg.setAttribute('fill', 'none')
+  svg.setAttribute('stroke', 'currentColor')
+  svg.setAttribute('stroke-width', SW)
+  svg.setAttribute('stroke-linecap', 'round')
+  svg.setAttribute('stroke-linejoin', 'round')
+  svg.setAttribute('aria-hidden', 'true')
+  const add = (d: string): void => {
+    const path = document.createElementNS(NS, 'path')
+    path.setAttribute('d', d)
+    svg.appendChild(path)
+  }
+  // 盒子：左侧 + 上下边（右边留缺口给外跳箭头）
+  add('M 8 3.2 H 3.6 A 1.4 1.4 0 0 0 2.2 4.6 V 10.4 A 1.4 1.4 0 0 0 3.6 11.8 H 9.4 A 1.4 1.4 0 0 0 10.8 10.4 V 6')
+  // 外跳箭头：斜杆 + 箭头头部
+  add('M 8.2 2.2 H 11.8 V 5.8')
+  add('M 11.8 2.2 L 7.4 6.6')
+  return svg
+}

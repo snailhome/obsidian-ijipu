@@ -211,6 +211,9 @@ class JpsEmbedHost {
           this.source = next
           await this.plugin.app.vault.modify(file, next)
         },
+        // adj（用户要求）：嵌入模式也对应一个真实文件 ⇒ 工具栏显示「应用打开」（仅桌面端）；
+        // 嵌入的写回（writeSource）是即时的，故不必额外刷盘
+        filePath: file.path,
       })
       el.dataset.ijipuPainted = '1'
     } catch (e) {

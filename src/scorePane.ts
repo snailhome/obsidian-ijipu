@@ -19,7 +19,8 @@ import { instrumentColorMap, playheadBaseOf, playheadPosIn, trackKeysOf, type Pl
 import { resolvePageConfig } from './config'
 import { ConfigDialog } from './configDialog'
 import { DEFS } from './defs'
-import { layoutIcon, modeIcon, settingsIcon, linkIcon, playIcon, stopIcon } from './icons'
+import { layoutIcon, modeIcon, settingsIcon, linkIcon, playIcon, stopIcon, appOpenIcon } from './icons'
+import { canOpenWithDefaultApp, openWithDefaultApp } from './openExternal'
 import { computeGuideLines, cropRectFor, guideLimits, guidePlacement, type GuideLine } from './guides'
 import { GUIDES_CHANGED, SETTINGS_CHANGED } from './main'
 import type IJipuPlugin from './main'
@@ -54,6 +55,19 @@ export type ScorePaneHost = {
   embedTitle?: string
   /** 点击嵌入标题时调用（打开被嵌入的 .jps 文件） */
   onOpenFile?: () => void
+  /**
+   * 当前谱面所属的**磁盘文件**（库内相对路径，如 `曲谱集/小星星.jps`）。
+   *
+   * `.jps` 文件视图与 `![[x.jps]]` 嵌入**有**（它们对应一个真实文件）；
+   * 代码块没有"自己的文件"⇒ 不传。有值且处于**桌面端**时，工具栏显示「应用打开」按钮
+   * （用户要求：手机端不出现）——点它用系统默认应用（`.jps` 关联的 iJipu 桌面版）打开去编辑。
+   */
+  filePath?: string
+  /**
+   * 「应用打开」之前的**落盘钩子**：先把未保存的编辑写进文件，再交给外部应用。
+   * 不提供就只在"已经落盘"的状态下打开（嵌入模式的写回是即时的，故嵌入可以不传）。
+   */
+  beforeOpenExternal?: () => void | Promise<void>
 }
 
 export type ScorePaneHandle = {
@@ -351,6 +365,32 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       // 按按钮下沿对齐展开（鼠标点、键盘 Enter 都适用）
       menu.showAtPosition({ x: rect.left, y: rect.bottom })
     })
+
+    // —— 「应用打开」（用户要求）：紧跟**显示模式（视图）组**之后，交给系统默认应用去编辑 ——
+    // 只在**桌面端**且**知道当前谱面文件**时出现：
+    //  · 手机端不出现（用户明确要求；`canOpenWithDefaultApp` 同时判了 adapter 能否给绝对路径）；
+    //  · 代码块没有"自己的文件"（`filePath` 只在 .jps 文件视图与嵌入里传）。
+    // 打开前先走 `beforeOpenExternal` 把未落盘的编辑刷下去，否则外部应用看到的是旧内容。
+    if (host.filePath && canOpenWithDefaultApp(plugin.app)) {
+      const appOpenBtn = toolbar.createEl('button', { cls: 'ijipu-play ijipu-app-open-btn' })
+      appOpenBtn.setAttr('title', '使用默认应用打开')
+      appOpenBtn.setAttr('aria-label', '使用默认应用打开')
+      appOpenBtn.appendChild(appOpenIcon(15))
+      appOpenBtn.createSpan({ cls: 'ijipu-btn-label', text: '应用打开' })
+      appOpenBtn.addEventListener('click', () => {
+        const path = host.filePath as string
+        void (async () => {
+          try {
+            await host.beforeOpenExternal?.()
+          } catch (e) {
+            // 落盘失败就别假装打开成功：说清楚，让用户先处理保存问题
+            new Notice(`保存后再打开失败：${e instanceof Error ? e.message : String(e)}`, 6000)
+            return
+          }
+          await openWithDefaultApp(plugin.app, path)
+        })()
+      })
+    }
 
     // —— 工具栏右端：打开谱面文件（仅嵌入模式；容器窄时只留链接图标）——
     if (host.embedded && host.embedTitle) {

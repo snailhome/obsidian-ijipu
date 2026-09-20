@@ -551,5 +551,49 @@ console.log('[adj452] playhead blocks follow playVoice / instrument / engine bou
   }
 }
 
+// ── 「应用打开」（用户要求：视图按钮组之后的入口，用系统默认应用去编辑）────────────────
+{
+  const scorePaneSrc = readFileSync('src/scorePane.ts', 'utf8')
+  const openExtSrc = readFileSync('src/openExternal.ts', 'utf8')
+  const fileViewSrcAp = readFileSync('src/fileView.ts', 'utf8')
+  const embedSrcAp = readFileSync('src/embed.ts', 'utf8')
+
+  check(
+    '应用打开：按钮在**显示模式（视图）组之后**，文案「应用打开」、悬浮提示「使用默认应用打开」',
+    scorePaneSrc.indexOf('const modeWrap') < scorePaneSrc.indexOf('ijipu-app-open-btn') &&
+      scorePaneSrc.includes("text: '应用打开'") &&
+      scorePaneSrc.includes("setAttr('title', '使用默认应用打开')"),
+    '',
+  )
+
+  check(
+    '应用打开：**仅桌面端 + 仅知道文件时**渲染（手机端不出现；代码块没有文件）',
+    /if \(host\.filePath && canOpenWithDefaultApp\(plugin\.app\)\)/.test(scorePaneSrc) &&
+      /if \(!Platform\.isDesktopApp\) return false/.test(openExtSrc),
+    '',
+  )
+
+  check(
+    '应用打开：走系统默认应用（shell.openPath）且把库内相对路径换算成绝对路径；失败必须 Notice',
+    openExtSrc.includes('shell.openPath') &&
+      openExtSrc.includes('getFullPath(filePath)') &&
+      openExtSrc.includes('new Notice(`用默认应用打开失败'),
+    '',
+  )
+
+  check(
+    '应用打开：两个"自带文件"的入口都传了 filePath（.jps 文件视图 / ![[x.jps]] 嵌入）',
+    /filePath: this\.file\?\.path/.test(fileViewSrcAp) && /filePath: file\.path/.test(embedSrcAp),
+    '',
+  )
+
+  check(
+    '应用打开：打开前先刷未落盘的编辑（fileView 传 beforeOpenExternal=saveNow，scorePane 先 await 它）',
+    /beforeOpenExternal: \(\) => this\.saveNow\(\)/.test(fileViewSrcAp) &&
+      /await host\.beforeOpenExternal\?\.\(\)/.test(scorePaneSrc),
+    '',
+  )
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exitCode = 1

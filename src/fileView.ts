@@ -269,6 +269,10 @@ export class IJipuFileView extends TextFileView {
       getFrontmatter: () => null,
       writeSource: (next) => this.applySource(next),
       embedded,
+      // adj（用户要求）：.jps 文件视图知道自己的文件 ⇒ 工具栏显示「应用打开」
+      // （桌面端才显示；打开前先 saveNow 把未落盘的编辑刷下去）。`file` 可能为 null ⇒ 不传则不显示。
+      filePath: this.file?.path,
+      beforeOpenExternal: () => this.saveNow(),
     })
   }
 
