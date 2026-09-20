@@ -1,20 +1,36 @@
-# 爱记谱 iJipu 0.12.0
+# 爱记谱 iJipu 0.13.0
 
-> 引擎同步 + 引擎行为变更需复核自身断言 ⇒ 0.11.0 → **0.12.0**（MINOR）。
-> vendor/engine 与应用 **0.26.0 引擎（0.15.0）完全一致**（已逐文件 SHA256 复核，差异 0）。
+> 插件**自身功能**更新（**不涉及引擎**：`vendor/engine` 与应用 0.15.0 引擎保持一致，本轮未动）⇒ 0.12.0 → **0.13.0**（MINOR）。
 
-## 变更
+## 新增
 
-- **vendor/engine 同步**：引擎 0.14.0 → **0.15.0**。新增 `playback/ornaments.ts`（波音演奏时值的纯函数模块）；
-  改：`index.ts`（新增 8 个导出 `MORDENT_SYMBOLS/ORNAMENT_SHORT_MIN_MS/ORNAMENT_SHORT_MAX_MS/ORNAMENT_SHORT_RATIO/mordentOf/mordentShortMs/neighborDegree/mordentPlan` + 类型）、`layout/spaceLayout.ts`（长倚音 = 本体 ×（附点 2/3、否则 1/2）+ 短倚音 = 主音符因子 × 倚音因子）、`parser/tokenizer.ts`（倚音括号**之后**写的 `&sby` 现在挂到音符 symbols，顺带修了"长倚音没有但有 `&zkh/&ykh/&hx`"的类似潜在 bug）、`parser/parser.ts`（删除旧"Σ 超主音符"告警，由借用机制接管）、`playback/sequence.ts`（**短前倚音总是抢在拍前**：倚音占 `[拍点 − 窗宽, 拍点]`，主音符稳落拍点；时间从上一个主音符匀、最多让出一半；力度 90%；连音合并方向性修复 —— 带波音自己不能并进前一个、但后一个同音可以并进它）。
+- **工具条「应用打开」按钮（仅桌面端）**——看谱时一键交给**系统默认应用**去编辑。
+  - **位置**：紧跟在「显示模式（视图）」组之后（试听 → 排版 → 设置 → 显示模式 → **应用打开** → 嵌入标题链接）。
+  - **悬浮提示**：「使用默认应用打开」；点击等价于在资源管理器里**双击该 `.jps`**（走系统文件关联，
+    在 Windows 上就是打开 iJipu 桌面版）。
+  - **出现条件**：**桌面端**（`Platform.isDesktopApp` + 库为本地文件系统）**且**当前面板知道自己的文件——
+    `.jps` 文件视图与 `![[x.jps]]` 嵌入**有**该按钮；**代码块**（```jps）没有"自己的文件"，不出现；
+    **手机端不出现**（移动端既没有 electron 也没有"默认应用"这回事）。
+  - **两个细节**：① `TFile.path` 是**库内相对路径**，实现里用 `FileSystemAdapter.getFullPath()` 换成绝对路径
+    （不是本地文件系统就明确拒绝，不会静默失败）；② 点它之前会先把**未落盘的编辑刷下去**
+    （`.jps` 文件视图走 `saveNow()`），否则外部应用打开的是旧内容；刷盘失败会明确提示、不假装成功。
+  - 实现为一个独立小模块 `src/openExternal.ts`（`electron.shell.openPath`），失败一律 `Notice` 说出来
+    ——这类交互最容易被误当成"点了没反应"。
 
 ## 验证
 
 - `tsc -noEmit -skipLibCheck`：退出码 0
-- `npm run smoke`：**155 passed, 0 failed**（共 155 条断言，引擎变更未破坏插件侧既有口径）
-- 应用侧 OP-05：tsc / lint (0 error, 27 warnings = 基线) / build (stamp v0.26.0) / smoke ALL PASSED
+- `npm run smoke`：**160 passed, 0 failed**（原 155 + 本轮新增 5 条断言：按钮位置/文案与悬浮提示、
+  仅桌面端且仅知道文件时渲染、走 `shell.openPath` 且做绝对路径换算并失败 `Notice`、
+  两个自带文件的入口都传 `filePath`、打开前先刷未落盘编辑）
+- `npm run build`：产物 `main.js` 已含新按钮；`electron` 保持 external（`require("electron")`）
 
 ## 升级
 
-`vendor/engine` 是 `tsconfig.json` 路径映射的消费端（`@ijipu/engine`），无需在插件侧改任何代码即可享受新引擎；
-**仅当你的脚本/预览依赖了旧的倚音/连音播放时值**才会感知到行为变化（这是规范的修订，不是 bug）。
+打开任意 `.jps` 文件（或在笔记里写 `![[某个.jps]]`）即可看到「应用打开」；纯 `.jps` 代码块里不会出现。
+桌面端才有该按钮；手机端界面不变。
+
+## 变更
+
+- 无破坏性变更：本轮只新增按钮与一个模块，工具条其余按钮的位置、行为、样式均未变。
+
