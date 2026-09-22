@@ -26,6 +26,11 @@ jobs:
       # 插件依赖 vite/esbuild/obsidian；用 install + legacy-peer-deps（比 ci 更宽容 lock 微差）
       - run: npm install --legacy-peer-deps
 
+      # 先生成 `src/gen/buildInfo.ts`——它被 `.gitignore` 排除（本地生成、不入库），
+      # 而 `src/settings.ts` 依赖它。缺这一步时 esbuild 直接报
+      # `Could not resolve "./gen/buildInfo"` ⇒ Release 全部失败（0.10.0 起连续多版都没发出去）。
+      - run: npm run gen:info
+
       # 用 esbuild 产单一 main.js（不拆 chunk，避免 Obsidian 插件目录缺 dist-*.js 报 Cannot find module）
       - run: node esbuild.config.mjs production
 
