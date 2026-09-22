@@ -23,6 +23,8 @@ import { tokenDuration } from '../duration'
 import { errAt } from './errors'
 // adj454：设置行（`# jps-config:`）的语法校验（顶格 / JSON / 键值类型）
 import { inspectJpsConfigLine, JPS_CONFIG_PREFIX } from '../settings'
+// adj594（用户要求）：小节时值校验（按拍号 + `|"p:2/4"` 临时拍号，不符给 warning）
+import { checkMeasureBeats } from '../measures'
 
 const HEADER_KEYS = new Set(['V', 'B', 'Z', 'D', 'P', 'J', 'Y', 'S'])
 
@@ -339,6 +341,15 @@ export function parseJps(source: string): ParseResult {
 
   // ---- 平均连音组 (y...) 时值均分（多连音线）：组内音符时值 = 组总时值 / 组内音符数 ----
   applyTupletDurations(groups, parseMeterBeats(header.meter))
+
+  /**
+   * adj594（用户要求）：**小节时值校验**——按拍号（含 `|"p:2/4"` 临时拍号）检查每个小节是否等长，
+   * 不符的给 `warning`（谱面照常渲染/播放，只在问题条里提醒）。
+   * 放在 `applyTupletDurations()` **之后**：连音组的 `tupletDur` 覆盖值已写好，
+   * 校验用的就是最终时值（与排版/播放同一口径，不会因为连音组误报）。
+   */
+  const preliminary: ParseResult = { header, lines, groups, errors }
+  errors.push(...checkMeasureBeats(preliminary))
 
   return { header, lines, groups, errors }
 }

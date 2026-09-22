@@ -572,6 +572,17 @@ export function buildPlaySequence(
    * 若记号写在本组最前（左侧没有可发声元素，如 `&hx 6 5` 的行首写法），退化为它**右侧最近**的那个音符。
    */
   const hxBreathNoteIdx = new Set<number>()
+  /**
+   * adj596（用户反馈「第二组多声部只演奏了第一声部」）：**行内项先按小节切好**，
+   * 之后按「单元」拼成 `seq`——多声部单元内**按小节交替**（第 k 小节各声部的内容先齐，
+   * 再接该小节线上的一个小节线项），单声部单元照旧按源码顺序。
+   *
+   * 为什么必须这样：反复（`:|`）的回跳走查是按 `seq` **顺序**推进的。旧实现里同一组的
+   * `Q1:`/`Q2:` 两行前后排列 ⇒ 走查到 Q1 行末的 `:|` 时**立刻回跳**，而 Q2 那一行还没走到，
+   * 于是"第二组多声部只演奏了第一声部"，要到第二遍才补上（真机实测该声部首个事件晚一整遍）。
+   * 按小节交替 + 同一小节线只留一项之后，回跳必然发生在**整小节（各声部）都排完之后**。
+   */
+  const lineSeqs: { voice: number; bars: { items: SeqItem[]; bar: SeqItem | null }[] }[] = []
   for (const line of result.lines) {
     if (line.kind !== 'music') continue
     const group = result.groups.find((g) => g.music === line)
@@ -590,6 +601,12 @@ export function buildPlaySequence(
         if (pick >= 0) hxBreathNoteIdx.add(noteIdx + pick)
       })
     }
+    const ls: { voice: number; bars: { items: SeqItem[]; bar: SeqItem | null }[] } = {
+      voice: group.music.voice,
+      bars: [{ items: [], bar: null }],
+    }
+    /** 当前正在填的小节格（遇到小节线就开新格） */
+    const cell = () => ls.bars[ls.bars.length - 1]
     for (const token of group.music.tokens) {
       if (token.kind === 'slur') {
         if (token.dir === 'open') slurStarts.push(noteIdx)
@@ -600,7 +617,7 @@ export function buildPlaySequence(
         continue
       }
       if (token.kind === 'barline') {
-        seq.push({
+        cell().bar = {
           kind: 'bar',
           bar: {
             type: token.type,
@@ -609,24 +626,93 @@ export function buildPlaySequence(
             voltaEnd: token.voltaEnd,
             voltaEndSlash: token.voltaEndSlash,
           },
-        })
+        }
+        ls.bars.push({ items: [], bar: null })
       } else if (token.kind === 'instrument') {
         // adj301/351：乐器切换指令纳入播放序列（不产生音符事件）——按所属声部（voice）记录，
         // 多声部各声部独立切换乐器（下一组同声部延续）
-        seq.push({ kind: 'instrument', instr: { name: token.name, voice: group.music.voice } })
+        cell().items.push({ kind: 'instrument', instr: { name: token.name, voice: group.music.voice } })
       } else if (token.kind === 'segment') {
         // adj427：临时段（{bz … } / {dsb … }）——**不占主旋律时值**，只推进段内的音符序号吗？
         // 不：段内音符是**独立**的（children 各自成事件），主旋律的 noteIdx 完全不受影响。
         // 这里只登记一个"待补发"标记项，实际事件在走查时补发。
         if (token.dir === 'open' && token.children && token.children.length > 0) {
-          seq.push({ kind: 'segment', seg: { voice: group.music.voice, children: token.children } })
+          cell().items.push({ kind: 'segment', seg: { voice: group.music.voice, children: token.children } })
         }
       } else if (token.kind === 'note' || token.kind === 'rest' || token.kind === 'rhythm') {
         const placed = byIndex.get(noteIdx)
-        if (placed) seq.push({ kind: 'note', note: placed, noteIdx })
+        if (placed) cell().items.push({ kind: 'note', note: placed, noteIdx })
         noteIdx++
       }
     }
+    // 收尾那一格既没内容又没小节线（正常的行尾）就丢掉，不为它排一项
+    const last = ls.bars[ls.bars.length - 1]
+    if (last.items.length === 0 && !last.bar) ls.bars.pop()
+    lineSeqs.push(ls)
+  }
+  /**
+   * 合并同一小节线上各声部的小节线项：类型取第一个、`marks` 取并集、
+   * 跳房子（volta）字段取首个非空——多声部里同一根线各声部写法一致，合并后只留一项。
+   */
+  const mergeBarItems = (items: (SeqItem | null)[]): SeqItem | null => {
+    const bars = items.filter((it): it is SeqItem => it !== null && it.kind === 'bar' && !!it.bar)
+    if (bars.length === 0) return null
+    const marks = new Set<BarlineMark>()
+    let voltaStart: PlacedBarline['voltaStart']
+    let voltaEnd: PlacedBarline['voltaEnd']
+    let voltaEndSlash: boolean | undefined
+    for (const it of bars) {
+      const b = it.bar as PlacedBarline
+      for (const m of b.marks ?? []) marks.add(m)
+      if (voltaStart === undefined) voltaStart = b.voltaStart
+      if (voltaEnd === undefined) voltaEnd = b.voltaEnd
+      if (voltaEndSlash === undefined) voltaEndSlash = b.voltaEndSlash
+    }
+    const first = bars[0].bar as PlacedBarline
+    return { kind: 'bar', bar: { type: first.type, marks: [...marks], voltaStart, voltaEnd, voltaEndSlash } }
+  }
+  // 组装成 `seq`：单元 = 连续曲行（声部号在本单元内重复即另起单元，与排版同一规则；分页标记也断单元）
+  {
+    let unit: typeof lineSeqs = []
+    let unitVoices = new Set<number>()
+    const flushUnit = () => {
+      if (unit.length === 0) return
+      if (unit.length === 1) {
+        const ls = unit[0]
+        for (const c of ls.bars) {
+          for (const it of c.items) seq.push(it)
+          if (c.bar) seq.push(c.bar)
+        }
+      } else {
+        // 多声部单元：按小节交替（各声部第 k 小节的内容先齐，再接这一小节线的一项）
+        const nb = Math.max(...unit.map((l) => l.bars.length))
+        for (let k = 0; k < nb; k++) {
+          for (const ls of unit) {
+            const c = ls.bars[k]
+            if (!c) continue
+            for (const it of c.items) seq.push(it)
+          }
+          const merged = mergeBarItems(unit.map((ls) => ls.bars[k]?.bar ?? null))
+          if (merged) seq.push(merged)
+        }
+      }
+      unit = []
+      unitVoices = new Set()
+    }
+    let cursor = 0
+    for (const line of result.lines) {
+      if (line.kind === 'pagebreak') {
+        flushUnit()
+        continue
+      }
+      if (line.kind !== 'music') continue
+      const ls = lineSeqs[cursor++]
+      if (!ls) continue
+      if (unit.length > 0 && unitVoices.has(ls.voice)) flushUnit()
+      unit.push(ls)
+      unitVoices.add(ls.voice)
+    }
+    flushUnit()
   }
   // 音符 → 所在 slur 区间（一个音符可属多层；用于判断相邻音符是否在同一连音线内）
   const slurOf = new Map<number, Set<number>>()
@@ -736,11 +822,7 @@ export function buildPlaySequence(
   let totalMs = 0
   {
     let ms = 0
-    // 每个 voice 在 result.groups 中按顺序的下一个待处理 group 索引（多组多声部各自独立 ms）
-    const voiceNextGroupIdx = new Map<number, number>()
-    // 已纳入 voiceBlock 的 groupIndex
-    const covered = new Set<number>()
-    // 块拍数（块内 max groupBeats）
+    // 块拍数（块内 max groupBeats：多声部块以"最长声部"为准推进时间）
     const blockBeatsOf = (gis: number[]) => {
       let bb = 0
       for (const gi of gis) {
@@ -764,46 +846,47 @@ export function buildPlaySequence(
       bsMs.push(beats * beatMs)
       return bsMs
     }
-    // 1. 多声部块（voiceBlock）— 每个 voice 在该 vb 取下一个未处理的 group（adj307）
-    for (const page of layout.pages) {
-      for (const vb of page.voiceBlocks) {
-        const gis: number[] = []
-        for (const v of vb.voices) {
-          // 找该 voice 下一个属于本 vb 的 group（按 result.groups 顺序遍历，跳过已覆盖）
-          let cur = voiceNextGroupIdx.get(v.voice) ?? 0
-          while (
-            cur < result.groups.length &&
-            (covered.has(cur) || result.groups[cur].music.voice !== v.voice)
-          ) {
-            cur++
-          }
-          if (cur < result.groups.length && result.groups[cur].music.voice === v.voice) {
-            gis.push(cur)
-            voiceNextGroupIdx.set(v.voice, cur + 1)
-          }
-        }
-        if (gis.length === 0) continue
-        gis.sort((a, b) => a - b)
-        const bb = blockBeatsOf(gis)
-        for (const gi of gis) {
-          groupStartMs[gi] = ms
-          barStartMsInGroup[gi] = bsMsOf(gi)
-          covered.add(gi)
-        }
-        ms += bb * beatMs
-      }
-    }
-    // 2. 单声部 group（不在任何 voiceBlock 内）按 groups 顺序自成块累加
-    for (let gi = 0; gi < result.groups.length; gi++) {
-      if (covered.has(gi)) continue
-      groupStartMs[gi] = ms
-      barStartMsInGroup[gi] = bsMsOf(gi)
-      let bb = 0
-      for (const tk of result.groups[gi].music.tokens) {
-        if (tk.kind === 'note' || tk.kind === 'rest' || tk.kind === 'rhythm') bb += tokenDuration(tk)
+    /**
+     * adj595（用户要求）：**按源码顺序把曲行切成"块"，再逐块累加时间**。
+     *
+     * 用户口径（原话）：单声部行（`Q:`）单独用第一音色演奏；紧随其后的 `Q1:`+`Q2:` 组成
+     * 一组多声部（两音色**同时**）；再接一组就接在**上一组之后**；再遇到 `Q:` 又回到单声部……
+     * 分块规则与排版完全一致（layout 构建 unit 时"声部号在本块内重复即断块"），
+     * 并同样在 `---` 分页标记处断块（跨页不该被合成同时发声）。
+     *
+     * 旧实现是"先遍历所有 voiceBlock、再遍历剩下的单声部 group"，有两个错：
+     *  ① **顺序错**：穿插在多声部块之间的单声部行被挪到所有多声部块之后；
+     *  ② **配对错**：块内按"该声部下一个未被占用的 group"取行，于是**块前那一行单声部**
+     *     （同为声部 1）会被吸进第一个多声部块，两组双声部整体错位
+     *     （实测 `Q: … / Q1: … / Q2: … / Q1: … / Q2: … / Q: …` 得到 g0=0、g2=0、g1=2000、g4=2000）。
+     */
+    let chunk: number[] = []
+    let chunkVoices = new Set<number>()
+    const flushChunk = (): void => {
+      if (chunk.length === 0) return
+      const bb = blockBeatsOf(chunk)
+      for (const gi of chunk) {
+        groupStartMs[gi] = ms
+        barStartMsInGroup[gi] = bsMsOf(gi)
       }
       ms += bb * beatMs
+      chunk = []
+      chunkVoices = new Set()
     }
+    for (const line of result.lines) {
+      if (line.kind === 'pagebreak') {
+        flushChunk()
+        continue
+      }
+      if (line.kind !== 'music') continue
+      const gi = result.groups.findIndex((g) => g.music === line)
+      if (gi === -1) continue
+      const v = result.groups[gi].music.voice
+      if (chunk.length > 0 && chunkVoices.has(v)) flushChunk()
+      chunk.push(gi)
+      chunkVoices.add(v)
+    }
+    flushChunk()
     totalMs = ms
   }
 
@@ -1026,8 +1109,16 @@ export function buildPlaySequence(
       // 波动短音在开头、不会被吞掉。用户报的 `(5/&sby 5)` 就属于后者：第二个 5 应当**延长**，
       // 此前我把"上一个带波音"也当成禁止合并的条件（`lastEventHadGrace`），于是又弱响了一个 5 ✗。
       const curHasMordent = token.kind === 'note' && mordentOf(token.symbols) !== null
+      /**
+       * adj596：合并（以及下面的倚音借时值）**只能发生在同一声部内**。
+       * adj596 把多声部单元按小节交替后，"上一个已发事件"在每小节边界处会变成**另一个声部**的音符——
+       * 不加这个判据，两个声部之间就会互相连奏/互相借时值（听感是某个声部莫名其妙被截短）。
+       */
+      const sameVoiceAsPrev =
+        lastMainEvIdx >= 0 && events[lastMainEvIdx]?.placed.id.voice === placed.id.voice
       if (
         lastEventNoteIdx >= 0 &&
+        sameVoiceAsPrev &&
         curNoteIdx === lastEventNoteIdx + 1 &&
         shareSlur &&
         !curHasGrace &&
@@ -1123,7 +1214,12 @@ export function buildPlaySequence(
           // 时间从**上一个主音符**匀：把它截短到窗口起点；前面的空白（休止、间隙）可直接用，不必截。
           // 安全下限：上一个主音符最多只让出一半（避免"前一个音被整个吃掉"）。
           const G = graceGroup * beatMs
-          const prevEv = lastMainEvIdx >= 0 ? events[lastMainEvIdx] : null
+          // adj596：借时值只向**同声部**的上一个主音符借（多声部按小节交替后，上一个已发事件
+          // 可能是另一声部的音符，绝不能截短它）
+          const prevEv =
+            lastMainEvIdx >= 0 && events[lastMainEvIdx]?.placed.id.voice === placed.id.voice
+              ? events[lastMainEvIdx]
+              : null
           const prevDur = prevEv ? prevEv.durationMs : 0
           const gapBefore = prevEv ? Math.max(0, atMs - (prevEv.atMs + prevEv.durationMs)) : atMs
           const need = Math.max(0, G - gapBefore)
@@ -1144,7 +1240,9 @@ export function buildPlaySequence(
           if (gn && !gn.after) mainShiftMs = graceGroup * beatMs
         } else if (!gn.after) {
           // 长前倚音装不下（极少）：向前借（前主音符贴补 → 不够则主音符继续扣）
-          const prevOrigBeats = lastMainEvIdx >= 0 && events[lastMainEvIdx] ? events[lastMainEvIdx].durationMs / beatMs : 0
+          // adj596：同上——只向**同声部**的上一个主音符借
+          const prevSameVoice = lastMainEvIdx >= 0 && events[lastMainEvIdx]?.placed.id.voice === placed.id.voice
+          const prevOrigBeats = prevSameVoice ? events[lastMainEvIdx].durationMs / beatMs : 0
           const shortfallBeats = graceGroup - principalBeats
           const prevCanCover = Math.min(prevOrigBeats, shortfallBeats)
           prevConsumeMs = prevCanCover * beatMs

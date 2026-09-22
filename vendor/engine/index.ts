@@ -14,6 +14,16 @@ export * from './types'
 export { parseJps } from './parser'
 export { formatJps, formatLine } from './format/format'
 export { tokenDuration, durationMs } from './duration'
+// adj594（用户要求）：小节时值校验（纯函数，解析器已自动并入 ParseResult.errors）
+export {
+  checkMeasureBeats,
+  measureBeatsOf,
+  meterBeatsOf,
+  inlineMeterBeats,
+  inlineMeterText,
+  DEFAULT_METER_BEATS,
+  MEASURE_BEATS_EPSILON,
+} from './measures'
 export { layoutScore } from './layout'
 export { renderScoreToSvg } from './render'
 export { buildPlaySequence, inferBpm, countScoreInstrumentSwitches, createBackend, schedulePlay, SynthBackend, SamplerBackend, pitchToFreq, renderSynthNote, INSTRUMENT_OPTIONS, INSTRUMENT_LIB_NAMES, INSTRUMENT_PRESETS, matchInstrument, resolveInstrument, SAMPLER_LIBRARIES, getSamplerLibrary, classifyNetwork, eventsToMidi, pitchToMidiNote, instrumentToProgram, pcmToWav, GmChannelAllocator, GM_MELODIC_CHANNELS, GM_VOICES, gmVoiceProgram, gmVoiceRef } from './playback'

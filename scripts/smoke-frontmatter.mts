@@ -317,7 +317,10 @@ console.log('[11] 解析问题分级（warning 不阻断）')
   check('跨行渐强/渐弱属 warning（不阻断渲染）', crossLine.errors.length === 0 && crossLine.warnings.some((w) => w.text.includes('不能跨行')), JSON.stringify(crossLine))
   check(
     'adj394 跨行渐强/渐弱的告警带正确写法（同一行内配对）',
-    crossLine.warnings.every((w) => !!w.hint && w.hint.includes('同一行')),
+    // adj594 起引擎还会报「小节时值不符」等同谱面的其它告警 ⇒ 这里只校验**渐强那条**的 hint
+    crossLine.warnings
+      .filter((w) => w.text.includes('不能跨行'))
+      .every((w) => !!w.hint && w.hint.includes('同一行')),
     JSON.stringify(crossLine.warnings.map((w) => w.hint)),
   )
   // adj394：所有报错点都必须带正确写法（逐个场景扫一遍，防止新增报错时漏挂 hint）
