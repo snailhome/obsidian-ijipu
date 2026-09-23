@@ -1970,6 +1970,15 @@ export function layoutScore(
     })
   }
 
+  /**
+   * adj601（用户要求）：**上一组多声部块的小节宽**——下一组在"自然对齐"（不撑满）时
+   * 拿它作为**下限**，使两组的小节线尽量上下对齐；若本组某小节自然更宽，就用自然宽
+   * （用户原话："第二组多声部，当自然对齐时，应尽量与上一组的小节线对齐，
+   * 除非第二组的小节宽度比上一级对应小节宽"）。
+   * 换页清空（跨页对齐没有意义）；中间夹了单声部行也不清（"上一组"就是上一个多声部块）。
+   */
+  let lastMultiBarW: readonly number[] | null = null
+
   /** 多声部块：各声部按小节对齐纵向堆叠（块内小节等宽 + 时值等宽） */
   const placeVoiceBlock = (unit: Unit) => {
     const geciSize = config.geci_size
@@ -2202,16 +2211,71 @@ export function layoutScore(
        * 少小节行按既有规则保持自然宽（行尾留白），与单声部 `!stretch` 分支口径相同。
        */
       const shrink = stretchBars && baseBarSum > targetBarSum && baseBarSum > 0 ? targetBarSum / baseBarSum : 1
+      /**
+       * adj601：**小节线对齐用的"下限宽"**——只对"自然对齐"（不撑满）的块生效：
+       * 撑满的块（≥ `align_min_bars` 小节）本来就按行宽拉伸，不参与。
+       * 先整体试算一遍 `Σ max(自然宽, 上一组对应小节宽)`：若合计超过本行可用宽（极端情形：
+       * "这一个小节更宽、那一个更窄"互相错开），就**整体放弃对齐**、退回自然宽——
+       * 对齐是"尽量"，越界是硬约束（与 adj593 同一取舍）。
+       */
+      const alignFloor = !stretchBars ? lastMultiBarW : null
+      let alignAdd: number[] | null = null
+      if (alignFloor && alignFloor.length > 0) {
+        const naturalOf = (b: number): number => {
+          const bb = barBeats[b]
+          let natural = b === 0 ? 0 : s
+          for (let k = 0; k < bb; k++) {
+            natural += (beatBodyW[b][k] > 0 ? beatBodyW[b][k] : BPW_NATURAL) * shrink + NOTE_GAP * shrink + s
+          }
+          if (bb > 0) natural -= NOTE_GAP * shrink
+          return natural
+        }
+        /**
+         * 本小节要"对齐到"的宽度下限。
+         *
+         * 末小节的**小节线位置公式**与内小节不同：内小节是 `内容右端 + 后间距/2`，末小节不加
+         * （`barToNextGap` 只有末尾记号让位量）。所以当本块末小节对应的是上一组的**内**小节时，
+         * 目标宽要把那半个后间距补回来，否则末小节线会短 `gap/2`（实测 1.6px）。
+         */
+        const floorOf = (b: number): number => {
+          const base = b < alignFloor.length ? alignFloor[b] : 0
+          const isLast = b === numBars - 1
+          const aboveIsInner = b < alignFloor.length - 1
+          // 用**默认小节间距**（两块都是默认；末记号让位只影响各自末小节，不参与这一步）
+          return base + (isLast && aboveIsInner ? barlinePad(m.noteSize) / 2 : 0)
+        }
+        let total = 0
+        let need = false
+        for (let b = 0; b < numBars; b++) {
+          const natural = naturalOf(b)
+          const floor = floorOf(b)
+          if (floor > natural + 0.01) need = true
+          total += Math.max(natural, floor)
+        }
+        total += gapSpaces.reduce((a, x) => a + x, 0)
+        if (need && total <= blockAvailW) {
+          alignAdd = new Array(totalBeats).fill(0)
+          for (let b = 0; b < numBars; b++) {
+            const bb = barBeats[b]
+            if (bb <= 0) continue
+            const natural = naturalOf(b)
+            const floor = floorOf(b)
+            if (floor > natural + 0.01) alignAdd[barStartBeat[b]] = (floor - natural) / bb
+          }
+        }
+      }
       for (let b = 0; b < numBars; b++) {
         const bb = barBeats[b]
         const start = barStartBeat[b]
         mspS[b] = s
         // 首小节节头 = 0（行首贴左）；中间小节节头 = s（小节线对称）
         let rel = b === 0 ? 0 : s
+        // adj601：本小节每拍额外分摊的"对齐加宽"（0 = 无需对齐）
+        const add = alignAdd ? (alignAdd[start] ?? 0) : 0
         for (let k = 0; k < bb; k++) {
           const idx = start + k
           // adj593：自然宽超限时按 `shrink` 压缩（拍宽与拍间距同比例），压缩后正好贴右边界
-          const wb = (beatBodyW[b][k] > 0 ? beatBodyW[b][k] : BPW_NATURAL) * shrink
+          const wb = (beatBodyW[b][k] > 0 ? beatBodyW[b][k] : BPW_NATURAL) * shrink + add
           outPerBeat[idx] = wb
           mspSegX[idx] = rel
           rel += wb + NOTE_GAP * shrink + s
@@ -2527,6 +2591,13 @@ export function layoutScore(
       voiceCenters: voiceYTop.map((yt) => r1(yt + m.noteSize * 0.85)),
     })
 
+    // adj601：记下本块每小节的**内容宽**，供下一组多声部块做"小节线对齐"的下限
+    lastMultiBarW = Array.from({ length: numBars }, (_, b) =>
+      useSpace
+        ? (mspBarRelW[b] ?? 0)
+        : ((beatStartX[barStartBeat[b] + barBeats[b]] ?? 0) - (beatStartX[barStartBeat[b]] ?? 0)),
+    )
+
     y = blockY + blockH
   }
 
@@ -2564,6 +2635,7 @@ export function layoutScore(
       pageIndex = pages.length
       startPage()
       y = m.bodyTopH // 后续页不占描述头区域
+      lastMultiBarW = null // adj601：跨页不做小节线对齐
       continue
     }
     const { unit } = ev
