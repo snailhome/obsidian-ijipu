@@ -727,6 +727,25 @@ export function buildPlaySequence(
   // 3. 跳房子配对：voltaStart 的 seq 索引 → 对应 voltaEnd 的 seq 索引
   // adj359：指向 voltaEnd「本小节线」而非其后一位——使 `:|]["2."`（共用一根线：volta1 结束 + volta2 开始）
   // 在跳过 volta1 后仍能处理该线上的 volta2 番号
+  /**
+   * adj598（用户口径）：**"下一处跳跃或结束"**的小节线判据——
+   * 反复线 `:|`/`:|:`、结束线 `||`/`||/`，以及带 `&ds`（跳花 S）/`&dc`（从头反复）/`&fine`（曲终）修饰的线。
+   * 未封闭房子 `|["n." … |]/` 的终点就取**其后第一根**这样的线（见下）。
+   */
+  const isJumpOrEndBar = (it: SeqItem): boolean => {
+    if (it.kind !== 'bar' || !it.bar) return false
+    const t = it.bar.type
+    const m = it.bar.marks ?? []
+    return (
+      t === ':|' ||
+      t === ':|:' ||
+      t === '||' ||
+      t === '||/' ||
+      m.includes('ds') ||
+      m.includes('dc') ||
+      m.includes('fine')
+    )
+  }
   const voltaAfter = new Map<number, number>()
   const pendingStarts: number[] = []
   seq.forEach((item, si) => {
@@ -737,13 +756,12 @@ export function buildPlaySequence(
       const start = pendingStarts.pop()!
       // adj360：未封闭房子（|]/）延续到其后第一个「跳跃小节线 :|/：|:」或「结束小节线 ||/||/」处；
       // 已封闭房子（|]）就以该末尾小节线为界
+      // adj598（用户口径，更严格）：未封闭房子是"**演奏到下一个跳跃或结束**"——
+      // 除 `:|`/`:|:`/`||`/`||/` 外，**带 `&ds`/`&dc`/`&fine` 修饰的小节线同样算**（见 `isJumpOrEndBar`）。
+      // 落到那根线时，它自己的"跳跃/结束"动作照常执行（走查里已按此处理。
+      // 旧口径只认反复/结束线型 ⇒ 房子会一路吞到更远的 `:|`，把本不该跳的音乐也吞掉。
       if (item.bar.voltaEndSlash) {
-        const ext = seq.findIndex(
-          (it, k) =>
-            k > si &&
-            it.kind === 'bar' &&
-            (it.bar?.type === ':|' || it.bar?.type === ':|:' || it.bar?.type === '||' || it.bar?.type === '||/'),
-        )
+        const ext = seq.findIndex((it, k) => k > si && isJumpOrEndBar(it))
         voltaAfter.set(start, ext >= 0 ? ext : si)
       } else {
         voltaAfter.set(start, si)
@@ -1364,12 +1382,17 @@ export function buildPlaySequence(
       pendingJumpMs = lastEndMs // adj361：被跳过的房子不占时，从当前播放时刻无缝接上
       return true
     }
-    // 因跳过 volta 而落在的小节线：不再触发该线的 :| 回跳（该反复已在跳过时越过），只处理其 volta 番号后前进
-    if (i === landedByVoltaSkip) {
+    /**
+     * 因跳过 volta 而落在的小节线：**不再触发该线的 `:|` 回跳**（该反复已在跳过时越过）。
+     *
+     * adj598（用户口径）：但该线上的**注释/修饰符跳转与曲终照常执行**——未封闭房子
+     * `|["n." … |]/` 的定义就是"演奏到**下一个跳跃或结束**"，落到那根线时它自己的
+     * `&ds`/`&dc`/`&fine` 必须生效（旧实现落点直接 `i++`，会把 `&fine` 当成没写过）。
+     */
+    const landedByVolta = i === landedByVoltaSkip
+    if (landedByVolta) {
       landedByVoltaSkip = -1
       if (trySkipVolta()) continue
-      i++
-      continue
     }
     // adj359：小节线修饰符跳转（&fine 曲终 / &dc 从头反复 / &ds 跳花S / &ty 跳越）
     // 规则（用户规范）：&dc/&ds「大反复」全曲各只跳一次（之后再遇不跳，续播到 Fine/终止线，避免死循环）；
@@ -1421,7 +1444,9 @@ export function buildPlaySequence(
     }
     // 反复结束线 :| —— 优先于 volta 跳过：`:|]["2."` 共用一根线时（volta1 结束 + volta2 开始），
     // 正常演奏到该线应先按反复回跳；只有「因跳过 volta1 而落在此线」时才越过回跳、转去判断 volta2 番号
-    if (bar.type === ':|' || bar.type === ':|:') {
+    // adj598：`landedByVolta` 时**整块跳过**（回跳已在跳过房子时越过），但下面 switch 里的
+    // 终止线 `||` / 段落起点 `|:` 仍要照常处理——落点线可能正是"结束"或"下一段起点"。
+    if (!landedByVolta && (bar.type === ':|' || bar.type === ':|:')) {
       const count = repeatCountAt.get(i) ?? 2 // 本段内到该线的第几个 :|（+1 = 总遍数）
       if (pass < count) {
         i = repeatStart
