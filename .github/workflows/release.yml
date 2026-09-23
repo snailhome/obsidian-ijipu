@@ -17,7 +17,12 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      # 检出**该发版对应的树**：tag 推送时 `github.ref` 就是该 tag；
+      # `workflow_dispatch` 补发时必须显式给 `ref`（默认检出默认分支 ⇒ 会把"最新代码"当成旧版本发出去，
+      # 见 E-2026-287 预防第 ③ 条）。
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - uses: actions/setup-node@v4
         with:
