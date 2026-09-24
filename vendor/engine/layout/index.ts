@@ -28,7 +28,7 @@ import type {
   ScorePageMeta,
   VoiceBlock,
 } from '../types'
-import { DIGIT_HEIGHT_RATIO, LAYER_GAP, SLUR_W, octaveTopY, BRACKET_PAD, H_GAP, noteScaleOf, GRACE_SIZE_RATIO, GRACE_SLOT_RATIO, GRACE_SLOT_RATIO_MULTI, VOLTA_BAR_GAP, VOLTA_RAISE, DYN_HALF_H, barlinePad, barlineTotalW, DOT_AFTER_DIGIT_GAP, DOT_R, SEGMENT_ROW_GAP_DEFAULT } from './spacing'
+import { DIGIT_HEIGHT_RATIO, LAYER_GAP, SLUR_W, octaveTopY, BRACKET_PAD, H_GAP, noteScaleOf, GRACE_SIZE_RATIO, GRACE_SLOT_RATIO, GRACE_SLOT_RATIO_MULTI, VOLTA_BAR_GAP, VOLTA_RAISE, DYN_HALF_H, barlinePad, barlineTotalW, DOT_AFTER_DIGIT_GAP, DOT_R, SEGMENT_ROW_GAP_DEFAULT, barNumberGapNeed } from './spacing'
 // adj284：空间优先布局的度量（本体宽 / 时值拆分 / 非时值元素间距）
 import { splitNoteDur, noteBodyW, augBodyW, dotBodyW, accidentalBodyW, markBodyW, digitSlotW, hxBodyW, graceAtTail, nonDurGap, slideExtraW } from './spaceLayout'
 import { hairpinEvents, resolveHairpins, type DynEvent, type NoteAnchors } from './hairpins'
@@ -341,9 +341,13 @@ function spacingFor(config: PageConfig, page: number): Spacing {
   }
 }
 
-/** 计算一行曲（含歌词行数）占用的总高度；
+/**
+ * 计算一行曲（含歌词行数）占用的总高度；
  *  无歌词时歌词部空间（曲下间距 quci + 歌词行高）为 0（adj33），减少两曲部间空白；
- *  行尾间距（adj79）：本行有歌词 → 曲部与上一行词部间距 ciquLyric；无歌词 → 曲部与曲部间距 ciqu */
+ *  行尾间距（adj79）：本行有歌词 → 曲部与上一行词部间距 ciquLyric；无歌词 → 曲部与曲部间距 ciqu。
+ *  adj625c（用户要求）：**方框小节序号不参与这段高度计算**——它算在曲部行自己的空间里
+ *  （画在小节线底缘下方、落在曲下间距/行尾间距的空隙内），于是"显示小节计数"的开关**不改变排版**。
+ */
 function lineHeightOf(config: PageConfig, m: LayoutMetrics, sp: Spacing, lyricRows: number): number {
   return (
     m.noteSize * 1.7 +
@@ -645,6 +649,7 @@ export function layoutScore(
       slurs: [],
       dynamics: [],
       brackets: [],
+      barNumbers: [],
       meta,
     }
     pages.push(page)
@@ -825,6 +830,53 @@ export function layoutScore(
     return out
   }
 
+  // ============================================================
+  // adj625（用户要求）：**方框小节序号**（显示小节计数）
+  // ============================================================
+  /**
+   * 「显示小节计数」打开时，每 `barCountInterval` 个小节，在该小节**左侧小节线下方**画一个
+   * 带外框的序号（默认间隔 4 ⇒ 第 4、8、12、16 小节）。
+   *
+   * 位置口径（用户规范）：
+   *  ① 序号在小节**左侧**那根小节线的**底下**，数字与方框都按「**倚音音符**字号 × 3/4」显示（见 `spacing.ts`）；
+   *  ② 行首第一个小节通常**不画小节线**（隐藏小节线）⇒ 序号放在隐藏线的位置下（= 行首内容左缘 / 左边距）；
+   *  ③ 多声部块：块首那个放在**大括号与音符之间**那条空隙里；行中间的仍画在那根小节线正下方；
+   *  ④ 高度一律按**最上面声部**的小节线底缘算（多声部同理）。
+   *
+   * 编号**全曲连续**（多声部块内每小节只算一次，见下面事件遍历里的 `startBarOfGroup`）。
+   * 关闭该选项时**不产生任何锚点**、也不占纵向空间 ⇒ 既有谱面零位移。
+   */
+  const barNoStep = ((): number => {
+    const v = Math.round(config.barCountInterval)
+    return Number.isFinite(v) && v >= 1 ? Math.min(v, 99) : 4
+  })()
+  const showBarNo = config.showBarCount === true
+  /** 该小节序号是否要画（间隔为 1 时第 1 小节也画——它就落在全曲起点的隐藏小节线上） */
+  const isNumberedBar = (n: number | null): boolean => showBarNo && n !== null && n % barNoStep === 0
+  /** 记一条序号锚点（渲染层据此画「数字 + 外框」） */
+  const pushBarNumber = (n: number, x: number, yBarBottom: number, voice: number, group: number): void => {
+    pages[pageIndex].barNumbers.push({ n, x: r1(x), yBarBottom: r1(yBarBottom), voice, group })
+  }
+  /**
+   * 组内每个 seg 的**全曲小节序号**（1 起）——`null` = 组首空 seg（那是**行首小节线**、不是小节）。
+   * `splitBars` 把每小节的"收尾小节线"放在该 seg 的 `bar` 上，故 seg i 的**左侧小节线**
+   * 就是 seg i−1 的 `bar`（行首那根则通常是隐藏的）。
+   */
+  const barOrdinalsOf = (segs: BarSeg[], startBar: number): (number | null)[] => {
+    let n = startBar
+    return segs.map((s, i) => (i === 0 && s.notes.length === 0 ? null : n++))
+  }
+  /** 本行第一个「算作小节」的 seg 下标（跳过组首空 seg；整行都不是小节时返回 `range.end`） */
+  const firstCountedSeg = (ord: (number | null)[], range: { start: number; end: number }): number => {
+    for (let b = range.start; b < range.end; b++) if (ord[b] !== null) return b
+    return range.end
+  }
+  /** 从 seg b 往后第一个「算作小节」的 seg 下标（超出 row.end 视为不在本行） */
+  const nextCountedSeg = (ord: (number | null)[], b: number, end: number): number => {
+    for (let c = b + 1; c < end; c++) if (ord[c] !== null) return c
+    return end
+  }
+
   const placeMusicRow = (
     segs: BarSeg[],
     row: LayoutRow,
@@ -838,6 +890,8 @@ export function layoutScore(
     refPerBeat?: number,
     /** adj421：本曲部只有这一行（单行曲部）——小节数 < align_min_bars 时按槽预分整行占宽 */
     singleRowGroup = false,
+    /** adj625：组内每个 seg 的全曲小节序号（见 `barOrdinalsOf`；不传 = 不画小节序号） */
+    ord: (number | null)[] = [],
   ): number | undefined => {
     const page = pages[pageIndex]
     // 小节线高度（adj50/69）：与音符数字等高（墨迹高 ≈0.8em，上沿基线-0.8×字号、下沿基线+0.5×s）
@@ -869,6 +923,11 @@ export function layoutScore(
     if (row.kind === 'frag') {
       // 超长小节碎片行：拍级每拍宽（adj35）
       const seg = segs[row.segIdx]
+      // adj625：超长小节被拆成多行时，**只有第一片**才算"这个行首就是该小节的开头"——
+      // 序号（若轮到它）落在它的左侧小节线位置（隐藏线 ⇒ 左边距），后续碎片行不再重复画。
+      if (row.noteStart === 0 && isNumberedBar(ord[row.segIdx])) {
+        pushBarNumber(ord[row.segIdx] as number, config.margin_left, yBottomBar, voice, groupIndex)
+      }
       const slice = { notes: seg.notes.slice(row.noteStart, row.noteEnd), bar: null }
       const beatsInfo: { dur: number; minDur: number; extra: number }[] = []
       let fgBeat = 0
@@ -1016,6 +1075,15 @@ export function layoutScore(
     //  ② 拍内音符最小间距 1px（need = max(14, 12.16/拍内最小时值)）
     //  ③ 超拍挤占其它正常拍空间，正常拍再平均调整
     const leadingEmpty = row.start < row.end && segs[row.start].notes.length === 0 ? 1 : 0
+    // adj625：**行首那个序号**——行首小节线通常不画（隐藏小节线），序号就放在它的位置下（= 左边距）。
+    // 只有「本行第一个算作小节的 seg」正好落在行首时才在此埋点；若它在本行靠后，
+    // 说明其左侧小节线是**上一小节的收尾线**（在行内），由那边的埋点负责。
+    {
+      const fc = firstCountedSeg(ord, row)
+      if (fc === row.start && isNumberedBar(ord[fc])) {
+        pushBarNumber(ord[fc] as number, config.margin_left, yBottomBar, voice, groupIndex)
+      }
+    }
     // adj47：跨行跳房子起点——上一行末的 voltaStart 小节线改画在本行行首
     // （断行发生在 [ 起点小节线后时，线若留在行尾会溢出右边界且跳房子跨行反向）
     const leadVoltaBar =
@@ -1397,6 +1465,15 @@ export function layoutScore(
             page.width - config.margin_right - halfW - meterGapD,
           )
           const bid: LayoutId = { page: pageIndex, voice, group: groupIndex, index: barCounter }
+          // adj625：这根是 seg b 的**收尾小节线**，也就是「下一个算作小节的 seg」的**左侧小节线**——
+          // 若那个小节在本行内（序号要画在左侧小节线底下），就在这里埋点；
+          // 若它已经跨到下一行，则由下一行的"行首埋点"放在隐藏小节线的位置（= 边距线）上。
+          {
+            const nc = nextCountedSeg(ord, b, row.end)
+            if (nc < row.end && isNumberedBar(ord[nc])) {
+              pushBarNumber(ord[nc] as number, lineX, yBottomBar, voice, groupIndex)
+            }
+          }
           page.barlines.push({
             id: bid,
             type: bar.type,
@@ -1451,10 +1528,21 @@ export function layoutScore(
     refRelMeasureW?: (number | undefined)[],
     /** adj421：本曲部只有这一行（单行曲部）——小节数 < align_min_bars 时按槽预分整行占宽 */
     singleRowGroup = false,
+    /** adj625：组内每个 seg 的全曲小节序号（见 `barOrdinalsOf`；不传 = 不画小节序号） */
+    ord: (number | null)[] = [],
   ): number[] | undefined => {
     if (row.kind !== 'bars') return undefined
     const page = pages[pageIndex]
     const leadingEmpty = row.start < row.end && segs[row.start].notes.length === 0 ? 1 : 0
+    // adj625：行首序号（行首小节线通常隐藏 ⇒ 放在它的位置下 = 左边距）；与 `placeMusicRow` 同一口径。
+    // 小节线高度公式与 `placeMusicRow` 一致（基线-18.4×s .. 基线+4.5×s）。
+    {
+      const yBottomBarLead = r1(yTop + m.noteSize * 1.1 + 4.5 * noteScaleOf(m.noteSize))
+      const fc = firstCountedSeg(ord, row)
+      if (fc === row.start && isNumberedBar(ord[fc])) {
+        pushBarNumber(ord[fc] as number, config.margin_left, yBottomBarLead, voice, groupIndex)
+      }
+    }
 
     // ---- 提取带时值元素（音符块 / 增时线 / 附点）+ 小节线 ----
     interface NEl {
@@ -1890,6 +1978,14 @@ export function layoutScore(
           lineX = page.width - config.margin_right - barlineTotalW(bk.bar.type) / 2 - (meterGap ?? 0)
         }
         const bid: LayoutId = { page: pageIndex, voice, group: groupIndex, index: barCounter }
+        // adj625：本 seg 的收尾小节线 = 「下一个算作小节的 seg」的左侧小节线（同 `placeMusicRow`）：
+        // 那个小节在本行内才在此埋点，跨到下一行的由下一行的行首埋点负责。
+        {
+          const nc = nextCountedSeg(ord, b, row.end)
+          if (nc < row.end && isNumberedBar(ord[nc])) {
+            pushBarNumber(ord[nc] as number, lineX, yBottomBar, voice, groupIndex)
+          }
+        }
         page.barlines.push({
           id: bid,
           type: bk.bar.type,
@@ -1919,8 +2015,10 @@ export function layoutScore(
   }
 
   /** 处理一个单声部组 */
-  const placeGroup = (groupIndex: number, voice: number, tokens: MusicToken[], lyrics: LyricLine[]) => {
+  const placeGroup = (groupIndex: number, voice: number, tokens: MusicToken[], lyrics: LyricLine[], startBar = 1) => {
     const segs = splitBars(tokens)
+    // adj625：本组每个 seg 的**全曲小节序号**（决定哪几个小节画方框序号）
+    const ord = barOrdinalsOf(segs, startBar)
     // adj288：空间优先用「本体宽」判据断行，避免时长优先拍级 need 高估导致过早换行
     const rows = config.noteSpaceLayout === 'space' ? breakRowsSpace(segs, availW, m.noteSize) : breakRows(segs, availW, m.noteSize)
     const geciSize = config.geci_size
@@ -1960,10 +2058,10 @@ export function layoutScore(
       // adj421：单行曲部（本曲部只有这一行）——小节数 < align_min_bars 时按槽预分整行占宽
       const singleRowGroup = rows.length === 1
       if (isSpace) {
-        const mws = placeMusicRowSpace(segs, row, groupIndex, voice, y, lyricMaps, geciSize, sp, rowSlots[ri], prevRowMeasW, singleRowGroup)
+        const mws = placeMusicRowSpace(segs, row, groupIndex, voice, y, lyricMaps, geciSize, sp, rowSlots[ri], prevRowMeasW, singleRowGroup, ord)
         if (mws !== undefined) prevRowMeasW = mws
       } else {
-        const pb = placeMusicRow(segs, row, groupIndex, voice, y, lyricMaps, geciSize, sp, rowSlots[ri], refPerBeat, singleRowGroup)
+        const pb = placeMusicRow(segs, row, groupIndex, voice, y, lyricMaps, geciSize, sp, rowSlots[ri], refPerBeat, singleRowGroup, ord)
         if (row.kind === 'bars' && pb !== undefined) refPerBeat = pb
       }
       y += rowH
@@ -1980,7 +2078,7 @@ export function layoutScore(
   let lastMultiBarW: readonly number[] | null = null
 
   /** 多声部块：各声部按小节对齐纵向堆叠（块内小节等宽 + 时值等宽） */
-  const placeVoiceBlock = (unit: Unit) => {
+  const placeVoiceBlock = (unit: Unit, startBar = 1) => {
     const geciSize = config.geci_size
     const sp = spacingFor(config, pageIndex)
     // adj275：多声部括号占位（括号/注释在页面有效范围、音符内容区右移）；每组占位在 parts 后按注释长度独立计算
@@ -2009,10 +2107,34 @@ export function layoutScore(
       const lead = collectMarkSlots(seg0, 0, Math.max(1, Math.ceil(segBeats(seg0))), m.noteSize).find(({ slot }) => slot.lead)
       if (lead) firstLeadMarkW = Math.max(firstLeadMarkW, lead.slot.w)
     }
-    const blockPad = labelPad + 14 - firstLeadMarkW
+    const numBars = Math.max(...parts.map((p) => p.segs.length))
+    /**
+     * adj625：块内每个小节格的**全曲小节序号**（null = 大括号后的行首小节线，不算小节）。
+     * 多声部块内各声部共享同一批小节 ⇒ 整块共用一份序号（用户确认"全曲连续编号"）。
+     */
+    const ord: (number | null)[] = (() => {
+      let n = startBar
+      const out: (number | null)[] = []
+      for (let b = 0; b < numBars; b++) {
+        const exists = parts.some((p) => p.segs[b] !== undefined)
+        const anyNotes = parts.some((p) => (p.segs[b]?.notes.length ?? 0) > 0)
+        if (b === 0 && exists && !anyNotes) {
+          out.push(null)
+          continue
+        }
+        out.push(n++)
+      }
+      return out
+    })()
+    /**
+     * adj625：块首序号要画在「大括号与音符之间」那条空隙里（用户口径），
+     * 而这段留白原本固定 12px——括号自身占 3px、方框 ≈10px 宽 ⇒ 会压到括号上。
+     * 打开该选项且**块首小节带序号**时，把空隙撑到 `barNumberGapNeed`（框宽 + 净距 + 括号厚）。
+     */
+    const blockGapNeed = showBarNo && isNumberedBar(ord[0]) ? barNumberGapNeed(ord[0] as number, m.noteSize) : 0
+    const blockPad = labelPad + Math.max(14, blockGapNeed) - firstLeadMarkW
     const blockStartX = config.margin_left + blockPad
     const blockAvailW = availW - blockPad
-    const numBars = Math.max(...parts.map((p) => p.segs.length))
     // 块内每拍宽 = 块可用宽 / 块总拍数（每小节取各声部最大拍数，adj15）
     let blockBeats = 0
     const barBeats: number[] = []
@@ -2549,6 +2671,18 @@ export function layoutScore(
       )
       xBar += barWb + (b < numBars - 1 ? (b < gapSpaces.length ? gapSpaces[b] : 0) : 0)
     }
+    // adj625：**块首那个序号**——多声部块的行首小节线同样不画（隐藏小节线），
+    // 序号放在「**大括号与音符之间**」那条空隙里（用户口径），高度按**最上面声部**的小节线底缘算。
+    {
+      const braceX = config.margin_left + labelPad + 2
+      // 括号双线：左粗线在 braceX、右细线在 braceX + 3 ⇒ 可用空隙是 [braceX+3, blockStartX]，取中点
+      const xGap = (braceX + 3 + blockStartX) / 2
+      const yBottomTop = r1(voiceYTop[0] + m.noteSize * 1.1 + 4.5 * bs)
+      const fc = ord.findIndex((v) => v !== null)
+      if (fc === 0 && isNumberedBar(ord[0])) {
+        pushBarNumber(ord[0] as number, xGap, yBottomTop, parts[0]?.voice ?? 1, parts[0]?.groupIndex ?? 0)
+      }
+    }
     for (let vi = 0; vi < parts.length; vi++) {
       const p = parts[vi]
       const vTop = voiceYTop[vi]
@@ -2559,6 +2693,14 @@ export function layoutScore(
         const seg = p.segs[b]
         if (!seg?.bar) continue
         if (b === 0 && seg.notes.length === 0 && seg.bar.type === '|') continue
+        // adj625：**行中间**的小节序号只埋一次（取最上面声部那条小节线正下方）——
+        // 这根收尾线正是「下一个算作小节的格」的左侧小节线；块首那格由上面的埋点负责。
+        if (vi === 0) {
+          const nc = nextCountedSeg(ord, b, numBars)
+          if (nc < numBars && isNumberedBar(ord[nc])) {
+            pushBarNumber(ord[nc] as number, barX[b], yBottomBar, p.voice, p.groupIndex)
+          }
+        }
         const bid: LayoutId = { page: pageIndex, voice: p.voice, group: p.groupIndex, index: barCounter }
         pages[pageIndex].barlines.push({
           id: bid,
@@ -2629,6 +2771,31 @@ export function layoutScore(
   }
   flush()
 
+  /**
+   * adj625：**全曲连续**的小节计数——每个 group 的起始小节序号。
+   *
+   * 口径（用户确认"全曲连续编号"）：
+   *  · 从第 1 小节数到底，**换行/换曲部都不断号**；
+   *  · 多声部块内各声部是**同一批小节**（纵向堆叠）⇒ 该块整体只推进一次，
+   *    推进量取各声部小节数的**最大值**（与 `placeVoiceBlock` 的 `numBars` 同源）；
+   *  · "小节数"按 `splitBars` 分段计，**组首空 seg（那是行首小节线）不算小节**。
+   */
+  const startBarOfGroup = new Map<number, number>()
+  {
+    const barCountOf = (tokens: MusicToken[]): number =>
+      splitBars(tokens).filter((s, i) => !(i === 0 && s.notes.length === 0)).length
+    let acc = 1
+    for (const ev of events) {
+      if (ev.kind !== 'unit') continue
+      let unitBars = 0
+      for (const { groupIndex, group } of ev.unit.groups) {
+        unitBars = Math.max(unitBars, barCountOf(group.music.tokens))
+        startBarOfGroup.set(groupIndex, acc)
+      }
+      acc += unitBars
+    }
+  }
+
   // ---- 按事件序列排版 ----
   for (const ev of events) {
     if (ev.kind === 'pagebreak') {
@@ -2640,10 +2807,10 @@ export function layoutScore(
     }
     const { unit } = ev
     if (unit.multi) {
-      placeVoiceBlock(unit)
+      placeVoiceBlock(unit, startBarOfGroup.get(unit.groups[0]?.groupIndex ?? -1) ?? 1)
     } else {
       for (const { groupIndex, group } of unit.groups) {
-        placeGroup(groupIndex, group.music.voice, group.music.tokens, group.lyrics)
+        placeGroup(groupIndex, group.music.voice, group.music.tokens, group.lyrics, startBarOfGroup.get(groupIndex) ?? 1)
       }
     }
   }

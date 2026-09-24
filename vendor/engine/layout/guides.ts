@@ -224,6 +224,7 @@ export type GuideKeyEx =
   | 'height_ciqu_lyric'
   | 'segmentRowGap_bz'  // adj428：bz 段上下层间距
   | 'segmentRowGap_dsb' // adj428：dsb 段上下层间距
+  | 'barCountInterval'  // adj625：小节序号间隔（每隔几个小节显示一个序号）
 
 export const GUIDE_LIMITS_EX: Record<GuideKeyEx, [number, number]> = {
   descAreaH: [40, 400],
@@ -241,4 +242,7 @@ export const GUIDE_LIMITS_EX: Record<GuideKeyEx, [number, number]> = {
   height_ciqu_lyric: [-80, 120], // 曲部与上一行词部间距（adj79；adj105 允许负值，用户需进一步压缩行距）
   segmentRowGap_bz: [10, 80],  // adj428：bz 段上下层间距（与 SEGMENT_ROW_GAP_DEFAULT 范围一致）
   segmentRowGap_dsb: [10, 80], // adj428：dsb 段上下层间距
+  // adj625：小节序号间隔——1 = 每小节都标；上限 99（排版端同样钳到 1~99，
+  // 超过曲长就等于"不显示"，没有实际意义，但设个上限避免误拖出天文数字）。
+  barCountInterval: [1, 99],
 }

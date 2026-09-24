@@ -167,6 +167,50 @@ export const NOTE_COMMENT_RAISE = 2
 /** 文字 descender 与字号比值（SVG 基线下方延伸，估算 0.2em） */
 export const DESC_RATIO = 0.2
 
+// ---- 方框小节序号（adj625，用户要求） ----
+/**
+ * 方框小节序号的几何。
+ *
+ * 用户口径：
+ *  · 字号与「**倚音音符**」一样大（`max(6×s, note_size × GRACE_SIZE_RATIO)`，与渲染倚音同一算式；
+ *    `s = noteScaleOf(note_size)`，有下限、随字号等比，两处不会各写一份而漂移）；
+ *  · adj625b（用户要求）：**序号连同方框整体按 3/4 显示** ⇒ 字号 / 框内空隙 / 框线宽一律 ×0.75
+ *    （框宽由这三者与数字位数推出，故一并缩）。`BAR_NUMBER_BOTTOM_GAP` 是"离小节线多高"的
+ *    **定位**间隙、不属于"序号 + 方框"的尺寸，保持不变。
+ * 位置：**小节线底缘下方**（`BOTTOM_GAP` 起）画外框，数字用 `dominant-baseline="central"` 框内居中。
+ */
+export const BAR_NUMBER_BOTTOM_GAP = 1.5
+/** adj625b：序号（数字 + 方框）整体缩放比例 */
+export const BAR_NUMBER_SCALE = 0.75
+/** 外框四周内空隙（px；已含 3/4 缩放） */
+export const BAR_NUMBER_PAD = 1.5 * BAR_NUMBER_SCALE
+/** 外框线宽（px；已含 3/4 缩放） */
+export const BAR_NUMBER_STROKE = 0.8 * BAR_NUMBER_SCALE
+/** 序号与**倚音音符**同字号，再整体 ×3/4：`max(6×s, note_size × 0.5) × 0.75` */
+export const barNumberFontSize = (noteSize: number): number =>
+  Math.max(6 * noteScaleOf(noteSize), noteSize * GRACE_SIZE_RATIO) * BAR_NUMBER_SCALE
+/** 外框高度（含线宽，px） */
+export const barNumberBoxH = (noteSize: number): number =>
+  barNumberFontSize(noteSize) + BAR_NUMBER_PAD * 2 + BAR_NUMBER_STROKE
+/**
+ * 外框宽度（px）：按数字位数自适应（等宽估算 0.62em，与数字槽同比例），
+ * 但不小于框高（一位数时是个方框）。
+ * 布局端要用它给「多声部块首」那条空隙留位（见 `placeVoiceBlock`），渲染端画框同源。
+ */
+export const barNumberBoxW = (n: number, noteSize: number): number =>
+  Math.max(barNumberBoxH(noteSize), String(n).length * barNumberFontSize(noteSize) * 0.62 + BAR_NUMBER_PAD * 2)
+/** 多声部块首序号需要的「大括号与音符之间」净空隙（框宽 + 左右各 1px 净距 + 括号自身 3px 厚） */
+export const barNumberGapNeed = (n: number, noteSize: number): number => barNumberBoxW(n, noteSize) + 5
+/**
+ * adj625c（用户要求）：**序号算在曲部行自己的空间里，显隐不得影响排版** ⇒
+ * 不再为它预留任何纵向空间（既不抬高行高、也不把词部下移）。
+ *
+ * 依据（默认配置、note_size 13）：小节线底缘在曲部行内有 ≈4.6px 余量，其下还有
+ * 「曲下间距 `height_quci`（默认 15px）」/「行尾间距 `height_ciqu`（默认 20px）」——
+ * 3/4 缩后的方框（≈7.7px）加上 1.5px 间隙整段落在这段空隙里，**不压歌词、也不越到下一行**。
+ * 与「小节线备注」等既有"线下方文字"同一处置（都不参与行高计算）。
+ */
+
 // ---- 连音线 ----
 /** 连音线线宽（px，adj150：由 1 减小到 0.8） */
 export const SLUR_W = 0.8

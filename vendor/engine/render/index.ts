@@ -14,7 +14,7 @@
  * TODO(M1c)：歌词 <text data-cipos>
  * TODO(M7)：跳房子/连音线/装饰符号/多声部
  */
-import type { PageConfig, PlacedBarline, PlacedDynamic, PlacedLyric, PlacedSegmentBracket, PlacedSlur, PlacedToken, ScoreLayout, ScorePage, VoiceBlock } from '../types'
+import type { PageConfig, PlacedBarline, PlacedBarNumber, PlacedDynamic, PlacedLyric, PlacedSegmentBracket, PlacedSlur, PlacedToken, ScoreLayout, ScorePage, VoiceBlock } from '../types'
 import { tokenDuration } from '../duration'
 import { metaAnchorOf, metaAnchorPt } from '../layout/metaAnchors'
 import {
@@ -44,6 +44,12 @@ import {
   GRACE_SLOT_RATIO_MULTI,
   GRACE_BEAM_GAP,
   GRACE_LINE_W,
+  // adj625：方框小节序号的几何（与布局端同源）
+  BAR_NUMBER_BOTTOM_GAP,
+  BAR_NUMBER_STROKE,
+  barNumberFontSize,
+  barNumberBoxH,
+  barNumberBoxW,
   noteScaleOf,
   beamY,
   lowDotY,
@@ -881,6 +887,37 @@ function renderBarline(bar: PlacedBarline, noteSize = 18, noteFontFamily = FONT_
 }
 
 // ============================================================
+// 方框小节序号（adj625，用户要求）
+// ============================================================
+
+/**
+ * 画一个**带外框的小节序号**（`showBarCount`）。几何全部来自 `spacing.ts`（布局端同源）：
+ *  - 字号 = **倚音音符**字号 **× 3/4**（`barNumberFontSize`；框内空隙与线宽同步 ×0.75，见 `spacing.ts`）；
+ *  - 外框顶 = 该谱行小节线底缘 + `BAR_NUMBER_BOTTOM_GAP`，数字在框内**上下居中**；
+ *  - 框宽按数字位数自适应（等宽估算 0.62em，与数字槽同比例）。
+ */
+function renderBarNumber(bn: PlacedBarNumber, config: PageConfig): string {
+  const noteSize = config.note_size
+  const fs = barNumberFontSize(noteSize)
+  const boxH = barNumberBoxH(noteSize)
+  const text = String(bn.n)
+  const boxW = barNumberBoxW(bn.n, noteSize)
+  const top = bn.yBarBottom + BAR_NUMBER_BOTTOM_GAP
+  const cy = top + boxH / 2
+  // adj625（用户反馈"序号在方框里偏靠上"）：必须用 `central` 而**不是** `middle`——
+  // `middle` 对齐的是 **x-height 的中线**，而数字占的是 cap 高 ⇒ 数字整体偏上；
+  // `central` 才是"字符中心对齐"（本库增时线 `-`、段层括号等居中文本一直用 `central`）。
+  return (
+    `<g data-barnumber="${bn.n}">` +
+    `<rect x="${r1n(bn.x - boxW / 2)}" y="${r1n(top)}" width="${r1n(boxW)}" height="${r1n(boxH)}" ` +
+    `fill="none" stroke="#1b1b1b" stroke-width="${r1n(BAR_NUMBER_STROKE * noteScaleOf(noteSize))}"/>` +
+    `<text x="${r1n(bn.x)}" y="${r1n(cy)}" text-anchor="middle" dominant-baseline="central" ` +
+    `font-size="${r1n(fs)}" font-family="${noteFont(config.shuzi_font)}" fill="#1b1b1b">${text}</text>` +
+    `</g>`
+  )
+}
+
+// ============================================================
 // 歌词绘制
 // ============================================================
 
@@ -1406,6 +1443,8 @@ function renderPage(page: ScorePage, config: PageConfig, pageCount: number, opts
   // adj427：临时段（{bz … } / {dsb … }）叠加层括弧——段内容音符已并入 page.notes 一并绘制
   for (const sb of page.segmentBrackets ?? []) body.push(renderSegmentBracket(sb, config))
   for (const b of page.barlines) body.push(renderBarline(b, config.note_size, noteFont(config.shuzi_font)))
+  // adj625：方框小节序号（「显示小节计数」）——画在小节线下方，数字与方框 = 倚音字号 × 3/4
+  for (const bn of page.barNumbers) body.push(renderBarNumber(bn, config))
   for (const l of page.lyrics) body.push(renderLyric(l, config))
   for (const vb of page.voiceBlocks) body.push(renderVoiceBlocks(page, vb, config.note_size))
   body.push(renderPageNum(page, config, pageCount))

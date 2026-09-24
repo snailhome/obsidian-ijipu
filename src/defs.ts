@@ -44,6 +44,9 @@ export const DEFS: SettingDef[] = [
   { group: '页面', key: 'noteSpaceLayout', label: '音符布局模式', type: 'select', options: [
     { label: '空间优先', value: 'space' },
     { label: '时值优先', value: 'duration' } ] },
+  // adj625（同步主项目）：方框小节序号——开关 + 每隔几个小节显示一个（1~99，默认 4）
+  { group: '页面', key: 'showBarCount', label: '显示小节计数', type: 'toggle' },
+  { group: '页面', key: 'barCountInterval', label: '小节序号间隔', type: 'number' },
   // —— 字体 ——
   { group: '字体', key: 'biaoti_font', label: '标题字体', type: 'select', options: FONTS },
   { group: '字体', key: 'biaoti_size', label: '标题字号', type: 'number' },

@@ -71,8 +71,29 @@ console.log('[3] 可选字段（无默认值）必须被识别——否则键会
   check('可选字段不再出现在"未识别"里', opt.unknown.length === 0, JSON.stringify(opt.unknown))
   const fields = Object.keys(defaultPageConfig)
   check(`字段表覆盖引擎默认字段（${fields.length} 个）`, fields.every((f) => PAGE_CONFIG_FIELDS.includes(f as never)))
-  check(`字段表字段数 = 33（引擎 35 字段去掉编辑器偏好 2 项；adj428 新增 segmentRowGap）`, PAGE_CONFIG_FIELDS.length === 33, String(PAGE_CONFIG_FIELDS.length))
+  check(`字段表字段数 = 35（引擎 37 字段去掉编辑器偏好 2 项；adj625 新增 showBarCount/barCountInterval）`, PAGE_CONFIG_FIELDS.length === 35, String(PAGE_CONFIG_FIELDS.length))
   check('字段表无重复（规范化后不冲突）', new Set(PAGE_CONFIG_FIELDS.map((f) => f.replace(/[^a-z0-9]/gi, '').toLowerCase())).size === PAGE_CONFIG_FIELDS.length)
+}
+
+console.log('[3b] adj625 方框小节序号两项（同步主项目：谱面变量里可设）')
+{
+  const g = CFG({ ijipu_showBarCount: true, ijipu_barCountInterval: 2 })
+  check('ijipu_showBarCount 被识别并生效（布尔）',
+    g.config.showBarCount === true && g.applied.some((a) => a.field === 'showBarCount'), String(g.config.showBarCount))
+  check('ijipu_barCountInterval 被识别并生效（数字，字符串 "2" 也转成数字）',
+    g.config.barCountInterval === 2 && g.applied.some((a) => a.field === 'barCountInterval'), String(g.config.barCountInterval))
+  check('两项都不落进"未识别"', g.unknown.length === 0, JSON.stringify(g.unknown))
+  check('旧示例写法 ijipu_show_bar_count / ijipu_bar_count_interval 同样生效',
+    CFG({ ijipu_show_bar_count: true }).config.showBarCount === true &&
+      CFG({ ijipu_bar_count_interval: 8 }).config.barCountInterval === 8)
+  check('关闭时不写多余值：false 原样（等于默认，不亮"非默认"）',
+    CFG({ ijipu_showBarCount: false }).config.showBarCount === false)
+  // DEFS（defs.ts）import 了 `obsidian`，纯逻辑冒烟不能引入它 ⇒ 读源码断言两项都在定义表里
+  // （设置面板与「排版」对话框共用同一份 DEFS，登记即两处同时出现）
+  const defsSrc = String(readFileSync('src/defs.ts', 'utf8'))
+  check('两项都在 DEFS 里（设置面板与「排版」对话框共用同一份定义）',
+    /key: 'showBarCount', label: '显示小节计数', type: 'toggle'/.test(defsSrc) &&
+      /key: 'barCountInterval', label: '小节序号间隔', type: 'number'/.test(defsSrc))
 }
 
 console.log('[4] 未识别键不再静默忽略（给出最近键名建议）')

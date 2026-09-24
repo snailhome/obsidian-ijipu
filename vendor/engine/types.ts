@@ -553,6 +553,25 @@ export interface VoiceBlock {
   voiceCenters?: number[]
 }
 
+/**
+ * adj625（用户要求）：**方框小节序号**的锚点（布局给出，渲染画「数字 + 外框」）。
+ *
+ * 位置规则（用户口径）：
+ *  - `x` = 该小节**左侧小节线**的中心 x；行首那根小节线通常不画（隐藏小节线）⇒ 取行首内容左缘
+ *    （单声部 = 左边距；多声部 = 大括号与音符之间的空隙）；
+ *  - `yBarBottom` = 该谱行**小节线底缘** y（方框画在它下方一个固定间隙处，字号与音符注释一致）。
+ */
+export interface PlacedBarNumber {
+  /** 小节序号（1 起，**全曲连续**；多声部块内每小节只算一次） */
+  n: number
+  /** 方框中心 x */
+  x: number
+  /** 谱行小节线底缘 y（方框顶 = 该值 + `BAR_NUMBER_TOP_GAP`） */
+  yBarBottom: number
+  voice: number
+  group: number
+}
+
 /** 连音线（() 匹配的音符对，同行内绘制） */
 export interface PlacedSlur {
   /** 起点（第一个音符左边缘） */
@@ -611,6 +630,11 @@ export interface ScorePage {
   dynamics: PlacedDynamic[]
   /** adj294：独立括号标记（&zkh/&ykh）——按源码位置插位、占宽，不影响音符 */
   brackets: PlacedBracket[]
+  /**
+   * adj625：**方框小节序号**清单（`showBarCount` 打开时才有内容）。
+   * 渲染层按 `n` 画「数字 + 外框」；位置由布局给出（见 `PlacedBarNumber`）。
+   */
+  barNumbers: PlacedBarNumber[]
   /**
    * adj427：临时段（`{bz … }` / `{dsb … }`）叠加层的**左右大括号**。
    * 段内容音符与小节线直接追加在 `notes` / `barlines`（带 `segment` 标记），
@@ -735,6 +759,16 @@ export interface PageConfig {
   align_min_bars: number
   /** adj281：音符空间布局模式——时值优先（音符宽度与拍数成正比）/ 空间优先（预留） */
   noteSpaceLayout: NoteSpaceLayout
+  /**
+   * adj625（用户要求）：**显示小节计数**——在小节线下方画带方框的小节序号。
+   * 谱面级设置（L2，随 .jps 走：开关会改变谱面外观）。
+   */
+  showBarCount: boolean
+  /**
+   * adj625（用户要求）：**小节序号间隔**——每隔几个小节显示一个序号（默认 4 ⇒ 第 4、8、12… 小节）。
+   * 只在 `showBarCount` 打开时生效；排版端钳制到 1~99（越界/非数回退 4）。
+   */
+  barCountInterval: number
   /** adj303：是否显示乐器名注释（@乐器名 / @@ 切换后的下一个音符上方；缺省 false 不显示） */
   showInstrument?: boolean
   /**
@@ -802,6 +836,9 @@ export const defaultPageConfig: PageConfig = {
   align_min_bars: 4,
   // adj289：默认空间优先（指定为默认布局方式）
   noteSpaceLayout: 'space',
+  // adj625：小节计数默认**关闭**（不改变既有谱面）；间隔默认 4 小节
+  showBarCount: false,
+  barCountInterval: 4,
   lianyinxian_type: 0,
 }
 

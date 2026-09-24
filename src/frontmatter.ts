@@ -69,6 +69,9 @@ export const PAGE_CONFIG_FIELDS = [
   'bar_gap',
   'align_min_bars',
   'noteSpaceLayout',
+  // adj625：方框小节序号（主项目新增的两项谱面级设置，随谱走）
+  'showBarCount',
+  'barCountInterval',
   'showInstrument',
   'metaPos',
   'lianyinxian_type',

@@ -17,6 +17,7 @@ doc/
 # 引擎源码 vendor 内置（自包含，提交入库）
 
 # 构建临时产物
+copy2ob.bat
 build *.bat
 dist-*.js
 dist-smoke/
