@@ -1188,17 +1188,20 @@ export function buildPlaySequence(
             : voiceDefaultOf(placed.id.voice),
       )
       const gain = isSecondaryVoice ? ACCOMP_GAIN : 1
-            // 倚音（adj489：用户细化时值规则——短倚音按减时线数定组时值、组内均分；
-      //   主音符不够时**向前/后音符借**）：
-      //   ① 短倚音（带减时线）组时值 = `1 / 2^(减时线条数 + 1)`，组内**均分**这个时段
-      //      例：`3[2/]` = 1/4 拍；`3[3/2/]` 组时值 1/4，两个倚音各 1/8；`3[2/1/2/]` 组时值 1/4，三个各 1/12；
-      //   ② 长倚音（无减时线）组时值 = 主音符总时值 / 2，组内均分
-      //      例：`3[2]` = 1/2 拍、`3.[2]` = 3/4 拍、`3[32]` 共享 1/2 拍；
-      //   ③ 主音符发声时值 = 总时值 − 组时值；不够时**向前（前倚音）/ 后（后倚音）借**——
-      //      借走的量从前/后主音符的时值里扣；总原则：
-      //      (prev_orig − prev_consume) + principal_new + grace_group = prev_orig + principal_orig；
-      //   ④ 前倚音依次奏于主音符**开头**，后倚音依次奏于主音符**末尾**（含增时线/附点）；
-      //   ⑤ `3 -[h5/]`：主音符先奏满增时线/附点（到总时值末尾前），最后 1/4 拍才奏后倚音。
+      // 倚音（时值口径 adj489/505/507/624；**摆放口径 adj623：前倚音占用本音符的时值**）：
+      //   ① 短倚音（带减时线）组时值 = **主音符因子 × 倚音因子**（adj507），组内**均分**这个时段；
+      //      主音符因子按**本体**（不含增时线与附点，adj624）算：1 拍 → 1、< 1 拍 → 1/2；
+      //      再取上限 `min(值, 本体 ÷ 2)`（adj624：本体 < 1/2 拍时倚音 = 本体的一半）；
+      //      例：`3[2/]` = 1/4 拍；`3/[2/]` = 1/8 拍；`3///[2/]` = 1/16 拍；`3 -[2/]` 仍 1/4 拍；
+      //   ② 长倚音（无减时线）组时值 = 主音符**本体** ×（附点 2/3、否则 1/2），组内均分
+      //      例：`3[2]` = 1/2 拍、`3.[2]` = 1 拍、`3[32]` 共享 1/2 拍；
+      //   ③ 前/后倚音的时值都从**本音符自己**的时值里匀（前后同一把尺子）：
+      //      主音符发声时值 = 本音符总时值 − 组时值，**本音符总时值不变**
+      //      ⇒ 小节总长、后续音符的起始点都不受影响（不再向前/向后一个音符借，整曲不会被挪动）；
+      //   ④ 前倚音依次奏于本音符**开头**（从拍点起奏、主音符顺延到倚音之后），
+      //      后倚音依次奏于主音符**末尾**（含增时线/附点）；
+      //   ⑤ `3 -[h5/]`：主音符先奏满增时线/附点（到总时值末尾前），最后 1/4 拍才奏后倚音
+      //      —— 倚音**时值**按本体 1 拍算（adj624），**位置**在增时线/附点之后。
       const gn = token.kind === 'note' ? token.gracenotes : undefined
       const gracePitches =
         gn && gn.notes.length > 0
@@ -1214,69 +1217,36 @@ export function buildPlaySequence(
       const graceGain = isShortGrace ? gain * 0.9 : gain
       // 组时值（拍）+ 单个倚音时值（ms）—— adj489 均分
       const graceGroup = gn && gn.notes.length > 0 ? graceGroupBeats(token, durationMs / beatMs) : 0
-      /** 主音符原本时值（拍）——用于「借」计算（adj489） */
+      /** 本音符原本时值（拍）—— 倚音从这份里匀 */
       const principalBeats = durationMs / beatMs
-      // 主音符新时值 + 借给/借自邻居的量 + 倚音组的实际摆放窗口
+      // 主音符新时值 + 倚音组的实际摆放窗口
       let principalNewMs = durationMs
-      let prevConsumeMs = 0
-      /** 倚音组实际占用的时长（ms；短前倚音可能因前面没时间可借而被压缩） */
+      /** 倚音组实际占用的时长（ms；只在下面"装不下"的兜底分支里才会被压缩） */
       let graceWindowMs = graceGroup * beatMs
-      /** 倚音组起点 */
-      let graceAtMs = atMs
-      /** 主音符起奏点相对拍点的偏移：长前倚音/兜底时后移，短前倚音抢拍前时为 0（稳落拍点） */
+      /** 主音符起奏点相对拍点的偏移：前倚音占本音符**开头** ⇒ 主音符后移；后倚音 ⇒ 0（落拍点） */
       let mainShiftMs = 0
       if (gn && gn.notes.length > 0) {
-        if (!gn.after && isShortGrace) {
-          // adj508（用户要求）：**短前倚音总是"抢在拍前"**——倚音组占 `[拍点 − 窗宽, 拍点]`，
-          // 主音符**保持原时值、稳落拍点**（短倚音不占强位、重音在主音符上）。
-          // 时间从**上一个主音符**匀：把它截短到窗口起点；前面的空白（休止、间隙）可直接用，不必截。
-          // 安全下限：上一个主音符最多只让出一半（避免"前一个音被整个吃掉"）。
-          const G = graceGroup * beatMs
-          // adj596：借时值只向**同声部**的上一个主音符借（多声部按小节交替后，上一个已发事件
-          // 可能是另一声部的音符，绝不能截短它）
-          const prevEv =
-            lastMainEvIdx >= 0 && events[lastMainEvIdx]?.placed.id.voice === placed.id.voice
-              ? events[lastMainEvIdx]
-              : null
-          const prevDur = prevEv ? prevEv.durationMs : 0
-          const gapBefore = prevEv ? Math.max(0, atMs - (prevEv.atMs + prevEv.durationMs)) : atMs
-          const need = Math.max(0, G - gapBefore)
-          prevConsumeMs = Math.min(need, prevDur / 2)
-          graceWindowMs = Math.min(G, gapBefore + prevConsumeMs)
-          if (graceWindowMs <= 0) {
-            // 前面一点时间都没有（全曲/乐句第一个音）⇒ 退回"占拍点、主音符后移"（否则倚音无声）
-            graceWindowMs = G
-            graceAtMs = atMs
-            mainShiftMs = G
-            principalNewMs = Math.max(0, principalBeats - graceGroup) * beatMs
-          } else {
-            graceAtMs = atMs - graceWindowMs
-          }
-        } else if (graceGroup <= principalBeats) {
-          // 够装：直接扣主音符（长前倚音占拍点；后倚音占自己主音符的尾部）
+        if (graceGroup <= principalBeats) {
+          // 够装（绝大多数）：**倚音只吃本音符自己的时值**，本音符总时值不变——
+          // 前倚音占本音符开头（主音符后移 `graceGroup`）、后倚音占本音符末尾（主音符照常起奏、提前收尾）。
           principalNewMs = (principalBeats - graceGroup) * beatMs
-          if (gn && !gn.after) mainShiftMs = graceGroup * beatMs
+          if (!gn.after) mainShiftMs = graceGroup * beatMs
         } else if (!gn.after) {
-          // 长前倚音装不下（极少）：向前借（前主音符贴补 → 不够则主音符继续扣）
-          // adj596：同上——只向**同声部**的上一个主音符借
-          const prevSameVoice = lastMainEvIdx >= 0 && events[lastMainEvIdx]?.placed.id.voice === placed.id.voice
-          const prevOrigBeats = prevSameVoice ? events[lastMainEvIdx].durationMs / beatMs : 0
-          const shortfallBeats = graceGroup - principalBeats
-          const prevCanCover = Math.min(prevOrigBeats, shortfallBeats)
-          prevConsumeMs = prevCanCover * beatMs
-          // principal_new = principal_orig − (shortfall − prevCanCover)
-          principalNewMs = Math.max(0, principalBeats - (graceGroup - prevCanCover)) * beatMs
-          mainShiftMs = graceGroup * beatMs
+          // adj624：按现行时值规则（短倚音 ≤ 本体的一半、长倚音 ≤ 本体）**已不可达**，此处只作兜底：
+          // 仍只占本音符的时值——窗口压缩到本音符长度（倚音按比例变快）、主音符挤成 0 拍不发声；
+          // **绝不向前一个音符借**（adj508 的旧口径会把上一个音符截短、整曲位移），也不撑长小节。
+          graceWindowMs = principalBeats * beatMs
+          principalNewMs = 0
+          mainShiftMs = graceWindowMs
         } else {
-          // 后倚音装不下：向后借——本主音符保持原时值（后倚音占其末尾），
-          // 借走量由下一次循环开头 patch 下一个主音符事件（见循环顶部）。
+          // 后倚音装不下（同样按现行时值规则不可达，兜底）：本主音符保持原时值，后倚音接在其末尾。
           principalNewMs = principalBeats * beatMs
         }
       }
       const mainMs = principalNewMs
-      /** 主音符发声起点：短前倚音抢拍前 ⇒ 偏移 0（稳落拍点）；长前倚音/兜底 ⇒ 后移 `mainShiftMs` */
+      /** 主音符发声起点：前倚音占本音符开头 ⇒ 后移 `mainShiftMs`；无倚音/后倚音 ⇒ 落拍点（偏移 0） */
       const mainAtMs = atMs + mainShiftMs
-      /** 单个倚音时值（ms）：短前倚音按**实际窗口**均分（可能被压缩），其余按组时值均分 */
+      /** 单个倚音时值（ms）= **实际窗口**均分（组时值超过本音符时窗口已被压缩，倚音随之变快） */
       const graceNoteMs = gracePerNoteBeats(graceWindowMs / beatMs, gn?.notes.length ?? 0) * beatMs
       // 波音（adj502，用户规范）：与倚音同源——时值从主音符里匀出来、总时值守恒，但**从主音开始**波动。
       //   · 每个短音 = clamp(P/8, 45, 110)ms（单波音 2 个短音 ≈ P/4；复波音 4 个 ≈ P/2；两者波动速度一致）；
@@ -1291,9 +1261,8 @@ export function buildPlaySequence(
       /** 按住的主音起奏点 = 主音起奏点 + 各短音之和 */
       const heldAtMs = mainAtMs + mordSteps.length * mordShortMs
       if (gn && !gn.after && gracePitches.length > 0) {
-        // adj508：短前倚音从**拍点前**的窗口起（`graceAtMs`，可能因可借时间不足而压缩）；
-        // 长前倚音仍从拍点起、主音符后移。
-        let gAt = graceAtMs
+        // adj623：前倚音一律从**本音符自己的拍点**起奏（占用本音符的时值），主音符顺延到倚音之后。
+        let gAt = atMs
         for (let gi = 0; gi < gn.notes.length; gi++) {
           // adj436：倚音是**独立事件**，必须**继承主音符的声部角色与音色来源**——
           // 否则「试听音色」的全局覆盖会把 `@手风琴@` 之后的倚音（如 `3/[3/5/]`）压回主音色
@@ -1339,13 +1308,8 @@ export function buildPlaySequence(
         // 有色块的话，色块已挂在首个波音短音上（见上）
         ...(mordSteps.length === 0 ? { playheadSegs } : {}),
       })
-      // adj489：前倚音借了前主音符 → patch 前主音符事件
-      if (prevConsumeMs > 0 && lastMainEvIdx >= 0) {
-        const prev = events[lastMainEvIdx]
-        prev.durationMs = Math.max(0, prev.durationMs - prevConsumeMs)
-        // adj361：借走后当前播放时刻随之前移
-        lastEndMs = Math.max(lastEndMs, prev.atMs + prev.durationMs)
-      }
+      // adj623：前倚音只吃**本音符自己的时值** ⇒ 无需再回改上一个主音符事件
+      // （adj508 的旧口径会把上一个音符截短来给倚音腾出"拍点前"的时间，现已废弃）。
       // adj375：本音符是某 &hx 的作用对象 → 标记该事件待结算（连音合并会累加时值后再一起算）
       if (hxBreathNoteIdx.has(curNoteIdx)) breathEvIdx = mainEvIdx
       if (gn && gn.after && gracePitches.length > 0) {
