@@ -19,10 +19,97 @@ import type { ParseError } from '../types'
  * @param opts.inSegment adj427：当前调用是否为 `{bz/dsb}` 段内的递归调用；为 true 时
  *   段内再遇到 `{bz/dsb` 会报"嵌套"错，段内遇到 `}` 会报"段内不应有 `}`"错。
  */
+
+/**
+ * 从小节线引号备注中识别"临时转调"指令 `d:<key>` 或单用 `d:`。
+ *
+ * 与 `parseKey` 同一调式口径：`<key>` 形如 `C` / `1=D` / `#F` / `Eb` / `bB` 等，
+ * 也接受简写 `D` / `F#` / `Eb`（直接传调名）。`d:` 单用 = 恢复描述头 `D:` 的全局调号（"清回"）。
+ *
+ * 备注里写其它文本（不是 `d:` 开头）→ 一律当成普通注释，**不被本函数消费**。
+ *
+ * @returns `{ rest, targetKey?, clear? }`：`rest` 是把 `d:...` 前缀剥掉后的剩余文本（用作显示注释）
+ *   ；`targetKey` 仅在 `<key>` 合法时返回（半音偏移）；`clear` 仅在 `d:` 单用时为 true。
+ */
+function parseKeyChange(comment: string): {
+  rest: string
+  targetKey?: number
+  clear?: boolean
+  keyText?: string
+  plus?: number
+  minus?: number
+} {
+  // 不以 `d:` 开头 → 与本功能无关，原样返回
+  if (!/^d:/.test(comment)) return { rest: comment }
+  // 截掉 `d:` 前缀，剩下 `1=D强音` / `D` / `Eb` / `F#` / ``（单用）
+  let s = comment.slice(2)
+  if (s === '') {
+    // 单用 `d:` ⇒ 恢复描述头调号
+    return { rest: '', clear: true }
+  }
+  // 允许简谱习惯的 `1=D`（级数 `1=` 只是书写习惯，调名是 `D`；等号两侧可有空格）
+  const eq = /^\d+\s*=\s*/.exec(s)
+  if (eq) s = s.slice(eq[0].length)
+  // 调号紧贴 `d:`（可带 `1=`）之后；调号之后允许继续写普通注释文字（"d:1=D强音" 的"强音"要照常显示）。
+  // **音名必须大写**——与描述头 `D:` 同一口径（`D: C` / `D: $B` 都要求大写字母）；
+  // 若放宽到小写，"d:abc" 这种普通备注会被误读成"a♭ + 备注 c"。
+  const km = /^([#$b]?[A-G][#$b]?)/.exec(s)
+  if (!km) return { rest: comment }
+  const keyText = km[1]
+  const targetKey = parseKeyString(keyText)
+  if (targetKey === null) return { rest: comment }
+  let rest = s.slice(km[0].length)
+  // adj627b（用户要求）：紧跟调名的 `+` / `-` ⇒ 抬升 / 降低**转调记号的显示高度**
+  // （与音符注释 `1"注"+`（adj392）同一套记法：每级 NOTE_COMMENT_RAISE px，`+` 向上）
+  let plus = 0
+  let minus = 0
+  while (rest.startsWith('+')) {
+    plus++
+    rest = rest.slice(1)
+  }
+  while (rest.startsWith('-')) {
+    minus++
+    rest = rest.slice(1)
+  }
+  return { rest, targetKey, keyText, ...(plus ? { plus } : {}), ...(minus ? { minus } : {}) }
+}
+
+/** 与 `parseKey` 同一正则（**音名大写**），但只验证并返回根音半音；不合法返回 null（不兜 0，区分"未给"与"非 C"） */
+function parseKeyString(s: string): number | null {
+  const m = /^([#$b]?)([A-G])([#$b]?)$/.exec(s.trim())
+  if (!m) return null
+  const semis: Record<string, number> = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 }
+  const acc = m[1] || m[3]
+  return semis[m[2]] + (acc === '#' ? 1 : acc === '$' || acc === 'b' ? -1 : 0)
+}
+
+/**
+ * 把一段小节线引号备注写进 token：识别 `d:` 转调指令，其余文本作为显示注释。
+ * 单独抽出来是因为**未闭合引号**那条分支也要走同一套（否则 `|"d:1=D` 会丢掉指令）。
+ */
+function applyKeyChange(
+  t: Extract<MusicToken, { kind: 'barline' }>,
+  rawNote: string,
+): void {
+  const parsed = parseKeyChange(rawNote)
+  if (parsed.targetKey !== undefined || parsed.clear) {
+    // adj627b：`keyText` 保留用户写法（`Ab` 不能显示成 `#G`）；`plus`/`minus` 是转调记号的抬升/降低级数
+    t.keyChange = {
+      ...(parsed.targetKey !== undefined ? { targetKey: parsed.targetKey } : {}),
+      ...(parsed.clear ? { clear: true } : {}),
+      ...(parsed.keyText !== undefined ? { keyText: parsed.keyText } : {}),
+      ...(parsed.plus ? { plus: parsed.plus } : {}),
+      ...(parsed.minus ? { minus: parsed.minus } : {}),
+    }
+  }
+  // 剥掉 `d:` 前缀后的剩余文本才是"给人看的注释"；空则不写 comment
+  if (parsed.rest !== '') t.comment = parsed.rest
+}
+
 export function tokenizeMusicLine(
   content: string,
   pos: SourcePos,
-  opts: { inSegment?: 'bz' | 'dsb' } = {},
+  opts: { inSegment?: SegmentKind } = {},
 ): { tokens: MusicToken[]; errors: ParseError[] } {
   const tokens: MusicToken[] = []
   const errors: ParseError[] = []
@@ -62,11 +149,13 @@ export function tokenizeMusicLine(
   const HINT_GRACE = '倚音用 `[` `]` 紧贴音符成对书写，括号内只允许高低音点 `\'` `,`、变音 `#` `$` `=`、减时线 `/`：前倚音 `1[65]`、后倚音 `1[h6/5]`'
   const HINT_SLUR_ATTACHED =
     '连音线 `(` 与音符之间**应有空格**（与虚音符 `(1)` 区分）；`(` 后的 `+`/`-` 是**连音线的高度级数**（`(+` 抬升、`(-` 降低，每级 2px），**不是**前一个音符的增时线——要给音符增时请写在音符旁，如 `1- (- 2 3)`'
-  // adj427：临时段提示文案
+  // adj427：临时段提示文案（adj629：加 `{tp}` 替谱——它只写在歌词行里）
   const HINT_SEGMENT_HEAD = '临时段必须以 `{bz`（临时伴奏）或 `{dsb`（临时多声部）开头，且 `bz`/`dsb` 后要留一个空格，如 `{bz 1 2 3}`'
   const HINT_SEGMENT_CLOSE = '临时段要成对闭合：`{bz … }` / `{dsb … }`，如 `3 4 | {bz 1 2 3 4} 5 6 |`'
   const HINT_SEGMENT_NEST = '临时段**不支持嵌套**；请先 `}` 关闭外层段，再开新段'
-  const HINT_SEGMENT_STRAY = '`}` 只能用于关闭 `{bz` 或 `{dsb` 临时段，不能单独出现'
+  const HINT_SEGMENT_STRAY = '`}` 只能用于关闭 `{bz` / `{dsb` / `{tp` 临时段，不能单独出现'
+  const HINT_TP_IN_LYRIC =
+    '替谱段 `{tp … }` 写在**歌词行**里（`C:` = 第 1 遍、`C2:` = 第 2 遍……），段内写"这一遍不同"的那几个音；如 `C2: … 借 {tp 4/ 3// 6,/ 6,// 1/ .1 -} 一 丝 懵 懂 …`'
   const HINT_VOLTA = '跳房子 `[` 要紧跟在小节线之后；行首跳房子请先用隐藏小节线 `|/`，如 `|/ ["1." 1 2 3 |]`'
   const HINT_SYMBOL =
     '音符用 `1`-`7`、休止 `0`（隐藏休止 `8`）、节奏 `9`；时值 `-` `/` `.`；高低音点 `\'` `,`；变音 `#` `$` `=`；装饰 `&编码`（如 `&tr`）；注释 `"文字"`；小节线与反复 `|` `||` `|:` `:|`；跳房子 `[` `]`；渐强渐弱 `<` `>` `!`（详见「语法速查」）'
@@ -216,13 +305,23 @@ export function tokenizeMusicLine(
       continue
     }
 
-    // adj427：临时段 `{bz … }`（临时伴奏）/ `{dsb … }`（临时多声部）。
+    // adj427：临时段 `{bz … }`（临时伴奏）/ `{dsb … }`（临时多声部）/ `{tp … }`（adj629 替谱，仅歌词行）。
     // 段内 token 递归 tokenize 后挂在 open token 的 children 上；`}` 生成配对的 close token。
-    // 段头边界校验见 matchSegmentHead（`bz`/`dsb` 后必须是空白或 `}`）；段结束扫描见
-    // findSegmentEnd（跳过引号内的 `}`）；段内**不嵌套**（段内再遇 `{bz/dsb` 报"嵌套"错）。
+    // 段头边界校验见 matchSegmentHead（段头后必须是空白或 `}`）；段结束扫描见
+    // findSegmentEnd（跳过引号内的 `}`）；段内**不嵌套**（段内再遇段头报"嵌套"错）。
     if (c === '{') {
       const segType = matchSegmentHead(content, i)
       if (segType) {
+        // adj629：`{tp … }` 的"第几遍"由**歌词行序号**决定（见 types.ts 的 LyricVariant）——
+        // 曲行里没有这个依据，写在曲行只能是笔误，直接报错并跳掉该段（不再往下走成"无遍次替谱层"）。
+        if (segType === 'tp') {
+          const tpEnd = findSegmentEnd(content, i + 1 + segType.length)
+          errors.push(
+            err('替谱段 "{tp … }" 只能写在歌词行（`C:` / `C2:` / `C3:` …）里', { line: pos.line, col: pos.col + i }, 'error', HINT_TP_IN_LYRIC),
+          )
+          i = tpEnd === -1 ? n : tpEnd + 1
+          continue
+        }
         // 嵌套限制：段内不能再开新段（递归调用时 opts.inSegment 已设置）
         if (opts.inSegment) {
           errors.push(
@@ -567,22 +666,49 @@ export function tokenizeMusicLine(
             }
           } else if (content[j] === '"') {
             // 小节线备注（引号，如 "p:2/4" 临时节拍 / 备注）——任意顺序下都能解析
+            // adj627：备注里若写 `d:<调号>` / `d:`（临时转调 / 恢复原调），把它**拆出来**单独存，
+            // 显示注释只留剥掉 `d:` 前缀后的剩余文本（否则谱面会同时显示指令与注释两截文字）
             const close = content.indexOf('"', j + 1)
             if (close === -1) {
-              t.comment = content.slice(j + 1)
+              const rawNote = content.slice(j + 1)
+              applyKeyChange(t, rawNote)
               errors.push(err('引号注释未闭合', { line: pos.line, col: pos.col + j }, 'error', HINT_QUOTE))
               j = n
             } else {
-              t.comment = content.slice(j + 1, close)
-              t.raw = rawAt(i, close + 1)
-              j = close + 1
+              const rawNote = content.slice(j + 1, close)
+              applyKeyChange(t, rawNote)
+              let k = close + 1
+              // adj627b（用户要求）：**紧接转调注释引号后的 `+` / `-`** ⇒ 抬升 / 降低转调记号。
+              // 位置与 adj392 的音符注释完全一致（`1"注"+` 的 `+` 也在闭合引号**之后**），
+              // 每级 NOTE_COMMENT_RAISE px；写在引号里（`"d:D+"`）同样认，两处都写则叠加。
+              // 只在**确实识别出转调**时吞掉这些符号，免得改变普通备注（`"p:2/4"+`）的既有行为。
+              if (t.keyChange) {
+                let plus = 0
+                let minus = 0
+                while (k < n && (content[k] === '+' || content[k] === '-')) {
+                  if (content[k] === '+') plus++
+                  else minus++
+                  k++
+                }
+                if (plus > 0) t.keyChange.plus = (t.keyChange.plus ?? 0) + plus
+                if (minus > 0) t.keyChange.minus = (t.keyChange.minus ?? 0) + minus
+              }
+              t.raw = rawAt(i, k)
+              j = k
             }
           } else {
             break
           }
         }
         // 无任何附加（备注/跳房子/修饰符）：回退到空格前（空格留给下一个块，adj23）
-        if (t.comment === undefined && t.voltaStart === undefined && t.voltaEnd === undefined && t.marks === undefined) {
+        // adj627：`d:` 转调指令也算"有附加内容"——否则 `|"d:1=D"` 会被回退、指令丢失
+        if (
+          t.comment === undefined &&
+          t.voltaStart === undefined &&
+          t.voltaEnd === undefined &&
+          t.marks === undefined &&
+          t.keyChange === undefined
+        ) {
           j = barEnd
         }
       }
@@ -897,19 +1023,19 @@ type NoteToken_ = Extract<MusicToken, { kind: 'note' }>
 // adj427：临时段（{bz … } / {dsb … }）辅助纯函数
 // ============================================================
 
-/** 临时段类型 */
-export type SegmentKind = 'bz' | 'dsb'
+/** 临时段类型（adj629 加 `tp` 替谱——它只写在歌词行里，段头不带遍次号） */
+export type SegmentKind = 'bz' | 'dsb' | 'tp'
 
 /**
- * 判断 `content[at]` 处是否为临时段开头（`{bz` / `{dsb`），是则返回段类型。
+ * 判断 `content[at]` 处是否为临时段开头（`{bz` / `{dsb` / `{tp`），是则返回段类型。
  *
- * **必须做边界校验**：`bz`/`dsb` 之后只能是空白或段结束 `}`——
+ * **必须做边界校验**：段头之后只能是空白或段结束 `}`——
  * 否则 `{bzzy 1 2}` 会被误当成 bz 段（`bzzy` 不是合法段头，应报"无法识别"）。
  */
 export function matchSegmentHead(content: string, at: number): SegmentKind | null {
   if (content[at] !== '{') return null
   // dsb 放在 bz 之前无影响（互不为前缀），但顺序固定便于阅读
-  for (const t of ['dsb', 'bz'] as const) {
+  for (const t of ['dsb', 'bz', 'tp'] as const) {
     if (!content.startsWith(t, at + 1)) continue
     const boundary = content[at + 1 + t.length]
     // 段头后必须是空白或直接结束 `}`（`{bz}` 空段）

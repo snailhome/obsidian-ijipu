@@ -10,6 +10,7 @@ import type {
   HeaderLine,
   LyricChar,
   LyricLine,
+  LyricVariant,
   MusicGroup,
   MusicLine,
   MusicToken,
@@ -18,7 +19,8 @@ import type {
   SlurToken,
   SourceLine,
 } from '../types'
-import { tokenizeMusicLine } from './tokenizer'
+// adj629：`{tp … }` 替谱段——段头识别 / 段结束扫描 / 段内 token 位置右移都复用临时段那套
+import { tokenizeMusicLine, matchSegmentHead, findSegmentEnd, shiftTokenPos } from './tokenizer'
 import { tokenDuration } from '../duration'
 import { errAt } from './errors'
 // adj454：设置行（`# jps-config:`）的语法校验（顶格 / JSON / 键值类型）
@@ -61,8 +63,12 @@ export function tempoLabel(num: string | undefined, text: string | undefined): s
 
 /** 解析一个 C 行（歌词）：每个汉字/音节对应一个音符；@ 占位（占一个字空间）；~ 连字；
  *  中文标点不占音符位，紧跟前面的字渲染（adj35） */
-function parseLyricContent(content: string, line: number): { chars: LyricChar[]; errors: ParseError[] } {
+function parseLyricContent(
+  content: string,
+  line: number,
+): { chars: LyricChar[]; variants: LyricVariant[]; errors: ParseError[] } {
   const chars: LyricChar[] = []
+  const variants: LyricVariant[] = []
   const errors: ParseError[] = []
   let i = 0
   const n = content.length
@@ -121,6 +127,36 @@ function parseLyricContent(content: string, line: number): { chars: LyricChar[];
       i++
       continue
     }
+    /**
+     * adj629（用户要求）：歌词行里的**替谱段** `{tp … }`——"这一遍与主旋律不同"的那几个音。
+     *
+     *  - **第 k 段歌词 = 第 k 遍**：`C:` = 第 1 遍、`C2:` = 第 2 遍……（遍次由 `parser` 注入时按行序给出）；
+     *  - **锚点** = 段前已提交的歌词字数（= 槽位号）：段紧跟在"被替换区间第一个字"的前面，
+     *    如 `… 晚 钟， {tp 4/ 3// …} 借 一 丝 …` ⇒ 从「借」那个音起替；
+     *  - 段内按**曲谱语法**解析（复用音乐行 tokenizer），可以写音符/时值/连音/倚音/装饰，不必写小节线；
+     *  - 段本身**不占歌词位**（`chars` 里没有它），所以本行歌词的字位对齐不受影响。
+     */
+    if (c === '{' && matchSegmentHead(content, i) === 'tp') {
+      flush()
+      mountPunct()
+      const slot = chars.reduce((a, ch) => a + (ch.punctuation ? 0 : 1), 0)
+      let k = i + 3 // 跳过 `{tp`（段头后必须是空白或 `}`，见 matchSegmentHead）
+      while (k < n && (content[k] === ' ' || content[k] === '\t')) k++
+      const segEnd = findSegmentEnd(content, k)
+      if (segEnd === -1) {
+        errors.push(
+          errAt('替谱段 "{tp … }" 未找到结束 "}"', line, i, 'error', '替谱段要成对闭合，如 `C2: … 借 {tp 4/ 3// 1/ .1 -} 一 丝 …`（段内写这一遍的音符）'),
+        )
+        i = n
+        continue
+      }
+      // 段内递归解析：`inSegment:'tp'`（第 3 参数）⇒ 段内再写段头会报"不支持嵌套"
+      const innerRes = tokenizeMusicLine(content.slice(k, segEnd), { line, col: k }, { inSegment: 'tp' })
+      errors.push(...innerRes.errors)
+      variants.push({ slot, tokens: shiftTokenPos(innerRes.tokens, k), pos: i })
+      i = segEnd + 1
+      continue
+    }
     if (c === '~') {
       // 连字：与下一个非空白字符合并到当前音节
       let k = i + 1
@@ -174,7 +210,7 @@ function parseLyricContent(content: string, line: number): { chars: LyricChar[];
   }
   flush()
   mountPunct()
-  return { chars, errors }
+  return { chars, variants, errors }
 }
 
 /** 解析整份 .jps 源码 */
@@ -316,9 +352,10 @@ export function parseJps(source: string): ParseResult {
     const lyricMatch = /^C(\d*)\s*:\s*(.*)$/.exec(trimmed)
     if (lyricMatch) {
       const voice = lyricMatch[1] === '' ? 1 : Number(lyricMatch[1])
-      const { chars, errors: lyrErrors } = parseLyricContent(lyricMatch[2] ?? '', lineNo)
+      const { chars, variants, errors: lyrErrors } = parseLyricContent(lyricMatch[2] ?? '', lineNo)
       errors.push(...lyrErrors)
       const ll: LyricLine = { kind: 'lyric', voice, chars, pos, raw }
+      if (variants.length > 0) ll.variants = variants
       lines.push(ll)
       // 依附于最近一个同声部 Q 行
       if (lastMusicIndex >= 0) {
@@ -338,6 +375,9 @@ export function parseJps(source: string): ParseResult {
     lines.push({ kind: 'unknown', pos, raw })
     errors.push(errAt(`无法识别的行 "${trimmed.slice(0, 20)}${trimmed.length > 20 ? '…' : ''}"`, lineNo, 0, 'warning', '行首必须是：描述头（`V:` 版本 / `B:` 标题 / `Z:` 作者 / `D:` 调式 / `P:` 拍号 / `J:` 节拍 / `Y:` 乐器 / `S:` 说明）、曲行 `Q:`、词行 `C:`、`#` 注释行、`[fenye]` 分页标记或 `# jps-config:{...}` 设置行（详见「语法速查」）'))
   }
+
+  // ---- adj629（用户要求）：把歌词行里的替谱段 `{tp … }` 注入所属曲行的 token 流 ----
+  errors.push(...injectLyricVariants(groups))
 
   // ---- 平均连音组 (y...) 时值均分（多连音线）：组内音符时值 = 组总时值 / 组内音符数 ----
   applyTupletDurations(groups, parseMeterBeats(header.meter))
@@ -359,6 +399,83 @@ function parseMeterBeats(meter: string | undefined): number | null {
   if (!meter) return null
   const m = /^(\d+)\s*\//.exec(meter.trim())
   return m ? Number(m[1]) : null
+}
+
+/**
+ * adj629（用户要求）：把各歌词行里的 `{tp … }`（替谱段）**注入所属曲行的 token 流**。
+ *
+ * 为什么要注入：排版/播放已经有完整的"临时段"机制——`computeSegments` 算拍位包络、
+ * `placeSegmentOverlays` 负责叠加层的坐标/括号/行宽预算、播放端按包络发事件、
+ * 段内音符有独立 id 命名空间供光标联动。只要替谱段以 `kind:'segment'` 出现在曲行 token 流里，
+ * 这一整套**全部免费生效**，不必为"写在歌词行上的段"另写一套排版。
+ *
+ * 锚点：第 `slot` 个**计时 token**（音符/休止/节奏——与排版端歌词槽位计数同一口径）**之前**。
+ * `pass` = 该歌词行在所属曲行里的行序（1 起）⇒ 播放端"第 k 遍用替谱替代主旋律"。
+ */
+function injectLyricVariants(groups: MusicGroup[]): ParseError[] {
+  const errors: ParseError[] = []
+  /**
+   * adj629：全谱是否有**反复结构**——决定"第 k 遍"到底会不会发生。
+   * 反复线（`|:` `:|` `:|:` 等，线型里都带 `:`）或大反复修饰（`&dc` / `&ds`）都算。
+   * 没有的话，`C2:`/`C3:` 上的替谱永远不会被演奏——给告警（不阻断），否则用户会以为它生效了。
+   */
+  const hasRepeat = groups.some((g) =>
+    g.music.tokens.some(
+      (t) =>
+        t.kind === 'barline' &&
+        (t.type.includes(':') || (t.marks ?? []).some((m) => m === 'dc' || m === 'ds')),
+    ),
+  )
+  for (const g of groups) {
+    const tokens = g.music.tokens
+    // 计时 token 下标表：其下标即歌词槽位号（与 layout 的 slotIndex 同步推进口径一致）
+    const durIdx: number[] = []
+    tokens.forEach((t, i) => {
+      if (t.kind === 'note' || t.kind === 'rest' || t.kind === 'rhythm') durIdx.push(i)
+    })
+    const ins: { at: number; seq: number; open: MusicToken; close: MusicToken }[] = []
+    g.lyrics.forEach((ly, li) => {
+      const pass = li + 1
+      let variantIdx = 0 // adj629d：同一行里第几个 `{tp … }`（源码坐标，供 id/光标联动用）
+      for (const v of ly.variants ?? []) {
+        // 段落在末音之后（槽位超出本曲行音符数）时挂到行尾
+        const at = v.slot < durIdx.length ? durIdx[v.slot] : tokens.length
+        ins.push({
+          at,
+          seq: ins.length,
+          open: {
+            kind: 'segment',
+            type: 'tp',
+            dir: 'open',
+            pos: v.pos,
+            raw: '{tp',
+            children: v.tokens,
+            pass,
+            tpLine: li,
+            tpVariant: variantIdx,
+          },
+          close: { kind: 'segment', type: 'tp', dir: 'close', pos: v.pos, raw: '}' },
+        })
+        variantIdx++
+        if (pass >= 2 && !hasRepeat) {
+          errors.push(
+            errAt(
+              `第 ${pass} 段歌词里的替谱段不会生效：本谱没有任何反复记号`,
+              ly.pos.line,
+              v.pos,
+              'warning',
+              '`{tp … }` 按"第 k 段歌词 = 第 k 遍"生效，所以要先有反复结构（`|: … :|`、`:|:`、`&dc`/`&ds`）；否则那一段替谱永远轮不到',
+            ),
+          )
+        }
+      }
+    })
+    if (ins.length === 0) continue
+    // 从后往前插：同一下标时**先写的那条排在前面**（seq 降序插入）
+    ins.sort((a, b) => b.at - a.at || b.seq - a.seq)
+    for (const it of ins) tokens.splice(it.at, 0, it.open, it.close)
+  }
+  return errors
 }
 
 /**

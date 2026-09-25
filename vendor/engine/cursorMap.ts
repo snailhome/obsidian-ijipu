@@ -7,11 +7,12 @@
  *  - codePosToNoteId：编辑器光标位置 → 音符 id（仅 Q 行内联动）
  *  - noteIdToCodePos：音符 id → 编辑器字符位置（点击谱面跳转）
  */
-import { tokenizeMusicLine } from './parser/tokenizer'
-import { isDurational, decodeSegmentNoteId, segmentNoteIndexBase } from './layout/segments'
+import { tokenizeMusicLine, matchSegmentHead, findSegmentEnd } from './parser/tokenizer'
+import { isDurational, decodeSegmentNoteId, decodeTpNoteId, segmentNoteIndexBase, tpNoteIndexBase } from './layout/segments'
 import type { MusicToken, ScoreLayout } from './types'
 
 const Q_RE = /^Q(\d*)(?:"[^"]*")?\s*:(.*)$/
+const C_RE = /^C(\d*)\s*:\s*(.*)$/
 const ID_RE = /^(\d+)_(\d+)_(\d+)_(\d+)$/
 
 export interface NoteIdParts {
@@ -90,6 +91,98 @@ function locateSegmentNote(
   return null
 }
 
+/**
+ * adj629d：**歌词行里的替谱段** `{tp … }`（用户报「点预览里替谱部分的音符不跳脚本、试听也点不过去」）。
+ *
+ * 替谱段的段头 token 是解析期**注入**到曲行 token 流里的，源码侧（本模块只重新分词 `Q:` 行）
+ * 复现不出那个下标；因此替谱音符的 id 改用**源码可推导**的三元组
+ * 「组号 + 歌词行号 + 该行内第几个 `{tp}` + 段内时值序号」（见 `layout/segments.ts`）。
+ * 这里提供两个方向共用的"扫源码"工具。
+ */
+interface TpSpan {
+  /** `{` 在本行内容里的列 */
+  openPos: number
+  /** `}` 的列（未闭合取行尾） */
+  closePos: number
+  /** 段内容起点列（跳过 `{tp` 后的空白） */
+  contentStart: number
+  /** 段内容终点列 */
+  contentEnd: number
+}
+
+/** 枚举一条歌词行内容里的全部 `{tp … }`（按源码顺序） */
+function tpSpansOf(body: string): TpSpan[] {
+  const out: TpSpan[] = []
+  let i = 0
+  while (i < body.length) {
+    if (body[i] === '{' && matchSegmentHead(body, i) === 'tp') {
+      let k = i + 3
+      while (k < body.length && (body[k] === ' ' || body[k] === '\t')) k++
+      const end = findSegmentEnd(body, k)
+      out.push({
+        openPos: i,
+        closePos: end === -1 ? body.length : end,
+        contentStart: k,
+        contentEnd: end === -1 ? body.length : end,
+      })
+      if (end === -1) break
+      i = end + 1
+      continue
+    }
+    i++
+  }
+  return out
+}
+
+/** 段内时值 token（源码次序；序号 = 下标） */
+function durationalsOf(body: string, sp: TpSpan): { pos: number }[] {
+  const { tokens } = tokenizeMusicLine(body.slice(sp.contentStart, sp.contentEnd), { line: 1, col: sp.contentStart })
+  return tokens.filter(isDurational)
+}
+
+/**
+ * 光标在本行内容里的列 → 命中的替谱段序号与段内音符序号（取"光标处或紧邻左侧的音"，
+ * 与段层 `{bz}` 的 `locateSegmentNote` 同一口径）。
+ */
+function locateTpNote(body: string, col: number): { variantIdx: number; durSeq: number } | null {
+  const spans = tpSpansOf(body)
+  for (let vi = 0; vi < spans.length; vi++) {
+    const sp = spans[vi]
+    if (col < sp.openPos || col > sp.closePos) continue
+    const notes = durationalsOf(body, sp)
+    if (notes.length === 0) return null
+    let last = 0
+    let k = 0
+    for (const n of notes) {
+      if (n.pos > col - sp.contentStart) break
+      last = k
+      k++
+    }
+    return { variantIdx: vi, durSeq: Math.min(last, notes.length - 1) }
+  }
+  return null
+}
+
+/** 一条源码行的定位信息（列基准用） */
+interface LineInfo {
+  /** 去掉行首缩进后的内容 */
+  trimmed: string
+  /** 行首空白数 */
+  leading: number
+  /** 「字段头 + 空格」的长度（内容起点列） */
+  headLen: number
+  /** 字段内容（`Q: ` / `C…: ` 之后） */
+  body: string
+  voice: number
+}
+
+function lineInfoOf(raw: string, m: RegExpExecArray): LineInfo {
+  const leading = raw.length - raw.trimStart().length
+  const trimmed = raw.trim()
+  const body = m[2] ?? ''
+  return { trimmed, leading, headLen: trimmed.length - body.length, body, voice: m[1] === '' ? 1 : Number(m[1]) }
+}
+
 /** 编辑器光标位置（0-based）→ notepos id；非 Q 行或超出范围返回 null
  *  @param indexToPage 布局时生成的「全局音符 index → 物理页 page」（自动分页一致）；缺省回退 [fenye] 计 */
 export function codePosToNoteId(code: string, pos: number, indexToPage?: Map<number, number>): string | null {
@@ -111,6 +204,9 @@ export function codePosToNoteId(code: string, pos: number, indexToPage?: Map<num
   let group = -1
   let noteCounter = 0
   let target: string | null = null
+  /** adj629d：每个曲行（组）已依附的歌词行（行号 + 内容），供"光标落在 `C` 行的 `{tp}` 里"定位 */
+  const groupLyrics: { line: number; info: LineInfo }[][] = []
+  const groupVoices: number[] = []
 
   for (let i = 0; i <= lineIdx; i++) {
     const raw = lines[i]
@@ -120,10 +216,43 @@ export function codePosToNoteId(code: string, pos: number, indexToPage?: Map<num
       page++
       continue
     }
+    // adj629d：`C…:` 行——先按 parser 的依附规则（最近一个同声部曲行）登记，再看光标是否落在替谱段里
+    const cm = C_RE.exec(trimmed)
+    if (cm) {
+      const li = lineInfoOf(raw, cm)
+      let gi = -1
+      for (let k = groupVoices.length - 1; k >= 0; k--) {
+        if (groupVoices[k] === li.voice) {
+          gi = k
+          break
+        }
+      }
+      if (gi < 0) gi = groupVoices.length - 1
+      if (gi >= 0) {
+        groupLyrics[gi] = groupLyrics[gi] ?? []
+        const lineIdxInGroup = groupLyrics[gi].length
+        groupLyrics[gi].push({ line: i, info: li })
+        if (i === lineIdx) {
+          const hit = locateTpNote(li.body, pos - lineStart - li.leading - li.headLen)
+          if (!hit) return null
+          const gIdx = tpNoteIndexBase(gi, lineIdxInGroup, hit.variantIdx) + hit.durSeq
+          const pg = indexToPage?.get(gIdx) ?? page
+          // 声部号取**所属曲行**的声部（`C2:` 的 2 是"第 2 条歌词行"的写法，不是声部号——
+          // 与 parser 的依附规则一致：找不到同声部曲行时依附到最近的那个曲行）
+          return `${pg}_${groupVoices[gi] ?? li.voice}_${gi}_${gIdx}`
+        }
+      }
+      // 注意：**不能**在这里累加 `lineStart`——它是第一个循环算出的"光标所在行的起点"，
+      // 第二个循环只在**光标行之前的行**上做登记（列基准必须保持为光标行起点）。
+      continue
+    }
     const m = Q_RE.exec(trimmed)
     if (!m) continue
+    const qi = lineInfoOf(raw, m)
     group++
-    const content = m[2] ?? ''
+    groupVoices[group] = qi.voice
+    groupLyrics[group] = groupLyrics[group] ?? []
+    const content = qi.body
     const { tokens } = tokenizeMusicLine(content, { line: i + 1, col: 0 })
     const noteTokens = tokens.filter(isNoteToken)
 
@@ -134,7 +263,7 @@ export function codePosToNoteId(code: string, pos: number, indexToPage?: Map<num
       // 点击块内任意位置（含块末空隙/行尾）都对应本块
       const col = pos - lineStart - leading // 相对 trimmed 行的列
       const headLen = trimmed.length - content.length
-      const voice = m[1] === '' ? 1 : Number(m[1])
+      const voice = qi.voice
       // adj445：光标落在临时段 `{bz …}` / `{dsb …}` 内 → **段内音符**（用户报「点 {bz} 里的音符不联动」）。
       // 段内音符不在主旋律音符流里，必须单独定位；id 用 layout 同一套「组号 + 段头下标 + 段内时值序号」编码。
       // 注：token 的 `pos` 相对**曲行内容**（`Q:` 之后那段），故减掉 `headLen` 再比较。
@@ -173,12 +302,63 @@ export function noteIdToCodePos(code: string, id: string): number | null {
   if (!parts) return null
 
   const lines = code.replace(/\r\n/g, '\n').split('\n')
+  const lineStartOf = (n: number): number => {
+    let acc = 0
+    for (let i = 0; i < n && i < lines.length; i++) acc += lines[i].length + 1
+    return acc
+  }
   let page = 0
   let noteCounter = 0
   let lineStart = 0
   let group = -1
   // adj445：段内音符 id（高位命名空间）→ 用「组号（= 第几个 Q 行）+ 段头下标 + 段内时值序号」定位
   const seg = decodeSegmentNoteId(parts.index)
+  /**
+   * adj629d：**替谱段音符**（写歌词行里的 `{tp … }`）——`openIndex` 是注入后的下标、源码侧没有，
+   * 改用 id 里的「歌词行号 + 行内第几个 `{tp}` + 段内时值序号」：先按 parser 的依附规则
+   * （`C…:` 依附最近一个同声部曲行）把歌词行归到各组，再在该行的第 n 个 `{tp}` 里取第 m 个音。
+   */
+  const tp = decodeTpNoteId(parts.index)
+  if (tp) {
+    const groupLyrics: { line: number; info: LineInfo }[][] = []
+    const groupVoices: number[] = []
+    let g = -1
+    for (let i = 0; i < lines.length; i++) {
+      const raw = lines[i]
+      const trimmed = raw.trim()
+      if (trimmed === '[fenye]') continue
+      const cm = C_RE.exec(trimmed)
+      if (cm) {
+        const li = lineInfoOf(raw, cm)
+        let gi = -1
+        for (let k = groupVoices.length - 1; k >= 0; k--) {
+          if (groupVoices[k] === li.voice) {
+            gi = k
+            break
+          }
+        }
+        if (gi < 0) gi = groupVoices.length - 1
+        if (gi >= 0) {
+          groupLyrics[gi] = groupLyrics[gi] ?? []
+          groupLyrics[gi].push({ line: i, info: li })
+        }
+        continue
+      }
+      const qm = Q_RE.exec(trimmed)
+      if (!qm) continue
+      g++
+      groupVoices[g] = lineInfoOf(raw, qm).voice
+      groupLyrics[g] = groupLyrics[g] ?? []
+    }
+    const ly = groupLyrics[tp.group]?.[tp.lineIdx]
+    if (!ly) return null
+    const spans = tpSpansOf(ly.info.body)
+    const sp = spans[tp.variantIdx]
+    if (!sp) return null
+    const t = durationalsOf(ly.info.body, sp)[tp.durSeq]
+    if (!t) return null
+    return lineStartOf(ly.line) + ly.info.leading + ly.info.headLen + sp.contentStart + t.pos
+  }
 
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i]

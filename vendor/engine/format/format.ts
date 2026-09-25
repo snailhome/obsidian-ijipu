@@ -2,12 +2,15 @@
  * engine/format/format.ts — 自动格式化（.jps 排版）
  *
  * 规则实现自 JPS 脚本规范（`docs/JPS-SPEC.md`，独立推导、不依赖任何第三方实现）：
- *  - 仅格式化 Q 行（曲行）；其余行原样保留；
+ *  - 格式化 Q 行（曲行）；其余行原样保留——**例外**：歌词行（`C…:`）里的 `{tp … }` 替谱段
+ *    也是曲部内容，按同样规则格式化（adj629h）；
  *  - 引号内（歌词引用/注释）与跳房子 [] 内不做空格处理；
  *  - 数字前补空格（除非前一位已是 Q/C/空格/(/y）；
  *  - "(" 前补空格；"|" 前补空格；":" 在 "|" 前补空格；"{" "}" 前补空格；
  *  - adj293：描述头属性与内容之间保留且只保留一个空格（如 Y:  钢琴 / Y:钢琴 → Y: 钢琴）。
  */
+import { matchSegmentHead, findSegmentEnd } from '../parser/tokenizer'
+
 export function formatJps(source: string): string {
   const lines = source.replace(/\r\n/g, '\n').split('\n')
   return lines.map(formatLine).join('\n') + '\n'
@@ -19,8 +22,45 @@ export function formatLine(raw: string): string {
   // adj293：描述头属性与内容之间保留且只保留一个空格
   const headerM = /^((?:V|B|Z|D|P|J|Y|S)\s*:)\s*(.*)$/.exec(trimmed)
   if (headerM) return `${headerM[1]} ${headerM[2]}`
+  /**
+   * adj629h：**歌词行里的 `{tp … }` 替谱段也要按曲行规则格式化**（用户问）——
+   * 歌词文字保持原样，只把段内那段"曲部内容"过一遍曲行规则（音符/小节线/连音线的空格）。
+   */
+  const cM = /^(C\d*\s*:)\s*(.*)$/.exec(trimmed)
+  if (cM) return `${cM[1]} ${formatLyricBody(cM[2]).trim()}`.trimEnd()
   if (!/^Q(\d*(?:"[^"]*")?\s*:)/.test(trimmed)) return raw
+  return formatMusicBody(trimmed)
+}
 
+/** adj629h：歌词行内容——歌词原样，`{tp … }` 段内按曲行规则格式化 */
+function formatLyricBody(body: string): string {
+  const out: string[] = []
+  let i = 0
+  while (i < body.length) {
+    const at = body.indexOf('{', i)
+    if (at < 0 || matchSegmentHead(body, at) !== 'tp') break
+    let k = at + 3
+    while (k < body.length && (body[k] === ' ' || body[k] === '\t')) k++
+    const end = findSegmentEnd(body, k)
+    if (end < 0) break
+    const pre = body.slice(i, at)
+    out.push(pre === '' ? '' : `${pre.replace(/[ \t]+$/, '')} `)
+    out.push(`{tp ${formatMusicBody(body.slice(k, end)).trim()}}`)
+    i = end + 1
+    // 段后统一补一个空格（原文多个空格收敛成一个），行尾则由最后 trim 掉
+    const lead = /^[ \t]*/.exec(body.slice(i))?.[0] ?? ''
+    i += lead.length
+    if (i < body.length) out.push(' ')
+  }
+  out.push(body.slice(i))
+  return out.join('')
+}
+
+/**
+ * adj629h：曲行内容的格式化（原 `formatLine` 的主循环，抽出来供歌词行里的替谱段复用）。
+ * 规则见文件头；`Q:` 以外的行头**已去掉**，这里收到的就是纯曲部内容。
+ */
+export function formatMusicBody(trimmed: string): string {
   const out: string[] = []
   let inQuote = false
   let inVolta = false

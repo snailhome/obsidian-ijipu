@@ -1,8 +1,8 @@
 import { App, Notice, PluginSettingTab, Setting } from 'obsidian'
 import { BUILD_STAMP, GIT_COMMIT } from './gen/buildInfo'
-import { frontmatterKey } from './frontmatter'
+import { buildFrontmatterTemplate, frontmatterKey } from './frontmatter'
 // 设置项定义与控件构建由 defs.ts 统一提供（设置面板与谱面「⚙ 排版」对话框共用一份，避免两处漂移）
-import { DEFS, GROUPS, addConfigControl, getDefault, type FieldKey, type FieldValue, type SettingDef } from './defs'
+import { DEFS, GROUPS, addConfigControl, getDefault, readDef, writeDef, type FieldKey, type SettingDef } from './defs'
 import { GM_VOICE_OPTIONS, DEFAULT_HQ_ENABLED, HqCache, getHqLibrary, prefetchHqLibraryProgress } from './soundbank'
 import type IJipuPlugin from './main'
 
@@ -32,27 +32,15 @@ async function copyText(text: string, okTip: string): Promise<void> {
   }
 }
 
-/** YAML 标量：数字/布尔直出，字符串含特殊字符（字体名里的单引号、逗号）时加双引号 */
-function yamlScalar(v: unknown): string {
-  if (typeof v === 'number' || typeof v === 'boolean') return String(v)
-  const s = String(v ?? '')
-  return /^[A-Za-z0-9_./-]+$/.test(s) ? s : `"${s.replace(/"/g, '\\"')}"`
-}
-
 /**
  * 生成可直接粘贴到笔记顶部的 frontmatter 模板（含当前生效值，按设置面板分组加注释）。
- * @param valueOf 取某项当前值（插件设置或默认值）
+ *
+ * adj629q：实现搬到 `frontmatter.ts` 的纯函数 `buildFrontmatterTemplate`（可被冒烟直接核对），
+ * 这里只提供"取当前值"的回调（插件设置优先、否则引擎默认）。嵌套字段（`segmentRowGap`）
+ * 会合成一行 YAML 流式映射，不会写成三行互相覆盖。
  */
 function frontmatterTemplate(valueOf: (def: SettingDef) => unknown): string {
-  const lines: string[] = ['---']
-  for (const group of GROUPS) {
-    const items = DEFS.filter((d) => d.group === group)
-    if (items.length === 0) continue
-    lines.push(`# ${group}`)
-    for (const def of items) lines.push(`${frontmatterKey(def.key)}: ${yamlScalar(valueOf(def))}`)
-  }
-  lines.push('---')
-  return lines.join('\n')
+  return buildFrontmatterTemplate(DEFS, GROUPS, (d) => valueOf(d as SettingDef))
 }
 
 export class IJipuSettingTab extends PluginSettingTab {
@@ -122,8 +110,13 @@ export class IJipuSettingTab extends PluginSettingTab {
       .addButton((b) =>
         b
           .setButtonText('复制全部键名')
-          .setTooltip(`复制 ${DEFS.length} 个 ijipu_* 键名（每行一个）`)
-          .onClick(() => void copyText(DEFS.map((d) => frontmatterKey(d.key)).join('\n'), `已复制 ${DEFS.length} 个 frontmatter 键名`)),
+          .setTooltip(`复制 ${new Set(DEFS.map((d) => d.key)).size} 个 ijipu_* 键名（每行一个）`)
+          .onClick(() =>
+            void copyText(
+              [...new Set(DEFS.map((d) => frontmatterKey(d.key)))].join('\n'),
+              `已复制 ${new Set(DEFS.map((d) => d.key)).size} 个 frontmatter 键名`,
+            ),
+          ),
       )
       .addButton((b) =>
         b
@@ -131,7 +124,7 @@ export class IJipuSettingTab extends PluginSettingTab {
           .setTooltip('带当前值的 YAML，可直接粘贴到笔记顶部')
           .onClick(() =>
             void copyText(
-              frontmatterTemplate((d) => this.plugin.settings[d.key] ?? getDefault(d)),
+              frontmatterTemplate((d) => readDef(this.plugin.settings, d) ?? getDefault(d)),
               '已复制 frontmatter 模板：粘贴到笔记顶部（--- 之间）即可生效',
             ),
           ),
@@ -142,9 +135,10 @@ export class IJipuSettingTab extends PluginSettingTab {
       if (items.length === 0) continue
       new Setting(containerEl).setName(group).setHeading()
       for (const def of items) {
-        const cur = this.plugin.settings[def.key] ?? getDefault(def)
+        // adj629q：嵌套字段（`segmentRowGap.bz` 等）按子项取值/写值，不再整字段互相覆盖
+        const cur = readDef(this.plugin.settings, def) ?? getDefault(def)
         const row = new Setting(containerEl).setName(def.label)
-        row.setDesc(this.keyDesc(def.key))
+        row.setDesc(this.keyDesc(def.key, def.sub))
         this.addControl(row, def, cur)
       }
     }
@@ -213,8 +207,10 @@ export class IJipuSettingTab extends PluginSettingTab {
   /**
    * 「frontmatter 键：<code>ijipu_xxx</code>」描述——**点键名即复制**（键盘 Enter/Space 亦可）。
    * 诉求来源：手抄 `ijipu_note_size` 这类键名容易写错，而写错会被静默忽略。
+   * adj629q：嵌套字段（`segmentRowGap`）的 frontmatter 键仍是**整字段**那一个
+   * （frontmatter 里按 `ijipu_segmentRowGap: {bz: …}` 写），只是多标一下子项名便于对照。
    */
-  private keyDesc(key: FieldKey): DocumentFragment {
+  private keyDesc(key: FieldKey, sub?: string): DocumentFragment {
     const k = frontmatterKey(key)
     return createFragment((frag) => {
       frag.appendText('frontmatter 键：')
@@ -229,13 +225,15 @@ export class IJipuSettingTab extends PluginSettingTab {
           void copyText(k, `已复制 ${k}`)
         }
       })
+      if (sub) frag.appendText(`（子项 ${sub}）`)
     })
   }
 
   /** 设置面板的一行控件（与「⚙ 排版」对话框共用 defs.ts 的同一实现） */
-  private addControl(row: Setting, def: SettingDef, cur: FieldValue): void {
-    addConfigControl(row, def, cur, (key, value) => {
-      ;(this.plugin.settings as Record<string, unknown>)[key as string] = value
+  private addControl(row: Setting, def: SettingDef, cur: unknown): void {
+    addConfigControl(row, def, cur, (_key, value) => {
+      // adj629q：嵌套字段按子项写入（`readDef`/`writeDef` 是唯一的口径）
+      writeDef(this.plugin.settings, def, value)
       void this.plugin.saveSettings()
     })
   }

@@ -116,10 +116,12 @@ function expectDescOf(key: string, v: unknown): string | null {
     case 'showInstrument':
       return typeof v === 'boolean' ? null : 'true / false'
     case 'segmentRowGap': {
-      if (typeof v !== 'object' || v === null || Array.isArray(v)) return '对象 {"bz":数值,"dsb":数值}'
+      // adj629：加 `tp`（替谱段与所属歌词行的间距）
+      const shape = '对象 {"bz":数值,"dsb":数值,"tp":数值}'
+      if (typeof v !== 'object' || v === null || Array.isArray(v)) return shape
       for (const [k, n] of Object.entries(v as Record<string, unknown>)) {
-        if (k !== 'bz' && k !== 'dsb') return '对象 {"bz":数值,"dsb":数值}'
-        if (typeof n !== 'number' || !Number.isFinite(n)) return '对象 {"bz":数值,"dsb":数值}'
+        if (k !== 'bz' && k !== 'dsb' && k !== 'tp') return shape
+        if (typeof n !== 'number' || !Number.isFinite(n)) return shape
       }
       return null
     }
@@ -307,11 +309,13 @@ export function roundPxIntegers(cfg: Partial<PageConfig>): Partial<PageConfig> {
   // 注意：**以后新增嵌套数值字段必须在这里补一段**（无编译期断言兜底，只能靠这条注释 +
   // smoke 断言；下面的 smoke 用例覆盖 segmentRowGap）。
   if (cfg.segmentRowGap) {
-    const g: { bz?: number; dsb?: number } = {}
+    const g: { bz?: number; dsb?: number; tp?: number } = {}
     const bz = cfg.segmentRowGap.bz
     const dsb = cfg.segmentRowGap.dsb
+    const tp = cfg.segmentRowGap.tp // adj629：替谱段间距
     if (typeof bz === 'number' && Number.isFinite(bz)) g.bz = Math.round(bz)
     if (typeof dsb === 'number' && Number.isFinite(dsb)) g.dsb = Math.round(dsb)
+    if (typeof tp === 'number' && Number.isFinite(tp)) g.tp = Math.round(tp)
     out.segmentRowGap = g
   }
   return out as unknown as Partial<PageConfig>

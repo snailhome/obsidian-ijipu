@@ -37,7 +37,7 @@ export type GuideLine = {
   to: number
   title: string
   readonly?: boolean
-  kind: 'margin' | 'desc' | 'row' | 'lyric'
+  kind: 'margin' | 'desc' | 'row' | 'lyric' | 'segment'
 }
 
 /** 取字段可调范围（核心表与扩展表合一，缺省 [0,400]） */
@@ -83,24 +83,49 @@ export function computeGuideLines(layout: ScoreLayout, cfg: PageConfig, pageInde
     kind: 'desc', readonly: true, title: '描述头区域中线（标注）',
   })
 
-  // —— 行结构线（曲部行 / 词部各行）——
+  // —— 行结构线（曲部行 / 段层行 / 词部各行）——
   const rows = computeRowGuides(layout, { quci: cfg.height_quci, geci: cfg.geci_size }, cfg.note_size)[pageIndex] ?? []
   rows.forEach((rg, ri) => {
     const prevHasLyric = ri > 0 ? (rows[ri - 1]?.lyricRows.length ?? 0) > 0 : false
-    const key: GuideKey = ri === 0 ? 'body_margin_top' : rg.voiceIdx > 0 ? 'height_shengbu' : prevHasLyric ? 'height_ciqu_lyric' : 'height_ciqu'
-    const title =
-      ri === 0
+    /**
+     * adj629q（与应用同口径）：**临时叠加段（`{bz}`/`{dsb}`/`{tp}`）的段层行**拖的是
+     * `segmentRowGap.{bz,dsb,tp}`（段层与主旋律 / 所属歌词行的间距），**不是谱面行距**——
+     * 此前插件把段层行当成普通曲行，拖它会误改 `height_ciqu*`（设置与应用不一致）。
+     * `bz` 只有上层；`dsb` 有上下两层（上层往上拖 = 增大间距 ⇒ invert）；
+     * `tp` 挂在所属歌词行之上，`tp` 越大层越高 ⇒ 同"上层"口径。
+     */
+    const isSeg = rg.segType !== undefined
+    const isUpper = rg.segLayer === 'upper'
+    const key: GuideKey = isSeg
+      ? rg.segType === 'bz'
+        ? 'segmentRowGap_bz'
+        : rg.segType === 'tp'
+          ? 'segmentRowGap_tp'
+          : 'segmentRowGap_dsb'
+      : ri === 0
+        ? 'body_margin_top'
+        : rg.voiceIdx > 0
+          ? 'height_shengbu'
+          : prevHasLyric
+            ? 'height_ciqu_lyric'
+            : 'height_ciqu'
+    const invert = isSeg && isUpper
+    const title = isSeg
+      ? rg.segType === 'tp'
+        ? '替谱段（第 k 段歌词 = 第 k 遍）与所属歌词行的间距（拖动调整）'
+        : `${rg.segType === 'bz' ? '临时伴奏' : '临时多声部'}${isUpper ? '上层' : '下层'}间距（拖动调整）`
+      : ri === 0
         ? '曲部上间距（与描述头间距，拖动调整）'
         : rg.voiceIdx > 0
           ? '声部行间距（拖动调整）'
           : prevHasLyric
             ? '曲部与上一行词部间距（拖动调整）'
             : '曲部与曲部间距（拖动调整）'
-    out.push({ key, dir: 'v', pos: rg.yCenter, from: contentL, to: contentR, kind: 'row', title })
+    out.push({ key, dir: 'v', invert, pos: rg.yCenter, from: contentL, to: contentR, kind: isSeg ? 'segment' : 'row', title })
     rg.lyricRows.forEach((lr, k) => {
       out.push({
         key: k === 0 ? 'height_quci' : 'height_cici', dir: 'v', pos: lr.center, from: contentL, to: contentR,
-        kind: 'lyric', title: k === 0 ? '曲-词间距（拖动调整）' : '词-词间距（拖动调整）',
+        kind: 'lyric', title: k === 0 ? '曲部与词部间距（拖动调整）' : '词部与词部间距（拖动调整）',
       })
     })
   })

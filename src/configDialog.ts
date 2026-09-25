@@ -13,7 +13,7 @@
  */
 import { App, Modal, Setting } from 'obsidian'
 import { defaultPageConfig, type PageConfig } from '@ijipu/engine'
-import { DEFS, GROUPS, addConfigControl } from './defs'
+import { DEFS, GROUPS, addConfigControl, readDef, writeDef } from './defs'
 
 /** 保存去向：谱面源码（# jps-config，只写本次改动） / 谱面源码（随谱固化 = 非默认项全量） / 插件设置（本库全局默认） */
 export type ConfigTarget = 'score' | 'score-full' | 'plugin'
@@ -76,9 +76,12 @@ export class ConfigDialog extends Modal {
       if (items.length === 0) continue
       new Setting(contentEl).setName(group).setHeading()
       for (const def of items) {
-        const row = new Setting(contentEl).setName(def.label).setDesc(`frontmatter 键：${def.key}`)
-        addConfigControl(row, def, this.draft[def.key], (k, v) => {
-          ;(this.draft as unknown as Record<string, unknown>)[k as string] = v
+        // adj629q：嵌套字段（`segmentRowGap.bz` 等）按子项取值/写值，同一字段的其它子项保留
+        const row = new Setting(contentEl)
+          .setName(def.label)
+          .setDesc(def.sub ? `frontmatter 键：${def.key}（子项 ${def.sub}）` : `frontmatter 键：${def.key}`)
+        addConfigControl(row, def, readDef(this.draft, def), (_k, v) => {
+          writeDef(this.draft, def, v)
         })
       }
     }

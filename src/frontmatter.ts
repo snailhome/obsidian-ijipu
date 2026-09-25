@@ -258,3 +258,54 @@ export function unknownKeyHint(list: UnknownKey[]): string {
     .map((u) => (u.suggest ? `${u.key}（是否想写 ${u.suggest}？）` : u.key))
     .join('、')
 }
+
+/** YAML 标量：数字/布尔直出，字符串含特殊字符（字体名里的单引号、逗号）时加双引号 */
+export function yamlScalar(v: unknown): string {
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v)
+  const s = String(v ?? '')
+  return /^[A-Za-z0-9_./-]+$/.test(s) ? s : `"${s.replace(/"/g, '\\"')}"`
+}
+
+/** 模板用得到的最小字段定义（避免本模块依赖 defs.ts —— 那会牵进 obsidian） */
+export interface TemplateDef {
+  key: string
+  /** 嵌套子项名（如 `segmentRowGap` 的 `bz`/`dsb`/`tp`） */
+  sub?: string
+  group: string
+  label: string
+}
+
+/**
+ * 生成可直接粘贴到笔记顶部的 frontmatter 模板（含当前生效值，按设置分组加注释）。
+ *
+ * adj629q：**嵌套字段只写一行 YAML 流式映射**（`ijipu_segmentRowGap: {bz: 22, dsb: 22, tp: 14}`）——
+ * 同一个字段的多个子项若各写一行会互相覆盖（后写的赢），值也会被 `String(对象)` 变成 `[object Object]`。
+ * 本函数**不依赖 obsidian**，冒烟测试可直接引入核对输出。
+ *
+ * @param valueOf 取某项（含子项）当前值
+ */
+export function buildFrontmatterTemplate(
+  defs: readonly TemplateDef[],
+  groups: readonly string[],
+  valueOf: (def: TemplateDef) => unknown,
+): string {
+  const lines: string[] = ['---']
+  for (const group of groups) {
+    const items = defs.filter((d) => d.group === group)
+    if (items.length === 0) continue
+    lines.push(`# ${group}`)
+    const done = new Set<string>()
+    for (const def of items) {
+      if (done.has(def.key)) continue
+      done.add(def.key)
+      const subs = items.filter((d) => d.key === def.key && d.sub)
+      if (subs.length === 0) {
+        lines.push(`${frontmatterKey(def.key)}: ${yamlScalar(valueOf(def))}`)
+      } else {
+        lines.push(`${frontmatterKey(def.key)}: {${subs.map((s) => `${s.sub}: ${yamlScalar(valueOf(s))}`).join(', ')}}`)
+      }
+    }
+  }
+  lines.push('---')
+  return lines.join('\n')
+}

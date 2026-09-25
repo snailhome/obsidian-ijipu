@@ -471,7 +471,7 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       for (const line of lines) {
         const { style, scale } = guidePlacement(line, crop, page.width, page.height, boxW)
         const el = layer.createDiv({
-          cls: `ijipu-guide-line ${line.dir === 'v' ? 'ijipu-guide-h' : 'ijipu-guide-v'}${line.readonly ? ' is-readonly' : ''}`,
+          cls: `ijipu-guide-line ${line.dir === 'v' ? 'ijipu-guide-h' : 'ijipu-guide-v'}${line.readonly ? ' is-readonly' : ''}${line.kind === 'segment' ? ' ijipu-guide-seg' : ''}`,
         })
         for (const [k, v] of Object.entries(style)) el.style.setProperty(k, v)
         el.setAttr('title', line.title)
@@ -490,14 +490,24 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       e.stopPropagation()
       endDragListeners?.()
       const base = draft ?? resolved.config
-      const startValue = Number((base as unknown as Record<string, unknown>)[line.key] ?? 0)
+      /**
+       * adj629q：段层虚线拖的是 `segmentRowGap.{bz,dsb,tp}`（**子对象**，与应用同口径）——
+       * 读写都要落到子项上，否则会写出一个顶层 `segmentRowGap_bz` 字段（引擎不认）。
+       */
+      const segKey = line.key.startsWith('segmentRowGap_') ? line.key.slice('segmentRowGap_'.length) : null
+      const startValue = segKey
+        ? Number((base.segmentRowGap ?? {})[segKey as 'bz' | 'dsb' | 'tp'] ?? 0)
+        : Number((base as unknown as Record<string, unknown>)[line.key] ?? 0)
       const startX = e.clientX
       const startY = e.clientY
       const [min, max] = guideLimits(line.key)
       const onMove = (ev: MouseEvent): void => {
         const delta = dragDelta({ key: line.key, dir: line.dir, invert: line.invert }, startX, startY, ev.clientX, ev.clientY, scale)
         const value = clamp(Math.round((startValue + delta) * 10) / 10, min, max)
-        draft = { ...(draft ?? base), [line.key]: value } as typeof base
+        const cur = draft ?? base
+        draft = (segKey
+          ? { ...cur, segmentRowGap: { ...(cur.segmentRowGap ?? {}), [segKey]: value } }
+          : { ...cur, [line.key]: value }) as typeof base
         schedulePaint()
       }
       const onUp = (): void => {
@@ -510,9 +520,12 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
         // 基线 = 按下时的生效配置）。此前直接把"整份生效配置"交给差量写入，于是插件设置 /
         // frontmatter 带来的每个非默认项都会在拖动时被顺手烧进谱面。
         const payload = mergeConfigEdits(host.getSource(), base, finalCfg as PageConfig)
+        const shown = segKey
+          ? (finalCfg.segmentRowGap ?? {})[segKey as 'bz' | 'dsb' | 'tp']
+          : (finalCfg as unknown as Record<string, unknown>)[line.key]
         void Promise.resolve(host.writeSource?.(writeJpsConfig(host.getSource(), payload)))
           .then(() => {
-            new Notice(`排版已保存：${line.key} = ${String((finalCfg as unknown as Record<string, unknown>)[line.key])}`, 2500)
+            new Notice(`排版已保存：${line.key} = ${String(shown)}`, 2500)
             paint()
           })
           .catch((err) => {

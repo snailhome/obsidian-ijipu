@@ -51,7 +51,8 @@ import {
   barNumberBoxH,
   barNumberBoxW,
   noteScaleOf,
-  beamY,
+  DIGIT_BOTTOM,
+  digitBottomY,
   lowDotY,
   octaveDotY,
   octaveTopY,
@@ -173,6 +174,57 @@ function noteFont(style: string): string {
  *    值为相对各自锚点的偏移（adj16）：区域宽/高变化时元素跟随锚点。
  */
 type RenderFontMeta = { w1eq?: number; wAcc?: number }
+/**
+ * adj627c（用户要求）：把**调名**画成与描述头 `1 = Ab` 完全同一套效果——
+ * 字母 + **左上角 ♯/♭ 角标**（角标字号 = 字母 3/4、上移 0.35×字号、字母右移 0.9×角标宽腾位）。
+ *
+ * 描述头调式行（`data-meta="keyline"`）与临时转调记号（`转1=Ab`）**共用本函数**，两处预览因此长得一模一样；
+ * 此前转调记号是整串文字，`Ab` 的降号会显示成普通字母 `b`，与描述头的 `A♭` 不是一回事。
+ *
+ * @param prefix   调名前的固定文字（`1 = ` / `转1=`）
+ * @param prefixW  前缀实际占宽（px）：角标左缘 = `x + prefixW`
+ * @param accW     角标字形实测宽（浏览器 measureText 传入）；缺省按角标字号估算
+ */
+function drawKeyName(o: {
+  x: number
+  y: number
+  size: number
+  font: string
+  /** 调名原文（如 `Ab` / `$B` / `F#`；非法时原样当字母画） */
+  keyRaw: string
+  prefix: string
+  prefixW: number
+  accW?: number
+  /** 写在 `<text>` 开头的额外属性（如 `data-meta="keyline" `） */
+  headAttrs?: string
+  /** 写在 `font-family` 与 `fill` 之间的额外属性（如 ` text-anchor="start"`） */
+  midAttrs?: string
+  /** 写在 `<text>` 末尾的额外属性（如 ` data-keychange="转1=Ab"`） */
+  tailAttrs?: string
+}): { parts: string[]; letter: string; accShift: number } {
+  const m = /^([#$b]?)([A-G])([#$b]?)$/.exec((o.keyRaw ?? '').trim())
+  const letter = m ? m[2] : (o.keyRaw ?? '').trim() // 调号字母（无效时原样）
+  const acc = m ? m[1] || m[3] : '' // 升降号（# 或 $/b）
+  const symb = acc ? (acc === '#' ? '♯' : '♭') : '' // 升降号字形（$ 与 b 等价 → ♭）
+  const symSize = symb ? o.size * (3 / 4) : 0 // 角标字号 = 字母 3/4
+  const symW = symb ? (o.accW ?? symSize) : 0
+  const accShift = symb ? 0.9 * symW : 0 // 字母右移 = 0.9×角标实际宽（角标略叠入字母约 0.1×占宽，更贴）
+  const parts: string[] = []
+  if (letter) {
+    const body = symb ? `<tspan dx="${r1n(accShift)}">${xmlEsc(letter)}</tspan>` : xmlEsc(letter)
+    parts.push(
+      `<text ${o.headAttrs ?? ''}x="${o.x}" y="${o.y}" font-size="${o.size}" font-family="${o.font}"${o.midAttrs ?? ''} fill="#1b1b1b"${o.tailAttrs ?? ''}>${o.prefix}${body}</text>`,
+    )
+    if (symb) {
+      // 字母右移后其左上角即原字母左缘：x=原字母左缘，y 抬升至字母中线；下沿与中线对齐
+      parts.push(
+        `<text x="${r1n(o.x + o.prefixW)}" y="${r1n(o.y - 0.35 * o.size)}" font-size="${r1n(symSize)}" font-family="${o.font}" fill="#1b1b1b">${symb}</text>`,
+      )
+    }
+  }
+  return { parts, letter, accShift }
+}
+
 function renderMeta(page: ScorePage, config: PageConfig, opts?: RenderFontMeta): string {
   const parts: string[] = []
   const { width } = page
@@ -193,36 +245,26 @@ function renderMeta(page: ScorePage, config: PageConfig, opts?: RenderFontMeta):
   // 1.2×角标占宽给角标让位，确保不重叠（前一轮 1/3 角标起点正好压在字母左缘而重叠）。
   const KEY_SHIFT = 6
   const keyRaw = (page.meta.key ?? '').trim()
-  const keyM = /^([#$b]?)([A-G])([#$b]?)$/.exec(keyRaw)
-  const keyLetter = keyM ? keyM[2] : keyRaw // 调号字母（无效时原样）
-  const keyAcc = keyM ? (keyM[1] || keyM[3]) : '' // 升降号（# 或 $/b）
-  const keyLabel = keyLetter ? `1 = ${keyLetter}` : ''
-  const symb = keyAcc ? (keyAcc === '#' ? '♯' : '♭') : '' // 升降号字形（$ 与 b 等价→♭）
   const scale0 = mSize / 13
-  const symSize = symb ? mSize * (3 / 4) : 0 // 角标字号=字母 3/4
   // 按字体实际宽度摆放角标/字母：w1eq(1= 宽)/wAcc(♯ 宽) 由 PreviewPane 用 canvas.measureText 实测传入，
   // 消除中/英文字体下 ♯ 宽度差异导致的间距忽大忽小或重叠；无实测（导出等场景）回退按字号估算（全角）
   const W1eq = opts?.w1eq ?? metaTextW('1 = ') * scale0 // "1 = " 实际宽（决定字母/角标左缘）
-  const symW = symb ? (opts?.wAcc ?? symSize) : 0 // 角标实际占用宽（无实测则按角标字号估算）
-  const accShift = symb ? 0.9 * symW : 0 // 字母右移 = 0.9×角标实际宽（角标略叠入字母约 0.1×占宽，更贴）
-  if (keyLabel) {
-    const pos = posOf('keyline', { x: KEY_SHIFT, y: -44 })
-    // "1 = " 起点不变；有 b/# 时字母 D 用 tspan dx 右移 accShift，腾出左上角给角标
-    const tail = symb
-      ? `<tspan dx="${r1n(accShift)}">${xmlEsc(keyLetter)}</tspan>`
-      : xmlEsc(keyLetter)
-    parts.push(
-      `<text data-meta="keyline" x="${pos.x}" y="${pos.y}" font-size="${mSize}" font-family="${mFont}" fill="#1b1b1b">1 = ${tail}</text>`,
-    )
-    if (symb) {
-      // 字母右移后其左上角即原字母左缘：x=原字母左缘，y 抬升至字母中线；下沿与中线对齐
-      const symX = pos.x + W1eq
-      const symY = pos.y - 0.35 * mSize
-      // 角标按字体原宽度渲染（不统一宽度）；字母右移量已调小，间距更紧凑
-      parts.push(
-        `<text x="${r1n(symX)}" y="${r1n(symY)}" font-size="${r1n(symSize)}" font-family="${mFont}" fill="#1b1b1b">${symb}</text>`,
-      )
-    }
+  const keyPos = posOf('keyline', { x: KEY_SHIFT, y: -44 })
+  const keyName = drawKeyName({
+    x: keyPos.x,
+    y: keyPos.y,
+    size: mSize,
+    font: mFont,
+    keyRaw,
+    prefix: '1 = ',
+    prefixW: W1eq,
+    accW: opts?.wAcc,
+    headAttrs: 'data-meta="keyline" ',
+  })
+  const keyLetter = keyName.letter // 调号字母（拍号定位要用）
+  const accShift = keyName.accShift // 字母右移量（拍号定位要用）
+  if (keyLetter) {
+    parts.push(...keyName.parts)
   }
   if (page.meta.meter) {
     const pos = posOf('keyline', { x: KEY_SHIFT, y: -44 })
@@ -238,7 +280,7 @@ function renderMeta(page: ScorePage, config: PageConfig, opts?: RenderFontMeta):
   const tempoText = page.meta.tempoText
   const legacyTempo = page.meta.tempo
   const hasTempoEq = Boolean(tempoNum) || (legacyTempo !== null && Number.isFinite(Number(legacyTempo)) && legacyTempo.trim() !== '')
-  const tempoEqShift = keyLabel && hasTempoEq ? (metaTextW('1 ') - metaTextW('♩')) * (mSize / 13) : 0
+  const tempoEqShift = keyLetter && hasTempoEq ? (metaTextW('1 ') - metaTextW('♩')) * (mSize / 13) : 0
   if (tempoNum || tempoText) {
     // adj：与调式行间距加大（偏移 -20 → -12），防止拍号分母与节拍行重叠；
     // adj176：与调号同步右移 KEY_SHIFT；adj181：有升降号时再右移 accShift
@@ -385,8 +427,46 @@ function dotRightEdgeOf(note: PlacedToken, noteSize: number): number | null {
   return cx + (note.token.dots - 1) * rDot * 2 + rDot
 }
 
+/**
+ * adj629b：段层（`layerScale` = 整层纵向压缩比 k < 1）里**基线以下那一块**（减时线 + 低八度点）
+ * 的**存储坐标补偿**。
+ *
+ * 为什么需要：整层用一个 `<g transform="… scale(1,k)">` 压扁后，`BEAM_H` 只有 0.8px × k ≈ 0.53px
+ * ——渲染出来几乎看不见，两级十六分减时线也会挤在一起（用户报「低八度点出现了，但减时线没了」）。
+ * 所以这一段在**存储坐标**里预先 ÷k：渲染结果仍是**原尺寸**（线宽、层间距、点半径都不变），
+ * 只有「基线 → 块顶」那一段随整层一起被压扁（视觉上整层更贴数字、更扁）。
+ */
+const layerBlockDiv = (v: number, k: number): number => (k === 1 ? v : v / k)
+
+/** adj629b：段层低八度点 cy（块内保持原尺寸；`k === 1` 时与 `lowDotY` 完全一致） */
+function layerLowDotY(y: number, i: number, dc: number, noteSize: number, k: number): number {
+  if (k === 1) return lowDotY(y, i, dc, noteSize)
+  const s = noteScaleOf(noteSize)
+  const top = y + (DIGIT_BOTTOM + LAYER_GAP) * s // 这一段会被 <g> ×k
+  const block = dc > 0 ? ((dc - 1) * (BEAM_H + INNER_GAP) + BEAM_H) * s : 0
+  const first = dc > 0 ? LAYER_GAP * s : digitBottomY(y, noteSize) - y + LAYER_GAP * s
+  return top + (block + first + DOT_R * s + i * (DOT_R * 2 + INNER_GAP) * s) / k
+}
+
+/**
+ * adj629b（用户要求）：**临时叠加层整层纵向压扁**（不逐个元素压）。
+ *
+ * `renderScoreToSvg` 把同一段层的元素（数字、减时线、括号、小节线、连音线）收进**一个**
+ * `<g transform="translate(0, baseY·(1−k)) scale(1, k)">`（见 `layerGroupKey` / 页组装），
+ * 以层基线为不动点做非等比缩放：`y' = baseY + k·(y − baseY)`。
+ * **字号不变**（数字仍按原字号绘制，只是被压扁），减时线/低八度点那一块在存储坐标里
+ * 已按 `layerBlockDiv` 补偿，压扁后仍是原尺寸 ⇒ 看得见、不互相压。
+ */
+function segmentYScaleWrap(html: string, layerScale: number | undefined, baseY: number | undefined): string {
+  if (html === '' || layerScale === undefined || layerScale === 1 || baseY === undefined) return html
+  // 取到 3 位小数：2/3 的浮点尾（0.6666666666666666）会把 SVG 属性写得很长
+  const k = Math.round(layerScale * 1000) / 1000
+  return `<g transform="translate(0 ${r1n(baseY * (1 - k))}) scale(1 ${k})">${html}</g>`
+}
+
 function renderNote(note: PlacedToken, config: PageConfig): string {
   const t = note.token
+  // adj629b：段层**字号不变**（用户口径：只压高度）；纵向压扁在 `segmentYScaleWrap` 里统一做
   const size = config.note_size
   const digitW = size * 0.62 // 数字槽宽（随字号）
   const x = note.x
@@ -416,9 +496,13 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
     // 取消 adj19 的左移 1px——项目中其它居中元素（增时线/上方修饰符/注释）也都用这一中心）
     const dotCx = x + digitW / 2
     const dc = t.diminishCount
+    // adj629b：段层（纵向压缩 k）——低八度点属于"减时线块"，块内在存储坐标里 ÷k 保持原尺寸；
+    // 高八度点在数字上方，随整层一起压扁即可（点半径随之略扁，观感自然）
+    const kL = note.layerScale ?? 1
     for (let i = 0; i < n; i++) {
-      const cy = oct > 0 ? octaveDotY(y, i, size) : lowDotY(y, i, dc, size)
-      parts.push(`<circle cx="${dotCx}" cy="${r1n(cy)}" r="${r1n(DOT_R * s)}" fill="#1b1b1b"/>`)
+      const cy = oct > 0 ? octaveDotY(y, i, size) : layerLowDotY(y, i, dc, size, kL)
+      const rr = oct > 0 || kL === 1 ? DOT_R * s : DOT_R * s / kL
+      parts.push(`<circle cx="${dotCx}" cy="${r1n(cy)}" r="${r1n(rr)}" fill="#1b1b1b"/>`)
     }
   }
 
@@ -883,6 +967,35 @@ function renderBarline(bar: PlacedBarline, noteSize = 18, noteFontFamily = FONT_
     })
   }
 
+  // adj627（用户要求）：**临时转调记号**——小节线引号备注写了 `"d:..."` 时，在线的**右上方**
+  // 画一小段 `转1=D`（文本由布局端算好，含 `d:` 单用时的"恢复调名"）。
+  // 位置取"线右缘 + 2×s"（与 `"p:2/4"` 临时节拍分数的起始口径一致），纵向在**小节线上端之上**，
+  // 与上方记号（&ty/&hs 画在线中心 mx）横向错开、互不压。
+  // adj627b（用户要求）：调名后面紧跟的 `+` / `-` 逐级抬升/降低记号（口径同 adj392 的音符注释）。
+  // adj627c（用户要求）：调名部分**与描述头 `D: Ab` 同款**——字母 + 左上角 ♯/♭ 角标
+  // （共用 `drawKeyName`；此前整串文字里 `Ab` 的降号只是普通字母 b，与描述头的 `A♭` 不一致）。
+  // 角标左缘 = `转1=` 起始 + 该前缀占宽（按字号估算，与导出路径上的描述头同口径）。
+  // adj627d（用户要求）：记号**只用粗体、不要斜体**（斜体让角标与字母的贴合看着发飘）。
+  if (bar.keyChangeLabel) {
+    const fs = Math.max(8, Math.round(9 * s))
+    const kcRaise = ((bar.keyChange?.plus ?? 0) - (bar.keyChange?.minus ?? 0)) * NOTE_COMMENT_RAISE
+    const kcX = x + barRightEdge + 2 * s
+    const kcY = yTop - 3 * s - kcRaise
+    parts.push(
+      ...drawKeyName({
+        x: r1n(kcX),
+        y: r1n(kcY),
+        size: fs,
+        font: noteFontFamily,
+        keyRaw: bar.keyChangeName ?? bar.keyChangeLabel.replace(/^转1=/, ''),
+        prefix: '转1=',
+        prefixW: metaTextW('转1=') * (fs / 13),
+        midAttrs: ' text-anchor="start" font-weight="bold"',
+        tailAttrs: ` data-keychange="${xmlEsc(bar.keyChangeLabel)}"`,
+      }).parts,
+    )
+  }
+
   return parts.join('\n')
 }
 
@@ -1259,6 +1372,15 @@ interface Beam {
   x1: number
   x2: number
   y: number
+  /** adj629b：线高（段层里已 ÷k 补偿，压扁后仍是 BEAM_H；缺省 = BEAM_H） */
+  h?: number
+  /**
+   * adj629b：该减时线所属**段层**的纵向压缩比与不动点（基线）——
+   * 段层整层用一个 `<g>` 压扁，减时线高度在存储坐标里已补偿（`h`），
+   * 这里只用于把该 beam 归到"哪一层"的组里。主旋律缺省（= 1）。
+   */
+  layerScale?: number
+  layerBase?: number
 }
 
 /**
@@ -1315,7 +1437,15 @@ function computeBeams(notes: PlacedToken[], noteSize = 18): Beam[] {
           x1: r1n(list[i].x + 1),
           x2: r1n(dotRight !== null ? Math.max(digitRight, dotRight) : digitRight),
           // adj60/69：减时线层贴数字底（LAYER_GAP×s），层内线距 INNER_GAP×s，随字号
-          y: r1n(beamY(list[i].y, level, noteSize)),
+          // adj629b：段层——"基线→块顶"照常随整层压扁，块内（层距/线高）÷k 补偿成原尺寸
+          y: r1n(
+            list[i].y +
+              (DIGIT_BOTTOM + LAYER_GAP) * noteScaleOf(noteSize) +
+              layerBlockDiv((level - 1) * (BEAM_H + INNER_GAP) * noteScaleOf(noteSize), list[i].layerScale ?? 1),
+          ),
+          h: r1n(layerBlockDiv(BEAM_H, list[i].layerScale ?? 1)),
+          layerScale: list[i].layerScale,
+          layerBase: list[i].layerScale !== undefined ? list[i].y : undefined,
         })
         i = j + 1
       }
@@ -1331,12 +1461,27 @@ export function computeBeamsForTest(notes: PlacedToken[], noteSize = 18): Beam[]
   return computeBeams(notes, noteSize)
 }
 
-function renderBeams(beams: Beam[]): string {
+/**
+ * adj629b：把同一段层的元素收进**一个** `<g transform>`（用户要求"整体压扁，而不是逐个元素压"）。
+ * 键 = `压缩比|层基线`；同层元素（数字/减时线/括号/小节线/连音线）在页组装时归到同一组，
+ * 最后一次性包一层 `<g>`。
+ */
+function layerGroupKey(layerScale: number | undefined, layerBase: number | undefined): string | null {
+  if (layerScale === undefined || layerScale === 1 || layerBase === undefined) return null
+  return `${Math.round(layerScale * 1000) / 1000}|${layerBase}`
+}
+
+function renderBeams(beams: Beam[], collect?: (html: string, layerScale?: number, layerBase?: number) => void): string {
   return beams
-    .map(
-      (b) =>
-        `<rect x="${b.x1}" y="${b.y}" width="${Math.max(1, b.x2 - b.x1)}" height="${BEAM_H}" fill="#1b1b1b"/>`,
-    )
+    .map((b) => {
+      const html = `<rect x="${b.x1}" y="${b.y}" width="${Math.max(1, b.x2 - b.x1)}" height="${b.h ?? BEAM_H}" fill="#1b1b1b"/>`
+      // 有收集器（页组装）：交给调用方按层归组，最后统一包一层 `<g>`——此处**不再**单独包（否则双重包裹）
+      if (collect) {
+        collect(html, b.layerScale, b.layerBase)
+        return html
+      }
+      return segmentYScaleWrap(html, b.layerScale, b.layerBase)
+    })
     .join('\n')
 }
 
@@ -1369,7 +1514,15 @@ function renderPageNum(page: ScorePage, config: PageConfig, pageCount: number): 
  * 位置取「占位中心 x」以及**略高于数字**的 y（呼吸记号画在音符右上方，不用数字基线中心）。
  */
 function renderBracket(
-  b: { code: 'zkh' | 'ykh' | 'hx'; dir: 'open' | 'close'; x: number; yTop: number; width: number },
+  b: {
+    code: 'zkh' | 'ykh' | 'hx'
+    dir: 'open' | 'close'
+    x: number
+    yTop: number
+    width: number
+    layerScale?: number
+    layerBase?: number
+  },
   config: PageConfig,
 ): string {
   const size = config.note_size
@@ -1383,6 +1536,7 @@ function renderBracket(
     return `<path d="M ${r1n(b.x - hw)} ${r1n(cy - 3 * s)} L ${r1n(b.x)} ${r1n(cy + 3 * s)} L ${r1n(b.x + hw)} ${r1n(cy - 3 * s)}" fill="none" stroke="#1b1b1b" stroke-width="0.8"/>`
   }
   const glyph = b.dir === 'open' ? '(' : ')'
+  // adj629b：段层括号**字号不变**，随整层一起压扁——压扁由页组装的整层 `<g>` 统一做，这里不再单独包
   return `<text x="${r1n(b.x)}" y="${r1n(b.yTop)}" text-anchor="middle" dominant-baseline="central" font-weight="bold" font-size="${size}" font-family="${noteFont(config.shuzi_font)}" fill="#1b1b1b">${glyph}</text>`
 }
 
@@ -1434,15 +1588,41 @@ function renderPage(page: ScorePage, config: PageConfig, pageCount: number, opts
   // 描述头（标题/作者/调号/拍号/节拍）仅第一页显示，后续页面不重复
   if (page.index === 0) body.push(renderMeta(page, config, opts))
   body.push(renderVoltas(page.barlines, config.note_size, config.margin_left, width, config.margin_right, page.notes)) // 跳房子线画在最底层
-  for (const s of page.slurs) body.push(renderSlur(s, config.note_size))
-  for (const d of page.dynamics) body.push(renderDynamic(d, config.note_size))
-  body.push(renderBeams(computeBeams(page.notes, config.note_size)))
-  for (const n of page.notes) body.push(renderNote(n, config))
+  /**
+   * adj629b（用户要求）：**临时叠加层整层压扁**——把同一段层的元素（连音线/减时线/数字/括号/小节线）
+   * 先按 `压缩比|层基线` 归组，页末一次性各包一层 `<g transform>`，而不是逐个元素各包一层。
+   * 主旋律元素（键为 null）照原顺序直接进 `body`。
+   */
+  const layerGroups = new Map<string, string[]>()
+  const pushEl = (html: string, layerScale?: number, layerBase?: number): void => {
+    if (html === '') return
+    const key = layerGroupKey(layerScale, layerBase)
+    if (key === null) {
+      body.push(html)
+      return
+    }
+    const arr = layerGroups.get(key)
+    if (arr) arr.push(html)
+    else layerGroups.set(key, [html])
+  }
+  const flushLayerGroups = (): void => {
+    for (const [key, els] of layerGroups) {
+      const [ks, bs] = key.split('|')
+      body.push(segmentYScaleWrap(els.join('\n'), Number(ks), Number(bs)))
+    }
+    layerGroups.clear()
+  }
+  for (const s of page.slurs) pushEl(renderSlur(s, config.note_size), s.layerScale, s.layerBase)
+  for (const d of page.dynamics) pushEl(renderDynamic(d, config.note_size))
+  renderBeams(computeBeams(page.notes, config.note_size), (html, ls, lb) => pushEl(html, ls, lb))
+  for (const n of page.notes) pushEl(renderNote(n, config), n.layerScale, n.y)
   // adj294：&zkh/&ykh 独立括号标记——按插位画括号
-  for (const b of page.brackets) body.push(renderBracket(b, config))
+  for (const b of page.brackets) pushEl(renderBracket(b, config), b.layerScale, b.layerBase)
   // adj427：临时段（{bz … } / {dsb … }）叠加层括弧——段内容音符已并入 page.notes 一并绘制
   for (const sb of page.segmentBrackets ?? []) body.push(renderSegmentBracket(sb, config))
-  for (const b of page.barlines) body.push(renderBarline(b, config.note_size, noteFont(config.shuzi_font)))
+  for (const b of page.barlines)
+    pushEl(renderBarline(b, config.note_size, noteFont(config.shuzi_font)), b.layerScale, b.layerBase)
+  flushLayerGroups() // 段层的所有元素在此一次性包一层 <g> 压扁
   // adj625：方框小节序号（「显示小节计数」）——画在小节线下方，数字与方框 = 倚音字号 × 3/4
   for (const bn of page.barNumbers) body.push(renderBarNumber(bn, config))
   for (const l of page.lyrics) body.push(renderLyric(l, config))
@@ -1489,7 +1669,14 @@ function renderPage(page: ScorePage, config: PageConfig, pageCount: number, opts
 
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
-    `<rect x="0" y="0" width="100%" height="100%" fill="#ffffff"/>` +
+    /**
+     * adj629n：页面白底 rect 带 `data-page-bg` 标记——宿主（预览层）需要把它透明化时
+     * **必须按这个标记选**，不能用 `rect:first-child`：
+     * 段层（`{bz}`/`{dsb}`/`{tp}`）整层被包在一个 `<g>` 里，而那个 `<g>` 的**第一个子元素
+     * 正是该层的第一条减时线 rect** ⇒ `rect:first-child` 会把它一起选中、fill 变透明
+     * （用户报「伴奏里的 `0/ 2/` 预览里下面没有减时线」——同层第二条线却正常）。
+     */
+    `<rect data-page-bg="1" x="0" y="0" width="100%" height="100%" fill="#ffffff"/>` +
     body.join('\n') +
     `</svg>`
   )

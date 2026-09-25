@@ -3,6 +3,8 @@
  * 供预览页叠加可拖拽虚线（边距/行距）使用。
  */
 import type { ScoreLayout } from '../types'
+// adj629f：段层虚线要按「压缩后」的层高取中心
+import { SEGMENT_LAYER_YSCALE } from './spacing'
 
 /** 音符数字基线到行顶的偏移（noteSize×1.1，随字号；默认 18） */
 const baselineOffset = (noteSize: number) => noteSize * 1.1
@@ -25,6 +27,12 @@ export interface LyricRowGuide {
   y: number
   /** 歌词行区域中心 y（基线 - 0.3×geci，字区中心，adj72） */
   center: number
+  /**
+   * adj629g：该歌词行的**行序号**（该曲行里第几条 `C…:`，0 起；缺省 = 未知）。
+   * 预览虚线据此决定拖的是 `height_quci`（第 1 行 = 歌词区↔曲部）还是 `height_cici`
+   * （第 2 行及以后 = 歌词行之间）——不能按"在该行里的序号"判（替谱层会让序号重置）。
+   */
+  line?: number
 }
 
 /** 行的结构位置：曲部行（含多声部）/ 歌词行（adj10/72 虚线用） */
@@ -47,8 +55,9 @@ export interface RowGuide {
    * adj432：该行是否属于**临时叠加段**（`{bz … }` / `{dsb … }`）的段内容层——
    * 段层是叠加层（不占主旋律拍位、画在主旋律上方/上下），它的虚线**不能**拖行距，
    * 应拖 `segmentRowGap.{bz,dsb}`（段层与主旋律的间距）。`bz` 只有上层；`dsb` 有上下两层。
+   * adj629：加 `tp`（替谱段，层画在**所属歌词行上方**，拖 `segmentRowGap.tp`）。
    */
-  segType?: 'bz' | 'dsb'
+  segType?: 'bz' | 'dsb' | 'tp'
   /** adj432：段层层次（upper = 段内容层 / lower = dsb 包络内被下移的主旋律） */
   segLayer?: 'upper' | 'lower'
 }
@@ -64,7 +73,7 @@ export function computeRowGuides(
     // 多声部块（adj72：用于判定声部序号 voiceIdx）
     const blocks = page.voiceBlocks.map((vb) => [vb.yTop, vb.yBottom] as const)
     // adj432：行同时记录**是否属于临时叠加段**——段层虚线拖 `segmentRowGap`，不是行距
-    type RowAcc = { yTop: number; lyricYs: number[]; segType?: 'bz' | 'dsb'; segLayer?: 'upper' | 'lower' }
+    type RowAcc = { yTop: number; lyricYs: number[]; segType?: 'bz' | 'dsb' | 'tp'; segLayer?: 'upper' | 'lower' }
     const rowMap = new Map<number, RowAcc>()
     for (const n of page.notes) {
       const yTop = Math.round((n.y - off) * 10) / 10
@@ -86,6 +95,13 @@ export function computeRowGuides(
       }
     }
     const tops = [...rowMap.keys()]
+    /** adj629g：行 y → 该行歌词的**歌词行序号**（同 y 取最小；用于虚线选 quci / cici） */
+    const lyricLineOfY = new Map<number, number>()
+    for (const l of page.lyrics) {
+      const y = Math.round(l.y * 10) / 10
+      const cur = lyricLineOfY.get(y)
+      if (l.line !== undefined && (cur === undefined || l.line < cur)) lyricLineOfY.set(y, l.line)
+    }
     for (const l of page.lyrics) {
       let best = -1
       let bestD = Infinity
@@ -117,17 +133,25 @@ export function computeRowGuides(
       // adj72：每行歌词一条（同一行歌词字 y 相同，去重）
       const rowYs = [...new Set(r.lyricYs.map((y) => Math.round(y * 10) / 10))].sort((a, b) => a - b)
       const base = r.yTop + off // 音符基线
+      /**
+       * adj629f（用户要求）：**段层虚线画在"压缩后"的层高中间**——
+       * 临时叠加层整层纵向压扁到 `SEGMENT_LAYER_YSCALE`（以层基线为不动点），
+       * 视觉中心随之从 `基线 − 0.4×字号` 变为 `基线 − 0.4×字号×压缩比`；
+       * 仍用未压缩值会把虚线画在数字上方（拖起来也对不上那层）。
+       */
+      const yScale = r.segType ? SEGMENT_LAYER_YSCALE : 1
       const lyricTop = rowYs.length > 0 ? rowYs[0] : null
       return {
         yTop: r.yTop,
         // adj69：曲部内容下沿（减时线区）随音符字号（0.6×noteSize）
-        yBottom: r.yTop + off + noteSize * 0.6,
-        // adj72：数字中心（基线 - 0.4×noteSize，数字字高 0.8em 的中心）
-        yCenter: Math.round((base - noteSize * 0.4) * 10) / 10,
+        yBottom: r.yTop + off + noteSize * 0.6 * yScale,
+        // adj72：数字中心（基线 - 0.4×noteSize，数字字高 0.8em 的中心）；adj629f：段层再乘压缩比
+        yCenter: Math.round((base - noteSize * 0.4 * yScale) * 10) / 10,
         voiceIdx: voiceIdxOf(r.yTop),
         lyricRows: rowYs.map((ly) => ({
           y: ly,
           center: Math.round((ly - cfg.geci * 0.3) * 10) / 10,
+          ...(lyricLineOfY.has(ly) ? { line: lyricLineOfY.get(ly)! } : {}),
         })),
         lyricTop,
         lyricBottom: rowYs.length > 0 ? rowYs[rowYs.length - 1] + cfg.geci : null,
@@ -224,6 +248,7 @@ export type GuideKeyEx =
   | 'height_ciqu_lyric'
   | 'segmentRowGap_bz'  // adj428：bz 段上下层间距
   | 'segmentRowGap_dsb' // adj428：dsb 段上下层间距
+  | 'segmentRowGap_tp'  // adj629e：替谱层距「上方内容」的间距
   | 'barCountInterval'  // adj625：小节序号间隔（每隔几个小节显示一个序号）
 
 export const GUIDE_LIMITS_EX: Record<GuideKeyEx, [number, number]> = {
@@ -242,6 +267,7 @@ export const GUIDE_LIMITS_EX: Record<GuideKeyEx, [number, number]> = {
   height_ciqu_lyric: [-80, 120], // 曲部与上一行词部间距（adj79；adj105 允许负值，用户需进一步压缩行距）
   segmentRowGap_bz: [10, 80],  // adj428：bz 段上下层间距（与 SEGMENT_ROW_GAP_DEFAULT 范围一致）
   segmentRowGap_dsb: [10, 80], // adj428：dsb 段上下层间距
+  segmentRowGap_tp: [0, 80],   // adj629e：替谱层距「上方内容」的间距（0 = 紧贴上方内容）
   // adj625：小节序号间隔——1 = 每小节都标；上限 99（排版端同样钳到 1~99，
   // 超过曲长就等于"不显示"，没有实际意义，但设个上限避免误拖出天文数字）。
   barCountInterval: [1, 99],

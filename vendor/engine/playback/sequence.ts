@@ -10,8 +10,10 @@
  */
 import type { BarlineMark, BarlineType, MusicToken, ParseResult, PlacedBarline, PlacedToken, ScoreLayout, ScorePage, VoiceBlock } from '../types'
 import { tokenDuration } from '../duration'
-import { parseKey, pitchToName } from '../layout/index'
+import { parseKey, pitchToName, isJumpOrEndBarline } from '../layout/index'
 import { graceGroupBeats, gracePerNoteBeats } from '../layout/spaceLayout'
+// adj629d：段层/替谱音符 id 判定（试听"点音符跳过去"要按 id 精确命中事件）
+import { decodeSegmentNoteId, decodeTpNoteId } from '../layout/segments'
 // adj502：波音（mordent）演奏时值——纯函数模块，见其文件头的口径与不变式
 import { mordentOf, mordentPlan, neighborDegree } from './ornaments'
 import { parseInstrumentRef } from './instruments'
@@ -131,8 +133,9 @@ interface SeqItem {
   /**
    * adj427：临时段（`{bz … }` / `{dsb … }`）——**不占主旋律时值**，走到此处只是"打标记"；
    * 段内容的实际事件在**下一个音符事件**处用同一个 `passMs` 补发（⇒ 反复每遍都发声）。
+   * adj629：替谱段（`tp`）带 `pass`（= 第几遍），**只在那一遍**补发，其余遍跳过。
    */
-  seg?: { voice: number; children: MusicToken[] }
+  seg?: { voice: number; children: MusicToken[]; type?: 'bz' | 'dsb' | 'tp'; pass?: number }
   bar?: {
     type: BarlineType
     marks?: BarlineMark[]
@@ -140,6 +143,8 @@ interface SeqItem {
     voltaEnd?: boolean
     /** adj360：|]/ 房子右侧未封闭——该房子延续到其后第一个跳跃小节线(:|)或结束小节线(||) */
     voltaEndSlash?: boolean
+    /** adj627：临时转调指令（小节线引号备注 `"d:<key>"` / `"d:"`）——见 `keyAtSeq` */
+    keyChange?: PlacedBarline['keyChange']
   }
 }
 
@@ -466,6 +471,9 @@ export function buildPlaySequence(
   const segLeftByGroupVoice = new Map<string, number>()
   for (const page of layout.pages) {
     for (const sb of page.segmentBrackets ?? []) {
+      // adj629：替谱段（tp）不参与 bz/dsb 的色块边界表——它是**另一遍**的内容（不与他人重叠），
+      // 混进来会把同组同声部的 bz/dsb 色块边界取 min/max 而改窄/改宽
+      if (sb.type === 'tp') continue
       const k = `${page.index}|${sb.group}|${sb.voice}`
       // adj442（用户规则）：色块占宽边界——**bz 以前后小节线为界、dsb 以大括号为界**；
       // 布局端已按段型写入 `blockLeft`/`blockRight`，此处只取用（旧数据无该字段时退回 x1/x2）。
@@ -625,6 +633,8 @@ export function buildPlaySequence(
             voltaStart: token.voltaStart,
             voltaEnd: token.voltaEnd,
             voltaEndSlash: token.voltaEndSlash,
+            // adj627：临时转调（小节线引号备注 `"d:..."`）——播放走查据此切调，见 `keyAtSeq`
+            keyChange: token.keyChange,
           },
         }
         ls.bars.push({ items: [], bar: null })
@@ -636,8 +646,12 @@ export function buildPlaySequence(
         // adj427：临时段（{bz … } / {dsb … }）——**不占主旋律时值**，只推进段内的音符序号吗？
         // 不：段内音符是**独立**的（children 各自成事件），主旋律的 noteIdx 完全不受影响。
         // 这里只登记一个"待补发"标记项，实际事件在走查时补发。
+        // adj629：替谱段（tp）连同 `pass` 一起登记——播放端据此"第 k 遍才奏"。
         if (token.dir === 'open' && token.children && token.children.length > 0) {
-          cell().items.push({ kind: 'segment', seg: { voice: group.music.voice, children: token.children } })
+          cell().items.push({
+            kind: 'segment',
+            seg: { voice: group.music.voice, children: token.children, type: token.type, pass: token.pass },
+          })
         }
       } else if (token.kind === 'note' || token.kind === 'rest' || token.kind === 'rhythm') {
         const placed = byIndex.get(noteIdx)
@@ -661,15 +675,18 @@ export function buildPlaySequence(
     let voltaStart: PlacedBarline['voltaStart']
     let voltaEnd: PlacedBarline['voltaEnd']
     let voltaEndSlash: boolean | undefined
+    // adj627：多声部同一根线上的转调指令（各声部写法一致 ⇒ 取首个非空）
+    let keyChange: PlacedBarline['keyChange']
     for (const it of bars) {
       const b = it.bar as PlacedBarline
       for (const m of b.marks ?? []) marks.add(m)
       if (voltaStart === undefined) voltaStart = b.voltaStart
       if (voltaEnd === undefined) voltaEnd = b.voltaEnd
       if (voltaEndSlash === undefined) voltaEndSlash = b.voltaEndSlash
+      if (keyChange === undefined) keyChange = b.keyChange
     }
     const first = bars[0].bar as PlacedBarline
-    return { kind: 'bar', bar: { type: first.type, marks: [...marks], voltaStart, voltaEnd, voltaEndSlash } }
+    return { kind: 'bar', bar: { type: first.type, marks: [...marks], voltaStart, voltaEnd, voltaEndSlash, keyChange } }
   }
   // 组装成 `seq`：单元 = 连续曲行（声部号在本单元内重复即另起单元，与排版同一规则；分页标记也断单元）
   {
@@ -731,21 +748,11 @@ export function buildPlaySequence(
    * adj598（用户口径）：**"下一处跳跃或结束"**的小节线判据——
    * 反复线 `:|`/`:|:`、结束线 `||`/`||/`，以及带 `&ds`（跳花 S）/`&dc`（从头反复）/`&fine`（曲终）修饰的线。
    * 未封闭房子 `|["n." … |]/` 的终点就取**其后第一根**这样的线（见下）。
+   * adj627b：判据本身抽到了布局端 `isJumpOrEndBarline`——**转调复原（`keyAtSeq`）与本处房子终点
+   * 必须同一口径**，两处各写一份迟早会漂。
    */
-  const isJumpOrEndBar = (it: SeqItem): boolean => {
-    if (it.kind !== 'bar' || !it.bar) return false
-    const t = it.bar.type
-    const m = it.bar.marks ?? []
-    return (
-      t === ':|' ||
-      t === ':|:' ||
-      t === '||' ||
-      t === '||/' ||
-      m.includes('ds') ||
-      m.includes('dc') ||
-      m.includes('fine')
-    )
-  }
+  const isJumpOrEndBar = (it: SeqItem): boolean =>
+    it.kind === 'bar' && !!it.bar && isJumpOrEndBarline(it.bar)
   const voltaAfter = new Map<number, number>()
   const pendingStarts: number[] = []
   seq.forEach((item, si) => {
@@ -929,6 +936,30 @@ export function buildPlaySequence(
   // 不再压缩成固定 6 种——否则动态采样音色名会丢失。
   const overriddenByVoice = new Map<number, string | null>()
   const keySemitone = parseKey(result.header.key)
+  /**
+   * adj627（用户要求）：**临时转调**（小节线引号备注 `"d:<key>"` / `"d:"` 恢复描述头调号）。
+   *
+   * 为什么是"预先扫一遍序列"而不是在走查里维护可变状态：转调是**绝对赋值**（`d:F#` 就是 F#，`d:`
+   * 就是描述头调号），所以**任意位置的生效调号只取决于源码前缀**。预先摊成"序列下标 → 生效调号"后，
+   * 反复（同一段第二次经过那条转调线）、跳越（前跳跳过转调线）、跳房子跳转全都自动正确——
+   * 若用可变状态，前跳会跳过转调线导致调号残留旧值。
+   *
+   * adj627b（用户要求）：遇到**跳跃/终结标志**（`isJumpOrEndBarline`）同样回描述头调号；
+   * 顺序是**先隐式回原调、再套本条线上的显式 `d:`**，与布局端 `effectiveKeysOf` 严格同一口径
+   * （否则会出现谱面已回原调、试听还在转调的割裂）。
+   */
+  const keyAtSeq: number[] = (() => {
+    const out: number[] = new Array<number>(seq.length).fill(keySemitone)
+    let cur = keySemitone
+    for (let si = 0; si < seq.length; si++) {
+      out[si] = cur
+      const bar = seq[si].bar
+      if (bar && isJumpOrEndBarline(bar)) cur = keySemitone // adj627b：跳跃/终结 ⇒ 回原调
+      const kc = bar?.keyChange
+      if (kc) cur = kc.clear ? keySemitone : kc.targetKey ?? cur
+    }
+    return out
+  })()
   // adj88：连音线内相同音高连续音符连奏合并——上一个已发事件的音符索引与音高；
   // 当前音符若与上一个音高相同、同属某连音线且中间无音符（索引相邻），则时值并入前一事件
   let lastEventNoteIdx = -1
@@ -965,7 +996,48 @@ export function buildPlaySequence(
     breathEvIdx = -1
   }
   /** adj427：待补发的临时段（走到段项时记下，在下一个音符事件处用同一 passMs 补发） */
-  let pendingSegment: { voice: number; children: MusicToken[] } | null = null
+  let pendingSegment: { voice: number; children: MusicToken[]; type?: 'bz' | 'dsb' | 'tp'; pass?: number } | null = null
+  /**
+   * adj629k（用户口径：「替谱演奏完应该回到主曲部继续演奏，从第三拍的 1 继续」）：
+   * **主旋律某音该不该被替谱静音** = 它的**时值区间**与替谱覆盖区间**有正测度重叠**。
+   *
+   * 为什么按区间重叠而不是"起点落在替谱区间内"：
+   *  · 替谱音常落在主旋律音的**内部**（拍位映射的中间），只看主旋律的起点会漏掉那些音 ⇒
+   *    主旋律与替谱**同时发声**（听感就是"跳音"/打架）；
+   *  · 反之若把区间终点算大了（旧实现 `r1` 把 1.25 圆成 1.3 ⇒ 末端 2.05），
+   *    就会把**紧接在替谱之后**、起点正好等于 2.0 的主旋律音（第 3 拍的 `1-`）也静音掉 ⇒
+   *    "替谱演奏完，第三拍的 1 没演奏到"。重叠判据端点相切不算覆盖，正好排除这一档。
+   *
+   * 坐标用**跨小节线性拍位**（`barStartMsInGroup` 折算），这样替谱音跨小节线时也正确。
+   *
+   * adj629o（用户报「某几拍没有演奏出来」）：**坐标必须带声部/行号**。
+   * 上面这个折算只到"**本组内**的绝对拍"，不含组号——于是"第 3 小节第 1~2 拍"这种坐标
+   * 在**所有组里都相等**：某一行（组）里的 `{tp}` 会把**别的行**同拍位区间的主旋律音一起静音
+   * （用户实测三条 `Q:` 行各自在"某小节前半"整段不发声，正是撞上了别组替谱覆盖的 `[8,10)`）。
+   * 替谱替代的只能是**它自己那一行**，故判据里加上组号。
+   */
+  const TP_EPS = 1e-6
+  const absBeatOf = (g: number, bar: number, beat: number): number =>
+    (barStartMsInGroup[g]?.[bar] ?? 0) / beatMs + beat
+  const tpSpans: { g: number; from: number; to: number; pass: number }[] = []
+  for (const it of seq) {
+    if (it.kind !== 'segment' || it.seg?.type !== 'tp') continue
+    const passNo = it.seg.pass ?? 2
+    for (const t of it.seg.children) {
+      if (t.kind !== 'note' && t.kind !== 'rest' && t.kind !== 'rhythm') continue
+      const p = segPlacedByToken.get(t)
+      if (!p) continue
+      const from = absBeatOf(p.id.group, p.barIndex, p.beatPos)
+      tpSpans.push({ g: p.id.group, from, to: from + tokenDuration(t), pass: passNo })
+    }
+  }
+  /** 该主旋律音是否被**本遍**的替谱替代（命中则静音）——只在**同一组**内比较 */
+  const replacedByTp = (placed: PlacedToken, passNo: number): boolean => {
+    if (placed.segment) return false
+    const a = absBeatOf(placed.id.group, placed.barIndex, placed.beatPos)
+    const b = a + placed.duration
+    return tpSpans.some((s) => s.g === placed.id.group && s.pass === passNo && a < s.to - TP_EPS && b > s.from + TP_EPS)
+  }
   /** adj427：段层事件的结束时刻（单独累计，**不动 lastEndMs**——它是"当前播放时刻"，动它会破坏反复/跳房子的无缝衔接） */
   let segEndMs = 0
   /**
@@ -976,7 +1048,10 @@ export function buildPlaySequence(
    * 声部角色决定音色与力度：`'main'` = 该声部当前音色 + 力度 1；
    * `'accomp'`（bz 上层）/ `'second'`（dsb 下层）= 第 2 可用音色 + 力度 0.75。
    */
-  const emitSegmentEvents = (seg: { voice: number; children: MusicToken[] }, passMsNow: number): void => {
+  const emitSegmentEvents = (
+    seg: { voice: number; children: MusicToken[]; type?: 'bz' | 'dsb' | 'tp'; pass?: number },
+    passMsNow: number,
+  ): void => {
     // adj427：段层内部色块右边界 = 同段内**下一个段层音符**左缘；最后一个用其占位右缘。
     // （不能沿用主旋律那套 rightEdgeByNoteIdx——它已按设计排除段层音符，避免两套坐标互相污染。）
     const segNotes = seg.children
@@ -1028,7 +1103,46 @@ export function buildPlaySequence(
       }
       return Math.max(next, own)
     }
-    for (const t of seg.children) {
+    /**
+     * adj629p（用户报「`(6// 6/)` 是连音，但实际演奏了两个音符」）：
+     * **段内同音连音要按"一个长音"奏**——与主旋律 adj89 的合并同口径。
+     *
+     * 为什么原来没合并：段层事件是这里**逐音 push** 的，没走主旋律那套 `shareSlur` 合并
+     * （主旋律靠 `slurOf` + 相邻音符索引），于是 `(6// 6/)` 成了两次起奏。
+     * 这里先按段内源码顺序算出"每个时值 token 属于哪几条连音线"（LIFO 配对，与排版端
+     * `segNoteOrder` 的配对同一套），发射时把**紧邻、同音高、且同属一条连音线**的段内音并进前一事件。
+     * 倚音/波音两侧都不合并（同主旋律 adj396/adj503 的顾虑：合并会盖住倚音、或吞掉波动）。
+     */
+    const segSlurOf = new Map<number, Set<number>>()
+    {
+      const stack: { start: number; ri: number }[] = []
+      let ri = 0
+      let lastDurIdx = -1
+      for (let k = 0; k < seg.children.length; k++) {
+        const tk = seg.children[k]
+        if (tk.kind === 'slur') {
+          if (tk.dir === 'open') stack.push({ start: lastDurIdx, ri: ri++ })
+          else {
+            const st = stack.pop()
+            if (st) {
+              for (let q = Math.max(0, st.start); q <= lastDurIdx; q++) {
+                const set = segSlurOf.get(q)
+                if (set) set.add(st.ri)
+                else segSlurOf.set(q, new Set([st.ri]))
+              }
+            }
+          }
+          continue
+        }
+        if (tk.kind === 'note' || tk.kind === 'rest' || tk.kind === 'rhythm') lastDurIdx = k
+      }
+    }
+    let lastSegEvIdx = -1
+    let lastSegTokIdx = -1
+    let lastSegHadGraceOrMordent = false
+    let lastEmittedDurIdx = -1
+    for (let ci = 0; ci < seg.children.length; ci++) {
+      const t = seg.children[ci]
       if (t.kind !== 'note' && t.kind !== 'rest' && t.kind !== 'rhythm') continue
       const placed = segPlacedByToken.get(t)
       if (!placed) continue
@@ -1046,6 +1160,35 @@ export function buildPlaySequence(
             : voiceDefaultOf(placed.id.voice),
       )
       const gain2 = isSec ? ACCOMP_GAIN : 1
+      // adj429：色块按曲行几何动态定界（多声部/临时叠加段不再互相覆盖、也不压歌词）
+      const segHeadSegs = buildPlayheadSegs(placed, 0, edgeOf(placed), {
+        ...computeColorBounds(placed, pageByNoteIdx.get(placed.id.index)!, voiceBlockByNoteIdx, noteSize),
+        // adj442：**左端不外扩**——色块从起始音符开始（见 buildPlayheadSegs 注释）。
+        // 原先这里给段内首个音传 `left`，会把色块拉到 `{` / 左括号之前（用户指出观感不对）。
+      }).map((s) => ({ ...s, instrument: inst2, playVoice: placed.playVoice, gain: gain2 }))
+      const hasGraceOrMordent =
+        t.kind === 'note' && ((t.gracenotes?.notes.length ?? 0) > 0 || mordentOf(t.symbols) !== null)
+      const prevEv = lastSegEvIdx >= 0 ? events[lastSegEvIdx] : undefined
+      const curSlurs = segSlurOf.get(ci)
+      const prevSlurs = lastSegTokIdx > 0 ? segSlurOf.get(lastSegTokIdx) : undefined
+      const sameSlur =
+        prevSlurs !== undefined && curSlurs !== undefined && [...prevSlurs].some((r) => curSlurs.has(r))
+      if (
+        prevEv !== undefined &&
+        ci === lastEmittedDurIdx + 1 && // 紧邻（中间没有别的时值 token）
+        !lastSegHadGraceOrMordent &&
+        !hasGraceOrMordent &&
+        sameSlur &&
+        placed.audioPitch !== null &&
+        placed.audioPitch === prevEv.placed.audioPitch
+      ) {
+        prevEv.durationMs += dur2
+        prevEv.playheadSegs = (prevEv.playheadSegs ?? []).concat(segHeadSegs)
+        segEndMs = Math.max(segEndMs, prevEv.atMs + prevEv.durationMs)
+        lastSegTokIdx = ci
+        lastEmittedDurIdx = ci
+        continue
+      }
       events.push({
         placed,
         instrument: inst2,
@@ -1053,13 +1196,12 @@ export function buildPlaySequence(
         durationMs: dur2,
         gain: gain2,
         playVoice: placed.playVoice,
-        // adj429：色块按曲行几何动态定界（多声部/临时叠加段不再互相覆盖、也不压歌词）
-        playheadSegs: buildPlayheadSegs(placed, 0, edgeOf(placed), {
-          ...computeColorBounds(placed, pageByNoteIdx.get(placed.id.index)!, voiceBlockByNoteIdx, noteSize),
-          // adj442：**左端不外扩**——色块从起始音符开始（见 buildPlayheadSegs 注释）。
-          // 原先这里给段内首个音传 `left`，会把色块拉到 `{` / 左括号之前（用户指出观感不对）。
-        }).map((s) => ({ ...s, instrument: inst2, playVoice: placed.playVoice, gain: gain2 })),
+        playheadSegs: segHeadSegs,
       })
+      lastSegEvIdx = events.length - 1
+      lastSegTokIdx = ci
+      lastEmittedDurIdx = ci
+      lastSegHadGraceOrMordent = hasGraceOrMordent
       segEndMs = Math.max(segEndMs, at2 + dur2)
     }
   }
@@ -1069,7 +1211,10 @@ export function buildPlaySequence(
     if (item.kind === 'segment') {
       // adj427：临时段（{bz}/{dsb}）——**不占主旋律时值**，此处只打标记；
       // 段内容等到**下一个音符事件**时用同一个 passMs 补发（⇒ 反复每遍都发声、与主旋律同刻）。
-      pendingSegment = item.seg ?? null
+      // adj629：替谱段只在**它自己那一遍**发（`pass` = 所属歌词行序号 = 第几遍）；
+      // 不匹配时**不动** pendingSegment（同一条线上并存 bz 段时，别把它的补发标记清掉）。
+      const s = item.seg
+      if (s && (s.type !== 'tp' || (s.pass ?? 2) === pass)) pendingSegment = s
       i++
       continue
     }
@@ -1082,11 +1227,6 @@ export function buildPlaySequence(
     if (item.kind === 'note' && item.note) {
       const placed = item.note
       const token = placed.token
-      const durationMs = (tokenDuration(token) * 60000) / bpm
-      const pitch = placed.audioPitch
-      const curNoteIdx = item.noteIdx ?? -1
-      // adj282：每个 event 的 atMs 由所属 group 的拍时钟决定（不受源码顺序累加），
-      // 保证同组同 (barIndex, beatPos) 的各声部事件 atMs 相同 → 同步播放
       const g = placed.id.group
       const bi = placed.barIndex
       const bp = placed.beatPos
@@ -1096,12 +1236,31 @@ export function buildPlaySequence(
         passMs = pendingJumpMs - clock
         pendingJumpMs = -1
       }
-      const atMs = passMs + clock
-      // adj427：若有待补发的临时段，就在这里用**同一个 passMs** 补发——它与本音符同刻开始
+      /**
+       * adj629k：**补发临时段要放在"静音判定"之前**。
+       *
+       * 静音（`replacedByTp`）是"这一遍主旋律不发声"，与"替谱层什么时候把事件补发出去"无关；
+       * 旧顺序在静音分支里 `continue`，于是**替谱段的补发被推迟到下一个没被静音的音符**——
+       * 若替谱覆盖到本组末尾（后面没有未静音的音符），补发会一直拖到走查结束、用**最后一遍的
+       * `passMs`** 发出（时间落错），听感就是"跳音"。现在先补发再判静音，顺序与时间都稳定。
+       */
       if (pendingSegment) {
         emitSegmentEvents(pendingSegment, passMs)
         pendingSegment = null
       }
+      // adj629：本遍若被替谱段替代，则**主旋律这一段不发声**（替谱层已在上面发声）
+      if (replacedByTp(placed, pass)) {
+        i++
+        continue
+      }
+      const durationMs = (tokenDuration(token) * 60000) / bpm
+      // adj627：音高按**当前生效调号**现算（有临时转调时 `placed.audioPitch` 只反映"第一遍"的调号，
+      // 反复/跳转后同一音符可能落在不同的调上；这里用 `keyAtSeq[i]` 与走查位置严格对应）
+      const pitch = token.kind === 'note' ? pitchToName(token.pitch, token.octaveShift, token.accidental, keyAtSeq[i]) : placed.audioPitch
+      const curNoteIdx = item.noteIdx ?? -1
+      // adj282：每个 event 的 atMs 由所属 group 的拍时钟决定（不受源码顺序累加），
+      // 保证同组同 (barIndex, beatPos) 的各声部事件 atMs 相同 → 同步播放
+      const atMs = passMs + clock
       lastEndMs = Math.max(lastEndMs, atMs + durationMs)
       // adj89：合并判定——与前一已发事件音高相同、索引相邻（中间无音符）、
       // 且**两者同属同一条连音线**（严格 slur 内连奏）：
@@ -1205,7 +1364,7 @@ export function buildPlaySequence(
       const gn = token.kind === 'note' ? token.gracenotes : undefined
       const gracePitches =
         gn && gn.notes.length > 0
-          ? gn.notes.map((g) => pitchToName(g.pitch, g.octaveShift, g.accidental, keySemitone))
+          ? gn.notes.map((g) => pitchToName(g.pitch, g.octaveShift, g.accidental, keyAtSeq[i]))
           : []
       /**
        * adj505（用户规范，力度按方案 b「只做力度区分」）：
@@ -1288,7 +1447,7 @@ export function buildPlaySequence(
           instrument,
           atMs: mainAtMs + si * mordShortMs,
           durationMs: mordShortMs,
-          ...(nb ? { pitch: pitchToName(nb.pitch, (token as { octaveShift: number }).octaveShift + nb.octave, null, keySemitone) } : {}),
+          ...(nb ? { pitch: pitchToName(nb.pitch, (token as { octaveShift: number }).octaveShift + nb.octave, null, keyAtSeq[i]) } : {}),
           gain,
           playVoice: playRole,
           ...(hasExplicitInst ? { explicitInstrument: true } : {}),
@@ -1303,6 +1462,9 @@ export function buildPlaySequence(
         durationMs: heldMs,
         gain,
         playVoice: playRole,
+        // adj627：临时转调下"当下调号算出的音高"与布局值不同时才**显式覆盖**
+        // （播放层取 `ev.pitch ?? ev.placed.audioPitch`；反复第二次经过转调线时布局值已不适用）
+        ...(pitch && pitch !== placed.audioPitch ? { pitch } : {}),
         // adj434：`@乐器名@` 显式指定 → 播放端保留该音色（不被「试听音色」全局覆盖压掉）
         ...(hasExplicitInst ? { explicitInstrument: true } : {}),
         // 有色块的话，色块已挂在首个波音短音上（见上）
@@ -1456,8 +1618,17 @@ export function buildPlaySequence(
 
   // adj88：从指定音符开始——丢弃起点之前的音符事件，其后 atMs 统一减去起点 atMs
   if (startIdxByPage !== null) {
-    // adj427：段层事件 id 在高位段（900000+），不能参与"起点音符"的定位——按主旋律音符判断
-    const from = events.findIndex((e) => !e.placed.segment && e.placed.id.index >= startIdxByPage.index)
+    /**
+     * adj629d（用户报「试听时点替谱层的音符不能跳到该处演奏」）：
+     * 段层音符的 id 在**高位命名空间**（`SEG_*`/`SEG_TP_*`），与主旋律的 0 起小整数完全不同段——
+     * 旧的 `e.placed.id.index >= startIdx.index` 判断会把"点段层音符"当成"从头开始"（0 >= 1e12 恒假，
+     * 于是 `from` 落在第一个主旋律音符上）⇒ 播放从头开始、点哪都没用。
+     * 现在：**先按 id 精确命中**（段层音符就是事件里的那一个），命中不了再退回原来的"主旋律序号 ≥"口径。
+     */
+    const segTarget = decodeSegmentNoteId(startIdxByPage.index) ?? decodeTpNoteId(startIdxByPage.index)
+    const from = segTarget
+      ? events.findIndex((e) => e.placed.id.index === startIdxByPage.index)
+      : events.findIndex((e) => !e.placed.segment && e.placed.id.index >= startIdxByPage.index)
     if (from > 0) {
       const base = events[from].atMs
       const sliced = events.slice(from).map((e) => ({ ...e, atMs: Math.max(0, e.atMs - base) }))

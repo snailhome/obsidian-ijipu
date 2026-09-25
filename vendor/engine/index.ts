@@ -13,6 +13,8 @@
 export * from './types'
 export { parseJps } from './parser'
 export { formatJps, formatLine } from './format/format'
+// adj629h：歌词行里 `{tp … }` 替谱段的识别（格式化 / 编辑器着色都要在 `C…:` 行里找它）
+export { matchSegmentHead, findSegmentEnd } from './parser/tokenizer'
 export { tokenDuration, durationMs } from './duration'
 // adj594（用户要求）：小节时值校验（纯函数，解析器已自动并入 ParseResult.errors）
 export {
@@ -35,7 +37,7 @@ export type { NoteDurSplit } from './layout/spaceLayout'
 // adj428：临时叠加段（{bz … } / {dsb … }）上下两行纵向间距的默认常量；UI 显示缺省值用
 export { SEGMENT_ROW_GAP_DEFAULT } from './layout/spacing'
 // adj427：临时段（{bz … } / {dsb … }）拍位包络计算——layout/render 共用，纯函数
-export { computeSegments, mainSpans, mainSpansInRange, tokensBeats, segmentBarBeats, beatRatio, isDurational, segmentNoteIndexBase, segmentBarIndexBase, decodeSegmentNoteId, SEG_NOTE_ID_BASE, SEG_BAR_ID_BASE } from './layout/segments'
+export { computeSegments, mainSpans, mainSpansInRange, tokensBeats, segmentBarBeats, beatRatio, isDurational, segmentNoteIndexBase, segmentBarIndexBase, decodeSegmentNoteId, SEG_NOTE_ID_BASE, SEG_BAR_ID_BASE, tpNoteIndexBase, decodeTpNoteId, SEG_TP_NOTE_ID_BASE } from './layout/segments'
 export type { SegmentInfo, MainSpan } from './layout/segments'
 // adj454：`mergeConfigEdits` = 写回时只并入「用户本次改动」（缓存来源的值不进谱面）；
 // `inspectJpsConfig`/`inspectJpsConfigLine` = 设置行的类型校验告警（解析器已并入 ParseResult.errors）

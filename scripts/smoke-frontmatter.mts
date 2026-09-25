@@ -5,10 +5,11 @@
  * 断言来源：用户反馈「在 frontmatter 里设置像 `ijipu_note_size` 好像没生效」——
  * 覆盖键名写法兼容、值类型转换、未识别键提示、优先级四类。
  */
-import { defaultPageConfig, dragDelta, layoutScore, parseJps, writeJpsConfig, mergeConfigEdits, configCarryover, SCORE_FONT_OPTIONS, buildPlaySequence } from '@ijipu/engine'
+import { defaultPageConfig, dragDelta, layoutScore, parseJps, writeJpsConfig, mergeConfigEdits, configCarryover, SCORE_FONT_OPTIONS, buildPlaySequence, GUIDE_LIMITS, GUIDE_LIMITS_EX, SEGMENT_ROW_GAP_DEFAULT } from '@ijipu/engine'
 import { readFileSync } from 'node:fs'
 import { instrumentColorMap, playheadBaseOf, playheadPosIn, trackKeysOf } from '../src/playhead'
-import { applyFrontmatter, deprecatedKeyHint, frontmatterKey, mergePageConfig, unknownKeyHint, PAGE_CONFIG_FIELDS } from '../src/frontmatter'
+import { applyFrontmatter, buildFrontmatterTemplate, deprecatedKeyHint, frontmatterKey, mergePageConfig, unknownKeyHint, PAGE_CONFIG_FIELDS } from '../src/frontmatter'
+import { PAGE_NUM_RANGES, clampNum } from '../src/numRanges'
 import { resolvePageConfig } from '../src/config'
 import { codeBlockBody, jpsLinkpath, replaceCodeBlockBody } from '../src/sourceEdit'
 import { computeGuideLines, cropRectFor, guideLimits, guidePlacement } from '../src/guides'
@@ -93,7 +94,116 @@ console.log('[3b] adj625 方框小节序号两项（同步主项目：谱面变�
   const defsSrc = String(readFileSync('src/defs.ts', 'utf8'))
   check('两项都在 DEFS 里（设置面板与「排版」对话框共用同一份定义）',
     /key: 'showBarCount', label: '显示小节计数', type: 'toggle'/.test(defsSrc) &&
-      /key: 'barCountInterval', label: '小节序号间隔', type: 'number'/.test(defsSrc))
+      /key: 'barCountInterval', label: '序号间隔', type: 'number'/.test(defsSrc))
+}
+
+console.log('[3c] adj629q 设置口径与应用一致（字段集 / 标签 / 范围 / 默认值）')
+{
+  const defsSrc = String(readFileSync('src/defs.ts', 'utf8'))
+  // ① 临时段三项（同步应用「布局 → 临时段」）：子项 + 应用同款标签
+  check('`segmentRowGap` 三个子项都在设置表里（bz / dsb / tp，标签与应用同款）',
+    /key: 'segmentRowGap', sub: 'bz', label: 'bz 段上下间距'/.test(defsSrc) &&
+      /key: 'segmentRowGap', sub: 'dsb', label: 'dsb 段上下间距'/.test(defsSrc) &&
+      /key: 'segmentRowGap', sub: 'tp', label: '替谱行与下方歌词间距'/.test(defsSrc))
+  // ② 应用不暴露的字段（bar_gap）设置面板也不再给控件，但仍可随谱携带
+  check('应用不暴露的 `bar_gap` 不再出现在设置表里（但仍可随谱携带：PAGE_CONFIG_FIELDS 里有）',
+    !/key: 'bar_gap'/.test(defsSrc) && PAGE_CONFIG_FIELDS.includes('bar_gap' as never))
+  // ③ 文案与应用逐项对齐（抽几个此前不一致的）
+  check('行距 / 布局类标签与应用一致（曲部与词部间距、布局模式、序号间隔…）',
+    /key: 'height_quci', label: '曲部与词部间距'/.test(defsSrc) &&
+      /key: 'height_cici', label: '词部与词部间距'/.test(defsSrc) &&
+      /key: 'height_ciqu', label: '曲部与曲部间距'/.test(defsSrc) &&
+      /key: 'height_ciqu_lyric', label: '曲部与上词部间距'/.test(defsSrc) &&
+      /key: 'noteSpaceLayout', label: '布局模式'/.test(defsSrc) &&
+      /key: 'body_margin_top', label: '首行至描述头间距'/.test(defsSrc) &&
+      /key: 'descAreaH', label: '描述头高'/.test(defsSrc) &&
+      /key: 'showInstrument', label: '乐器显示'/.test(defsSrc) &&
+      /key: 'lyricShrink', label: '歌词压缩'/.test(defsSrc))
+  // ④ 范围表逐项引用引擎表（与应用 `numFieldRanges.ts` 同一份来源，值不许各写一份）
+  const keys = Object.keys(PAGE_NUM_RANGES) as (keyof typeof PAGE_NUM_RANGES)[]
+  const want: Record<string, readonly [number, number]> = {
+    margin_top: GUIDE_LIMITS.margin_top,
+    margin_bottom: GUIDE_LIMITS.margin_bottom,
+    margin_left: GUIDE_LIMITS.margin_left,
+    margin_right: GUIDE_LIMITS.margin_right,
+    height_ciqu: GUIDE_LIMITS.height_ciqu,
+    descAreaH: GUIDE_LIMITS_EX.descAreaH,
+    body_margin_top: GUIDE_LIMITS_EX.body_margin_top,
+    height_quci: GUIDE_LIMITS_EX.height_quci,
+    height_cici: GUIDE_LIMITS_EX.height_cici,
+    height_ciqu_lyric: GUIDE_LIMITS_EX.height_ciqu_lyric,
+    height_shengbu: GUIDE_LIMITS_EX.height_shengbu,
+    segmentRowGap_bz: GUIDE_LIMITS_EX.segmentRowGap_bz,
+    segmentRowGap_dsb: GUIDE_LIMITS_EX.segmentRowGap_dsb,
+    segmentRowGap_tp: GUIDE_LIMITS_EX.segmentRowGap_tp,
+    barCountInterval: GUIDE_LIMITS_EX.barCountInterval,
+  }
+  check('范围表 15 项与应用同一份引擎表逐项相等',
+    keys.length === Object.keys(want).length &&
+      keys.every((k) => {
+        const r = PAGE_NUM_RANGES[k]
+        const w = want[k as string]
+        return w !== undefined && r[0] === w[0] && r[1] === w[1]
+      }),
+    JSON.stringify(keys.map((k) => `${k}=${PAGE_NUM_RANGES[k]}`)))
+  check('越界值按引擎范围钳制（bz 段间距 5 → 10、tp 取 0 合法、序号间隔 200 → 99）',
+    clampNum('segmentRowGap', 'bz', 5) === GUIDE_LIMITS_EX.segmentRowGap_bz[0] &&
+      clampNum('segmentRowGap', 'tp', 0) === 0 &&
+      clampNum('barCountInterval', undefined, 200) === GUIDE_LIMITS_EX.barCountInterval[1] &&
+      clampNum('note_size', undefined, 999) === 999) // 引擎表里没有范围的字段不钳制
+  // ⑤ 默认值一律来自引擎（`SEGMENT_ROW_GAP_DEFAULT`），插件不另立默认
+  check('临时段三项的默认值 = 引擎 `SEGMENT_ROW_GAP_DEFAULT`（bz 22 / dsb 22 / tp 14）',
+    SEGMENT_ROW_GAP_DEFAULT.bz === 22 && SEGMENT_ROW_GAP_DEFAULT.dsb === 22 && SEGMENT_ROW_GAP_DEFAULT.tp === 14 &&
+      /SEGMENT_ROW_GAP_DEFAULT/.test(defsSrc))
+  // ⑥ frontmatter 模板：嵌套字段只写一行 YAML（三行会互相覆盖、且会变成 [object Object]）
+  const tpl = buildFrontmatterTemplate(
+    [
+      { key: 'note_size', group: '字体', label: '音符字号' },
+      { key: 'segmentRowGap', sub: 'bz', group: '行距', label: 'bz 段上下间距' },
+      { key: 'segmentRowGap', sub: 'dsb', group: '行距', label: 'dsb 段上下间距' },
+      { key: 'segmentRowGap', sub: 'tp', group: '行距', label: '替谱行与下方歌词间距' },
+    ],
+    ['字体', '行距'],
+    (d) => (d.sub ? (SEGMENT_ROW_GAP_DEFAULT as Record<string, number>)[d.sub] : 13),
+  )
+  check('frontmatter 模板把 `segmentRowGap` 合成一行流式映射（不是三行、不出 [object Object]）',
+    tpl.includes('ijipu_segmentRowGap: {bz: 22, dsb: 22, tp: 14}') &&
+      !tpl.includes('[object Object]') &&
+      (tpl.match(/ijipu_segmentRowGap/g) ?? []).length === 1,
+    tpl)
+}
+
+console.log('[3d] adj629q 段层虚线与应用同口径（拖 bz/dsb/tp 改 segmentRowGap.*，不是谱面行距）')
+{
+  const src =
+    'V: 1.0\nB: t\nD: C\nP: 4/4\n' +
+    'Q: |: 1 2 3 4 | 5 6 7 1 :|\n' +
+    'C: 一 二 三 四 五 六 七 八\n' +
+    "C2: 一 二 {tp 1' 2'} 三 四 五 六 七\n" +
+    'Q: 3 4 | {bz 1 2 3 4} 5 6 7 1 |\n' +
+    'Q: 3 4 | {dsb 1 2 3 4} 5 6 7 1 |\n'
+  const lay = layoutScore(parseJps(src), defaultPageConfig)
+  const lines = computeGuideLines(lay, defaultPageConfig, 0)
+  const seg = lines.filter((l) => l.kind === 'segment')
+  const keys = [...new Set(seg.map((l) => l.key))]
+  check('段层虚线用 `segmentRowGap_*` 键（bz / dsb / tp 都认），不是 `height_ciqu*`',
+    keys.includes('segmentRowGap_bz') && keys.includes('segmentRowGap_dsb') && keys.includes('segmentRowGap_tp') &&
+      seg.every((l) => l.key.startsWith('segmentRowGap_')),
+    JSON.stringify(keys))
+  check('段层“上层”虚线 `invert`（往上拖 = 增大间距，与应用同口径）',
+    seg.filter((l) => l.key !== 'segmentRowGap_dsb').every((l) => l.invert === true) &&
+      seg.some((l) => l.key === 'segmentRowGap_dsb'),
+    JSON.stringify(seg.map((l) => `${l.key}:${l.invert}`)))
+  check('段层虚线有专门的 kind="segment"（宿主据此换紫色，与应用观感一致）',
+    lines.some((l) => l.kind === 'segment'))
+  check('`segmentRowGap_*` 的范围取自引擎表（可与虚线拖拽范围互校）',
+    guideLimits('segmentRowGap_tp')[0] === GUIDE_LIMITS_EX.segmentRowGap_tp[0] &&
+      guideLimits('segmentRowGap_tp')[1] === GUIDE_LIMITS_EX.segmentRowGap_tp[1])
+  // 拖拽写回必须落到子对象（不能写成顶层 `segmentRowGap_bz` 字段——引擎不认那个键）
+  const paneSrc = String(readFileSync('src/scorePane.ts', 'utf8'))
+  check('拖拽写回落到 `segmentRowGap` 子对象（含落盘提示取值）',
+    /segmentRowGap: \{ \.\.\.\(cur\.segmentRowGap \?\? \{\}\), \[segKey\]: value \}/.test(paneSrc) &&
+      /const segKey = line\.key\.startsWith\('segmentRowGap_'\)/.test(paneSrc))
 }
 
 console.log('[4] 未识别键不再静默忽略（给出最近键名建议）')

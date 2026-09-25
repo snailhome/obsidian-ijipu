@@ -173,6 +173,16 @@
   pointer-events: none;
   cursor: default;
 }
+/* adj629q（与应用同一套观感）：临时叠加段（{bz}/{dsb}/{tp}）的段层虚线换紫色——
+   它拖的是 `segmentRowGap.{bz,dsb,tp}`（段层与主旋律/所属歌词行的间距），不是谱面行距 */
+.ijipu-guide-line.ijipu-guide-seg {
+  border-color: #a855f7;
+  opacity: 0.75;
+}
+.ijipu-guide-line.ijipu-guide-seg:hover {
+  border-color: #c084fc;
+  opacity: 1;
+}
 /* 虚线太细不好抓：用透明加宽的热区（±3px）扩大命中范围 */
 .ijipu-guide-line::after {
   content: '';

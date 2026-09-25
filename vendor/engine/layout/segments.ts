@@ -51,8 +51,16 @@ export function segmentBarBeats(tokens: MusicToken[]): number[] {
 
 /** 一个临时段的包络信息 */
 export interface SegmentInfo {
-  /** 段类型：bz 临时伴奏 / dsb 临时多声部 */
-  type: 'bz' | 'dsb'
+  /** 段类型：bz 临时伴奏 / dsb 临时多声部 / tp 替谱段（adj629，来自歌词行 `{tp … }`） */
+  type: 'bz' | 'dsb' | 'tp'
+  /**
+   * adj629：**替谱段专属**——替代的是第几遍（1 起，= 所属歌词行的序号）。
+   * 只有 `type === 'tp'` 时有值；播放端据此按遍次替换主旋律。
+   */
+  pass?: number
+  /** adj629d：替谱段的源码坐标（歌词行号 / 该行内第几个 `{tp}`）——id 命名空间用，见 `tpNoteIndexBase` */
+  tpLine?: number
+  tpVariant?: number
   /** 段头（open）token 在 token 序列中的下标 */
   openIndex: number
   /** 段结束（close）token 下标；-1 = 未闭合（tokenizer 兜底路径） */
@@ -97,6 +105,9 @@ export function computeSegments(tokens: MusicToken[]): SegmentInfo[] {
         const closeIndex = next && next.kind === 'segment' && next.dir === 'close' && next.type === t.type ? i + 1 : -1
         out.push({
           type: t.type,
+          ...(t.pass !== undefined ? { pass: t.pass } : {}), // adj629：替谱段带遍次
+          ...(t.tpLine !== undefined ? { tpLine: t.tpLine } : {}), // adj629d：替谱段的源码坐标
+          ...(t.tpVariant !== undefined ? { tpVariant: t.tpVariant } : {}),
           openIndex: i,
           closeIndex,
           startBeat: beat,
@@ -179,6 +190,50 @@ export function segmentNoteIndexBase(group: number, openIndex: number): number {
 /** 第 `group` 组第 `openIndex` 个段头对应的**段内小节线** id 基值（+ 段内小节线序号） */
 export function segmentBarIndexBase(group: number, openIndex: number): number {
   return SEG_BAR_ID_BASE + group * SEG_ID_GROUP_STRIDE + openIndex * SEG_ID_OPEN_STRIDE
+}
+
+// ============================================================
+// adj629d：**替谱段（`{tp … }`，写在歌词行里）的 id 命名空间**
+// ============================================================
+
+/**
+ * 为什么替谱段要单独一套 id：它的段头 token 是**解析期注入**到曲行 token 流里的，
+ * `openIndex` 是"注入后的下标"——**源码侧（cursorMap 只重新分词 `Q:` 行）复现不出来**，
+ * 于是"点谱面跳脚本 / 点音符跳过去试听"两条路都断（用户报）。
+ *
+ * 改用源码可推导的三元组：`组号 + 歌词行号 + 该行内第几个 {tp} + 段内时值序号`：
+ *  - 歌词行号 = 该 `C…:` 行在所属曲行歌词列表里的序号（= 第几遍）；
+ *  - 行内序号 = 同一行里第几个 `{tp … }`（一行可以有多处替谱）。
+ * 范围：`SEG_TP_NOTE_ID_BASE`(9e12) 起，与段层（1e12）/段层小节线（5e12）互不重叠。
+ */
+export const SEG_TP_NOTE_ID_BASE = 9e12
+/** 一行内最多 10 处 `{tp … }`（`lineIdx×10 + variantIdx` 的跨距） */
+export const SEG_TP_ID_VARIANT_STRIDE = 10
+
+/** 第 `group` 组、第 `lineIdx` 条歌词行、该行第 `variantIdx` 个 `{tp}` 的段内音符 id 基值 */
+export function tpNoteIndexBase(group: number, lineIdx: number, variantIdx: number): number {
+  return (
+    SEG_TP_NOTE_ID_BASE +
+    group * SEG_ID_GROUP_STRIDE +
+    (lineIdx * SEG_TP_ID_VARIANT_STRIDE + variantIdx) * SEG_ID_OPEN_STRIDE
+  )
+}
+
+/** 替谱段音符 id 判定 + 解码；非替谱段 id 返回 null */
+export function decodeTpNoteId(
+  index: number,
+): { group: number; lineIdx: number; variantIdx: number; durSeq: number } | null {
+  if (!Number.isFinite(index) || index < SEG_TP_NOTE_ID_BASE) return null
+  const off = index - SEG_TP_NOTE_ID_BASE
+  const group = Math.floor(off / SEG_ID_GROUP_STRIDE)
+  const rest = off % SEG_ID_GROUP_STRIDE
+  const mid = Math.floor(rest / SEG_ID_OPEN_STRIDE)
+  return {
+    group,
+    lineIdx: Math.floor(mid / SEG_TP_ID_VARIANT_STRIDE),
+    variantIdx: mid % SEG_TP_ID_VARIANT_STRIDE,
+    durSeq: rest % SEG_ID_OPEN_STRIDE,
+  }
 }
 
 /** 段内音符 id 判定 + 解码；非段内音符 id（含段内小节线）返回 null */

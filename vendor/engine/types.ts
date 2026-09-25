@@ -91,6 +91,28 @@ export interface LyricLine extends LineBase {
   voice: number
   /** 歌词字符序列（每个元素对应一个音符） */
   chars: LyricChar[]
+  /**
+   * adj629（用户要求）：本行歌词里的「替谱段」`{tp … }`——**第 k 段歌词 = 第 k 遍**，
+   * 段内就是"这一遍与主旋律不同"的那几个音（写在被替换区间第一个字的前面）。
+   * 解析后由 `parser.ts` 注入到所属曲行的 token 流（见 `injectLyricVariants`），
+   * 于是排版/播放全部走现成的临时段机制（`{bz}` 那一套包络）。
+   */
+  variants?: LyricVariant[]
+}
+
+/**
+ * adj629：歌词行内联的**替谱段**（`C2: … {tp 4/ 3// 6,/ 6,// 1/ .1 -} 借 一 丝 …`）。
+ *
+ * 为什么挂在歌词行上：谱面上"第二遍不同"这件事本身就是**跟着歌词段走**的——
+ * 第 2 段歌词就是第 2 遍，加一段歌词就多一套替谱，不必在曲行里数遍次。
+ */
+export interface LyricVariant {
+  /** 锚点：替谱从**第 `slot` 个歌词槽位**（0 起）对应的音符起生效（= 段前已提交的歌词字数） */
+  slot: number
+  /** 段内音乐 token（与曲行同一套，经 `tokenizeMusicLine` 递归解析） */
+  tokens: MusicToken[]
+  /** 段头 `{` 在本行内容里的列偏移（供报错/光标定位） */
+  pos: number
 }
 
 /** 分页行：单独一行 "[fenye]" */
@@ -275,8 +297,19 @@ export interface BarlineToken {
   voltaEndSlash?: boolean
   /** 纯跳房子起点（无小节线的 [，如 ] 后连续 [ 或行首），渲染不画小节线竖线（adj26） */
   voltaOnly?: boolean
-  /** 小节线备注（引号内容） */
+  /** 小节线备注（引号内容；`d:` 转调指令已从其中剥掉，见 `keyChange`） */
   comment?: string
+  /**
+   * adj627 临时转调（用户要求，与 `"p:2/4"` 临时节拍同槽位）：小节线引号备注里写 `d:<key>`。
+   *  - `targetKey`：新调号根音半音偏移（与 `parseKey` 同口径，如 `d:1=D` / `d:D` / `d:Eb` / `d:F#`）；
+   *  - `keyText`：**用户写的调名原文**（如 `Ab` / `F#` / `$B`）——预览按用户的写法显示（`转1=Ab`），
+   *    不折算成等音（`Ab` 不会显示成 `#G`）；
+   *  - `clear: true`：`d:` 单用 ⇒ 恢复描述头 `D:` 的全局调号；
+   *  - `plus` / `minus`：紧跟调名的 `+` / `-` 个数——**抬升 / 降低转调记号的显示高度**
+   *    （与音符注释 `1"注"+` 的 adj392 同一套记法，每级 `NOTE_COMMENT_RAISE` px）；
+   *  - 字段缺省 = 这条小节线没有转调指令（显示 `comment` 与普通备注无异）。
+   */
+  keyChange?: { targetKey?: number; clear?: boolean; keyText?: string; plus?: number; minus?: number }
   pos: number
   raw: string
 }
@@ -358,14 +391,32 @@ export interface BracketToken {
  */
 export interface SegmentToken {
   kind: 'segment'
-  /** 段类型：bz 临时伴奏 / dsb 临时多声部 */
-  type: 'bz' | 'dsb'
+  /**
+   * 段类型：
+   *  - `bz` 临时伴奏（画主旋律上方）
+   *  - `dsb` 临时多声部（上下两层）
+   *  - `tp` 替谱段（adj629，来自歌词行的 `{tp … }`；画在**它所属那条歌词行的上方**，
+   *    且只在第 `pass` 遍替代主旋律）
+   */
+  type: 'bz' | 'dsb' | 'tp'
   /** open = `{bz` / `{dsb`（段开始）；close = `}`（段结束） */
   dir: 'open' | 'close'
   pos: number
   raw: string
   /** 段内 token（仅 open 时存在；close 时为 undefined） */
   children?: MusicToken[]
+  /**
+   * adj629：**替谱段专属**——本段替代的是**第几遍**（1 起，= 所属歌词行的序号）。
+   * 只有 `type === 'tp'` 时有值；其它段型缺省。播放端据此按遍次替换主旋律。
+   */
+  pass?: number
+  /**
+   * adj629d：**替谱段的源码坐标**——所属歌词行的序号（0 起）与该行内第几个 `{tp … }`（0 起）。
+   * 段头 token 是解析期注入的，`openIndex` 在源码侧复现不出来；光标联动/试听定位改用这两个
+   * 源码可推导的值（见 `layout/segments.ts` 的 `tpNoteIndexBase`）。
+   */
+  tpLine?: number
+  tpVariant?: number
 }
 
 /** 音乐 token 联合 */
@@ -485,7 +536,7 @@ export interface PlacedToken {
    * `layer`：upper = 段内容层（画在主旋律**上方**）；lower = dsb 段包络内的主旋律（下层声部，
    * 与上层同一拍位垂直对齐）。主旋律音符不带该字段。
    */
-  segment?: { type: 'bz' | 'dsb'; layer: 'upper' | 'lower' }
+  segment?: { type: 'bz' | 'dsb' | 'tp'; layer: 'upper' | 'lower'; pass?: number }
   /**
    * adj427：临时段重叠区的**声部角色**——供播放端决定音色与力度（用户规格）：
    *  - `'accomp'`：bz 段的段内容层 = **伴奏声部** → 第 2 可用音色 + 0.75 力度
@@ -494,6 +545,12 @@ export interface PlacedToken {
    * 未设置 = 普通主声部（音色与力度都不变）。
    */
   playVoice?: 'accomp' | 'main' | 'second'
+  /**
+   * adj629b（用户要求）：**临时叠加层（`{bz}`/`{dsb}`/`{tp}`）的曲部高度压缩比**——
+   * 段层音符的字号与各层间距按 `SEGMENT_LAYER_SCALE`（2/3）缩小，看起来比主旋律"扁"，
+   * 从而一眼区分"这是另一层/另一遍的内容"。主旋律音符缺省（= 1）。
+   */
+  layerScale?: number
 }
 
 /** 一个定位后的歌词字符 */
@@ -506,6 +563,13 @@ export interface PlacedLyric {
   slotW?: number
   /** 与相邻歌词的最小间距（px，adj71 后处理；判断两侧是否密集会重叠） */
   gapL?: number
+  /**
+   * adj629g：本字所属的**歌词行序号**（该曲行里第几条 `C…:`，0 起）。
+   * 预览虚线据此决定拖的是"歌词区↔曲部"（第 1 行 = `height_quci`）还是"歌词行之间"
+   * （第 2 行及以后 = `height_cici`）——此前按键在**那一行内的序号**判，
+   * 替谱层插进来后第 2 行歌词会被归到替谱行、序号又变 0，拖它错改成 quci（用户报）。
+   */
+  line?: number
 }
 
 /** 一个定位后的小节线（含反复记号/跳房子信息） */
@@ -523,6 +587,28 @@ export interface PlacedBarline {
   voltaOnly?: boolean
   /** 小节线备注 */
   comment?: string
+  /**
+   * adj627 临时转调：从该小节线起的整段谱改为 `<targetKey>`（半音偏移，与 `parseKey` 口径一致）。
+   * - `targetKey` 给定 + `clear` 缺省/假：转调生效；
+   * - `clear` 真：恢复描述头 `D:` 的全局调号（`d:` 单用）；
+   * - `keyText`：用户写的调名原文——记号显示按用户写法（`转1=Ab` 不折算成 `#G`）；
+   * - `plus` / `minus`：紧跟调名的 `+` / `-` 个数 ⇒ 抬升 / 降低记号显示高度。
+   * 由小节线引号备注 `d:<key>` / `d:` 解析得到；不写 `d:` 时整字段缺省（`undefined`），表示没有转调指令。
+   */
+  keyChange?: { targetKey?: number; clear?: boolean; keyText?: string; plus?: number; minus?: number }
+  /**
+   * adj627：转调记号的**显示文本**（如 `转1=D`；`d:` 单用时显示恢复后的调名）——
+   * 布局端算好（它同时知道描述头调号与目标调），渲染端直接画。
+   */
+  keyChangeLabel?: string
+  /**
+   * adj627c：转调记号里的**调名部分**（`转1=Ab` 的 `Ab`）。
+   *
+   * 为什么要单独给：渲染端要把它拆成「字母 + 左上角 ♯/♭ 角标」两笔来画，
+   * **与描述头 `D: Ab` 的预览完全同一套笔法**（角标字号 = 字母 3/4、上移 0.35×字号、
+   * 字母右移 0.9×角标宽让位）——只给一个拼好的字符串就没法复用同一段画法了。
+   */
+  keyChangeName?: string
   /** 小节线中心 x */
   x: number
   /** 行顶 y */
@@ -536,7 +622,14 @@ export interface PlacedBarline {
    * （按段内自身拍位映射到包络内的 x；主旋律小节线不带该字段）。
    * 渲染时用 `yTop`/`yBottom` 限制在该层高度内，避免与主旋律小节线重叠。
    */
-  segment?: { type: 'bz' | 'dsb'; layer: 'upper' | 'lower' }
+  segment?: { type: 'bz' | 'dsb' | 'tp'; layer: 'upper' | 'lower'; pass?: number }
+  /**
+   * adj629b：段层小节线的**纵向压缩比**（同 `PlacedToken.layerScale`；主旋律缺省 = 1）。
+   * 渲染端以 `layerBase` 为不动点做 `scale(1, 该值)`——**字号不变**，只把高度压扁。
+   */
+  layerScale?: number
+  /** adj629b：纵向压缩的**不动点 y**（= 该段层的音符基线 `yUpper`） */
+  layerBase?: number
 }
 
 /** 多声部块（Q1/Q2 纵向堆叠，小节对齐），供渲染声部括弧与名称 */
@@ -588,6 +681,13 @@ export interface PlacedSlur {
   half?: 'l' | 'r'
   /** 平均连音组 (y...) 音符数（仅 (y 组标注数字；普通连音线 (…) 不标注，adj43） */
   tupletCount?: number
+  /**
+   * adj629b：**段层连音线**所在层的**纵向压缩比**（临时叠加层压扁到 `SEGMENT_LAYER_YSCALE` = 2/3）。
+   * 主旋律连音线缺省（= 1）。
+   */
+  layerScale?: number
+  /** adj629b：纵向压缩的**不动点 y**（= 该段层的音符基线） */
+  layerBase?: number
 }
 
 /** 渐强渐弱记号（< > 起点至 ! 结束） */
@@ -615,6 +715,13 @@ export interface PlacedBracket {
   width: number
   voice: number
   group: number
+  /**
+   * adj629b：**段层括号**所在层的**纵向压缩比**（临时叠加层压扁到 `SEGMENT_LAYER_YSCALE` = 2/3，
+   * **字号不变**）。主旋律的 `&zkh/&ykh` 缺省（= 1）。
+   */
+  layerScale?: number
+  /** adj629b：纵向压缩的**不动点 y**（= 该段层的音符基线） */
+  layerBase?: number
 }
 
 /** 单个乐谱页 */
@@ -650,8 +757,8 @@ export interface ScorePage {
  * 左右括号分别落在**包络起点与终点**的 x 上（包络 = [段所在拍位, +段自身拍数)）。
  */
 export interface PlacedSegmentBracket {
-  /** 段类型：bz 临时伴奏 / dsb 临时多声部 */
-  type: 'bz' | 'dsb'
+  /** 段类型：bz 临时伴奏 / dsb 临时多声部 / tp 替谱段（adj629，无大括号，只有包络范围供色块用） */
+  type: 'bz' | 'dsb' | 'tp'
   /** 左括号 x（包络起点） */
   x1: number
   /** 右括号 x（包络终点） */
@@ -772,13 +879,15 @@ export interface PageConfig {
   /** adj303：是否显示乐器名注释（@乐器名 / @@ 切换后的下一个音符上方；缺省 false 不显示） */
   showInstrument?: boolean
   /**
-   * adj428：临时叠加段（`{bz … }` / `{dsb … }`）上下两行之间的纵向间距（px）。
+   * adj428：临时叠加段（`{bz … }` / `{dsb … }` / adj629 `{tp … }`）上下两行之间的纵向间距（px）。
    *  - `bz`：主旋律行不动，段层抬 `segmentRowGap.bz`。
    *  - `dsb`：上下两层各偏移 `segmentRowGap.dsb / 2`，整块关于主旋律基线居中。
+   *  - `tp`（adj629 替谱段）：主旋律行不动，替谱层画在**所属歌词行上方** `segmentRowGap.tp` 处，
+   *    该歌词行及其后各歌词行整体下移以腾出空间。
    * 单项缺省回退 `spacing.ts` 的 `SEGMENT_ROW_GAP_DEFAULT`（22 px，与 adj427 原值 ≈`note_size × 1.7` 一致）。
    * 谱面级设置——改它会让这份谱"长不一样"，需随 .jps 走（见 docs/SETTINGS-AUDIT.md）。
    */
-  segmentRowGap?: { bz?: number; dsb?: number }
+  segmentRowGap?: { bz?: number; dsb?: number; tp?: number }
   /**
    * 描述头自定义位置：相对各自锚点的偏移（adj16）。
    * title/subtitle_i → 描述区上边中点；author_i → 右下角；keyline/tempo → 左下角。
