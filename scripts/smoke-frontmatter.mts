@@ -5,7 +5,7 @@
  * 断言来源：用户反馈「在 frontmatter 里设置像 `ijipu_note_size` 好像没生效」——
  * 覆盖键名写法兼容、值类型转换、未识别键提示、优先级四类。
  */
-import { defaultPageConfig, dragDelta, layoutScore, parseJps, writeJpsConfig, mergeConfigEdits, configCarryover, SCORE_FONT_OPTIONS, buildPlaySequence, GUIDE_LIMITS, GUIDE_LIMITS_EX, SEGMENT_ROW_GAP_DEFAULT } from '@ijipu/engine'
+import { defaultPageConfig, dragDelta, layoutScore, parseJps, writeJpsConfig, mergeConfigEdits, configCarryover, SCORE_FONT_OPTIONS, buildPlaySequence, GUIDE_LIMITS, GUIDE_LIMITS_EX, SEGMENT_ROW_GAP_DEFAULT, OPTIONAL_CONFIG_FIELDS, defaultConfigForReset, extractJpsConfig, nonDefaultConfigKeys } from '@ijipu/engine'
 import { readFileSync } from 'node:fs'
 import { instrumentColorMap, playheadBaseOf, playheadPosIn, trackKeysOf } from '../src/playhead'
 import { applyFrontmatter, buildFrontmatterTemplate, deprecatedKeyHint, frontmatterKey, mergePageConfig, unknownKeyHint, PAGE_CONFIG_FIELDS } from '../src/frontmatter'
@@ -173,6 +173,89 @@ console.log('[3c] adj629q 设置口径与应用一致（字段集 / 标签 / 范
     tpl)
 }
 
+console.log('[3f] adj629z 插件默认值/字段集/文档 与 iJipu 应用逐项同步')
+{
+  // 大背景：应用侧默认值是**代码默认**（`defaultPageConfig` / `SEGMENT_ROW_GAP_DEFAULT`），
+  // 插件运行期一律直接读引擎（`getDefault` → 引擎）⇒ 只要 vendor/engine 同步，默认值就同步。
+  // 真正会漂移的是**文档与登记表**（应用改了默认值、插件 README 还写着旧数字；应用加了设置项、插件没行）。
+  // 下面把 DEFS 逐行解析出来，与引擎默认值、README 对照表逐项核，作为长期守卫。
+  const defsSrc = String(readFileSync('src/defs.ts', 'utf8'))
+  const rows = [...defsSrc.matchAll(/\{\s*group:\s*'([^']+)',\s*key:\s*'([^']+)'(?:,\s*sub:\s*'([^']+)')?,\s*label:\s*'([^']+)',\s*type:\s*'([^']+)'/g)].map((m) => ({
+    group: m[1],
+    key: m[2],
+    sub: m[3],
+    label: m[4],
+    type: m[5] as 'select' | 'number' | 'text' | 'toggle',
+  }))
+  check(`defs.ts 解析出 ${rows.length} 行设置项（含 segmentRowGap 三个子项）`, rows.length >= 30, `got ${rows.length}`)
+  // ① 字段名都必须是引擎字段（不许插件自造字段）
+  const engineFields = new Set<string>([...Object.keys(defaultPageConfig), ...OPTIONAL_CONFIG_FIELDS])
+  const invented = rows.filter((r) => !engineFields.has(r.key)).map((r) => r.key)
+  check('① 每行 key 都是引擎 `PageConfig` 字段（插件不自造字段）', invented.length === 0, invented.join(','))
+  // ② 默认值只来自引擎（行内不许自带 default 字面量——那才会与应用漂移）
+  check('② 默认值只来自引擎：行内无 `default:` 字面量，且 `getDefault` 读 defaultPageConfig / SEGMENT_ROW_GAP_DEFAULT',
+    !/,\s*default:/.test(defsSrc) &&
+      /return defaultPageConfig\[def\.key\]/.test(defsSrc) &&
+      /SEGMENT_ROW_GAP_DEFAULT/.test(defsSrc))
+  // ③ 数值字段的范围必须等于引擎范围表（与应用 `numFieldRanges.ts` 同源）
+  const engineRanges: Record<string, readonly [number, number]> = { ...GUIDE_LIMITS, ...GUIDE_LIMITS_EX }
+  const rangeMismatch: string[] = []
+  for (const [k, r] of Object.entries(PAGE_NUM_RANGES)) {
+    const e = engineRanges[k]
+    if (!e || e[0] !== r[0] || e[1] !== r[1]) rangeMismatch.push(`${k}: [${r}] ≠ [${e}]`)
+  }
+  check(`③ 范围表 ${Object.keys(PAGE_NUM_RANGES).length} 项与引擎逐项相等`, rangeMismatch.length === 0, rangeMismatch.join(' | '))
+  // ④ README「Frontmatter 键对照表」逐行核对：每个设置项都有一行，且行里写的默认值 = 引擎默认值
+  //    （字体行文档只写"系统栈"，不做数值核对；可选布尔项要求写明默认 false）
+  const readme = String(readFileSync('README.md', 'utf8'))
+  const docRows = readme.split('\n').filter((l) => l.trim().startsWith('|') && l.includes('`ijipu_'))
+  const cellOf = (key: string) => {
+    const row = docRows.find((r) => r.includes(`\`ijipu_${key}\``))
+    if (!row) return null
+    const cells = row.split('|')
+    return cells[cells.length - 2] ?? ''
+  }
+  const missing: string[] = []
+  const stale: string[] = []
+  for (const r of rows) {
+    if (r.type === 'select' && /font$/i.test(r.key)) continue // 字体：文档写"系统栈"
+    const cell = cellOf(r.key)
+    if (cell === null) { missing.push(r.sub ? `${r.key}.${r.sub}` : r.key); continue }
+    if (r.sub) continue // segmentRowGap 三个子项共一行，统一在 ⑤ 核
+    const v = (defaultPageConfig as unknown as Record<string, unknown>)[r.key]
+    if (v === undefined) {
+      if (!/默认\s*(false|关)/.test(cell)) stale.push(`${r.key}（可选字段默认未设置，文档写「${cell.trim()}」）`)
+      continue
+    }
+    if (typeof v === 'number') {
+      if (!new RegExp(`(^|[^\\d.-])${String(v).replace('.', '\\.')}([^\\d]|$)`).test(cell)) stale.push(`${r.key}=${v}，文档写「${cell.trim()}」`)
+      continue
+    }
+    if (typeof v === 'boolean') {
+      if (!cell.includes(String(v))) stale.push(`${r.key}=${v}，文档写「${cell.trim()}」`)
+      continue
+    }
+    if (!cell.includes(String(v))) stale.push(`${r.key}=${String(v)}，文档写「${cell.trim()}」`)
+  }
+  check('④a README 对照表覆盖每一项设置（缺行=用户照文档写 frontmatter 会找不到键）', missing.length === 0, `缺行：${missing.join(',')}`)
+  check('④b README 里写的默认值与引擎默认值一致（改了默认值必须同步文档）', stale.length === 0, stale.join(' | '))
+  // ⑤ segmentRowGap：一行里要写全三个子项默认值
+  const segCell = cellOf('segmentRowGap') ?? ''
+  check('⑤ README 写明 `segmentRowGap` 三个子项默认值（bz/dsb/tp = 22/22/14）',
+    /bz\D*22/.test(segCell) && /dsb\D*22/.test(segCell) && /tp\D*14/.test(segCell), segCell.trim())
+  // ⑥ 应用暴露的字段（TAB_CONFIG_KEYS 登记表）插件都有控件；插件不许有应用没有的谱面字段
+  const appSrc = String(readFileSync('../ijipu/src/dialogs/PageConfigDialog.tsx', 'utf8'))
+  const tabBlock = appSrc.match(/const TAB_CONFIG_KEYS[\s\S]*?\n\}/)?.[0] ?? ''
+  if (tabBlock) {
+    const appKeys = [...new Set([...tabBlock.matchAll(/'([A-Za-z_][A-Za-z0-9_]*)'/g)].map((m) => m[1]))]
+    const pluginKeys = new Set(rows.map((r) => r.key))
+    const gaps = appKeys.filter((k) => engineFields.has(k) && !pluginKeys.has(k))
+    check('⑥ 应用暴露的谱面字段插件都有控件（跨仓对账）', gaps.length === 0, `插件缺：${gaps.join(',')}`)
+  } else {
+    check('⑥ 应用 PageConfigDialog 可读（跨仓对账）', false, '未找到 ../ijipu/src/dialogs/PageConfigDialog.tsx 的 TAB_CONFIG_KEYS')
+  }
+}
+
 console.log('[3d] adj629q 段层虚线与应用同口径（拖 bz/dsb/tp 改 segmentRowGap.*，不是谱面行距）')
 {
   const src =
@@ -204,6 +287,27 @@ console.log('[3d] adj629q 段层虚线与应用同口径（拖 bz/dsb/tp 改 seg
   check('拖拽写回落到 `segmentRowGap` 子对象（含落盘提示取值）',
     /segmentRowGap: \{ \.\.\.\(cur\.segmentRowGap \?\? \{\}\), \[segKey\]: value \}/.test(paneSrc) &&
       /const segKey = line\.key\.startsWith\('segmentRowGap_'\)/.test(paneSrc))
+}
+
+console.log('[3e] adj629s 「恢复默认」用引擎的 defaultConfigForReset（清掉可选字段）')
+{
+  const reset = defaultConfigForReset()
+  check('引擎 `defaultConfigForReset()` 不含可选字段、差量写入为空',
+    OPTIONAL_CONFIG_FIELDS.every((k) => !(k in (reset as unknown as Record<string, unknown>))) &&
+      nonDefaultConfigKeys(reset).length === 0,
+    JSON.stringify(nonDefaultConfigKeys(reset)))
+  const withMeta = 'V: 1.0\nB: t\nD: C\nP: 4/4\nQ: 1 2 3 4 |\n\n# jps-config:{"metaPos":{"keyline":{"x":0,"y":-21}}}\n'
+  const saved = writeJpsConfig(withMeta, reset)
+  check('恢复默认后保存：设置行**清空为 `# jps-config:{}`**（不再含 metaPos，也不整行消失）',
+    saved.split('\n').filter((l) => l.startsWith('# jps-config')).join('|') === '# jps-config:{}' && !saved.includes('metaPos'),
+    saved.split('\n').find((l) => l.startsWith('# jps-config')) ?? '(无)')
+  // 「⚙ 排版」对话框的「恢复默认」必须走同一份（直接展开 defaultPageConfig 会留下可选字段）
+  // 先剥注释再断言：注释里**故意写了**要禁用的旧写法（同 E-2026-237 的坑）
+  const dlgFlat = String(readFileSync('src/configDialog.ts', 'utf8'))
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '')
+  check('插件的「恢复默认」用 `defaultConfigForReset()`，不再 `{ ...defaultPageConfig }`',
+    /defaultConfigForReset\(\)/.test(dlgFlat) && !/\{ \.\.\.defaultPageConfig \}/.test(dlgFlat))
 }
 
 console.log('[4] 未识别键不再静默忽略（给出最近键名建议）')

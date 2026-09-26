@@ -37,7 +37,7 @@ export const JPS_CONFIG_PREFIX = '# jps-config:'
  * 只读回 29 个，App 勾选「显示乐器名」保存后重新打开就丢（同类"设置不生效"）。
  * 下面的编译期断言保证**引擎新增可选字段时此处必须同步**（否则 tsc 报错）。
  */
-const OPTIONAL_CONFIG_FIELDS = ['heights', 'metaPos', 'lyricShrink', 'showInstrument', 'segmentRowGap'] as const
+export const OPTIONAL_CONFIG_FIELDS = ['heights', 'metaPos', 'lyricShrink', 'showInstrument', 'segmentRowGap'] as const
 
 /** PageConfig 中的可选字段集合 */
 type OptionalConfigKey = {
@@ -345,6 +345,23 @@ export function mergeJpsConfig(
 export type JpsConfigWriteMode = 'diff' | 'full'
 
 /**
+ * adj629s：**「恢复默认」该落到的那份配置**——代码默认值，且**可选字段整键移除**。
+ *
+ * 为什么不能直接 `{ ...defaultPageConfig }`：`defaultPageConfig` **不包含可选字段**
+ * （`metaPos` / `heights` / `segmentRowGap` / `lyricShrink` / `showInstrument`），
+ * 把它展开覆盖到当前配置上时，这些字段会**原样留下**；而"默认里没有它们"意味着
+ * `writeJpsConfig` 的差量写入会把它们视为"与默认不同" ⇒ 点了「恢复默认」再保存，
+ * `# jps-config` 里仍留着一条（用户报：恢复默认后还剩 `{"metaPos":{…}}`）。
+ *
+ * 应用与插件两处的「恢复默认」都走这一份 ⇒ 口径不会各写一遍。
+ */
+export function defaultConfigForReset(): PageConfig {
+  const out: Record<string, unknown> = { ...defaultPageConfig }
+  for (const k of OPTIONAL_CONFIG_FIELDS) delete out[k]
+  return out as unknown as PageConfig
+}
+
+/**
  * adj480：**谱面自包含检查**——列出「生效值与代码默认值不同、但谱面 `# jps-config` 没写（或写得不一样）」的字段。
  *
  * 为什么需要：`.jps` 要能"复制给别人也一模一样"，就必须**自包含**——凡影响外观的值都得写在谱面里。
@@ -461,7 +478,10 @@ export function mergeConfigEdits(code: string, base: PageConfig, next: PageConfi
  * 把设置写回源码的 `# jps-config` 行：
  *  - 已有该行 → 原位替换 JSON；
  *  - 无该行且有待写内容 → 追加到源码末尾（补空行分隔，adj200）；
- *  - **差量模式（默认）且无差量 → 删除已有该行**（全部回到默认 = 不需要设置行）。
+ *  - **差量模式（默认）且无差量**：
+ *      · 已有该行 → **原位清空为 `# jps-config:{}`**（adj629t，用户要求：恢复默认/全默认时就"清空为 {}"，
+ *        不要整行消失——新文件模板本来就是 `{}`，留着这一行位置固定、也免得用户以为设置行被弄丢了）；
+ *      · 没有该行 → 保持原样（不为了写个空对象而凭空加一行）。
  * 返回新源码；JSON 序列化失败时返回原串。
  * adj454：`cfg` 放宽为 `Partial<PageConfig>`；**持久化用户改动**请传 `mergeConfigEdits(...)` 的结果，
  * 不要直接传合并后的生效配置（那会把本机缓存设置固化进谱面）。
@@ -470,28 +490,22 @@ export function writeJpsConfig(code: string, cfg: Partial<PageConfig>, opts?: { 
   const mode: JpsConfigWriteMode = opts?.mode ?? 'diff'
   // adj413：写入前统一取整——文件里的 px 一律整数（即便调用方传了浮点）
   const picked = pickWritableConfig(roundPxIntegers(cfg), mode)
+  const text = code.replace(/\r\n/g, '\n')
+  const lines = text.split('\n')
+  const idx = lines.findIndex((l) => l.startsWith(JPS_CONFIG_PREFIX))
+  if (Object.keys(picked).length === 0) {
+    if (idx < 0) return code
+    // adj629t：清空为 `# jps-config:{}`（保留该行位置，不再整行删除）
+    if (lines[idx] === `${JPS_CONFIG_PREFIX}{}`) return code
+    lines[idx] = `${JPS_CONFIG_PREFIX}{}`
+    return lines.join('\n')
+  }
   let raw: string
   try {
     raw = JSON.stringify(picked)
   } catch {
     return code
   }
-  const text = code.replace(/\r\n/g, '\n')
-  const lines = text.split('\n')
-  const idx = lines.findIndex((l) => l.startsWith(JPS_CONFIG_PREFIX))
-  const isEmpty = Object.keys(picked).length === 0
-
-  if (isEmpty) {
-    if (idx < 0) return code
-    // 删除设置行：连同它上方由 adj200 补出的连续空行一起收敛（最多 3 行），避免留一堆空行
-    let from = idx
-    while (from > 0 && lines[from - 1] === '' && idx - from < 3) from--
-    lines.splice(from, idx - from + 1)
-    // 文末空行收敛为一个
-    while (lines.length > 1 && lines[lines.length - 1] === '' && lines[lines.length - 2] === '') lines.pop()
-    return lines.join('\n')
-  }
-
   const line = `${JPS_CONFIG_PREFIX}${raw}`
   if (idx >= 0) {
     lines[idx] = line

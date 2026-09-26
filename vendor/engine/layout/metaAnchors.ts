@@ -8,6 +8,7 @@
  *
  * 描述头区域 = descAreaH（adj30 拆分的内容区），元素锚定其角且不超出区域（adj31）。
  * metaPos[key] = { x, y } 为相对锚点的偏移（x 向右、y 向下为正，SVG 坐标）。
+ * 默认偏移（无 metaPos）= 贴角排布，见 `metaCornerOffsets` / `metaAuthorRowY`（adj629u）。
  */
 import { clamp } from './guides'
 
@@ -93,4 +94,48 @@ export function clampMetaPos(
       // 已在函数开头处理，此处仅为类型穷尽
       return { x: relX, y: relY }
   }
+}
+
+// ============================================================
+// adj629u：描述头**贴角默认**纵向偏移
+// ============================================================
+
+/**
+ * 描述头默认纵向偏移（相对各自锚点；负 = 由下沿往上）。
+ *
+ * 用户口径（adj629u）：**左栏（调式/拍号、节拍）靠左下角、右栏（作者）靠右下角、
+ * 居中栏（标题/副标题/乐器）靠区域上沿**，各行按顺序排列。
+ *
+ * 此前默认值是几处与字号脱钩的硬编码（标题 30.6 = 旧字号 36×0.85、调式 −44、节拍 −12），
+ * 字号改成 20（adj213）后这些魔数就悬空了：空设置下三块恰好都落在描述头区域中部、不贴角。
+ * 现在一律按「**该栏末行贴下沿**」推导，且行距随字号缩放——拍号分母会向基线下方探出
+ * ≈0.85em，行距写死 px 在大字号下必然重叠。
+ *
+ * @param p.mSize       描述头字号（调式/节拍/乐器/作者基准）
+ * @param p.biaotiSize  标题字号
+ * @param p.hasKeyRow   该谱是否有「调式/拍号」行（决定节拍行是否为末行）
+ * @param p.hasTempoRow 该谱是否有「节拍」行
+ */
+export function metaCornerOffsets(p: {
+  mSize: number
+  biaotiSize: number
+  hasKeyRow: boolean
+  hasTempoRow: boolean
+}): { title: number; keyline: number; tempo: number } {
+  const edgePad = p.mSize * 0.45 // 末行基线距区域下沿（下伸/CJK 字底 ≈0.12em，净距 ≈0.33em）
+  const keyGap = p.mSize * 1.85 // 调式/拍号行 → 节拍行（拍号分母下探 0.85em + 节拍字高 0.72em）
+  return {
+    // 0.85 = 字顶贴线（CJK 字身 ≈0.88em，与 clampMetaPos 的下限同口径），0.1 = 视觉余量
+    title: p.biaotiSize * 1.1,
+    // 末行贴下沿；有节拍行时调式/拍号行上移一行；只有调式行时它自己就是末行
+    keyline: p.hasKeyRow ? -edgePad - (p.hasTempoRow ? keyGap : 0) : -edgePad,
+    tempo: -edgePad,
+  }
+}
+
+/** 作者第 i 行的默认纵向偏移（右下锚，**末行贴下沿**、从下往上排；adj629u） */
+export function metaAuthorRowY(i: number, count: number, mSize: number): number {
+  const edgePad = mSize * 0.45
+  const rowGap = Math.max(9, mSize - 1) * 1.42 // 作者字号 = 描述头字号 - 1
+  return -edgePad - (count - 1 - i) * rowGap
 }

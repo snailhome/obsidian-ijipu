@@ -934,12 +934,12 @@ export const defaultPageConfig: PageConfig = {
   note_size: 13,
   // adj213：音符字体微软雅黑 → 黑体（简谱数字用黑体更醒目）
   shuzi_font: SYS_FONT,
-  // adj213：曲部与词部间距 13 → 15
-  height_quci: 15,
+  // adj213：曲部与词部间距 13 → 15；adj629y（用户要求）：默认 15 → 20
+  height_quci: 20,
   height_cici: 10,
   height_ciqu: 20, // adj78：曲部与曲部间距默认 40→20；adj79 拆分后仅指无歌词行行尾间距
-  // adj213：曲部与上一行词部间距 12 → 10
-  height_ciqu_lyric: 10,
+  // adj213：曲部与上一行词部间距 12 → 10；adj629w（用户要求）：默认 10 → -5（歌词行压得更紧）
+  height_ciqu_lyric: -5,
   height_shengbu: 0,
   bar_gap: 0,
   align_min_bars: 4,

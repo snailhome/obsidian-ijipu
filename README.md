@@ -94,13 +94,15 @@ ijipu_showInstrument: true
 | 纸张 | `ijipu_page` | 枚举 | A4 / A5 / A4_horizontal / A5_horizontal（默认 A4） |
 | 上边距 | `ijipu_margin_top` | 数字 | 默认 40 |
 | 下边距 | `ijipu_margin_bottom` | 数字 | 默认 40 |
-| 左边距 | `ijipu_margin_left` | 数字 | 默认 40 |
-| 右边距 | `ijipu_margin_right` | 数字 | 默认 40 |
+| 左边距 | `ijipu_margin_left` | 数字 | 默认 50 |
+| 右边距 | `ijipu_margin_right` | 数字 | 默认 50 |
 | 正文上间距 | `ijipu_body_margin_top` | 数字 | 默认 20 |
 | 描述头区高 | `ijipu_descAreaH` | 数字 | 默认 80 |
-| 小节间距 | `ijipu_bar_gap` | 数字 | 默认 0 |
+| 小节间距 | `ijipu_bar_gap` | 数字 | 默认 0（设置面板未提供控件，仍可用 frontmatter 携带） |
 | 两端对齐最小小节数 | `ijipu_align_min_bars` | 数字 | 默认 4 |
 | 音符布局模式 | `ijipu_noteSpaceLayout` | 枚举 | space（空间优先）/ duration（时值优先），默认 space |
+| 显示小节计数 | `ijipu_showBarCount` | boolean | true / false（默认 false） |
+| 序号间隔 | `ijipu_barCountInterval` | 数字 | 默认 4（每隔几个小节显示一个方框序号） |
 
 ### 字体
 | 设置项 | frontmatter 键 | 类型 | 默认 |
@@ -121,11 +123,12 @@ ijipu_showInstrument: true
 ### 行距
 | 设置项 | frontmatter 键 | 类型 | 默认 |
 |---|---|---|---|
-| 曲-词间距 | `ijipu_height_quci` | 数字 | 15 |
+| 曲-词间距 | `ijipu_height_quci` | 数字 | 20 |
 | 词-词间距 | `ijipu_height_cici` | 数字 | 10 |
 | 曲-曲间距 | `ijipu_height_ciqu` | 数字 | 20 |
-| 曲-上词间距 | `ijipu_height_ciqu_lyric` | 数字 | 10 |
+| 曲-上词间距 | `ijipu_height_ciqu_lyric` | 数字 | -5 |
 | 声部间距 | `ijipu_height_shengbu` | 数字 | 0 |
+| 临时段上下间距 | `ijipu_segmentRowGap` | 映射 | `{bz: 22, dsb: 22, tp: 14}`（bz/dsb 段上下层、替谱层与歌词行的纵向间距；可只写其中一项） |
 
 ### 渲染
 | 设置项 | frontmatter 键 | 类型 | 取值 / 默认 |

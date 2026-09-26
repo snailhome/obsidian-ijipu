@@ -16,7 +16,7 @@
  */
 import type { PageConfig, PlacedBarline, PlacedBarNumber, PlacedDynamic, PlacedLyric, PlacedSegmentBracket, PlacedSlur, PlacedToken, ScoreLayout, ScorePage, VoiceBlock } from '../types'
 import { tokenDuration } from '../duration'
-import { metaAnchorOf, metaAnchorPt } from '../layout/metaAnchors'
+import { metaAnchorOf, metaAnchorPt, metaAuthorRowY, metaCornerOffsets } from '../layout/metaAnchors'
 import {
   DOT_R,
   DOT_R_DOT,
@@ -112,13 +112,19 @@ const ABOVE_GLYPH: Record<string, string> = {
 const SYM_LAYER_GAP = 1
 
 /**
- * 13px 元数据字形宽（Microsoft YaHei GDI 实测，px）——用于调式/节拍 = 号对齐（adj42）。
+ * 13px 元数据字形宽（px）——用于调式/节拍 = 号对齐（adj42）。
  * 其余 ASCII 按 7.62、CJK 按 13 兜底估算。
+ *
+ * adj629v：表格里除 `♩` 外都是 YaHei 的 GDI 实测值，与浏览器实测一致
+ * （Blink `measureText`：`1` 7.62 / ` ` 3.85 / `=` 9.64）；**`♩` 是例外**——
+ * YaHei 没有 U+2669，浏览器回退到 CJK 字体、占宽 **一个全角 = 13px**
+ * （GDI 当年量到的 7.0 在浏览器渲染路径上不成立）。不改这个数，节拍行的
+ * `=` 会**比调式行右偏 6px**（估算宽 7.0 vs 实际 13.0 的差）。
  */
 const META_GLYPH_W: Record<string, number> = {
   ' ': 3.85,
   '=': 9.64,
-  '♩': 7.0,
+  '♩': 13.0,
   '0': 7.62, '1': 7.62, '2': 7.62, '3': 7.62, '4': 7.62,
   '5': 7.62, '6': 7.62, '7': 7.62, '8': 7.62, '9': 7.62,
   'A': 9.15, 'B': 8.16, 'C': 8.7, 'D': 9.9, 'E': 7.15,
@@ -166,14 +172,23 @@ function noteFont(style: string): string {
 // ============================================================
 
 /**
- * 描述头默认布局（adj16 锚点语义）：
- *  - 主标题：上边中点（top-center）；副标题紧接其下
- *  - 作者：右下角（bottom-right，从底部往上）
- *  - 调式+拍号：左下角（bottom-left）；节拍在其下；其它各一行
+ * 描述头默认布局（adj16 锚点语义；adj629u 调整为**贴角**）：
+ *  - 主标题：上边中点（top-center），字顶贴区域上沿；副标题/乐器紧接其下
+ *  - 作者：右下角（bottom-right，从底部往上：末行贴区域下沿）
+ *  - 调式+拍号：左下角（bottom-left），节拍在其下（末行贴区域下沿）
  *  - metaPos 可覆盖任意元素位置（key: title/subtitle_i/author_i/keyline/tempo）
  *    值为相对各自锚点的偏移（adj16）：区域宽/高变化时元素跟随锚点。
  */
-type RenderFontMeta = { w1eq?: number; wAcc?: number }
+type RenderFontMeta = {
+  /** `1 = ` 实测宽（决定调号字母/角标左缘，adj199） */
+  w1eq?: number
+  /** `♯` 实测宽（角标，adj199） */
+  wAcc?: number
+  /** `1 ` 实测宽（adj629v：调式行 = 号左缘基准） */
+  w1sp?: number
+  /** `♩` 实测宽（adj629v：节拍行 = 号左缘基准） */
+  wTempo?: number
+}
 /**
  * adj627c（用户要求）：把**调名**画成与描述头 `1 = Ab` 完全同一套效果——
  * 字母 + **左上角 ♯/♭ 角标**（角标字号 = 字母 3/4、上移 0.35×字号、字母右移 0.9×角标宽腾位）。
@@ -249,7 +264,21 @@ function renderMeta(page: ScorePage, config: PageConfig, opts?: RenderFontMeta):
   // 按字体实际宽度摆放角标/字母：w1eq(1= 宽)/wAcc(♯ 宽) 由 PreviewPane 用 canvas.measureText 实测传入，
   // 消除中/英文字体下 ♯ 宽度差异导致的间距忽大忽小或重叠；无实测（导出等场景）回退按字号估算（全角）
   const W1eq = opts?.w1eq ?? metaTextW('1 = ') * scale0 // "1 = " 实际宽（决定字母/角标左缘）
-  const keyPos = posOf('keyline', { x: KEY_SHIFT, y: -44 })
+  // ---- adj629u：描述头默认布局 = **贴角**（左栏贴左下角、右栏贴右下角、居中栏贴区域上沿） ----
+  // 用户报「空设置下没有按『左靠左下角 / 右靠右下角 / 居中靠中上』排列」：
+  // 默认值原是与字号脱钩的硬编码（标题 30.6 = 旧字号 36×0.85，调式 -44 / 节拍 -12 / 作者 -16-18n），
+  // 空设置下三块恰好都落在区域中部。公式集中在 layout/metaAnchors.ts（与 smoke 共用一份）。
+  const hasKeyRow = Boolean(keyRaw || page.meta.meter)
+  const hasTempoRow = Boolean(page.meta.tempoNum || page.meta.tempoText || page.meta.tempo)
+  const corner = metaCornerOffsets({
+    mSize,
+    biaotiSize: config.biaoti_size,
+    hasKeyRow,
+    hasTempoRow,
+  })
+  const keyDefY = corner.keyline
+  const tempoDefY = corner.tempo
+  const keyPos = posOf('keyline', { x: KEY_SHIFT, y: keyDefY })
   const keyName = drawKeyName({
     x: keyPos.x,
     y: keyPos.y,
@@ -267,24 +296,31 @@ function renderMeta(page: ScorePage, config: PageConfig, opts?: RenderFontMeta):
     parts.push(...keyName.parts)
   }
   if (page.meta.meter) {
-    const pos = posOf('keyline', { x: KEY_SHIFT, y: -44 })
-    // 拍号左缘 = "1 = " 宽 + 字母区（字母右移 accShift + 字母宽）+ 一个空格 + 10 间距
-    const meterX = pos.x + metaTextW('1 = ') * scale0 + accShift + metaTextW(keyLetter) * scale0 + metaTextW(' ') * scale0 + 10
+    const pos = posOf('keyline', { x: KEY_SHIFT, y: keyDefY })
+    // 拍号左缘 = "1 = " 宽（优先实测 W1eq）+ 字母区（字母右移 accShift + 字母宽）+ 一个空格 + 10 间距
+    const meterX = pos.x + W1eq + accShift + metaTextW(keyLetter) * scale0 + metaTextW(' ') * scale0 + 10
     parts.push(renderMeterMeta(page.meta.meter, meterX, pos.y, mFont, mSize))
   }
   // ---- 节拍（左下锚，keyline 下方；数字 ♩=N + 文字，多条 J 时并排） ----
   // adj42：= 号后加空格（"♩= 80"），并与调式行 = 号垂直对齐：
   // 调式行 "=" 位于 x + w("1 ")，节拍行 "=" 位于 x' + w("♩")，令 x' = x + w("1 ") - w("♩")
   // 仅当节拍行含 "♩=" 前缀时对齐；纯文字节拍（无 = 号）保持与调式行左缘对齐
+  // adj629v（用户要求「描述头 D 的 = 号和 J 的 = 号保持对齐」）：调号带升降号时字母是在
+  // **字符串内部**用 `<tspan dx>` 右移的（adj190），调式行的 "=" 不再跟着右移；而节拍行还留着
+  // adj181 时代的 `+ accShift`（那是"整行右移给角标让位"的写法）⇒ 带升降号时 J 行的 "=" 恰好
+  // 右偏一个角标宽（`D: Bb` 实测 8.8px）。去掉 accShift，并优先用 PreviewPane 实测的
+  // "1 " / "♩" 宽（与 adj199 的角标实测同一口径），消除估算宽与实际字体的差。
   const tempoNum = page.meta.tempoNum
   const tempoText = page.meta.tempoText
   const legacyTempo = page.meta.tempo
   const hasTempoEq = Boolean(tempoNum) || (legacyTempo !== null && Number.isFinite(Number(legacyTempo)) && legacyTempo.trim() !== '')
-  const tempoEqShift = keyLetter && hasTempoEq ? (metaTextW('1 ') - metaTextW('♩')) * (mSize / 13) : 0
+  const w1sp = opts?.w1sp ?? metaTextW('1 ') * scale0
+  const wTempo = opts?.wTempo ?? metaTextW('♩') * scale0
+  const tempoEqShift = keyLetter && hasTempoEq ? w1sp - wTempo : 0
   if (tempoNum || tempoText) {
     // adj：与调式行间距加大（偏移 -20 → -12），防止拍号分母与节拍行重叠；
-    // adj176：与调号同步右移 KEY_SHIFT；adj181：有升降号时再右移 accShift
-    const pos = posOf('tempo', { x: tempoEqShift + KEY_SHIFT + accShift, y: -12 })
+    // adj176：与调号同步右移 KEY_SHIFT（adj629v：不再叠加 accShift，= 号与调式行严格对齐）
+    const pos = posOf('tempo', { x: tempoEqShift + KEY_SHIFT, y: tempoDefY })
     parts.push(
       `<text data-meta="tempo" x="${pos.x}" y="${pos.y}" font-size="${mSize}" font-family="${mFont}" fill="#1b1b1b">${xmlEsc(tempoLabel(tempoNum ?? undefined, tempoText ?? undefined))}</text>`,
     )
@@ -295,22 +331,23 @@ function renderMeta(page: ScorePage, config: PageConfig, opts?: RenderFontMeta):
       Number.isFinite(n) && page.meta.tempo.trim() !== ''
         ? `♩= ${n}`
         : xmlEsc(page.meta.tempo.replace(/\s*\n\s*/g, '　'))
-    const pos = posOf('tempo', { x: tempoEqShift + KEY_SHIFT + accShift, y: -12 })
+    const pos = posOf('tempo', { x: tempoEqShift + KEY_SHIFT, y: tempoDefY })
     parts.push(
       `<text data-meta="tempo" x="${pos.x}" y="${pos.y}" font-size="${mSize}" font-family="${mFont}" fill="#1b1b1b">${tempoText}</text>`,
     )
   }
 
-  // ---- 主标题（上居中锚；默认偏移 30.6 = 字号×0.85，文字顶不越过顶部虚线，adj32） ----
+  // ---- 主标题（上居中锚；默认偏移 = 字顶贴区域上沿 + 视觉余量，adj32/adj629u） ----
+  const titleDefY = corner.title
   if (page.meta.titles[0]) {
-    const pos = posOf('title', { x: 0, y: 30.6 })
+    const pos = posOf('title', { x: 0, y: titleDefY })
     parts.push(
       `<text data-meta="title" x="${pos.x}" y="${pos.y}" text-anchor="middle" font-size="${config.biaoti_size}" font-family="${config.biaoti_font}" font-weight="bold" fill="#1b1b1b">${xmlEsc(page.meta.titles[0])}</text>`,
     )
   }
   // ---- 副标题（上居中锚，主标题下） ----
   let subIdx = 0
-  let subOffY = 30.6 + config.biaoti_size * 1.1
+  let subOffY = titleDefY + config.biaoti_size * 1.1
   for (const t of page.meta.titles.slice(1)) {
     const pos = posOf(`subtitle_${subIdx}`, { x: 0, y: subOffY })
     parts.push(
@@ -331,9 +368,9 @@ function renderMeta(page: ScorePage, config: PageConfig, opts?: RenderFontMeta):
     instOffY += mSize * 1.4
   }
 
-  // ---- 作者（右下锚，从底部往上） ----
+  // ---- 作者（右下锚，从底部往上：**末行贴区域下沿**，adj629u） ----
   for (let i = 0; i < page.meta.authors.length; i++) {
-    const pos = posOf(`author_${i}`, { x: 0, y: -16 - (page.meta.authors.length - 1 - i) * 18 })
+    const pos = posOf(`author_${i}`, { x: 0, y: metaAuthorRowY(i, page.meta.authors.length, mSize) })
     parts.push(
       `<text data-meta="author_${i}" x="${pos.x}" y="${pos.y}" text-anchor="end" font-size="${Math.max(9, mSize - 1)}" font-family="${mFont}" fill="#1b1b1b">${xmlEsc(page.meta.authors[i])}</text>`,
     )

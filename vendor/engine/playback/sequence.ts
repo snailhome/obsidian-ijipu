@@ -1267,66 +1267,15 @@ export function buildPlaySequence(
       // (2 - | 2/) 的 2 连 2.5 拍；(2 3/ 2/ | 2) 第 3、4 个 2 连奏；
       // (2 3 | 2) 中间隔 3 不合并；**连音线外的同音符不并入**
       // （(2 - | 2) 2 → 播 3 拍再播 1 拍，不连成 4 拍）
-      // adj396/adj504：**只有"后倚音"会阻止下一个音符合并进来**。
-      //  - 后倚音事件排在主音符**之后**（占尾部）⇒ 若把下一个同音并进主音符，主音会延长到盖住那段，
-      //    后倚音就会在延长的音里"插一嘴" ✗ ⇒ 保持不合并。
-      //  - **前倚音**事件排在主音符**之前**，合并只延长主音事件、倚音仍在原位不受影响 ⇒ 应当合并。
-      //    用户报的 `(3/[3/5/] 3)` 正属这种：第二个 3 应为**延长**，此前却因 `!lastEventHadGrace`
-      //    一刀切禁用（那是 adj396 的旧顾虑：当时合并取"events 末元素"，会并到后倚音事件上；
-      //    现在合并目标是 `lastMainEvIdx`（主音事件），该顾虑已不存在）。
-      const prevRanges = lastEventNoteIdx >= 0 ? slurOf.get(lastEventNoteIdx) : undefined
-      const curRanges = slurOf.get(curNoteIdx)
-      const shareSlur =
-        prevRanges !== undefined &&
-        curRanges !== undefined &&
-        [...prevRanges].some((r) => curRanges.has(r))
-      const curHasGrace = token.kind === 'note' && (token.gracenotes?.notes.length ?? 0) > 0
-      // adj503：带波音的音符**自己不能被并进前一个**（它必须重新起奏并波动）；
-      // 但**后一个同音仍可并进它**——并的是"按住的主音"那一段（`lastMainEvIdx` 指向它），
-      // 波动短音在开头、不会被吞掉。用户报的 `(5/&sby 5)` 就属于后者：第二个 5 应当**延长**，
-      // 此前我把"上一个带波音"也当成禁止合并的条件（`lastEventHadGrace`），于是又弱响了一个 5 ✗。
-      const curHasMordent = token.kind === 'note' && mordentOf(token.symbols) !== null
-      /**
-       * adj596：合并（以及下面的倚音借时值）**只能发生在同一声部内**。
-       * adj596 把多声部单元按小节交替后，"上一个已发事件"在每小节边界处会变成**另一个声部**的音符——
-       * 不加这个判据，两个声部之间就会互相连奏/互相借时值（听感是某个声部莫名其妙被截短）。
-       */
-      const sameVoiceAsPrev =
-        lastMainEvIdx >= 0 && events[lastMainEvIdx]?.placed.id.voice === placed.id.voice
-      if (
-        lastEventNoteIdx >= 0 &&
-        sameVoiceAsPrev &&
-        curNoteIdx === lastEventNoteIdx + 1 &&
-        shareSlur &&
-        !curHasGrace &&
-        !curHasMordent &&
-        !lastEventHadTailGrace &&
-        lastMainEvIdx >= 0 &&
-        pitch !== null &&
-        pitch === lastEventPitch
-      ) {
-        const prev = events[lastMainEvIdx]
-        prev.durationMs += durationMs
-        lastEndMs = Math.max(lastEndMs, prev.atMs + prev.durationMs) // adj361：合并后当前播放时刻随之前移
-        // adj300：连音合并——把被合并音符的拍段并入 prev 的播放拍段（色块可覆盖全时值，
-        // 如 (1 - - - | 1) - 0 0 中 1 合并 6 拍，色块依次滑过 1 - - - 1 -）
-        // adj502/503：色块挂在"该音符携带 playheadSegs 的那个事件"上——普通音符 = 主事件（= prev）；
-        // 带波音的音符 = **首个波音短音**（见上文的发射顺序）⇒ 追加拍段要落到那一个上，
-        // 否则 `prevBeat` 会从 0 起算、色块与已有段重叠。
-        const blockEv = events[lastBlockEvIdx >= 0 ? lastBlockEvIdx : lastMainEvIdx]
-        const prevBeat = (blockEv.playheadSegs ?? []).reduce((a, s) => a + s.beats, 0)
-        // adj451：并入的拍段力度取**发声事件（prev）的 gain**——合并后是一个 noteOn，
-        // 音频只可能用一个力度，色块轨道必须跟着它，二者不能各说各话。
-        const prevGain = prev.gain ?? 1
-        blockEv.playheadSegs = (blockEv.playheadSegs ?? []).concat(
-          buildPlayheadSegs(item.note!, prevBeat, rightEdgeByNoteIdx.get(item.note!.id.index), computeColorBounds(item.note!, pageByNoteIdx.get(item.note!.id.index)!, voiceBlockByNoteIdx, noteSize)).map((s) => ({ ...s, instrument: blockEv.instrument, playVoice: item.note!.playVoice, gain: prevGain })),
-        )
-        // adj157：合并时值；atMs 来自拍时钟（每个 event 独立），不需全局 at 累加
-        lastEventNoteIdx = curNoteIdx
-        lastEventHadTailGrace = false
-        i++
-        continue
-      }
+      //
+      // adj396/adj504/adj629r：倚音对这档合并的影响**分前后**看：
+      //  · **前倚音**排在主音符**之前**、占本音符开头 ⇒ 并进来就没有独立起奏点、倚音会被吞 ✗ 不合并；
+      //  · **后倚音**占的正是这个长音的**末尾** ✗ 旧口径也一律不合并 —— 于是
+      //    `(6- | 6[h1'/])` 这种"跨小节同音连线 + 末尾后倚音"被拆成两次起奏（用户报「6 演奏了 2 次」）。
+      //    现在允许合并：延长前者、把后倚音挪到**合并后的末尾**奏出（时值不增不减）。
+      //
+      // 注意：合并判定放在**倚音/音色算完之后**（下面 adj629r 块）——后倚音要复用 `graceWindowMs`/
+      // `graceNoteMs`/`gracePitches`/`instrument`/`gain` 这些量，早于它们的旧位置做不到。
       // adj351：按声部取覆盖乐器（该声部最近一次 @ 结果；未设置/@@ 清空 → 用该声部 Y 默认乐器）
       // adj427：按**声部角色**分流——'accomp'（bz 上层）/ 'second'（dsb 下层）为伴奏/第二声部：
       //   用第 2 可用音色（色块随之换色）+ 0.75 力度；'main' / 未设置 = 主声部，音色力度都不变。
@@ -1419,6 +1368,71 @@ export function buildPlaySequence(
       const heldMs = mordPlan ? mordPlan.heldMs : mainMs
       /** 按住的主音起奏点 = 主音起奏点 + 各短音之和 */
       const heldAtMs = mainAtMs + mordSteps.length * mordShortMs
+      /**
+       * adj629r（用户报「`(- (6[1'/]- 6.) 1'/) | … (6- | 6[h1'/])- …` 里 `(6- | 6[h1'/])` 只应是一个
+       * `6` 奏 4 拍、末尾一个后倚音，实际 `6` 奏了两次」）：**同音连音合并**放在这里（倚音/音色都算完之后），
+       * 并按"倚音在前还是在后"区别对待：
+       *  · **前倚音**不合并——它排在主音符**之前**、占本音符开头，并进来就没有独立起奏点、倚音会被吞；
+       *  · **后倚音**可以合并——它占的正是这个长音的**末尾**：延长前者，再把后倚音排在合并后的末尾奏出，
+       *    总时值不增不减（长音少奏 `graceWindowMs`，这段正好留给后倚音）。
+       * adj503：带**波音**的音符自己不能被并进前一个（它要重新起奏并波动）；
+       * adj596：合并只能在**同一声部内**（多声部单元按小节交替后，"上一个已发事件"可能属于另一声部）。
+       */
+      const sameVoiceAsPrev =
+        lastMainEvIdx >= 0 && events[lastMainEvIdx]?.placed.id.voice === placed.id.voice
+      {
+        const prevRanges = lastEventNoteIdx >= 0 ? slurOf.get(lastEventNoteIdx) : undefined
+        const curRanges = slurOf.get(curNoteIdx)
+        const shareSlur =
+          prevRanges !== undefined && curRanges !== undefined && [...prevRanges].some((r) => curRanges.has(r))
+        const hasFrontGrace = gn !== undefined && !gn.after && gracePitches.length > 0
+        const hasTailGrace = gn !== undefined && gn.after && gracePitches.length > 0
+        if (
+          lastEventNoteIdx >= 0 &&
+          sameVoiceAsPrev &&
+          curNoteIdx === lastEventNoteIdx + 1 &&
+          shareSlur &&
+          !hasFrontGrace &&
+          mordent === null &&
+          !lastEventHadTailGrace &&
+          lastMainEvIdx >= 0 &&
+          pitch !== null &&
+          pitch === lastEventPitch
+        ) {
+          const prev = events[lastMainEvIdx]
+          // 后倚音占这个长音的末尾 ⇒ 长音先奏到"末尾之前"，空出来的那段给后倚音
+          const tailMs = hasTailGrace ? graceWindowMs : 0
+          prev.durationMs += durationMs - tailMs
+          lastEndMs = Math.max(lastEndMs, prev.atMs + prev.durationMs) // adj361：合并后当前播放时刻随之前移
+          // adj300：连音合并——把被合并音符的拍段并入 prev 的播放拍段（色块可覆盖全时值，
+          // 如 (1 - - - | 1) - 0 0 中 1 合并 6 拍，色块依次滑过 1 - - - 1 -）
+          // adj502/503：色块挂在"该音符携带 playheadSegs 的那个事件"上——普通音符 = 主事件（= prev）；
+          // 带波音的音符 = **首个波音短音**（见上文的发射顺序）⇒ 追加拍段要落到那一个上，
+          // 否则 `prevBeat` 会从 0 起算、色块与已有段重叠。
+          const blockEv = events[lastBlockEvIdx >= 0 ? lastBlockEvIdx : lastMainEvIdx]
+          const prevBeat = (blockEv.playheadSegs ?? []).reduce((a, s) => a + s.beats, 0)
+          // adj451：并入的拍段力度取**发声事件（prev）的 gain**——合并后是一个 noteOn，
+          // 音频只可能用一个力度，色块轨道必须跟着它，二者不能各说各话。
+          const prevGain = prev.gain ?? 1
+          blockEv.playheadSegs = (blockEv.playheadSegs ?? []).concat(
+            buildPlayheadSegs(item.note!, prevBeat, rightEdgeByNoteIdx.get(item.note!.id.index), computeColorBounds(item.note!, pageByNoteIdx.get(item.note!.id.index)!, voiceBlockByNoteIdx, noteSize)).map((s) => ({ ...s, instrument: blockEv.instrument, playVoice: item.note!.playVoice, gain: prevGain })),
+          )
+          if (hasTailGrace) {
+            // 后倚音接在被合并长音的**末尾**（时值口径与不合并时一致：主音让出这一小段）
+            let gAt = prev.atMs + prev.durationMs
+            for (let gi = 0; gi < gn!.notes.length; gi++) {
+              events.push({ placed: item.note, instrument, atMs: gAt, durationMs: graceNoteMs, pitch: gracePitches[gi], gain: graceGain, playVoice: playRole, ...(hasExplicitInst ? { explicitInstrument: true } : {}) })
+              gAt += graceNoteMs
+            }
+          }
+          // adj157：合并时值；atMs 来自拍时钟（每个 event 独立），不需全局 at 累加
+          lastEventNoteIdx = curNoteIdx
+          // 合并进来的那个音带后倚音 ⇒ 末尾已有倚音，再并下一个音会盖住它（同 adj396 的顾虑）
+          lastEventHadTailGrace = hasTailGrace
+          i++
+          continue
+        }
+      }
       if (gn && !gn.after && gracePitches.length > 0) {
         // adj623：前倚音一律从**本音符自己的拍点**起奏（占用本音符的时值），主音符顺延到倚音之后。
         let gAt = atMs
@@ -1488,8 +1502,8 @@ export function buildPlaySequence(
       lastEventPitch = pitch
       lastMainEvIdx = mainEvIdx
       lastBlockEvIdx = blockEvIdx >= 0 ? blockEvIdx : mainEvIdx
-      // adj504：只有**后倚音**会阻止下一个音符合并进来（前倚音/波音都不阻止，见上面的说明）
-      lastEventHadTailGrace = curHasGrace && gn?.after === true
+      // adj504/adj629r：只有**后倚音**会阻止下一个音符合并进来（前倚音/波音都不阻止，见上面的说明）
+      lastEventHadTailGrace = gn !== undefined && gn.after && gracePitches.length > 0
       i++
       continue
     }

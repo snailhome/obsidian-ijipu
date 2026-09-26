@@ -12,7 +12,7 @@
  * 对话框只改自己这份草稿，取消即丢弃（与 iJipu「关闭未保存则恢复快照」一致）。
  */
 import { App, Modal, Setting } from 'obsidian'
-import { defaultPageConfig, type PageConfig } from '@ijipu/engine'
+import { defaultConfigForReset, type PageConfig } from '@ijipu/engine'
 import { DEFS, GROUPS, addConfigControl, readDef, writeDef } from './defs'
 
 /** 保存去向：谱面源码（# jps-config，只写本次改动） / 谱面源码（随谱固化 = 非默认项全量） / 插件设置（本库全局默认） */
@@ -93,7 +93,10 @@ export class ConfigDialog extends Modal {
       return b
     }
     mk('恢复默认', 'ijipu-btn', () => {
-      this.draft = { ...defaultPageConfig }
+      // adj629s：用引擎的 `defaultConfigForReset()`（默认值 + **移除可选字段**）——
+      // 直接 `{ ...defaultPageConfig }` 会把 `metaPos`/`heights`/`segmentRowGap` 等可选字段留在草稿里，
+      // 保存时它们又算"与默认不同" ⇒ 点了恢复默认仍会往 `# jps-config` 写一条（用户报）。
+      this.draft = { ...defaultConfigForReset() }
       this.refresh()
     })
     mk('取消', 'ijipu-btn', () => this.close())
