@@ -53,6 +53,8 @@ import {
   noteScaleOf,
   DIGIT_BOTTOM,
   digitBottomY,
+  // adj630b：谱尾说明（S:）的行基线（与预览端拖拽基准共用）
+  notesRowBaseline,
   lowDotY,
   octaveDotY,
   octaveTopY,
@@ -1668,38 +1670,48 @@ function renderPage(page: ScorePage, config: PageConfig, pageCount: number, opts
 
   // 说明文字（adj83：S 行，多行；渲染在简谱主体最末尾——最后一页正文下方、下边距线上方，
   // adj154：用独立的说明字体字号 notes_font/notes_size（默认沿用描述头）；
-  // adj151：左对齐（text-anchor=start、x=左边距）、颜色与 P:/J: 一致，
-  // 每段 data-meta="notes_i" 可独立拖拽调整位置，metaPos["notes_i"] 为相对默认的偏移；
-  // adj153：内容不超边距——超宽自动换行成子行（data-notes-sub）、x 钳制在左右边距内）
+  // adj151/adj153：每段 data-meta="notes_i" 可独立拖拽（metaPos["notes_i"] = 相对左缘基准的偏移）、
+  //   超宽自动换行成子行（data-notes-sub）、内容不越左右边距；
+  // adj630/adj630b（用户要求）：**紧靠边距内的右下角** —— 右对齐到右边距（`text-anchor=end`），
+  //   且**整块自下而上**排（末行贴下边距线、往上逐行），两条边距线一改整块跟着走
+  //   （行基线 = `notesRowBaseline()`，与预览端拖拽基准共用同一个函数）。
+  //   **拖拽过的段落**（有 metaPos["notes_i"]，或旧 metaPos["notes"]）仍按原口径加偏移
+  //   （x：左缘基准 / 页面居中基准，`text-anchor=start`），「恢复默认」清掉 metaPos 后回到右下角。
   if (page.index === pageCount - 1 && page.meta.notes.length > 0) {
     const nFont = config.notes_font ?? config.miaoshu_font
     const nSize = config.notes_size ?? config.miaoshu_size
     const baseX = config.margin_left
-    const baseY = height - config.margin_bottom - 24
+    // adj630：默认右对齐基准 = 右边距线（`width - margin_right`）
+    const rightX = width - config.margin_right
     // 可用宽 = 左右边距之间（adj153：文本不超此范围）
     const availW = Math.max(width - config.margin_left - config.margin_right, 10)
+    // adj630b：先把每段都折好行，才知道整块的**总行数**（末行贴线、往上退，需要总数）
+    const noteSubs = page.meta.notes.map((line) => wrapNotesLine(line, availW, nSize))
+    const totalRows = Math.max(1, noteSubs.reduce((s, subs) => s + subs.length, 0))
+    let row = 0
     for (let i = 0; i < page.meta.notes.length; i++) {
-      const line = page.meta.notes[i]
       // adj151：新 metaPos["notes_i"] 相对左边距基准；兼容旧 metaPos["notes"]
       // （adj83 语义：相对页面居中）——旧偏移按居中基准解释，避免位置出页面
       const p = config.metaPos?.[`notes_${i}`]
       const pOld = config.metaPos?.['notes']
-      const pos = p
-        ? { x: baseX + p.x, y: baseY + i * nSize * 1.4 + p.y }
-        : pOld
-          ? { x: width / 2 + pOld.x, y: baseY + i * nSize * 1.4 + pOld.y }
-          : { x: baseX, y: baseY + i * nSize * 1.4 }
-      // adj153：超宽自动换行（字符级估算宽、随字号缩放），每子行一个 text
-      const subs = wrapNotesLine(line, availW, nSize)
+      const pinnedX = p ? baseX + p.x : pOld ? width / 2 + pOld.x : null
+      const offY = p ? p.y : pOld ? pOld.y : 0
+      const subs = noteSubs[i]
       for (let k = 0; k < subs.length; k++) {
         const sub = subs[k]
         const subW = metaTextW(sub) * (nSize / 13)
-        // 钳制：文字整体在 [左边距, 右边距 - 文本宽] 内，右缘不超右边距
-        const maxX = width - config.margin_right - subW
-        const x = Math.min(Math.max(pos.x, baseX), maxX)
+        const y = notesRowBaseline({ pageH: height, marginBottom: config.margin_bottom, nSize, row, totalRows }) + offY
+        // 默认（贴右边距）：`text-anchor=end` ⇒ 约束是「左缘 = x − 文本宽 ≥ 左边距」；
+        // 万一某子行仍比可用宽还宽（不可断的长串），退回"左缘贴左边距"（与旧实现的退化方式一致）。
+        // 拖拽过的段落：沿用旧口径（左缘基准、`text-anchor=start`、右缘不超右边距）。
+        const x =
+          pinnedX === null
+            ? Math.max(rightX, baseX + subW)
+            : Math.min(Math.max(pinnedX, baseX), Math.max(baseX, rightX - subW))
         body.push(
-          `<text data-meta="notes_${i}" data-notes-line="${i}" data-notes-sub="${k}" x="${r1n(x)}" y="${r1n(pos.y + k * nSize * 1.4)}" text-anchor="start" font-size="${nSize}" font-family="${nFont}" fill="#1b1b1b">${xmlEsc(sub)}</text>`,
+          `<text data-meta="notes_${i}" data-notes-line="${i}" data-notes-sub="${k}" data-notes-row="${row}" data-notes-total="${totalRows}" x="${r1n(x)}" y="${r1n(y)}" text-anchor="${pinnedX === null ? 'end' : 'start'}" font-size="${nSize}" font-family="${nFont}" fill="#1b1b1b">${xmlEsc(sub)}</text>`,
         )
+        row++
       }
     }
   }

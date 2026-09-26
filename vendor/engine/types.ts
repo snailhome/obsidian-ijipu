@@ -945,8 +945,9 @@ export const defaultPageConfig: PageConfig = {
   align_min_bars: 4,
   // adj289：默认空间优先（指定为默认布局方式）
   noteSpaceLayout: 'space',
-  // adj625：小节计数默认**关闭**（不改变既有谱面）；间隔默认 4 小节
-  showBarCount: false,
+  // adj625：小节计数（方框小节序号）；间隔默认 4 小节
+  // adj630c（用户要求）：默认由**关闭**改为**勾选**（新谱/未写过该项的谱都显示序号）
+  showBarCount: true,
   barCountInterval: 4,
   lianyinxian_type: 0,
 }

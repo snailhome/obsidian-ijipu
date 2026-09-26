@@ -33,6 +33,8 @@ export { codePosToNoteId, noteIdToCodePos, parseNoteId, buildIndexToPage } from 
 export { computeRowTops, computeRowGuides, dragDelta, clamp, metaAreaH, GUIDE_ITEMS, GUIDE_LIMITS, GUIDE_LIMITS_EX } from './layout/guides'
 export { metaAnchorOf, metaAnchorPt, clampMetaPos, metaCornerOffsets, metaAuthorRowY } from './layout/metaAnchors'
 export { splitNoteDur, digitSlotW, dotBodyW, augBodyW, slideBodyW, bracketBodyW, noteBodyW, nonDurGap, accidentalBodyW, hxBodyW, slideGlyphInk, slideExtraW } from './layout/spaceLayout'
+// adj630b：谱尾说明（`S:`）的行基线——渲染端与预览端拖拽基准共用（不得各写一份）
+export { notesRowBaseline, NOTES_LINE_H_RATIO, NOTES_BOTTOM_GAP, NOTES_DESCENT_RATIO } from './layout/spacing'
 export type { NoteDurSplit } from './layout/spaceLayout'
 // adj428：临时叠加段（{bz … } / {dsb … }）上下两行纵向间距的默认常量；UI 显示缺省值用
 export { SEGMENT_ROW_GAP_DEFAULT } from './layout/spacing'

@@ -345,3 +345,45 @@ export const lowDotY = (y: number, i: number, dc: number, noteSize: number) => {
     dc > 0 ? beamBottomY(y, dc, noteSize) + LAYER_GAP * s : digitBottomY(y, noteSize) + LAYER_GAP * s
   return top + DOT_R * s + i * (DOT_R * 2 + INNER_GAP) * s
 }
+
+// ============================================================
+// 谱尾说明（`S:`）的行位置
+// ============================================================
+
+/** 说明文字的行高比例（行距 = 说明字号 × 此值；同一段内换行与不同 `S:` 段共用） */
+export const NOTES_LINE_H_RATIO = 1.4
+
+/** 末行文字**字底**距下边距线的余量（px）——"紧靠"但不压线 */
+export const NOTES_BOTTOM_GAP = 2
+
+/** 字形下伸比例（CJK/拉丁混排取 0.15em，够容纳数字与汉字的下缘） */
+export const NOTES_DESCENT_RATIO = 0.15
+
+/**
+ * adj630b（用户要求「`S:` 应紧靠右下边距线，并随右边距线和下边距线调整」）：
+ * **谱尾说明的行基线**——整块**自下而上**排，**末行贴下边距线**，往上逐行退 `字号×1.4`。
+ *
+ * 为什么是"末行贴线"而不是"首行离线 24px 往下排"：后者在多行（或多段、或超宽换行）时会一路
+ * **越过下边距线**跑出页面（旧实现 `height − margin_bottom − 24 + i×1.4×字号` 就是这个形状），
+ * 而"整块靠右下角"的正确读法是**块底贴着下边距线、往上长**。
+ *
+ * 渲染端（`render/index.ts`）与预览端拖拽基准（`PreviewPane.tsx`）**共用本函数**，
+ * 保证"页面自带的默认位置"与"拖拽偏移的零点"是同一个数（否则一拖就跳）。
+ *
+ * @param pageH        页高（pt）
+ * @param marginBottom 下边距
+ * @param nSize        说明字号（`notes_size`，缺省随描述头）
+ * @param row          该子行在**整块**里的序号（0 起，跨 `S:` 段与换行子行连续编号）
+ * @param totalRows    整块子行总数（决定首行往上退多少）
+ */
+export function notesRowBaseline(o: {
+  pageH: number
+  marginBottom: number
+  nSize: number
+  row: number
+  totalRows: number
+}): number {
+  const lineH = o.nSize * NOTES_LINE_H_RATIO
+  const bottom = o.pageH - o.marginBottom - NOTES_BOTTOM_GAP - o.nSize * NOTES_DESCENT_RATIO
+  return bottom - (Math.max(1, o.totalRows) - 1 - o.row) * lineH
+}

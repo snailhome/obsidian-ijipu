@@ -101,7 +101,7 @@ ijipu_showInstrument: true
 | 小节间距 | `ijipu_bar_gap` | 数字 | 默认 0（设置面板未提供控件，仍可用 frontmatter 携带） |
 | 两端对齐最小小节数 | `ijipu_align_min_bars` | 数字 | 默认 4 |
 | 音符布局模式 | `ijipu_noteSpaceLayout` | 枚举 | space（空间优先）/ duration（时值优先），默认 space |
-| 显示小节计数 | `ijipu_showBarCount` | boolean | true / false（默认 false） |
+| 显示小节计数 | `ijipu_showBarCount` | boolean | true / false（默认 true） |
 | 序号间隔 | `ijipu_barCountInterval` | 数字 | 默认 4（每隔几个小节显示一个方框序号） |
 
 ### 字体
