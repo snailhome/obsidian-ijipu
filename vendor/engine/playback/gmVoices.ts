@@ -73,6 +73,30 @@ export const GM_VOICES: GmVoice[] = [
 ]
 
 /**
+ * GM 128 音色的**分类**（14 类，按 MIDI 标准程序号区间）——供「音色库」按类分组展示（流式分类列表）。
+ *
+ * adj631（用户要求：插件的「收藏音色」采用与应用全局设置一致的**流式分类列表**）：
+ * 这张表原先只写在应用 `src/dialogs/VoicePickerDialog.tsx` 里，插件用不到 ⇒ 收敛到引擎
+ * （`GM_VOICES` 的同一文件），应用与插件共用一份，避免"两处各写一张分类表"漂移。
+ */
+export const GM_GROUPS: { title: string; range: [number, number] }[] = [
+  { title: '钢琴家族（Piano）', range: [0, 7] },
+  { title: '色彩打击乐（Chromatic Percussion）', range: [8, 15] },
+  { title: '风琴（Organ）', range: [16, 23] },
+  { title: '吉他（Guitar）', range: [24, 31] },
+  { title: '贝斯（Bass）', range: [32, 39] },
+  { title: '弦乐（Strings）', range: [40, 47] },
+  { title: '合奏/合唱（Ensemble）', range: [48, 55] },
+  { title: '铜管（Brass）', range: [56, 63] },
+  { title: '簧管/双簧管（Reed）', range: [64, 71] },
+  { title: '笛管（Pipe）', range: [72, 79] },
+  { title: '合成领奏/垫音/效果（Synth）', range: [80, 95] },
+  { title: '民族/其它（Ethnic / Others）', range: [96, 111] },
+  { title: '打击乐（Percussive）', range: [112, 119] },
+  { title: '声音效果（Sound Effects）', range: [120, 127] },
+]
+
+/**
  * GM program → **音色名 ref**（剥掉显示编号，如 `21 手风琴` → `手风琴`）；无匹配返回 undefined。
  *
  * adj455：这是 `gmVoiceProgram` 的逆映射，供「试听音色」选定具体音色后作为**全篇乐器覆盖**

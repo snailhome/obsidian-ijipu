@@ -1,13 +1,13 @@
 {
   "name": "obsidian-ijipu",
-  "version": "0.19.1",
+  "version": "0.20.0",
   "description": "Obsidian 插件：.jps 简谱渲染 + 试听（复用 @ijipu/engine）",
   "main": "main.js",
   "scripts": {
     "gen:info": "node scripts/gen-build-info.mjs",
     "dev": "npm run gen:info && tsc -noEmit -skipLibCheck && node esbuild.config.mjs",
     "build": "npm run gen:info && tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
-    "smoke": "npm run gen:info && esbuild scripts/smoke-frontmatter.mts --bundle --platform=node --format=esm --target=node20 --log-level=warning --alias:@ijipu/engine=./vendor/engine/index.ts --outfile=dist-smoke/smoke.mjs && node dist-smoke/smoke.mjs"
+    "smoke": "npm run gen:info && esbuild scripts/smoke-frontmatter.mts --bundle --platform=node --format=esm --target=node20 --log-level=warning --alias:@ijipu/engine=./vendor/engine/index.ts --alias:obsidian=./scripts/obsidianStub.ts --outfile=dist-smoke/smoke.mjs && node dist-smoke/smoke.mjs"
   },
   "keywords": ["obsidian", "简谱", "jps", "ijipu"],
   "license": "AGPL-3.0",

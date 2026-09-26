@@ -159,6 +159,40 @@ export function addConfigControl(row: Setting, def: SettingDef, cur: unknown, sa
 /** 该字段是否有硬范围（供冒烟/界面提示用） */
 export const hasRange = (def: SettingDef): boolean => rangeOf(def.key as string, def.sub) !== undefined
 
+/** 值相等判定（数字/字符串/布尔严格相等；对象/数组按 JSON 比较）——嵌套字段 `segmentRowGap` 要用 */
+export function sameConfigValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (a === null || b === null || a === undefined || b === undefined) return false
+  if (typeof a === 'object' || typeof b === 'object') return JSON.stringify(a) === JSON.stringify(b)
+  return false
+}
+
+/**
+ * adj631（用户报告："预览页面的设置与 设置-iJipu 里的设置项不同步"）：
+ * **两个配置之间被改动过的字段**（`before` = 打开对话框那一刻的生效配置，`after` = 用户改完的草稿）。
+ *
+ * 为什么要它：「保存为插件默认」此前把**整份草稿**写进插件设置，而草稿的初值是"这份谱的**生效值**"
+ * （含笔记 frontmatter 与源码 `# jps-config`）⇒ 点一下就把**本谱专属的值**变成了**全库默认**：
+ * 「设置 → iJipu」随即显示出一堆你从没在那里设过的值，别的笔记观感也跟着变（用户看到的就是"两边不同步"）。
+ * 现在只写**真正动过的项**——与 iJipu 应用"只固化用户改动"（`mergeConfigEdits`）同一口径。
+ */
+export function changedDefs(before: Partial<PageConfig>, after: Partial<PageConfig>): SettingDef[] {
+  const b = before as unknown as Record<string, unknown>
+  const a = after as unknown as Record<string, unknown>
+  return DEFS.filter((def) => !sameConfigValue(readDef(a as never, def), readDef(b as never, def)))
+}
+
+/**
+ * 某项的值是否**等于引擎默认**（等于就不必存进插件设置——稀疏存储让"跟随引擎默认"保持显式）。
+ * 可选字段（`showInstrument`/`lyricShrink`）的默认是"未设置"，`false`/`undefined` 都算默认（与 E-2026-294 同口径）。
+ */
+export function isDefaultValue(def: SettingDef, value: unknown): boolean {
+  const d = getDefault(def)
+  if (d === undefined) return value === undefined || value === false
+  if (value === undefined) return false
+  return sameConfigValue(d, value)
+}
+
 /** 供界面显示的 frontmatter 键（= ijipu_<字段名>） */
 export { frontmatterKey }
 

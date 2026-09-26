@@ -625,3 +625,155 @@
 .ijipu-settings-header a {
   font-weight: 600;
 }
+
+/* ============================================================
+ * adj631（用户要求）：设置面板多页签 + 「收藏音色」流式分类列表
+ * ============================================================ */
+
+/* 页签栏：横向可滚（窄屏/手机上不换行挤压），选中项用强调色下划线 */
+.ijipu-settings-tabs {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+.ijipu-settings-tab {
+  flex: 0 0 auto;
+  padding: 5px 12px;
+  font-size: 0.9em;
+  color: var(--text-muted);
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  cursor: pointer;
+  box-shadow: none;
+}
+.ijipu-settings-tab:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+.ijipu-settings-tab.is-active {
+  color: var(--text-on-accent);
+  background: var(--interactive-accent);
+  border-color: var(--interactive-accent);
+  font-weight: 600;
+}
+/* 页签内容区：一屏一组（配合页签减少滚动） */
+.ijipu-settings-panel > .setting-item:first-child {
+  border-top: none;
+}
+/* 「这一页是本库全局默认」的说明条（用户报"与预览页面不同步"的根因说明） */
+.ijipu-settings-note {
+  margin: 0 0 10px;
+  padding: 7px 10px;
+  font-size: 0.85em;
+  line-height: 1.55;
+  color: var(--text-muted);
+  background: var(--background-secondary);
+  border-left: 3px solid var(--interactive-accent);
+  border-radius: 4px;
+}
+.ijipu-settings-empty {
+  color: var(--text-faint);
+  font-size: 0.9em;
+}
+
+/* —— 收藏音色：工具条 —— */
+.ijipu-voice {
+  margin: 2px 0 12px;
+}
+.ijipu-voice-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 6px 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-secondary);
+}
+.ijipu-voice-search {
+  flex: 1 1 140px;
+  min-width: 120px;
+  font-size: 0.85em;
+}
+.ijipu-voice-sum {
+  margin-left: auto;
+  font-size: 0.8em;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+/* 小号按钮（工具条与分类标题里的「选本组 / 消本组」） */
+.ijipu-btn.is-mini {
+  padding: 1px 6px;
+  font-size: 0.75em;
+  line-height: 1.5;
+  height: auto;
+}
+
+/* —— 收藏音色：分类列表 —— */
+.ijipu-voice-groups {
+  margin-top: 8px;
+  max-height: min(46vh, 420px);
+  overflow-y: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+.ijipu-voice-group + .ijipu-voice-group {
+  border-top: 1px solid var(--background-modifier-border);
+}
+.ijipu-voice-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 2px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.85em;
+  color: var(--text-muted);
+}
+.ijipu-voice-group-head:hover {
+  color: var(--text-normal);
+}
+.ijipu-voice-caret {
+  width: 12px;
+  flex: 0 0 auto;
+}
+.ijipu-voice-group-title {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ijipu-voice-group-count {
+  font-size: 0.85em;
+  color: var(--text-faint);
+  flex: 0 0 auto;
+}
+/* 流式排布：128 种音色按类横向流动，不做 128 行长列表 */
+.ijipu-voice-rows {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  padding: 2px 2px 6px 18px;
+}
+.ijipu-voice-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.8em;
+  color: var(--text-normal);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ijipu-voice-chip input {
+  margin: 0;
+}
+/* 折叠：收起时只留分类标题（含「选本组 / 消本组」按钮） */
+.ijipu-voice-group.is-collapsed .ijipu-voice-rows {
+  display: none;
+}

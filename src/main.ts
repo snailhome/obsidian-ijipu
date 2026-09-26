@@ -33,6 +33,8 @@ export default class IJipuPlugin extends Plugin {
   private playStops: (() => void)[] = []
   /** 内置 SpessaSynth worklet URL（worklet 代码内联进 main.js → Blob URL，随插件单文件分发） */
   private workletUrl = ''
+  /** adj631：「设置 → iJipu」页签的"就地重画"回调（别处改了插件设置时保持两边显示一致） */
+  private settingsRefresh: (() => void) | null = null
 
   /** 切换排版辅助虚线（显示后可拖动虚线调边距/行距），并通知所有面板重画 */
   toggleGuides(): boolean {
@@ -89,10 +91,24 @@ export default class IJipuPlugin extends Plugin {
     this.settings = Object.assign({}, await this.loadData())
   }
 
-  async saveSettings(): Promise<void> {
+  /**
+   * 保存插件设置。
+   *
+   * @param opts.from 调用方标识：`'settingsTab'` = 「设置 → iJipu」页签自己改的。
+   *   adj631（用户报"预览页面的设置与 设置-iJipu 里的设置项不同步"）：
+   *   别处（谱面预览对话框「保存为插件默认」）改完设置后，**让开着的设置页签就地重画**，
+   *   否则那一页还停在旧值上、看起来两边不一致；页签自己改的不重画——会打断正在输入的控件焦点。
+   */
+  async saveSettings(opts?: { from?: 'settingsTab' }): Promise<void> {
     await this.saveData(this.settings)
     // 设置面板改动后广播：打开中的谱面即时按新设置重渲染（此前要重开笔记才生效）
     this.events.trigger(SETTINGS_CHANGED)
+    if (opts?.from !== 'settingsTab') this.settingsRefresh?.()
+  }
+
+  /** 登记/注销「设置 → iJipu」页签的重画回调（页签 `display()` 时登记、`hide()` 时注销） */
+  registerSettingsRefresh(fn: (() => void) | null): void {
+    this.settingsRefresh = fn
   }
 
   /** 由内嵌 worklet 代码构造 Blob URL（不再依赖插件目录单独文件；供 audioWorklet.addModule） */

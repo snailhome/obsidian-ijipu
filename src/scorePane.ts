@@ -18,7 +18,8 @@ import { renderScoreFull, playScore, unknownKeyHint, deprecatedKeyHint, type Pla
 import { instrumentColorMap, playheadBaseOf, playheadPosIn, trackKeysOf, type PlayheadPos } from './playhead'
 import { resolvePageConfig } from './config'
 import { ConfigDialog } from './configDialog'
-import { DEFS } from './defs'
+// adj631：「保存为插件默认」要按"本次真正改动过的项"写入（changedDefs）+ 等于引擎默认则不存（isDefaultValue）
+import { changedDefs, isDefaultValue } from './defs'
 import { layoutIcon, modeIcon, settingsIcon, linkIcon, playIcon, stopIcon, appOpenIcon } from './icons'
 import { canOpenWithDefaultApp, openWithDefaultApp } from './openExternal'
 import { computeGuideLines, cropRectFor, guideLimits, guidePlacement, type GuideLine } from './guides'
@@ -311,10 +312,32 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
           sourceValues: resolved.config as unknown as Record<string, unknown>,
           onApply: (target, next) => {
             if (target === 'plugin') {
+              /**
+               * adj631（用户报"预览页面的设置与 设置-iJipu 里的设置项不同步"）：
+               * 「保存为插件默认」**只写本次在对话框里真正改动过的项**。
+               *
+               * 此前是把**整份草稿**写进插件设置，而草稿初值是"这份谱的**生效值**"
+               * （含笔记 frontmatter 与源码 `# jps-config`）⇒ 点一下就把**本谱专属的值**变成**全库默认**：
+               * 「设置 → iJipu」随即显示出一堆你从没在那里设过的值、别的笔记观感也跟着变。
+               * 现在与 iJipu 应用"只固化用户改动"（`mergeConfigEdits`）同一口径：
+               *  · 与打开对话框那一刻不同的字段才写；等于引擎默认的**从插件设置里移除**（保持稀疏）；
+               *  · 一项都没动 ⇒ 明确提示，不写任何东西。
+               */
               const bag = plugin.settings as unknown as Record<string, unknown>
               const src = next as unknown as Record<string, unknown>
-              for (const def of DEFS) bag[def.key as string] = src[def.key as string]
-              void plugin.saveSettings().then(() => new Notice('已保存为插件默认（对未自带设置的谱生效）'))
+              const changed = changedDefs(resolved.config, next)
+              if (changed.length === 0) {
+                new Notice('对话框里没有改动——插件默认未变（要改本库默认请直接改，或先改动再保存）', 4000)
+                return
+              }
+              for (const def of changed) {
+                const k = def.key as string
+                if (isDefaultValue(def, src[k])) delete bag[k]
+                else bag[k] = src[k]
+              }
+              void plugin
+                .saveSettings()
+                .then(() => new Notice(`已保存为插件默认：${changed.length} 项（对未自带设置的谱生效）`))
               return
             }
             // adj480：两个去向的口径**与应用对齐**——

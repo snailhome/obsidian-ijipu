@@ -47,12 +47,22 @@ export class ConfigDialog extends Modal {
 
     const hint = contentEl.createDiv({ cls: 'ijipu-config-hint' })
     hint.createDiv({ text: '优先级：引擎默认 < 插件设置 < 笔记 frontmatter < 谱面自带 # jps-config' })
+    // adj631（用户报"预览页面的设置与 设置-iJipu 里的设置项不同步"）：这里显示的是**这一份谱的生效值**，
+    // 与「设置 → iJipu」的**本库全局默认**口径不同 ⇒ 值可以不一样（本谱有 frontmatter / 源内设置时尤其明显）。
+    hint.createDiv({
+      cls: 'ijipu-config-hint-sub',
+      text: '下面显示的是**这一份谱的生效值**（含笔记 frontmatter 与源内 `# jps-config`），与「设置 → iJipu」里的**本库全局默认**不是同一层——两者值不同是正常的。',
+    })
     hint.createDiv({
       cls: 'ijipu-config-hint-sub',
       text:
         this.opts.sourceFields.length > 0
           ? '本谱已自带 # jps-config 行：「保存到谱面」只更新**本次改动**（原位更新，优先级最高）；要把插件设置 / frontmatter 的差异也写进去（分享给他人显示一致）用「随谱固化」。'
           : '「保存到谱面」只会写入**本次改动**（不把插件设置 / frontmatter 顺手烧进谱面）；要把当前生效的全部非默认项写进谱面（复制给他人也一模一样）用「随谱固化」。',
+    })
+    hint.createDiv({
+      cls: 'ijipu-config-hint-sub',
+      text: '「保存为插件默认」= 只把**你在本对话框里改动过的项**写进本库全局默认（不会把这份谱 frontmatter / 源内的值顺手变成全库默认）。',
     })
 
     // 「谱面自带设置 N 项」——原先挂在谱面工具栏上（挤占按钮位置、详情只能悬停看），

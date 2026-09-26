@@ -5,11 +5,16 @@
  * 断言来源：用户反馈「在 frontmatter 里设置像 `ijipu_note_size` 好像没生效」——
  * 覆盖键名写法兼容、值类型转换、未识别键提示、优先级四类。
  */
-import { defaultPageConfig, dragDelta, layoutScore, parseJps, writeJpsConfig, mergeConfigEdits, configCarryover, SCORE_FONT_OPTIONS, buildPlaySequence, GUIDE_LIMITS, GUIDE_LIMITS_EX, SEGMENT_ROW_GAP_DEFAULT, OPTIONAL_CONFIG_FIELDS, defaultConfigForReset, extractJpsConfig, nonDefaultConfigKeys } from '@ijipu/engine'
+import { defaultPageConfig, dragDelta, layoutScore, parseJps, writeJpsConfig, mergeConfigEdits, configCarryover, SCORE_FONT_OPTIONS, buildPlaySequence, GUIDE_LIMITS, GUIDE_LIMITS_EX, SEGMENT_ROW_GAP_DEFAULT, OPTIONAL_CONFIG_FIELDS, defaultConfigForReset, extractJpsConfig, nonDefaultConfigKeys, GM_GROUPS } from '@ijipu/engine'
+import type { PageConfig } from '@ijipu/engine'
 import { readFileSync } from 'node:fs'
 import { instrumentColorMap, playheadBaseOf, playheadPosIn, trackKeysOf } from '../src/playhead'
 import { applyFrontmatter, buildFrontmatterTemplate, deprecatedKeyHint, frontmatterKey, mergePageConfig, unknownKeyHint, PAGE_CONFIG_FIELDS } from '../src/frontmatter'
 import { PAGE_NUM_RANGES, clampNum } from '../src/numRanges'
+// adj631：设置面板的纯逻辑（页签/收藏音色分类列表/「保存为插件默认」的改动判据）
+// —— `obsidian` 依赖已由 `npm run smoke` 的 `--alias:obsidian=./scripts/obsidianStub.ts` 替换掉
+import { DEFS, changedDefs, getDefault, isDefaultValue } from '../src/defs'
+import { clearVoices, filterVoices, groupVoices, invertVoices, normalizeVoices, selectAllVoices, selectedInGroup, setGroupVoices, toggleVoice, voiceSummary } from '../src/voiceChooser'
 import { resolvePageConfig } from '../src/config'
 import { codeBlockBody, jpsLinkpath, replaceCodeBlockBody } from '../src/sourceEdit'
 import { computeGuideLines, cropRectFor, guideLimits, guidePlacement } from '../src/guides'
@@ -254,6 +259,81 @@ console.log('[3f] adj629z 插件默认值/字段集/文档 与 iJipu 应用逐�
   } else {
     check('⑥ 应用 PageConfigDialog 可读（跨仓对账）', false, '未找到 ../ijipu/src/dialogs/PageConfigDialog.tsx 的 TAB_CONFIG_KEYS')
   }
+}
+
+console.log('[3g] adj631 设置面板：多页签 / 收藏音色分类列表 / 与预览页面的同步口径')
+{
+  // ---- ① 收藏音色的分类与勾选运算（纯逻辑，voiceChooser.ts）----
+  const groups = groupVoices()
+  check('① 收藏音色按 GM 分类分组（14 类，与应用「音色库」同一张引擎表 GM_GROUPS）',
+    groups.length === GM_GROUPS.length && GM_GROUPS.length === 14, `组的数=${groups.length}`)
+  const flat = groups.flatMap((g) => g.voices.map((v) => v.program))
+  check('① 分类**覆盖全部 128 个音色、不重不漏**（区间首尾相接）',
+    flat.length === 128 && new Set(flat).size === 128 && [...flat].sort((a, b) => a - b).every((p, i) => p === i),
+    `count=${flat.length}`)
+  check('② 关键词过滤按显示名包含（空关键词原样返回）',
+    filterVoices('').length === 128 && filterVoices('钢琴').length > 0 && filterVoices('钢琴').every((v) => v.label.includes('钢琴')),
+    JSON.stringify(filterVoices('钢琴').map((v) => v.label)))
+  check('③ 勾选运算：单个切换 / 去重排序 / 丢弃非法 program',
+    toggleVoice([0], 1).join(',') === '0,1' &&
+      toggleVoice([0, 1], 0).join(',') === '1' &&
+      normalizeVoices([5, 5, 200, -1, 3, 5.5]).join(',') === '3,5',
+    `${toggleVoice([0], 1)} | ${normalizeVoices([5, 5, 200, -1, 3, 5.5])}`)
+  check('③ 全选 / 全消 / 反选（反选两次回到原集合）',
+    selectAllVoices().length === 128 && clearVoices().length === 0 &&
+      invertVoices(invertVoices([0, 10])).join(',') === '0,10',
+    `${invertVoices([0, 10]).length}`)
+  check('③ 整组选 / 消：只动本类（首类 0-7），其它类的勾选原样保留',
+    setGroupVoices([100], [0, 7], true).length === 9 &&
+      selectedInGroup(setGroupVoices([100], [0, 7], true), [0, 7]) === 8 &&
+      setGroupVoices(setGroupVoices([100], [0, 7], true), [0, 7], false).join(',') === '100',
+    `${setGroupVoices([100], [0, 7], true).length}`)
+  check('④ 摘要文案「已选 N / 128」随勾选变化',
+    voiceSummary([0, 1, 1, 999]) === '已选 2 / 128', voiceSummary([0, 1, 1, 999]))
+
+  // ---- ⑤ 与预览页面同步：`changedDefs` 只认"真正改动过的项" ----
+  // 复现用户场景：这份谱的**生效值**来自 frontmatter / 源内 # jps-config（与插件默认不同）
+  const effective: PageConfig = { ...defaultPageConfig, note_size: 17, margin_left: 60, segmentRowGap: { bz: 30, dsb: 22, tp: 14 } }
+  check('⑤a 打开对话框后**什么都没改** ⇒ 没有"改动项"（旧实现会把整份生效值写成全库默认）',
+    changedDefs(effective, { ...effective }).length === 0,
+    JSON.stringify(changedDefs(effective, { ...effective }).map((d) => d.key)))
+  const edited: PageConfig = { ...effective, note_size: 15, segmentRowGap: { bz: 30, dsb: 22, tp: 20 } }
+  const changed = changedDefs(effective, edited).map((d) => (d.sub ? `${String(d.key)}.${d.sub}` : String(d.key))).sort()
+  check('⑤b 只改两项 ⇒ 只有这两项算改动（嵌套字段 `segmentRowGap.tp` 也能识别）',
+    changed.join(',') === 'note_size,segmentRowGap.tp', changed.join(','))
+  check('⑤c 等于引擎默认的改动**不写进插件设置**（保持稀疏；可选布尔字段的 false/未设置都算默认）',
+    isDefaultValue({ key: 'note_size', label: '', type: 'number', group: '字体' }, 13) &&
+      !isDefaultValue({ key: 'note_size', label: '', type: 'number', group: '字体' }, 15) &&
+      isDefaultValue({ key: 'showInstrument', label: '', type: 'toggle', group: '渲染' }, false) &&
+      isDefaultValue({ key: 'showInstrument', label: '', type: 'toggle', group: '渲染' }, undefined) &&
+      isDefaultValue({ key: 'segmentRowGap', sub: 'tp', label: '', type: 'number', group: '行距' }, 14) &&
+      !isDefaultValue({ key: 'segmentRowGap', sub: 'tp', label: '', type: 'number', group: '行距' }, 20),
+    '')
+  check('⑤d 插件设置里的默认逐项来自引擎（`getDefault`）',
+    getDefault({ key: 'note_size', label: '', type: 'number', group: '字体' }) === defaultPageConfig.note_size &&
+      getDefault({ key: 'segmentRowGap', sub: 'bz', label: '', type: 'number', group: '行距' }) === SEGMENT_ROW_GAP_DEFAULT.bz)
+
+  // ---- ⑥ 源码级：多页签 + 流式分类列表 + 两处同步接线 ----
+  const settingsSrc = String(readFileSync('src/settings.ts', 'utf8'))
+  const mainSrc = String(readFileSync('src/main.ts', 'utf8'))
+  const paneSrc = String(readFileSync('src/scorePane.ts', 'utf8'))
+  const cssSrc = String(readFileSync('styles.css', 'utf8'))
+  check('⑥a 设置面板有页签栏（页面/字体/行距/渲染/音色库/说明 六个页签，一屏一组）',
+    /SETTINGS_TABS: SettingsTabId\[\] = \['页面', '字体', '行距', '渲染', '音色库', '说明'\]/.test(settingsSrc) &&
+      /ijipu-settings-tabs/.test(settingsSrc) && /ijipu-settings-tab/.test(cssSrc))
+  check('⑥b 收藏音色是**流式分类列表**（分类容器 + 折叠 + 组内 flex-wrap + 工具条全选/全消/反选/搜索）',
+    /ijipu-voice-groups/.test(settingsSrc) && /renderVoiceList/.test(settingsSrc) &&
+      /全选/.test(settingsSrc) && /反选/.test(settingsSrc) && /ijipu-voice-search/.test(settingsSrc) &&
+      /\.ijipu-voice-rows \{[\s\S]*?flex-wrap: wrap/.test(cssSrc) &&
+      /\.ijipu-voice-group\.is-collapsed \.ijipu-voice-rows/.test(cssSrc))
+  check('⑥c 「保存为插件默认」只写改动项（`changedDefs` + 等于默认则删除该键），不再整份覆盖',
+    /changedDefs\(resolved\.config, next\)/.test(paneSrc) && /isDefaultValue\(def, src\[k\]\)\) delete bag\[k\]/.test(paneSrc) &&
+      !/for \(const def of DEFS\) bag\[def\.key as string\] = src\[def\.key as string\]/.test(paneSrc))
+  check('⑥d 别处改插件设置 ⇒ 设置页签就地重画（页签自己改的不重画，避免打断输入焦点）',
+    /registerSettingsRefresh/.test(settingsSrc) && /registerSettingsRefresh/.test(mainSrc) &&
+      /from !== 'settingsTab'/.test(mainSrc) && /saveSettings\(\{ from: 'settingsTab' \}\)/.test(settingsSrc))
+  check('⑥e 对话框写清"生效值 ≠ 本库全局默认"（用户报两边不同步的口径说明）',
+    /这一份谱的生效值/.test(String(readFileSync('src/configDialog.ts', 'utf8'))))
 }
 
 console.log('[3d] adj629q 段层虚线与应用同口径（拖 bz/dsb/tp 改 segmentRowGap.*，不是谱面行距）')
