@@ -14,8 +14,11 @@ import { parseKey, pitchToName, isJumpOrEndBarline } from '../layout/index'
 import { graceGroupBeats, gracePerNoteBeats } from '../layout/spaceLayout'
 // adj629d：段层/替谱音符 id 判定（试听"点音符跳过去"要按 id 精确命中事件）
 import { decodeSegmentNoteId, decodeTpNoteId } from '../layout/segments'
-// adj502：波音（mordent）演奏时值——纯函数模块，见其文件头的口径与不变式
-import { mordentOf, mordentPlan, neighborDegree } from './ornaments'
+// adj502/adj635：演奏型装饰（波音 / 打音 / 叠音）的时值——纯函数模块，见其文件头的口径与不变式
+// adj636：滑音（上滑音 / 下滑音）的逐半音阶梯——纯函数模块，见 slides.ts
+import { ornamentOf, ornamentPlan, neighborDegree } from './ornaments'
+import { slideOf, slidePlan } from './slides'
+import { midiToPitchName, pitchToMidiNote } from './midi'
 import { parseInstrumentRef } from './instruments'
 
 /** adj427：第 2 可用音色的内置默认（用户规格：第 1 = 大钢琴、第 2 = 手风琴） */
@@ -1051,6 +1054,8 @@ export function buildPlaySequence(
   const emitSegmentEvents = (
     seg: { voice: number; children: MusicToken[]; type?: 'bz' | 'dsb' | 'tp'; pass?: number },
     passMsNow: number,
+    /** adj637：本段生效的**调号**（临时转调会变）——段内邻音/滑音阶梯要按它算音高 */
+    keyAt: number = keySemitone,
   ): void => {
     // adj427：段层内部色块右边界 = 同段内**下一个段层音符**左缘；最后一个用其占位右缘。
     // （不能沿用主旋律那套 rightEdgeByNoteIdx——它已按设计排除段层音符，避免两套坐标互相污染。）
@@ -1139,7 +1144,7 @@ export function buildPlaySequence(
     }
     let lastSegEvIdx = -1
     let lastSegTokIdx = -1
-    let lastSegHadGraceOrMordent = false
+    let lastSegHadGraceOrOrnament = false
     let lastEmittedDurIdx = -1
     for (let ci = 0; ci < seg.children.length; ci++) {
       const t = seg.children[ci]
@@ -1166,8 +1171,13 @@ export function buildPlaySequence(
         // adj442：**左端不外扩**——色块从起始音符开始（见 buildPlayheadSegs 注释）。
         // 原先这里给段内首个音传 `left`，会把色块拉到 `{` / 左括号之前（用户指出观感不对）。
       }).map((s) => ({ ...s, instrument: inst2, playVoice: placed.playVoice, gain: gain2 }))
-      const hasGraceOrMordent =
-        t.kind === 'note' && ((t.gracenotes?.notes.length ?? 0) > 0 || mordentOf(t.symbols) !== null)
+      // adj635/adj636/adj637：带**演奏型装饰**（波音/打音/叠音）或**滑音**的段内音符同样不能被并进前一个
+      //（打音的用途正是"把两个相同的音断开"、滑音并进去滑行就没了；倚音同 adj396 的顾虑）
+      const hasGraceOrOrnament =
+        t.kind === 'note' &&
+        ((t.gracenotes?.notes.length ?? 0) > 0 ||
+          ornamentOf(t.symbols) !== null ||
+          slideOf(t.symbols) !== null)
       const prevEv = lastSegEvIdx >= 0 ? events[lastSegEvIdx] : undefined
       const curSlurs = segSlurOf.get(ci)
       const prevSlurs = lastSegTokIdx > 0 ? segSlurOf.get(lastSegTokIdx) : undefined
@@ -1176,8 +1186,8 @@ export function buildPlaySequence(
       if (
         prevEv !== undefined &&
         ci === lastEmittedDurIdx + 1 && // 紧邻（中间没有别的时值 token）
-        !lastSegHadGraceOrMordent &&
-        !hasGraceOrMordent &&
+        !lastSegHadGraceOrOrnament &&
+        !hasGraceOrOrnament &&
         sameSlur &&
         placed.audioPitch !== null &&
         placed.audioPitch === prevEv.placed.audioPitch
@@ -1189,20 +1199,156 @@ export function buildPlaySequence(
         lastEmittedDurIdx = ci
         continue
       }
-      events.push({
-        placed,
-        instrument: inst2,
-        atMs: at2,
-        durationMs: dur2,
-        gain: gain2,
-        playVoice: placed.playVoice,
-        playheadSegs: segHeadSegs,
-      })
+      /**
+       * adj637（用户要求「一起补齐以保持一致」）：**段内音符也展开演奏细节**——
+       * 段层（`{bz}` / `{dsb}` / `{tp}`）此前只 push 一个整音事件：倚音**不奏**、
+       * 演奏型装饰与滑音**不奏**（`&sby` 自 adj502 起就没覆盖段层）。这里按与主旋律
+       * **同一套口径**补齐（纯函数 `graceGroupBeats`/`ornamentPlan`/`slidePlan` 全是共用的）：
+       *   ① 前倚音依次奏于本音符**开头**、主音顺延；后倚音奏于末尾（时值只从本音符里匀，同 adj623）；
+       *   ② 点状装饰（波音/打音/叠音）＝ 若干短音 + 按住的主音；滑音 ＝ 逐半音阶梯 + 按住的主音；
+       *   ③ 倚音自身带装饰/滑音时，按 adj633 口径"计划按主音符算、时值整体 × 比率"。
+       * 色块仍挂在**本音符的首个非倚音事件**上（与主旋律同一规则：色块与"音符起奏"对齐）。
+       */
+      const keyAt637 = keyAt
+      const notePitch637 = t.kind === 'note' ? pitchToName(t.pitch, t.octaveShift, t.accidental, keyAt637) : null
+      const gn637 = t.kind === 'note' ? t.gracenotes : undefined
+      const gracePitches637 =
+        gn637 && gn637.notes.length > 0
+          ? gn637.notes.map((g) => pitchToName(g.pitch, g.octaveShift, g.accidental, keyAt637))
+          : []
+      const graceGroup637 = gn637 && gn637.notes.length > 0 ? graceGroupBeats(t, dur2 / beatMs) : 0
+      const principalBeats637 = dur2 / beatMs
+      let graceWindowMs637 = graceGroup637 * beatMs
+      let mainMs637 = dur2
+      let mainShiftMs637 = 0
+      if (gn637 && gn637.notes.length > 0) {
+        if (graceGroup637 <= principalBeats637) {
+          mainMs637 = (principalBeats637 - graceGroup637) * beatMs
+          if (!gn637.after) mainShiftMs637 = graceGroup637 * beatMs
+        } else if (!gn637.after) {
+          // 与主旋律同一兜底（按现行时值规则已不可达）：窗口压到本音符长度、主音挤成 0
+          graceWindowMs637 = principalBeats637 * beatMs
+          mainMs637 = 0
+          mainShiftMs637 = graceWindowMs637
+        } else {
+          mainMs637 = principalBeats637 * beatMs
+        }
+      }
+      const mainAt637 = at2 + mainShiftMs637
+      const graceNoteMs637 = gracePerNoteBeats(graceWindowMs637 / beatMs, gn637?.notes.length ?? 0) * beatMs
+      const ornKind637 = t.kind === 'note' ? ornamentOf(t.symbols) : null
+      const ornPlan637 = ornKind637 ? ornamentPlan(mainMs637, ornKind637) : null
+      const slideKind637 = t.kind === 'note' && ornKind637 === null ? slideOf(t.symbols) : null
+      const preSeq637: { pitchName: string | null; ms: number }[] = []
+      let heldMs637 = ornPlan637 ? ornPlan637.heldMs : mainMs637
+      if (ornPlan637 && ornPlan637.steps.length > 0 && t.kind === 'note') {
+        for (const step of ornPlan637.steps) {
+          let nm: string | null = null
+          if (step !== 'P') {
+            const nb = neighborDegree(t.pitch, step === 'U')
+            nm = pitchToName(nb.pitch, t.octaveShift + nb.octave, null, keyAt637)
+          }
+          preSeq637.push({ pitchName: nm, ms: ornPlan637.shortMs })
+        }
+      } else if (slideKind637 && t.kind === 'note') {
+        const nb = neighborDegree(t.pitch, slideKind637 === 'xhy')
+        const fromName = pitchToName(nb.pitch, t.octaveShift + nb.octave, null, keyAt637)
+        const plan =
+          fromName && notePitch637
+            ? slidePlan(pitchToMidiNote(fromName), pitchToMidiNote(notePitch637), mainMs637, midiToPitchName)
+            : null
+        if (plan && plan.steps.length > 0) {
+          for (const p of plan.steps) preSeq637.push({ pitchName: p, ms: plan.stepMs })
+          heldMs637 = plan.heldMs
+        }
+      }
+      /** 发一个段内事件（`withSegs` = 携带色块，只给"本音符的首个非倚音事件"） */
+      const pushSegEv = (a: number, d: number, p: string | null, withSegs = false) => {
+        events.push({
+          placed,
+          instrument: inst2,
+          atMs: a,
+          durationMs: d,
+          ...(p ? { pitch: p } : {}),
+          gain: gain2,
+          playVoice: placed.playVoice,
+          ...(withSegs ? { playheadSegs: segHeadSegs } : {}),
+        })
+      }
+      /** adj637：段内**单个倚音**的事件（带装饰/滑音时展开，口径同 adj633/adj636：计划按主音符算、整体 ×k） */
+      const pushSegGrace = (gi: number, gStartMs: number): void => {
+        const g = gn637!.notes[gi]
+        const k = mainMs637 > 0 ? graceNoteMs637 / mainMs637 : 0
+        const nbOf = (up: boolean) => {
+          const nb = neighborDegree(g.pitch, up)
+          return pitchToName(nb.pitch, g.octaveShift + nb.octave, null, keyAt637)
+        }
+        const pre: { pitchName: string | null; ms: number }[] = []
+        let held = graceNoteMs637
+        const ok = ornamentOf(g.symbols)
+        if (ok && k > 0) {
+          const plan = ornamentPlan(mainMs637, ok)
+          for (const step of plan.steps) pre.push({ pitchName: step === 'P' ? null : nbOf(step === 'U'), ms: plan.shortMs })
+          if (plan.steps.length > 0) held = plan.heldMs
+        } else {
+          const sk = slideOf(g.symbols)
+          const toName = gracePitches637[gi]
+          const fromName = sk ? nbOf(sk === 'xhy') : null
+          const plan =
+            sk && fromName && toName && k > 0
+              ? slidePlan(pitchToMidiNote(fromName), pitchToMidiNote(toName), mainMs637, midiToPitchName)
+              : null
+          if (plan && plan.steps.length > 0) {
+            for (const p of plan.steps) pre.push({ pitchName: p, ms: plan.stepMs })
+            held = plan.heldMs
+          }
+        }
+        if (pre.length === 0) {
+          pushSegEv(gStartMs, graceNoteMs637, gracePitches637[gi])
+          return
+        }
+        let gAt = gStartMs
+        for (const st of pre) {
+          pushSegEv(gAt, st.ms * k, st.pitchName ?? gracePitches637[gi])
+          gAt += st.ms * k
+        }
+        pushSegEv(gAt, held * k, gracePitches637[gi])
+      }
+      // ① 前倚音（从本音符拍点起奏，主音顺延）
+      if (gn637 && !gn637.after && gracePitches637.length > 0) {
+        let gAt = at2
+        for (let gi = 0; gi < gn637.notes.length; gi++) {
+          pushSegGrace(gi, gAt)
+          gAt += graceNoteMs637
+        }
+      }
+      // ② 装饰短音 / 滑音阶梯 + 按住的主音（色块挂在本音符的首个非倚音事件上）
+      {
+        let at = mainAt637
+        for (let si = 0; si < preSeq637.length; si++) {
+          const st = preSeq637[si]
+          pushSegEv(at, st.ms, st.pitchName, si === 0)
+          at += st.ms
+        }
+        // 本音事件只在**与布局算出的音高不同**时才显式给 `pitch`（临时转调）——与主旋律同一口径，
+        // 也让"没有装饰的段内音"保持旧事件形状（不凭空多出 `pitch` 字段，见 smoke 的 AX7c/AX9b）
+        const heldPitch637 = notePitch637 && notePitch637 !== placed.audioPitch ? notePitch637 : null
+        pushSegEv(at, heldMs637, heldPitch637, preSeq637.length === 0)
+      }
+      // ③ 后倚音（接在主音符的时值之后）
+      if (gn637 && gn637.after && gracePitches637.length > 0) {
+        let gAt = mainAt637 + mainMs637
+        for (let gi = 0; gi < gn637.notes.length; gi++) {
+          pushSegGrace(gi, gAt)
+          gAt += graceNoteMs637
+        }
+      }
+      segEndMs = Math.max(segEndMs, at2 + dur2)
       lastSegEvIdx = events.length - 1
       lastSegTokIdx = ci
       lastEmittedDurIdx = ci
-      lastSegHadGraceOrMordent = hasGraceOrMordent
-      segEndMs = Math.max(segEndMs, at2 + dur2)
+      lastSegHadGraceOrOrnament = hasGraceOrOrnament
+      continue
     }
   }
 
@@ -1245,7 +1391,7 @@ export function buildPlaySequence(
        * `passMs`** 发出（时间落错），听感就是"跳音"。现在先补发再判静音，顺序与时间都稳定。
        */
       if (pendingSegment) {
-        emitSegmentEvents(pendingSegment, passMs)
+        emitSegmentEvents(pendingSegment, passMs, keyAtSeq[Math.min(i, keyAtSeq.length - 1)] ?? keySemitone)
         pendingSegment = null
       }
       // adj629：本遍若被替谱段替代，则**主旋律这一段不发声**（替谱层已在上面发声）
@@ -1356,18 +1502,108 @@ export function buildPlaySequence(
       const mainAtMs = atMs + mainShiftMs
       /** 单个倚音时值（ms）= **实际窗口**均分（组时值超过本音符时窗口已被压缩，倚音随之变快） */
       const graceNoteMs = gracePerNoteBeats(graceWindowMs / beatMs, gn?.notes.length ?? 0) * beatMs
-      // 波音（adj502，用户规范）：与倚音同源——时值从主音符里匀出来、总时值守恒，但**从主音开始**波动。
-      //   · 每个短音 = clamp(P/8, 45, 110)ms（单波音 2 个短音 ≈ P/4；复波音 4 个 ≈ P/2；两者波动速度一致）；
+      // 演奏型装饰（adj502 波音 / adj635 打音·叠音，用户规范）：与倚音同源——时值从主音符里匀出来、
+      // 总时值守恒，但**从主音侧起奏**（波音与打音从主音开始；叠音从上方邻音起奏、主音顺延）：
+      //   · 短音时长按族取：波音 = clamp(P/8, 45, 110)ms；打音/叠音 = clamp(P/16, 30, 70)ms（辅助音"极小"）；
       //   · P 取「扣掉倚音后的发声时值」mainMs ⇒ 与倚音共用同一个主音符预算，总守恒不打折；
       //   · 短音依次排在**主音起奏点** mainAtMs 之后，其后才是"按住的主音"（heldMs）；
       //   · 邻音取调内二度、不继承主音临时变音；7 上翻八度、1 下翻八度（见 ornaments.ts）。
-      const mordent = token.kind === 'note' ? mordentOf(token.symbols) : null
-      const mordPlan = mordent ? mordentPlan(mainMs, mordent) : null
-      const mordSteps = mordPlan ? mordPlan.steps : []
-      const mordShortMs = mordPlan ? mordPlan.shortMs : 0
-      const heldMs = mordPlan ? mordPlan.heldMs : mainMs
-      /** 按住的主音起奏点 = 主音起奏点 + 各短音之和 */
-      const heldAtMs = mainAtMs + mordSteps.length * mordShortMs
+      const ornKind = token.kind === 'note' ? ornamentOf(token.symbols) : null
+      const ornPlan = ornKind ? ornamentPlan(mainMs, ornKind) : null
+      /**
+       * adj636：**滑音**（`&shy` 从下方滑进、`&xhy` 从上方滑进，见 `slides.ts`）——只在**没有**点状装饰
+       * （波音/打音/叠音）时生效：两者同写时点状装饰优先（都要求"重新起奏"，叠在一起没有音乐含义）。
+       */
+      const slideKind = token.kind === 'note' && ornKind === null ? slideOf(token.symbols) : null
+      /** 按住的主音时值（有装饰/滑音时 = 计划里剩下的那一段；否则就是整个发声时值） */
+      let heldMs = ornPlan ? ornPlan.heldMs : mainMs
+      /**
+       * **本音符开头的前置短音序列**（按演奏顺序，依次从 `mainAtMs` 起排）：
+       *  · 点状装饰（波音/打音/叠音）＝ 若干等长短音（`ornPlan.shortMs`），`pitchName = null` 表示"本音本体"；
+       *  · 滑音 ＝ 逐半音的阶梯音（`slidePlan`，如 `6&shy` = 5 → 5#），**到本音音高的那一格就是下面的主音事件**；
+       *  · 无装饰无滑音 ＝ 空（本音符直接从自己的音高起奏）。
+       * 两种情形**总时值都不变**（前置占的开头 + 按住的剩余 = 本音符发声时值）。
+       */
+      const preSeq: { pitchName: string | null; ms: number }[] = []
+      if (ornPlan && ornPlan.steps.length > 0) {
+        for (const step of ornPlan.steps) {
+          let pitchName: string | null = null
+          if (step !== 'P' && token.kind === 'note') {
+            const nb = neighborDegree(token.pitch, step === 'U')
+            pitchName = pitchToName(nb.pitch, token.octaveShift + nb.octave, null, keyAtSeq[i])
+          }
+          preSeq.push({ pitchName, ms: ornPlan.shortMs })
+        }
+      } else if (slideKind && token.kind === 'note') {
+        // 起点 = 本音在滑动方向上的调内二度（`&shy` 从下方滑进 ⇒ 取**下方**邻音；`&xhy` ⇒ 上方邻音）
+        const nb = neighborDegree(token.pitch, slideKind === 'xhy')
+        const fromName = pitchToName(nb.pitch, token.octaveShift + nb.octave, null, keyAtSeq[i])
+        const toName = pitch ?? placed.audioPitch
+        const plan =
+          fromName && toName ? slidePlan(pitchToMidiNote(fromName), pitchToMidiNote(toName), mainMs, midiToPitchName) : null
+        if (plan && plan.steps.length > 0) {
+          for (const p of plan.steps) preSeq.push({ pitchName: p, ms: plan.stepMs })
+          heldMs = plan.heldMs
+        }
+      }
+      /** 按住的主音起奏点 = 主音起奏点 + 前置短音之和 */
+      const heldAtMs = mainAtMs + preSeq.reduce((a, s) => a + s.ms, 0)
+      /**
+       * adj633/adj636（用户要求）：**倚音上的演奏型装饰与滑音**（`2[3/&sby]`、`6/[5/&die]`、`3[2/&da]`、
+       * `6/[5/&shy]`）——口径「倚音的演奏参考主音符，只在时值按比率缩得更短」：
+       *  · 装饰/滑音**计划本身按主音符算**：P 取 `mainMs`（与主音符上的同名记号同一个 P），同一套
+       *    短音时长、预算规则与邻音规则 ⇒ 奏法形状与主音符完全一致；
+       *  · 再把这个计划里的每一步时长**整体 × k**（`k = 该倚音的发声时值 / P`）——只是按比率变快；
+       *    各步之和 = 该倚音的发声时值（`graceNoteMs`），总时值守恒不打折（倚音不额外占拍）；
+       *  · 邻音取**该倚音**音级的调内二度（同主音符口径：不继承临时变音，`7` 上翻八度、`1` 下翻八度）；
+       *  · 力度沿用该倚音的 `graceGain`（短倚音 90%），与主音符"用主音符自己的力度"同一口径。
+       * 主音符发声时值为 0（极端兜底路径）时退化为普通倚音事件，不硬塞装饰。
+       */
+      const pushGraceNote = (gi: number, gStartMs: number): void => {
+        const g = gn!.notes[gi]
+        /** 发一个该倚音的事件（字段顺序与既有单音事件一致） */
+        const pushOne = (atMs0: number, durMs: number, pitchName: string | null) => {
+          // 注：闭包里用上面已收窄的 `placed`（`item.note` 在回调里收窄不成立）
+          events.push({ placed, instrument, atMs: atMs0, durationMs: durMs, pitch: pitchName, gain: graceGain, playVoice: playRole, ...(hasExplicitInst ? { explicitInstrument: true } : {}) })
+        }
+        const kind = ornamentOf(g.symbols)
+        const k = mainMs > 0 ? graceNoteMs / mainMs : 0
+        const nbOf = (up: boolean) => {
+          const nb = neighborDegree(g.pitch, up)
+          return pitchToName(nb.pitch, g.octaveShift + nb.octave, null, keyAtSeq[i])
+        }
+        // 前置短音（装饰短音 / 滑音阶梯），时值随后统一 ×k（见上面的口径）
+        const pre: { pitchName: string | null; ms: number }[] = []
+        let planHeld = graceNoteMs
+        if (kind && k > 0) {
+          const plan = ornamentPlan(mainMs, kind)
+          for (const step of plan.steps) pre.push({ pitchName: step === 'P' ? null : nbOf(step === 'U'), ms: plan.shortMs })
+          if (plan.steps.length > 0) planHeld = plan.heldMs
+        } else {
+          // adj636：倚音上的滑音——起点仍是该倚音音级的调内二度（`&shy` 下方、`&xhy` 上方）
+          const sk = slideOf(g.symbols)
+          const toName = gracePitches[gi]
+          const fromName = sk ? nbOf(sk === 'xhy') : null
+          const plan = sk && fromName && toName && k > 0
+            ? slidePlan(pitchToMidiNote(fromName), pitchToMidiNote(toName), mainMs, midiToPitchName)
+            : null
+          if (plan && plan.steps.length > 0) {
+            for (const p of plan.steps) pre.push({ pitchName: p, ms: plan.stepMs })
+            planHeld = plan.heldMs
+          }
+        }
+        if (pre.length === 0) {
+          pushOne(gStartMs, graceNoteMs, gracePitches[gi])
+          return
+        }
+        let gAt = gStartMs
+        for (const st of pre) {
+          pushOne(gAt, st.ms * k, st.pitchName ?? gracePitches[gi])
+          gAt += st.ms * k
+        }
+        // 收尾：装饰短音 / 滑音阶梯之后按住的那个主音（同一个倚音，时值 = 计划里的 heldMs × k）
+        pushOne(gAt, planHeld * k, gracePitches[gi])
+      }
       /**
        * adj629r（用户报「`(- (6[1'/]- 6.) 1'/) | … (6- | 6[h1'/])- …` 里 `(6- | 6[h1'/])` 只应是一个
        * `6` 奏 4 拍、末尾一个后倚音，实际 `6` 奏了两次」）：**同音连音合并**放在这里（倚音/音色都算完之后），
@@ -1375,7 +1611,7 @@ export function buildPlaySequence(
        *  · **前倚音**不合并——它排在主音符**之前**、占本音符开头，并进来就没有独立起奏点、倚音会被吞；
        *  · **后倚音**可以合并——它占的正是这个长音的**末尾**：延长前者，再把后倚音排在合并后的末尾奏出，
        *    总时值不增不减（长音少奏 `graceWindowMs`，这段正好留给后倚音）。
-       * adj503：带**波音**的音符自己不能被并进前一个（它要重新起奏并波动）；
+       * adj503：带**演奏型装饰**（波音/打音/叠音）的音符自己不能被并进前一个（它要重新起奏并奏出辅助音）；
        * adj596：合并只能在**同一声部内**（多声部单元按小节交替后，"上一个已发事件"可能属于另一声部）。
        */
       const sameVoiceAsPrev =
@@ -1393,7 +1629,8 @@ export function buildPlaySequence(
           curNoteIdx === lastEventNoteIdx + 1 &&
           shareSlur &&
           !hasFrontGrace &&
-          mordent === null &&
+          ornKind === null &&
+          slideKind === null &&
           !lastEventHadTailGrace &&
           lastMainEvIdx >= 0 &&
           pitch !== null &&
@@ -1419,9 +1656,10 @@ export function buildPlaySequence(
           )
           if (hasTailGrace) {
             // 后倚音接在被合并长音的**末尾**（时值口径与不合并时一致：主音让出这一小段）
+            // adj633：带波音的倚音在这里也照旧展开成波音短音（`pushGraceNote`）
             let gAt = prev.atMs + prev.durationMs
             for (let gi = 0; gi < gn!.notes.length; gi++) {
-              events.push({ placed: item.note, instrument, atMs: gAt, durationMs: graceNoteMs, pitch: gracePitches[gi], gain: graceGain, playVoice: playRole, ...(hasExplicitInst ? { explicitInstrument: true } : {}) })
+              pushGraceNote(gi, gAt)
               gAt += graceNoteMs
             }
           }
@@ -1441,32 +1679,36 @@ export function buildPlaySequence(
           // 否则「试听音色」的全局覆盖会把 `@手风琴@` 之后的倚音（如 `3/[3/5/]`）压回主音色
           // （用户报「演奏到 `3/[3/5/]` 处又切回主音色了，应该还是手风琴」）；
           // 段内（bz/dsb）音符的倚音缺 `playVoice` 还会丢掉伴奏/第二声部音色。
-          events.push({ placed: item.note, instrument, atMs: gAt, durationMs: graceNoteMs, pitch: gracePitches[gi], gain: graceGain, playVoice: playRole, ...(hasExplicitInst ? { explicitInstrument: true } : {}) })
+          // adj633：带波音的倚音由 `pushGraceNote` 展开成「波音短音 + 按住的主音」。
+          pushGraceNote(gi, gAt)
           gAt += graceNoteMs
         }
       }
       // adj375：新事件开始 → 上一个事件已完成（不会再被连音合并）→ 结算它的呼吸静音
       settleBreath()
-      // adj502：波音短音（从主音开始）——首个短音顺便携带色块（色块要与"音符起奏"对齐，
-      // 否则会晚一个波音的长度才亮）
+      // adj502/adj635/adj636：演奏型装饰与滑音的**前置短音**（装饰短音 / 滑音半音阶梯）
+      // ——首个短音顺便携带色块（色块要与"音符起奏"对齐，否则会晚一个短音的长度才亮）
       const playheadSegs = buildPlayheadSegs(item.note!, 0, rightEdgeByNoteIdx.get(item.note!.id.index), computeColorBounds(item.note!, pageByNoteIdx.get(item.note!.id.index)!, voiceBlockByNoteIdx, noteSize)).map((s) => ({ ...s, instrument, playVoice: item.note!.playVoice, gain }))
-      // adj503：色块挂在**首个波音短音**上（有波音时）或主事件上（无波音）——记下来供连音合并追加拍段
-      const blockEvIdx = mordSteps.length > 0 ? events.length : -1
-      for (let si = 0; si < mordSteps.length; si++) {
-        const step = mordSteps[si]
-        // 'P' 不带 `pitch` ⇒ 沿用 placed.audioPitch（主音本体，含变音记号）；邻音按调内二度算
-        const nb = step === 'P' || token.kind !== 'note' ? null : neighborDegree(token.pitch, step === 'U')
-        events.push({
-          placed: item.note,
-          instrument,
-          atMs: mainAtMs + si * mordShortMs,
-          durationMs: mordShortMs,
-          ...(nb ? { pitch: pitchToName(nb.pitch, (token as { octaveShift: number }).octaveShift + nb.octave, null, keyAtSeq[i]) } : {}),
-          gain,
-          playVoice: playRole,
-          ...(hasExplicitInst ? { explicitInstrument: true } : {}),
-          ...(si === 0 ? { playheadSegs } : {}),
-        })
+      // adj503：色块挂在**首个前置短音**上（有装饰/滑音时）或主事件上（都没有）——记下来供连音合并追加拍段
+      const blockEvIdx = preSeq.length > 0 ? events.length : -1
+      {
+        let at = mainAtMs
+        for (let si = 0; si < preSeq.length; si++) {
+          const st = preSeq[si]
+          events.push({
+            placed: item.note,
+            instrument,
+            atMs: at,
+            durationMs: st.ms,
+            // 装饰的 'P' 步不带 `pitch` ⇒ 沿用 placed.audioPitch（本音本体，含变音记号）
+            ...(st.pitchName ? { pitch: st.pitchName } : {}),
+            gain,
+            playVoice: playRole,
+            ...(hasExplicitInst ? { explicitInstrument: true } : {}),
+            ...(si === 0 ? { playheadSegs } : {}),
+          })
+          at += st.ms
+        }
       }
       const mainEvIdx = events.length
       events.push({
@@ -1481,8 +1723,8 @@ export function buildPlaySequence(
         ...(pitch && pitch !== placed.audioPitch ? { pitch } : {}),
         // adj434：`@乐器名@` 显式指定 → 播放端保留该音色（不被「试听音色」全局覆盖压掉）
         ...(hasExplicitInst ? { explicitInstrument: true } : {}),
-        // 有色块的话，色块已挂在首个波音短音上（见上）
-        ...(mordSteps.length === 0 ? { playheadSegs } : {}),
+        // 有色块的话，色块已挂在首个前置短音上（见上）
+        ...(preSeq.length === 0 ? { playheadSegs } : {}),
       })
       // adj623：前倚音只吃**本音符自己的时值** ⇒ 无需再回改上一个主音符事件
       // （adj508 的旧口径会把上一个音符截短来给倚音腾出"拍点前"的时间，现已废弃）。
@@ -1494,7 +1736,8 @@ export function buildPlaySequence(
         let gAt = mainAtMs + mainMs
         for (let gi = 0; gi < gn.notes.length; gi++) {
           // adj436：同样继承声部角色与音色来源（同前倚音）
-          events.push({ placed: item.note, instrument, atMs: gAt, durationMs: graceNoteMs, pitch: gracePitches[gi], gain: graceGain, playVoice: playRole, ...(hasExplicitInst ? { explicitInstrument: true } : {}) })
+          // adj633：带演奏型装饰的倚音由 `pushGraceNote` 展开成「装饰短音 + 按住的主音」
+          pushGraceNote(gi, gAt)
           gAt += graceNoteMs
         }
       }
@@ -1622,7 +1865,7 @@ export function buildPlaySequence(
   settleBreath()
   // adj427：段落在行尾/后面没有音符时，用最后一遍的 passMs 补发（保证它仍然发声）
   if (pendingSegment) {
-    emitSegmentEvents(pendingSegment, passMs)
+    emitSegmentEvents(pendingSegment, passMs, keyAtSeq[keyAtSeq.length - 1] ?? keySemitone)
     pendingSegment = null
   }
 

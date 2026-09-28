@@ -32,7 +32,7 @@ export { buildPlaySequence, inferBpm, countScoreInstrumentSwitches, createBacken
 export { codePosToNoteId, noteIdToCodePos, parseNoteId, buildIndexToPage } from './cursorMap'
 export { computeRowTops, computeRowGuides, dragDelta, clamp, metaAreaH, GUIDE_ITEMS, GUIDE_LIMITS, GUIDE_LIMITS_EX } from './layout/guides'
 export { metaAnchorOf, metaAnchorPt, clampMetaPos, metaCornerOffsets, metaAuthorRowY } from './layout/metaAnchors'
-export { splitNoteDur, digitSlotW, dotBodyW, augBodyW, slideBodyW, bracketBodyW, noteBodyW, nonDurGap, accidentalBodyW, hxBodyW, slideGlyphInk, slideExtraW, graceSlotLayout, graceSlideInk } from './layout/spaceLayout'
+export { splitNoteDur, digitSlotW, dotBodyW, augBodyW, slideBodyW, bracketBodyW, noteBodyW, nonDurGap, accidentalBodyW, hxBodyW, slideGlyphInk, slideExtraW, graceSlotLayout, graceSlideInk, mordentInkW } from './layout/spaceLayout'
 // adj630b：谱尾说明（`S:`）的行基线——渲染端与预览端拖拽基准共用（不得各写一份）
 export { notesRowBaseline, NOTES_LINE_H_RATIO, NOTES_BOTTOM_GAP, NOTES_DESCENT_RATIO } from './layout/spacing'
 export type { NoteDurSplit } from './layout/spaceLayout'
@@ -48,6 +48,20 @@ export type { JpsConfigWriteMode, JpsConfigIssue } from './settings'
 // adj502：波音（mordent）演奏时值——纯函数，宿主（Obsidian 插件）与 smoke 都要用同一套口径
 export { MORDENT_SYMBOLS, ORNAMENT_SHORT_MIN_MS, ORNAMENT_SHORT_MAX_MS, ORNAMENT_SHORT_RATIO, mordentOf, mordentShortMs, neighborDegree, mordentPlan } from './playback/ornaments'
 export type { MordentKind, OrnamentStep, MordentPlan, PitchDegree } from './playback/ornaments'
+// adj635：竹笛/葫芦丝的传统装饰音（打音 `&da` / 叠音 `&die`）+ **演奏型装饰**统一入口
+export {
+  PORT_SYMBOLS,
+  ORNAMENT_PORT_RATIO,
+  ORNAMENT_PORT_MIN_MS,
+  ORNAMENT_PORT_MAX_MS,
+  ORNAMENT_SYMBOLS,
+  portOf,
+  portShortMs,
+  portPlan,
+  ornamentOf,
+  ornamentPlan,
+} from './playback/ornaments'
+export type { PortKind, OrnamentKind } from './playback/ornaments'
 // 字体策略（跨机尽量有 / 适合简谱 / 保证有可用字体）+ 分层归属：
 // 编辑器偏好属「用户个性」（L1，不进谱面），谱面字体属「谱面级」（L2）
 export {

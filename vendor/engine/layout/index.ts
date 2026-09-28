@@ -1828,8 +1828,13 @@ export function layoutScore(
             const grW = t.kind === 'note' ? graceInlineW(t, m.noteSize) : 0
             const grTailW = t.kind === 'note' ? graceTailW(t, m.noteSize) : 0
             const gn = t.kind === 'note' ? t.gracenotes : undefined
-            // 前倚音向左扩展、后倚音向右扩展；只有前倚音影响「数字左缘」
-            const leftExt = gn && !gn.after ? grW : 0
+            /**
+             * adj636b：滑音记号画在数字**左侧** ⇒ 它的墨迹宽要算在「数字左缘偏移」里
+             * （与变音角标 `accW`、前倚音 `grW` 同一套账：本体宽里含它、数字右移同样多）。
+             * 前倚音向左扩展、后倚音向右扩展；只有前倚音与滑音影响「数字左缘」。
+             */
+            const slideW = t.kind === 'note' ? slideWOf(t, m.noteSize) : 0
+            const leftExt = (gn && !gn.after ? grW : 0) + slideW
             noteList.push({
               t,
               slotPos,
@@ -1840,7 +1845,7 @@ export function layoutScore(
               augDur: s.augDur,
               dotDur: s.dotDur,
               hasDot: t.dots > 0,
-              noteBodyW: noteBodyW(m.noteSize, grW) + accW,
+              noteBodyW: noteBodyW(m.noteSize, grW) + accW + slideW,
               dotBodyW: t.dots > 0 ? dotBodyW(m.noteSize) * t.dots : 0,
               grTailW,
               accW,

@@ -12,8 +12,10 @@
  * 供后续 P2（每元素时值宽度分配/放置）、P3（断行）、P4（layoutScore 分流）、
  * P5（多声部）复用。均为纯函数，零 React/DOM 依赖。
  */
-import { DOT_R_DOT, BRACKET_PAD, GRACE_SIZE_RATIO, GRACE_SLOT_RATIO, GRACE_SLOT_RATIO_MULTI, GRACE_MARK_GAP, GRACE_MARK_HUG_GAP, DIGIT_INK_ASC_RATIO, digitInkH, digitInkW, noteScaleOf } from './spacing'
+import { DOT_R_DOT, BRACKET_PAD, GRACE_SIZE_RATIO, GRACE_SLOT_RATIO, GRACE_SLOT_RATIO_MULTI, GRACE_MARK_GAP, GRACE_MARK_HUG_GAP, DIGIT_INK_ASC_RATIO, digitInkH, noteScaleOf } from './spacing'
 import { tokenDuration } from '../duration'
+// adj633：倚音上的波音编码（与 `types.ts` 同源，避免布局端另写一份判断）
+import { GRACE_MORDENT_CODES } from '../types'
 // adj479：滑音图形的宽高比来自矢量修饰符表（由 scripts/gen-modifier-glyphs.mjs 生成的数据文件）——
 // 只共享**图形度量**，不依赖 render 的绘制逻辑
 import { MODIFIER_GLYPHS, glyphInkAspect } from '../render/modifierGlyphs'
@@ -135,16 +137,25 @@ export const markBodyW = (_code: 'zkh' | 'ykh' | 'hx', _noteSize: number) => bra
  * 现在渲染端按本函数摆放、布局端按 `slideExtraW` 占宽——一份几何两处消费，
  * 避免本项目踩过的「线宽改了一处、占位表没同步」（adj104/adj391 的教训）。
  *
- * 几何（与 adj458 定下的画法一致，数值未变）：先按旧矢量算出**包围盒**（弧线两点 + 箭头尖 + 两翼），
- * 再按**高度**贴合、左缘贴在数字右缘（`x + digitW`），横向占宽随图形自身比例。
- * 返回值为**相对量**：`dx` 相对数字左缘（x）、`dy` 相对音符基线（y，向上为负）。
+ * adj636b（用户要求）：**记号画在数字左侧**（原来画在右侧是错的）——"上/下滑音"是**滑进本音**的
+ * 记号，写在音的左边才读得通（与演奏口径"从下/上一个音滑进本音"一致）。
+ * 只改横向侧、**高度与大小不变**：墨迹**右缘**贴数字左缘，再让开**该音左侧已有的东西**——
+ * 变音角标占位、以及前倚音组占用的横向范围（`clearLeft = max(accW, 前倚音左伸量)`），否则会压在 `#` 或倚音上。
+ *
+ * 几何：先按旧矢量算出**包围盒**（弧线两点 + 箭头尖 + 两翼），再按**高度**贴合、右缘贴在让开后的位置。
+ * 返回值为**相对量**：`dx` 相对数字左缘（x，**负值 = 向左**）、`dy` 相对音符基线（y，向上为负）。
  */
-export function slideGlyphInk(sym: 'shy' | 'xhy', noteSize: number): { dx: number; dy: number; w: number; h: number } {
+export function slideGlyphInk(
+  sym: 'shy' | 'xhy',
+  noteSize: number,
+  clearLeft = 0,
+): { dx: number; dy: number; w: number; h: number } {
   const s = noteScaleOf(noteSize)
   const digitW = digitSlotW(noteSize)
   const sz = noteSize * 0.25 // 滑音大小 = 音符的 1/4
   const right = sym === 'shy'
-  // 旧矢量的弧线两点（x 相对数字左缘、y 相对基线）
+  // 旧矢量的弧线两点（x 相对数字左缘、y 相对基线）——只用来求**包围盒**（高度/宽高比），
+  // 实际横向落位由下面的 `dx` 决定（adj636b：一律贴数字左缘）
   let x1: number
   let y1: number
   let x2: number
@@ -177,12 +188,15 @@ export function slideGlyphInk(sym: 'shy' | 'xhy', noteSize: number): { dx: numbe
   const ys = [y1, y2, ay, y2 + oy, y2 - oy]
   const top = Math.min(...ys)
   const h = Math.max(...ys) - top
-  return { dx: digitW, dy: top, w: h * glyphInkAspect(MODIFIER_GLYPHS[sym]), h }
+  const w = h * glyphInkAspect(MODIFIER_GLYPHS[sym])
+  // adj636b：墨迹**右缘**贴数字左缘、再让开左侧已有的角标/倚音 ⇒ 左缘在数字左侧 `clearLeft + w` 处
+  return { dx: -(clearLeft + w), dy: top, w, h }
 }
 
 /**
- * adj479：滑音图形的**右侧额外占宽**（= 数字槽之外那一截墨迹宽）。
- * 布局端在多声部块内把它计入音符本体宽，让后一个元素让开（单声部留白充裕，行为不变）。
+ * adj479/adj636b：滑音图形的**左侧额外占宽**（= 数字槽之外的墨迹宽）。
+ * 布局端把它计入音符本体宽并**左移量**（见 layout 的 `leftExt`），让前一个元素与它互不重叠；
+ * 多声部块内同样计入每拍本体宽（否则紧排时图形压到相邻数字）。
  */
 export const slideExtraW = (sym: 'shy' | 'xhy', noteSize: number) => slideGlyphInk(sym, noteSize).w
 
@@ -284,27 +298,59 @@ export function graceAtTail(t: GraceShape | undefined): boolean {
 // ============================================================
 
 /**
- * adj632b：倚音**右侧**修饰符（`&shy` 上滑音 / `&xhy` 下滑音）的**墨迹几何**——渲染与布局共用。
+ * adj633（用户要求）：**波音（mordent）的墨迹宽度**——主音符与倚音**共用这一把尺子**。
  *
- * 与主音符那套 `slideGlyphInk` **不是一回事**（adj632b 用户口径明确三条）：
+ * 用户口径：「倚音上的波音，大小参考波音与主音符的比率」⇒ 同一个比率，乘**记号所属音符**的
+ * 缩放因子 `scale`：单波音（2.5 齿）`9 × scale`、复波音（3.5 齿）`13.5 × scale`
+ * （主音符 `scale = noteSize/18`、倚音 `scale = 倚音字号/18` ⇒ 倚音上的波音自然缩为一半）。
+ * 两个数值就是主音符波音沿用至今的横向占位（`2 × 5×0.9 = 9`、`2 × 9×0.75 = 13.5`，见 render 的波音分支）；
+ * 抽到这里是为了**两处（主音符 / 倚音）不各写一份**（同 adj458/adj479/adj632b 的「一份几何两处消费」）。
+ */
+export function mordentInkW(kind: string, scale: number): number {
+  return (kind.endsWith('+') ? 13.5 : 9) * scale
+}
+
+/**
+ * adj632b/adj636c：倚音上的滑音（`&shy` 上滑音 / `&xhy` 下滑音）的**墨迹几何**——渲染与布局共用。
+ *
+ * 三条用户口径（adj632b 定尺寸、adj636c 定侧）：
  *  · **大小与倚音一样大** ⇒ 墨迹高 = 倚音**数字墨迹**高（`digitInkH`）；
  *  · **与倚音水平** ⇒ 墨迹纵向范围与数字墨迹**完全对齐**（同顶同底，而非主音符那套"偏数字上半截"）；
- *  · **紧跟倚音** ⇒ 左缘贴数字**墨迹**右缘（不是数字槽右缘，槽比墨迹宽 0.1~0.27em）+ 一点净距。
+ *  · **紧跟倚音** ⇒ adj636c（用户要求"和主音符一样，滑音调整到左侧"）：墨迹**右缘**贴数字**槽**左缘
+ *    + 一点净距——与主音符的滑音记号同侧，语义一致（都是"滑进本音"）。
  *
- * 返回相对量：`dx` 相对倚音**数字左缘**、`dy` 相对倚音**基线**（向上为负）；`w`/`h` 为墨迹宽高。
- * @param digit 该倚音的数字字符（1-7）——逐数字墨迹宽不同（`1` 最窄），"紧跟"要按各自的墨迹算
+ * 返回相对量：`dx` 相对倚音**数字左缘**（**负值 = 向左**）、`dy` 相对倚音**基线**（向上为负）；`w`/`h` 为墨迹宽高。
+ * 注：改到左侧后**不再需要逐数字的墨迹宽**（左缘对齐用的是数字**槽**左缘，各数字的左边距差异极小），
+ * 故参数里不再带数字字符（adj632b 右侧时代按"墨迹宽"算，是为了贴住数字**墨迹**右缘）。
  */
-export function graceSlideInk(sym: 'shy' | 'xhy', gSize: number, digit: string): { dx: number; dy: number; w: number; h: number } {
+export function graceSlideInk(sym: 'shy' | 'xhy', gSize: number): { dx: number; dy: number; w: number; h: number } {
   const h = digitInkH(gSize)
+  const w = h * glyphInkAspect(MODIFIER_GLYPHS[sym])
   return {
-    dx: digitInkW(digit, gSize) + GRACE_MARK_HUG_GAP * (gSize / 18),
+    // 右缘 = 数字墨迹左缘 − 净距 ⇒ 左缘在数字左缘左侧 `净距 + w` 处
+    dx: -(GRACE_MARK_HUG_GAP * (gSize / 18) + w),
     dy: -DIGIT_INK_ASC_RATIO * gSize,
-    w: h * glyphInkAspect(MODIFIER_GLYPHS[sym]),
+    w,
     h,
   }
 }
 
-/** 单个倚音的**最右墨迹**（从该倚音数字左缘算起；无右侧修饰时 = 数字槽右缘 `gW`） */
+/** 单个倚音的**最左墨迹**（从该倚音数字左缘向左算起的量；无左侧修饰时 = 0） */
+function graceLeftExtent(
+  note: { pitch?: number; symbols?: readonly string[] },
+  gSize: number,
+): number {
+  let l = 0
+  for (const sym of note.symbols ?? []) {
+    if (sym === 'shy' || sym === 'xhy') {
+      const ink = graceSlideInk(sym, gSize)
+      l = Math.max(l, -ink.dx)
+    }
+  }
+  return l
+}
+
+/** 单个倚音的**最右墨迹**（从该倚音数字左缘算起；无右侧/上方修饰时 = 数字槽右缘 `gW`） */
 function graceRightExtent(
   note: { pitch?: number; symbols?: readonly string[] },
   gSize: number,
@@ -312,39 +358,43 @@ function graceRightExtent(
 ): number {
   let r = gW
   for (const sym of note.symbols ?? []) {
-    if (sym === 'shy' || sym === 'xhy') {
-      const ink = graceSlideInk(sym, gSize, String(note.pitch ?? ''))
-      r = Math.max(r, ink.dx + ink.w)
+    if ((GRACE_MORDENT_CODES as readonly string[]).includes(sym)) {
+      // adj633：波音画在该倚音**正上方**、以数字槽中心居中 ⇒ 右半幅会伸出槽右缘；
+      // 宽于槽时必须计入（否则多倚音时图形会压到后一个倚音的正上方记号区）。
+      r = Math.max(r, gW / 2 + mordentInkW(sym, gSize / 18) / 2)
     }
   }
   return r
 }
 
 /**
- * adj632：倚音组内**每个倚音的槽位几何**——渲染（摆放）与布局（占宽）的**唯一来源**。
+ * adj632/adj636c：倚音组内**每个倚音的槽位几何**——渲染（摆放）与布局（占宽）的**唯一来源**。
  *
- * 为什么抽到这里：倚音右侧修饰符（`&shy`/`&xhy`）会把墨迹伸出数字槽右缘，
+ * 为什么抽到这里：倚音上的修饰符会把墨迹伸出数字槽（右侧曾是滑音、上方是波音、左侧是滑音），
  * 而倚音组的右缘是**贴住主音符左缘**的（前倚音）——不出占宽就会压到主音符数字上；
- * 多倚音时还会压到后一个倚音。与 adj479 同一条教训：一份几何两处消费，绝不各算一套。
+ * 组内相邻倚音之间也会互相压。与 adj479 同一条教训：一份几何两处消费，绝不各算一套。
  *
  * 返回（长度与 `notes` 一致的数组）：
- *  · `offs[i]`：第 i 个倚音**数字左缘**相对「组首数字左缘」的偏移；
- *  · `width`：组首数字左缘 → 组内**最右墨迹**（含末个倚音的右侧修饰）的宽；
+ *  · `offs[i]`：第 i 个倚音**数字左缘**相对「组首墨迹左缘」的偏移（首音左侧有滑音时为该墨迹宽）；
+ *  · `leftExt0`：**首音**左侧伸出的墨迹宽（组左缘 → 首音数字左缘）——后倚音的组左缘要额外让出它，
+ *    否则滑音墨迹会压到主音符（前倚音不需要，组左缘本来就按 `width` 定位）；
+ *  · `width`：组**最左墨迹** → 组内**最右墨迹**的宽；
  *  · `gSize`/`gW`/`gapW`：倚音字号 / 数字槽宽 / 无修饰时的相邻槽位间距（渲染端还要用）。
  *
- * 间距规则：无右侧修饰时**原样沿用** adj103 的紧凑间距 `GRACE_SLOT_RATIO_MULTI`（多倚音时比槽宽还窄，
- * 观感紧凑且是既有行为）；只有该倚音**确有**右侧修饰，才把下一个槽位推到「最右墨迹 + GRACE_MARK_GAP」之外。
+ * 间距规则：无右侧/上方修饰时**原样沿用** adj103 的紧凑间距 `GRACE_SLOT_RATIO_MULTI`（多倚音时比槽宽还窄，
+ * 观感紧凑且是既有行为）；只有该倚音**确有**右侧/上方修饰，才把下一个槽位推到「最右墨迹 + GRACE_MARK_GAP」之外。
  */
 export function graceSlotLayout(
   notes: readonly { pitch?: number; symbols?: readonly string[] }[],
   noteSize: number,
-): { offs: number[]; width: number; gSize: number; gW: number; gapW: number } {
+): { offs: number[]; leftExt0: number; width: number; gSize: number; gW: number; gapW: number } {
   const gSize = noteSize * GRACE_SIZE_RATIO
   const gW = gSize * GRACE_SLOT_RATIO
   const gapW = notes.length >= 2 ? gSize * GRACE_SLOT_RATIO_MULTI : gW
   const gs = gSize / 18 // 倚音缩放因子（同渲染端）
   const offs: number[] = []
-  let off = 0
+  const leftExt0 = notes.length > 0 ? graceLeftExtent(notes[0], gSize) : 0
+  let off = leftExt0
   for (let i = 0; i < notes.length; i++) {
     offs.push(off)
     const r = graceRightExtent(notes[i], gSize, gW)
@@ -352,5 +402,5 @@ export function graceSlotLayout(
   }
   const last = notes.length - 1
   const width = last < 0 ? 0 : offs[last] + graceRightExtent(notes[last], gSize, gW)
-  return { offs, width, gSize, gW, gapW }
+  return { offs, leftExt0, width, gSize, gW, gapW }
 }

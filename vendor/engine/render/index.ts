@@ -15,6 +15,8 @@
  * TODO(M7)：跳房子/连音线/装饰符号/多声部
  */
 import type { PageConfig, PlacedBarline, PlacedBarNumber, PlacedDynamic, PlacedLyric, PlacedSegmentBracket, PlacedSlur, PlacedToken, ScoreLayout, ScorePage, VoiceBlock } from '../types'
+// adj633：倚音上的波音编码（与解析/布局/演奏同源一份清单）
+import { GRACE_MORDENT_CODES } from '../types'
 import { tokenDuration } from '../duration'
 import { metaAnchorOf, metaAnchorPt, metaAuthorRowY, metaCornerOffsets } from '../layout/metaAnchors'
 import {
@@ -61,7 +63,9 @@ import {
 } from '../layout/spacing'
 import { tempoLabel } from '../parser/parser'
 import { parseInstrumentRef } from '../playback/instruments'
-import { graceAtTail, graceSlideInk, graceSlotLayout, slideGlyphInk } from '../layout/spaceLayout'
+import { graceAtTail, graceSlideInk, graceSlotLayout, mordentInkW, slideGlyphInk } from '../layout/spaceLayout'
+// adj636b：变音角标占位（滑音记号改画在数字左侧后，要与角标并排——渲染与布局同一把尺子）
+import { accidentalBodyW } from '../layout/spaceLayout'
 // adj458：波音/滑音改用**用户提供的矢量修饰符**（生成文件，见 scripts/gen-modifier-glyphs.mjs）
 import { MODIFIER_GLYPHS, glyphMarkup, type ModifierGlyphKey } from './modifierGlyphs'
 
@@ -589,12 +593,14 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
   //  adj632（用户要求）：**倚音自身也能挂修饰符**——写在括号内该倚音之后（如 `6/[5/&tu]`）：
   //          `&tu`/`&die`/`&da` 画在该倚音**正上方**、`&shy`/`&xhy` 画在该倚音**右侧**，
   //          尺寸一律随倚音字号（用户口径「与倚音等高」），字形/图形与主音符同款。
+  //  adj633（用户要求）：倚音也能挂**波音**（`&sby`/`&xby`/`&sby+`/`&xby+`，如 `2[3/&sby]`）——
+  //          画在该倚音**正上方**，墨迹宽按「波音 : 所属音符」同一比率随倚音等比缩小。
   if (t.kind === 'note' && t.gracenotes && t.gracenotes.notes.length > 0) {
     const gn = t.gracenotes
     // ①倚音字号 = 主音符 × GRACE_SIZE_RATIO（adj105 定为 0.5，下限 6×s 随字号等比，adj103）
     // adj632：字号 / 数字槽宽 / 组内间距 / 各倚音槽位偏移收敛到 `graceSlotLayout`
     // （与布局端同一份几何，见 spaceLayout.ts）
-    const { offs: gOffs, width: gGroupW, gSize, gW } = graceSlotLayout(gn.notes, size)
+    const { offs: gOffs, leftExt0: gLeftExt, width: gGroupW, gSize, gW } = graceSlotLayout(gn.notes, size)
     const gs = gSize / 18 // 倚音缩放因子（高低音点/间距随倚音字号缩放）
     const mainTop = y - size * DIGIT_HEIGHT_RATIO // 主音符文本上端（adj100 = 第一条减时线位置）
     // ③ 数字底 = 首条减时线上方 0.5×s（adj101 下移 1.5px 后；间距随字号等比）
@@ -617,9 +623,12 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
     // 数字水平排列：前倚音从主音符左上角向左依次排；后倚音从锚点向右依次排
     // adj106：组右端（前倚音）固定与主音符留 1px×s——多音符时组内间距 gapW < 槽宽 gW，
     // 原公式按 gapW 排组尾会右移侵入主音符区造成重叠；后倚音原公式组左端已固定
-    // adj632：整组宽 = gGroupW（含末个倚音的右侧修饰墨迹），故前倚音的组**左缘**要再往左让出这段墨迹，
-    //         组右缘（最右墨迹）才仍停在「主音符数字左缘 − 1px×s」；后倚音左缘照旧贴锚点。
-    const gx0 = gn.after ? graceAnchorX + 1 * s : x - 1 * s - gGroupW
+    // adj632：整组宽 = gGroupW（含末个倚音的右侧/上方修饰墨迹），故前倚音的组**左缘**要再往左让出这段墨迹，
+    //         组右缘（最右墨迹）才仍停在「主音符数字左缘 − 1px×s」。
+    // adj636c：倚音上的滑音改画在**左侧**后，首音的左伸墨迹（`leftExt0`）要从**组宽之外**再让出：
+    //         前倚音由 `gGroupW` 自动带出（组左缘再往左），后倚音则把组左缘右移 `leftExt0`，
+    //         否则滑音墨迹会压到主音符的收尾元素（数字/增时线/附点）上。
+    const gx0 = gn.after ? graceAnchorX + 1 * s + gLeftExt : x - 1 * s - gGroupW
     const gxs: number[] = gOffs.map((o) => gx0 + o)
     const gy = gBaseY // 同基线（水平排列）
     // 组范围（数字区）：组首 x、组尾 x
@@ -659,16 +668,21 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
       )
       // adj632（用户要求）：**倚音自身的修饰符**——写在该倚音数字之后（如 `6/[5/&tu]`）。
       //   · `&tu`/`&die`/`&da`：画在该倚音**正上方**，字形与主音符同款（粗体 T / 又 / 扌；`die` 横向缩 0.75）；
+      //   · adj633（用户要求）：`&sby`/`&xby`（及加长的 `&sby+`/`&xby+`）波音也画在**正上方**，
+      //     用主音符同款矢量图形，墨迹宽按「波音 : 所属音符」**同一比率**随倚音等比缩小（`mordentInkW`）；
       //   · `&shy`/`&xhy`：画在该倚音**右侧**，与主音符同款矢量图形。
       // adj632b（用户要求「记号要随倚音变小，别比倚音还大」）：字号 = **记号所属音符字号 × SYM_FONT_RATIO**
       //   ——与主音符的 `&tu` 等同一把尺子（主音符 `SYM_FS = 10×s`，s = 音符字号/18），
       //   故记号随倚音一起等比缩小；实测与用户示例图的 T:5 高度比吻合（见 spacing.ts 的 SYM_FONT_RATIO）。
       const mfs = markFontSize(gSize)
+      // adj633：该倚音的**上方层顶**——一个倚音上写多个上方记号（如 `&tu` + `&sby`）时逐层往上排，
+      //   与主音符的层进同一套（每层抬「记号字号 × 数字高比」）；右侧记号（滑音）不占上方层。
+      let gAboveTop = g.octaveShift > 0 ? octaveTopY(gy, g.octaveShift, gSize) : gy - DIGIT_INK_ASC_RATIO * gSize
       for (const sym of g.symbols ?? []) {
         if (sym === 'shy' || sym === 'xhy') {
-          // adj632b：右侧滑音的几何与主音符那套**不同**（用户口径：与倚音一样大 / 与倚音水平 / 紧跟倚音），
-          // 见 `graceSlideInk`——墨迹高 = 数字墨迹高、纵向与数字墨迹对齐、左缘贴数字墨迹右缘。
-          const ink = graceSlideInk(sym, gSize, String(g.pitch))
+          // adj632b/adj636c：倚音上的滑音几何见 `graceSlideInk`——墨迹高 = 数字墨迹高、纵向与数字墨迹对齐、
+          // **右缘贴数字左缘**（与主音符一样画在音的**左侧**，语义都是"滑进本音"）。
+          const ink = graceSlideInk(sym, gSize)
           parts.push(
             glyphMarkup(
               MODIFIER_GLYPHS[sym],
@@ -677,12 +691,27 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
               '#1b1b1b',
             ),
           )
+        } else if ((GRACE_MORDENT_CODES as readonly string[]).includes(sym)) {
+          // adj633：倚音上的**波音**——矢量图形画在该倚音正上方、以数字槽中心居中。
+          // 纵向沿用主音符那把尺子：先取该层「文字基线位」（层顶 − 层距×gs − descender），
+          // 图形中心 = 基线 − 2×gs（同主音符波音的 `wy = symY - 2s`）；尺寸只按 gs 缩（gs = 倚音缩放因子）。
+          const mcx = gx + gW / 2
+          const my = gAboveTop - LAYER_GAP * gs - mfs * DESC_RATIO
+          const w = mordentInkW(sym, gs)
+          parts.push(
+            glyphMarkup(
+              MODIFIER_GLYPHS[sym as ModifierGlyphKey],
+              { x: mcx - w / 2, y: my - 2 * gs, w, h: 0 },
+              'width',
+              '#1b1b1b',
+            ),
+          )
+          gAboveTop = my - mfs * DIGIT_HEIGHT_RATIO
         } else if (ABOVE_GLYPH[sym]) {
           const mcx = gx + gW / 2 // 倚音数字槽中心
           // 层顶与主音符同一套口径：有**高八度点**时从「最高高八度点层顶」起算（否则记号会压在点上），
           // 无高八度点时从**数字墨迹顶**起算。底 = 层顶 − LAYER_GAP×gs；基线再抬一个 descender。
-          const mTop = g.octaveShift > 0 ? octaveTopY(gy, g.octaveShift, gSize) : gy - DIGIT_INK_ASC_RATIO * gSize
-          const my = mTop - LAYER_GAP * gs - mfs * DESC_RATIO
+          const my = gAboveTop - LAYER_GAP * gs - mfs * DESC_RATIO
           if (sym === 'die') {
             parts.push(
               `<text x="0" y="0" text-anchor="middle" transform="translate(${r1n(mcx)},${r1n(my)}) scale(0.75,1)" font-size="${r1n(mfs)}" font-weight="bold" font-family="${FONT_CN}" fill="#1b1b1b">${xmlEsc(ABOVE_GLYPH[sym])}</text>`,
@@ -692,6 +721,7 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
               `<text x="${r1n(mcx)}" y="${r1n(my)}" text-anchor="middle" font-size="${r1n(mfs)}" font-weight="bold" font-family="${FONT_CN}" fill="#1b1b1b">${xmlEsc(ABOVE_GLYPH[sym])}</text>`,
             )
           }
+          gAboveTop = my - mfs * DIGIT_HEIGHT_RATIO
         }
       }
     }
@@ -825,14 +855,15 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
           //   · 横向占位沿用此前逐轮调好的值（2.5 齿 = 9s、3.5 齿 = 13.5s），以数字槽中心 cx 居中；
           //   · 高度交给图形自身比例（`fit='width'`）——「复下波音」中带竖线，天生比「复上波音」高；
           //   · 垂直中心沿用 adj125 定下的 wy（= symY - 2s）。
+          // adj633：宽度算式抽到 `spaceLayout.mordentInkW`（倚音上的波音共用同一把尺子，见该函数）。
           // 旧矢量实现（斜上细线 0.7 / 斜下粗线 1.8、adj113~adj125）随之移除；
           // 需要退回旧画法时，从 git 历史取回该分支即可。
-          const half = (sym.endsWith('+') ? 9 * s : 5 * s) * (sym.endsWith('+') ? 0.75 : 0.9)
+          const w = mordentInkW(sym, s)
           const wy = symY - 2 * s
           parts.push(
             glyphMarkup(
               MODIFIER_GLYPHS[sym as ModifierGlyphKey],
-              { x: cx - half, y: wy, w: 2 * half, h: 0 },
+              { x: cx - w / 2, y: wy, w, h: 0 },
               'width',
               '#1b1b1b',
             ),
@@ -840,9 +871,14 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
         } else if (sym === 'shy' || sym === 'xhy') {
           // adj458（用户要求）：滑音改用**用户提供的矢量修饰符**（同上），不再手绘弧线 + 箭头。
           // adj479：摆放几何抽到 `layout/spaceLayout.ts` 的 `slideGlyphInk`（与布局占宽**同源**）——
-          // 渲染端按它的 `dx/dy/w/h` 放置（左缘贴数字右缘、按高度贴合 `fit='height'`），
-          // 布局端按同一份宽度给音符占位，多声部里不再压到相邻数字（用户报「与音符重叠」）。
-          const ink = slideGlyphInk(sym, size)
+          // 渲染端按它的 `dx/dy/w/h` 放置（按高度贴合 `fit='height'`），布局端按同一份宽度给音符占位。
+          // adj636b（用户要求）：记号改画在数字**左侧**（`dx` 为负）——"滑进本音"的记号写在音的左边；
+          //   再让开该音左侧已有的东西：变音角标占位、前倚音组占用的横向范围（否则会压在 `#` 或倚音上）。
+          //   高度/大小不变。
+          const accW = t.kind === 'note' && t.accidental ? accidentalBodyW(size) : 0
+          const gnSlide = t.kind === 'note' ? t.gracenotes : undefined
+          const graceL = gnSlide && !gnSlide.after ? 1 * s + graceSlotLayout(gnSlide.notes, size).width : 0
+          const ink = slideGlyphInk(sym, size, Math.max(accW, graceL))
           parts.push(
             glyphMarkup(
               MODIFIER_GLYPHS[sym as ModifierGlyphKey],

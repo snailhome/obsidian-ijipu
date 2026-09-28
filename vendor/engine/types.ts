@@ -195,20 +195,29 @@ export interface NoteToken {
 /**
  * adj632（用户要求）：**倚音音符专属**的修饰符编码——写在倚音括号内、该倚音之后，如 `6/[5/&tu]`。
  *
- * 为什么只放这 5 个：它们的画法在倚音尺度下仍然成立，且用户点名要求——
+ * 为什么放这些：它们的画法在倚音尺度下仍然成立——
  *  · `tu` / `die` / `da`：画在该倚音**正上方**（粗体 T / 又 / 扌，与主音符同款字形）；
+ *  · `sby` / `xby` / `sby+` / `xby+`（adj633，用户要求）：上/下/长上/长下波音，
+ *    画在该倚音**正上方**（与主音符同款矢量图形），墨迹宽按「波音 : 所属音符」同一比率随倚音等比缩小；
  *  · `shy` / `xhy`：画在该倚音**右侧**（矢量滑音图形，与主音符同款图形）。
- * 其余编码（力度、波音、颤音、独立括号 `&zkh/&ykh/&hx`……）**倚音不支持**：
+ * 其余编码（力度、颤音、独立括号 `&zkh/&ykh/&hx`……）**倚音不支持**：
  * 倚音本身只有主音符一半大小、且成组横向紧排，再堆这些记号必然与主音符自己的记号挤在一起。
  * 解析端对不支持的编码发告警（不静默丢弃），见 `parser/tokenizer.ts`。
  */
-export const GRACE_MARK_CODES = ['tu', 'die', 'da', 'shy', 'xhy'] as const
+export const GRACE_MARK_CODES = ['tu', 'die', 'da', 'shy', 'xhy', 'sby', 'xby', 'sby+', 'xby+'] as const
 
 /** 倚音支持的修饰符编码（见 `GRACE_MARK_CODES`） */
 export type GraceMarkCode = (typeof GRACE_MARK_CODES)[number]
 
 /** 画在倚音**正上方**的编码（其余已支持的编码一律画在**右侧**） */
-export const GRACE_MARK_ABOVE: readonly GraceMarkCode[] = ['tu', 'die', 'da']
+export const GRACE_MARK_ABOVE: readonly GraceMarkCode[] = ['tu', 'die', 'da', 'sby', 'xby', 'sby+', 'xby+']
+
+/**
+ * adj633：倚音上的**波音**编码（`GRACE_MARK_ABOVE` 里走矢量图形的那几个）。
+ * 渲染（画在正上方、随倚音等比缩小）与演奏（按倚音自己的时值展开波音短音）都要认这一组，
+ * 收在这里避免两处各写一份（同 `MORDENT_SYMBOLS` 之于主音符波音）。
+ */
+export const GRACE_MORDENT_CODES = ['sby', 'xby', 'sby+', 'xby+'] as const
 
 /** 倚音音符（[] 或 [h] 内，adj23）：可含高低音点 ' ,、变音 # $ =、减时线 /、修饰符 & 编码（adj632） */
 export interface GracenoteNote {

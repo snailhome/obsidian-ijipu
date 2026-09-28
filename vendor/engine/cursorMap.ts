@@ -5,7 +5,8 @@
  * 并渲染为 SVG 的 data-notepos（音符）/ data-cipos（歌词）属性。
  * 本模块在编辑器端复现该编号规则，实现：
  *  - codePosToNoteId：编辑器光标位置 → 音符 id（仅 Q 行内联动）
- *  - noteIdToCodePos：音符 id → 编辑器字符位置（点击谱面跳转）
+ *  - noteIdToCodePos：音符 id → 编辑器字符位置（点击谱面跳转；
+ *    adj634：可选落点 `'start'` 块首 / `'end'` 块末——预览区点击用块末，便于接着写修饰符）
  */
 import { tokenizeMusicLine, matchSegmentHead, findSegmentEnd } from './parser/tokenizer'
 import { isDurational, decodeSegmentNoteId, decodeTpNoteId, segmentNoteIndexBase, tpNoteIndexBase } from './layout/segments'
@@ -176,6 +177,42 @@ interface LineInfo {
   voice: number
 }
 
+/**
+ * adj634（用户要求）：**反向定位的落点**。
+ *
+ * `'start'` = 音符块的**首字符**（数字本身，旧行为，round-trip 断言用它）；
+ * `'end'` = 音符块的**末尾**——块内最后一个字符之后、与下一块之间的**空格之前**。
+ * 为什么需要 `'end'`：修饰符（`&sby`、注释、倚音括号）都跟在主音符**后面**，
+ * 点预览区音符后把光标落在块末更顺手（接着敲 `&` 就直接挂在这个音符上）。
+ */
+export type NoteBlockAnchor = 'start' | 'end'
+
+/** 紧邻 `t` 的下一个 token 的起点列；`t` 不在表里或已是最后一个时返回 null（= 直到段尾） */
+function nextPosAfter(tokens: readonly { pos: number }[], t: { pos: number }): number | null {
+  const idx = tokens.indexOf(t)
+  return idx >= 0 && idx + 1 < tokens.length ? tokens[idx + 1].pos : null
+}
+
+/**
+ * adj634：**块末列号**——块内最后一个字符之后、与下一块之间的空白**之前**。
+ *
+ * 取法：从「块后第一个 token 的起点」往前退掉空格/制表符；没有后继 token 时由调用方
+ * 传入**所属范围的终点**（整行内容末尾 / 临时段 `}` / 替谱段内容末尾）。
+ * 之所以不能直接用 `token.pos + token.raw.length`：源码里独立书写的增时线/附点
+ * （`5 - -`，格式化前的常见写法）会被 tokenizer 并入前一个音符但**不含中间的空格**，
+ * `raw` 的长度与源码跨距不等；而"块内不出现空格"是语法保证（块间以单空格分隔、
+ * 注释里的空格写作 `_`、倚音括号内的空格由 tokenizer 跳过），所以退空白一定落在块末。
+ *
+ * @param content 目标 token 所在的**坐标系文本**（token 的 `pos` 相对这段文本）
+ * @param start   目标块的起点（`token.pos`）
+ * @param nextPos 块后第一个 token 的起点；没有后继 token 时传所属范围的终点
+ */
+function blockEndIn(content: string, start: number, nextPos: number): number {
+  let end = Math.min(nextPos, content.length)
+  while (end > start && (content[end - 1] === ' ' || content[end - 1] === '\t')) end--
+  return end
+}
+
 function lineInfoOf(raw: string, m: RegExpExecArray): LineInfo {
   const leading = raw.length - raw.trimStart().length
   const trimmed = raw.trim()
@@ -296,8 +333,9 @@ export function codePosToNoteId(code: string, pos: number, indexToPage?: Map<num
   return target
 }
 
-/** notepos id → 编辑器字符位置；找不到返回 null */
-export function noteIdToCodePos(code: string, id: string): number | null {
+/** notepos id → 编辑器字符位置；找不到返回 null
+ *  @param anchor adj634：落点——`'start'` 音符块首字符（默认，旧行为）、`'end'` 音符块末尾（空格之前） */
+export function noteIdToCodePos(code: string, id: string, anchor: NoteBlockAnchor = 'start'): number | null {
   const parts = parseNoteId(id)
   if (!parts) return null
 
@@ -355,9 +393,13 @@ export function noteIdToCodePos(code: string, id: string): number | null {
     const spans = tpSpansOf(ly.info.body)
     const sp = spans[tp.variantIdx]
     if (!sp) return null
-    const t = durationalsOf(ly.info.body, sp)[tp.durSeq]
+    // adj634：段内音符的 token 位置相对**段内容**；`'end'` 也在这里按段内 token 序列取块末
+    const inner = ly.info.body.slice(sp.contentStart, sp.contentEnd)
+    const tpTokens = tokenizeMusicLine(inner, { line: 1, col: sp.contentStart }).tokens
+    const t = tpTokens.filter(isDurational)[tp.durSeq]
     if (!t) return null
-    return lineStartOf(ly.line) + ly.info.leading + ly.info.headLen + sp.contentStart + t.pos
+    const local = anchor === 'start' ? t.pos : blockEndIn(inner, t.pos, nextPosAfter(tpTokens, t) ?? inner.length)
+    return lineStartOf(ly.line) + ly.info.leading + ly.info.headLen + sp.contentStart + local
   }
 
   for (let i = 0; i < lines.length; i++) {
@@ -384,8 +426,16 @@ export function noteIdToCodePos(code: string, id: string): number | null {
       if (group === seg.group) {
         const open = tokens[seg.openIndex]
         if (open && open.kind === 'segment' && open.dir === 'open') {
-          const t = (open.children ?? []).filter(isDurational)[seg.durSeq]
-          if (t) return lineStart + leading + headLen + t.pos
+          const kids = open.children ?? []
+          const t = kids.filter(isDurational)[seg.durSeq]
+          // adj634：段内块末按**段内 token 序列**取；没有后继 token 时以配对的 `}` 为界
+          //（段内容结束在 `}` 之前，不能退到整行末尾——后面还可能有别的音符）
+          if (t) {
+            if (anchor === 'start') return lineStart + leading + headLen + t.pos
+            const close = tokens[seg.openIndex + 1]
+            const bound = close && close.kind === 'segment' && close.dir === 'close' ? close.pos : content.length
+            return lineStart + leading + headLen + blockEndIn(content, t.pos, nextPosAfter(kids, t) ?? bound)
+          }
         }
         return null
       }
@@ -399,7 +449,9 @@ export function noteIdToCodePos(code: string, id: string): number | null {
       // 目标音符在本行
       const local = parts.index - noteCounter
       const t = noteTokens[local]
-      return lineStart + leading + headLen + t.pos
+      // adj634：`'end'` = 块末（与后一块之间的空格之前）——修饰符都跟在主音符后面，落在块末更顺手
+      const col = anchor === 'start' ? t.pos : blockEndIn(content, t.pos, nextPosAfter(tokens, t) ?? content.length)
+      return lineStart + leading + headLen + col
     }
     noteCounter += noteTokens.length
     lineStart += raw.length + 1

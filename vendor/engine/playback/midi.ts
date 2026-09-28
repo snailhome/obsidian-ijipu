@@ -20,6 +20,13 @@ export function pitchToMidiNote(name: string): number {
   return (Number(m[3]) + 1) * 12 + semis[m[1]] + (m[2] === '#' ? 1 : 0)
 }
 
+/** MIDI 音符号 → 简谱音名（与 `pitchToMidiNote` 互逆；只用 `#` 记法，如 68 → G#4）——adj636 滑音逐半音阶梯用 */
+const MIDI_NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+export function midiToPitchName(midi: number): string {
+  const n = Math.round(midi)
+  return `${MIDI_NOTE_NAMES[((n % 12) + 12) % 12]}${Math.floor(n / 12) - 1}`
+}
+
 /** 乐器 id → GM 程序号（0 钢琴 / 16 风琴 / 48 弦乐 / 73 长笛 / 56 铜管 / 10 八音盒） */
 const GM_PROGRAMS: Record<InstrumentId, number> = {
   piano: 0,
