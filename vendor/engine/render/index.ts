@@ -39,11 +39,11 @@ import {
   TUPLET_NUM_RATIO,
   TUPLET_NUM_W_RATIO,
   TUPLET_LABEL_PAD,
-  GRACE_SIZE_RATIO,
-  GRACE_SLOT_RATIO,
-  GRACE_SLOT_RATIO_MULTI,
   GRACE_BEAM_GAP,
   GRACE_LINE_W,
+  // adj632b：倚音记号的尺寸尺子与数字墨迹度量（渲染与布局同源）
+  markFontSize,
+  DIGIT_INK_ASC_RATIO,
   // adj625：方框小节序号的几何（与布局端同源）
   BAR_NUMBER_BOTTOM_GAP,
   BAR_NUMBER_STROKE,
@@ -61,7 +61,7 @@ import {
 } from '../layout/spacing'
 import { tempoLabel } from '../parser/parser'
 import { parseInstrumentRef } from '../playback/instruments'
-import { graceAtTail, slideGlyphInk } from '../layout/spaceLayout'
+import { graceAtTail, graceSlideInk, graceSlotLayout, slideGlyphInk } from '../layout/spaceLayout'
 // adj458：波音/滑音改用**用户提供的矢量修饰符**（生成文件，见 scripts/gen-modifier-glyphs.mjs）
 import { MODIFIER_GLYPHS, glyphMarkup, type ModifierGlyphKey } from './modifierGlyphs'
 
@@ -586,13 +586,15 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
   //          后倚音移到这些时值元素**之后**（`3 -[h5/]` 的倚音画在 `-` 右侧、
   //          `3.[h5/]` 画在附点右侧），弧线终点同样落在该尾部元素右缘；
   //          无增时线也无附点的后倚音仍紧贴数字右上角（既有行为不变）。
+  //  adj632（用户要求）：**倚音自身也能挂修饰符**——写在括号内该倚音之后（如 `6/[5/&tu]`）：
+  //          `&tu`/`&die`/`&da` 画在该倚音**正上方**、`&shy`/`&xhy` 画在该倚音**右侧**，
+  //          尺寸一律随倚音字号（用户口径「与倚音等高」），字形/图形与主音符同款。
   if (t.kind === 'note' && t.gracenotes && t.gracenotes.notes.length > 0) {
     const gn = t.gracenotes
-    // ①倚音字号 = 主音符 × 0.4（下限 6×s 随字号等比，adj103）
-    const gSize = Math.max(6 * s, size * GRACE_SIZE_RATIO)
-    const gW = gSize * GRACE_SLOT_RATIO // 数字槽宽（同数字槽宽比例）
-    // adj103：多音符（≥2）数字间占宽缩小为 0.5×字号；单音无间距问题
-    const gapW = gn.notes.length >= 2 ? gSize * GRACE_SLOT_RATIO_MULTI : gW
+    // ①倚音字号 = 主音符 × GRACE_SIZE_RATIO（adj105 定为 0.5，下限 6×s 随字号等比，adj103）
+    // adj632：字号 / 数字槽宽 / 组内间距 / 各倚音槽位偏移收敛到 `graceSlotLayout`
+    // （与布局端同一份几何，见 spaceLayout.ts）
+    const { offs: gOffs, width: gGroupW, gSize, gW } = graceSlotLayout(gn.notes, size)
     const gs = gSize / 18 // 倚音缩放因子（高低音点/间距随倚音字号缩放）
     const mainTop = y - size * DIGIT_HEIGHT_RATIO // 主音符文本上端（adj100 = 第一条减时线位置）
     // ③ 数字底 = 首条减时线上方 0.5×s（adj101 下移 1.5px 后；间距随字号等比）
@@ -615,14 +617,10 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
     // 数字水平排列：前倚音从主音符左上角向左依次排；后倚音从锚点向右依次排
     // adj106：组右端（前倚音）固定与主音符留 1px×s——多音符时组内间距 gapW < 槽宽 gW，
     // 原公式按 gapW 排组尾会右移侵入主音符区造成重叠；后倚音原公式组左端已固定
-    const gxs: number[] = []
-    for (let gi = 0; gi < gn.notes.length; gi++) {
-      gxs.push(
-        gn.after
-          ? graceAnchorX + 1 * s + gi * gapW
-          : x - 1 * s - gW - (gn.notes.length - 1 - gi) * gapW,
-      )
-    }
+    // adj632：整组宽 = gGroupW（含末个倚音的右侧修饰墨迹），故前倚音的组**左缘**要再往左让出这段墨迹，
+    //         组右缘（最右墨迹）才仍停在「主音符数字左缘 − 1px×s」；后倚音左缘照旧贴锚点。
+    const gx0 = gn.after ? graceAnchorX + 1 * s : x - 1 * s - gGroupW
+    const gxs: number[] = gOffs.map((o) => gx0 + o)
     const gy = gBaseY // 同基线（水平排列）
     // 组范围（数字区）：组首 x、组尾 x
     const gx1 = Math.min(...gxs)
@@ -659,6 +657,43 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
       parts.push(
         `<text x="${gx}" y="${gy}" font-size="${gSize}" font-family="${font}" font-weight="bold" fill="#1b1b1b">${g.pitch}</text>`,
       )
+      // adj632（用户要求）：**倚音自身的修饰符**——写在该倚音数字之后（如 `6/[5/&tu]`）。
+      //   · `&tu`/`&die`/`&da`：画在该倚音**正上方**，字形与主音符同款（粗体 T / 又 / 扌；`die` 横向缩 0.75）；
+      //   · `&shy`/`&xhy`：画在该倚音**右侧**，与主音符同款矢量图形。
+      // adj632b（用户要求「记号要随倚音变小，别比倚音还大」）：字号 = **记号所属音符字号 × SYM_FONT_RATIO**
+      //   ——与主音符的 `&tu` 等同一把尺子（主音符 `SYM_FS = 10×s`，s = 音符字号/18），
+      //   故记号随倚音一起等比缩小；实测与用户示例图的 T:5 高度比吻合（见 spacing.ts 的 SYM_FONT_RATIO）。
+      const mfs = markFontSize(gSize)
+      for (const sym of g.symbols ?? []) {
+        if (sym === 'shy' || sym === 'xhy') {
+          // adj632b：右侧滑音的几何与主音符那套**不同**（用户口径：与倚音一样大 / 与倚音水平 / 紧跟倚音），
+          // 见 `graceSlideInk`——墨迹高 = 数字墨迹高、纵向与数字墨迹对齐、左缘贴数字墨迹右缘。
+          const ink = graceSlideInk(sym, gSize, String(g.pitch))
+          parts.push(
+            glyphMarkup(
+              MODIFIER_GLYPHS[sym],
+              { x: gx + ink.dx, y: gy + ink.dy, w: 0, h: ink.h },
+              'height',
+              '#1b1b1b',
+            ),
+          )
+        } else if (ABOVE_GLYPH[sym]) {
+          const mcx = gx + gW / 2 // 倚音数字槽中心
+          // 层顶与主音符同一套口径：有**高八度点**时从「最高高八度点层顶」起算（否则记号会压在点上），
+          // 无高八度点时从**数字墨迹顶**起算。底 = 层顶 − LAYER_GAP×gs；基线再抬一个 descender。
+          const mTop = g.octaveShift > 0 ? octaveTopY(gy, g.octaveShift, gSize) : gy - DIGIT_INK_ASC_RATIO * gSize
+          const my = mTop - LAYER_GAP * gs - mfs * DESC_RATIO
+          if (sym === 'die') {
+            parts.push(
+              `<text x="0" y="0" text-anchor="middle" transform="translate(${r1n(mcx)},${r1n(my)}) scale(0.75,1)" font-size="${r1n(mfs)}" font-weight="bold" font-family="${FONT_CN}" fill="#1b1b1b">${xmlEsc(ABOVE_GLYPH[sym])}</text>`,
+            )
+          } else {
+            parts.push(
+              `<text x="${r1n(mcx)}" y="${r1n(my)}" text-anchor="middle" font-size="${r1n(mfs)}" font-weight="bold" font-family="${FONT_CN}" fill="#1b1b1b">${xmlEsc(ABOVE_GLYPH[sym])}</text>`,
+            )
+          }
+        }
+      }
     }
     // ②减时线（跨组平行横线）：实际时值 +1 条；线宽 GRACE_LINE_W×s、间距 GRACE_BEAM_GAP×s
     for (let d = 0; d < maxDim; d++) {

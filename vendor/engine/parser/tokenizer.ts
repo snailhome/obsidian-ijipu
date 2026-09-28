@@ -8,7 +8,8 @@
  * 虚音符（(1) 括号紧贴数字，adj23）、倚音（1[65] 前 / 1[h65] 后，adj23）。
  * 块间空格规则（adj23）：音符块与音符块、音符块与小节线块之间恰好一个空格。
  */
-import type { BarlineMark, BarlineType, GracenoteNote, MusicToken, SourcePos } from '../types'
+import type { BarlineMark, BarlineType, GraceMarkCode, GracenoteNote, MusicToken, SourcePos } from '../types'
+import { GRACE_MARK_CODES } from '../types'
 import { err } from './errors'
 import type { ParseError } from '../types'
 
@@ -146,7 +147,12 @@ export function tokenizeMusicLine(
   const HINT_HAIRPIN_SPAN =
     '起止之间至少要有音符：`1 2 3 < 4 ! 5`；`!` 也可写在该音符的增时线/附点之后，如 `1 2 3 < 4- ! 5`、`1 2 3 < 4. ! 5`'
   const HINT_AMP = '`&` 后要跟修饰符编码（字母），如 `&tr` 颤音、`&mp` 力度、`&tu` 吐音；独立标记 `&zkh`/`&ykh`/`&hx` 两侧各留一个空格'
-  const HINT_GRACE = '倚音用 `[` `]` 紧贴音符成对书写，括号内只允许高低音点 `\'` `,`、变音 `#` `$` `=`、减时线 `/`：前倚音 `1[65]`、后倚音 `1[h6/5]`'
+  const HINT_GRACE =
+    '倚音用 `[` `]` 紧贴音符成对书写，括号内只允许高低音点 `\'` `,`、变音 `#` `$` `=`、减时线 `/`、修饰符 `&tu`/`&die`/`&da`/`&shy`/`&xhy`：前倚音 `1[65]`、后倚音 `1[h6/5]`、带吐音的倚音 `6/[5/&tu]`'
+  // adj632：倚音专属修饰符——不支持时的提示（区别于"倚音内乱写字"的通用提示）
+  const HINT_GRACE_MARK =
+    '倚音只支持 `&tu` 吐音、`&die` 叠音、`&da` 打音（画在该倚音**正上方**）与 `&shy` 上滑音、`&xhy` 下滑音（画在该倚音**右侧**）；' +
+    '编码要紧跟在**该倚音数字之后**，如 `6/[5/&tu]`、`3[2/&shy]`'
   const HINT_SLUR_ATTACHED =
     '连音线 `(` 与音符之间**应有空格**（与虚音符 `(1)` 区分）；`(` 后的 `+`/`-` 是**连音线的高度级数**（`(+` 抬升、`(-` 降低，每级 2px），**不是**前一个音符的增时线——要给音符增时请写在音符旁，如 `1- (- 2 3)`'
   // adj427：临时段提示文案（adj629：加 `{tp}` 替谱——它只写在歌词行里）
@@ -777,6 +783,32 @@ export function tokenizeMusicLine(
               }
             }
             notes.push(gn)
+          } else if (ch === '&') {
+            // adj632（用户要求）：倚音自身也能挂修饰符——写在该倚音数字之后，如 `6/[5/&tu]`。
+            // 编码收法与主音符一致（连续字母 + 可选尾部 `+`），但**只认** GRACE_MARK_CODES；
+            // 不支持的编码发告警而非静默丢弃（用户写错编码时看得见），且必须挂在某个倚音之后。
+            let ek = k + 1
+            while (ek < n && /[a-zA-Z]/.test(content[ek])) ek++
+            if (content[ek] === '+') ek++
+            const code = content.slice(k + 1, ek)
+            const host = notes[notes.length - 1]
+            if (ek === k + 1) {
+              errors.push(
+                err('倚音内的 `&` 后要跟修饰符编码', { line: pos.line, col: pos.col + k }, 'warning', HINT_GRACE_MARK),
+              )
+            } else if (!(GRACE_MARK_CODES as readonly string[]).includes(code)) {
+              errors.push(
+                err(`倚音不支持修饰符 "&${code}"`, { line: pos.line, col: pos.col + k }, 'warning', HINT_GRACE_MARK),
+              )
+            } else if (!host) {
+              errors.push(
+                err(`倚音修饰符 "&${code}" 要写在倚音音符之后`, { line: pos.line, col: pos.col + k }, 'warning', HINT_GRACE_MARK),
+              )
+            } else {
+              if (!host.symbols) host.symbols = []
+              host.symbols.push(code as GraceMarkCode)
+            }
+            k = ek
           } else {
             errors.push(
               err('倚音内不支持的符号', { line: pos.line, col: pos.col + k }, 'warning', HINT_GRACE),

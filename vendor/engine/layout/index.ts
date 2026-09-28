@@ -29,9 +29,9 @@ import type {
   ScorePageMeta,
   VoiceBlock,
 } from '../types'
-import { DIGIT_HEIGHT_RATIO, LAYER_GAP, SLUR_W, octaveTopY, BRACKET_PAD, H_GAP, noteScaleOf, GRACE_SIZE_RATIO, GRACE_SLOT_RATIO, GRACE_SLOT_RATIO_MULTI, VOLTA_BAR_GAP, VOLTA_RAISE, DYN_HALF_H, barlinePad, barlineTotalW, DOT_AFTER_DIGIT_GAP, DOT_R, SEGMENT_ROW_GAP_DEFAULT, SEGMENT_LAYER_YSCALE, TP_BRACKET_GAP, barNumberGapNeed } from './spacing'
+import { DIGIT_HEIGHT_RATIO, LAYER_GAP, SLUR_W, octaveTopY, BRACKET_PAD, H_GAP, noteScaleOf, VOLTA_BAR_GAP, VOLTA_RAISE, DYN_HALF_H, barlinePad, barlineTotalW, DOT_AFTER_DIGIT_GAP, DOT_R, SEGMENT_ROW_GAP_DEFAULT, SEGMENT_LAYER_YSCALE, TP_BRACKET_GAP, barNumberGapNeed } from './spacing'
 // adj284：空间优先布局的度量（本体宽 / 时值拆分 / 非时值元素间距）
-import { splitNoteDur, noteBodyW, augBodyW, dotBodyW, accidentalBodyW, markBodyW, digitSlotW, hxBodyW, graceAtTail, nonDurGap, slideExtraW } from './spaceLayout'
+import { splitNoteDur, noteBodyW, augBodyW, dotBodyW, accidentalBodyW, markBodyW, digitSlotW, hxBodyW, graceAtTail, graceSlotLayout, nonDurGap, slideExtraW } from './spaceLayout'
 import { hairpinEvents, resolveHairpins, type DynEvent, type NoteAnchors } from './hairpins'
 // adj303：乐器名标注需要用 parseInstrumentRef / 库名（@乐器名 / @@ 后下一个音符）
 import { parseInstrumentRef, INSTRUMENT_LIB_NAMES } from '../playback/instruments'
@@ -157,13 +157,12 @@ const halfDigitW = (noteSize: number) => noteSize * 0.31
  * 倚音字号 = 主音符 × 0.5（adj105），每音占宽 0.62×0.5×noteSize；
  * 多音符（≥2）数字间距缩小为 0.5×0.5×noteSize（adj103，与渲染一致）；
  * 组内 n 个倚音线性叠加 + 左右各 2px 间距（共 4px）。
+ * adj632：槽位几何（含倚音自身修饰符 `&shy`/`&xhy` 向右伸出的墨迹）收敛到
+ * `spaceLayout.graceSlotLayout`——渲染端按同一份几何摆放，避免"图形压到主音符/后一个倚音"。
  */
 function graceGroupW(t: Extract<MusicToken, { kind: 'note' }> | undefined, noteSize: number): number {
   if (!t || t.kind !== 'note' || !t.gracenotes || t.gracenotes.notes.length === 0) return 0
-  const n = t.gracenotes.notes.length
-  const gW = noteSize * GRACE_SIZE_RATIO * GRACE_SLOT_RATIO // 单音槽宽
-  const gapW = n >= 2 ? noteSize * GRACE_SIZE_RATIO * GRACE_SLOT_RATIO_MULTI : gW // 多音符间距缩小
-  return (n - 1) * gapW + gW + 4 // 组总宽 + 4px 间距（左右各 2px）
+  return graceSlotLayout(t.gracenotes.notes, noteSize).width + 4 // 组总宽 + 4px 间距（左右各 2px）
 }
 /**
  * 紧贴数字的倚音占位宽（前倚音，以及无增时线/附点的后倚音）。

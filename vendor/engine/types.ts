@@ -192,7 +192,25 @@ export interface NoteToken {
   raw: string
 }
 
-/** 倚音音符（[] 或 [h] 内，adj23）：可含高低音点 ' ,、变音 # $ =、减时线 / */
+/**
+ * adj632（用户要求）：**倚音音符专属**的修饰符编码——写在倚音括号内、该倚音之后，如 `6/[5/&tu]`。
+ *
+ * 为什么只放这 5 个：它们的画法在倚音尺度下仍然成立，且用户点名要求——
+ *  · `tu` / `die` / `da`：画在该倚音**正上方**（粗体 T / 又 / 扌，与主音符同款字形）；
+ *  · `shy` / `xhy`：画在该倚音**右侧**（矢量滑音图形，与主音符同款图形）。
+ * 其余编码（力度、波音、颤音、独立括号 `&zkh/&ykh/&hx`……）**倚音不支持**：
+ * 倚音本身只有主音符一半大小、且成组横向紧排，再堆这些记号必然与主音符自己的记号挤在一起。
+ * 解析端对不支持的编码发告警（不静默丢弃），见 `parser/tokenizer.ts`。
+ */
+export const GRACE_MARK_CODES = ['tu', 'die', 'da', 'shy', 'xhy'] as const
+
+/** 倚音支持的修饰符编码（见 `GRACE_MARK_CODES`） */
+export type GraceMarkCode = (typeof GRACE_MARK_CODES)[number]
+
+/** 画在倚音**正上方**的编码（其余已支持的编码一律画在**右侧**） */
+export const GRACE_MARK_ABOVE: readonly GraceMarkCode[] = ['tu', 'die', 'da']
+
+/** 倚音音符（[] 或 [h] 内，adj23）：可含高低音点 ' ,、变音 # $ =、减时线 /、修饰符 & 编码（adj632） */
 export interface GracenoteNote {
   /** 音级 1-7 */
   pitch: 1 | 2 | 3 | 4 | 5 | 6 | 7
@@ -202,6 +220,11 @@ export interface GracenoteNote {
   accidental: '#' | '$' | '=' | null
   /** 减时线数量（/） */
   diminishCount: number
+  /**
+   * adj632：依附在**本倚音**上的修饰符编码（`&tu`/`&die`/`&da`/`&shy`/`&xhy`）。
+   * 只有写了才存在——旧谱面的 `gracenotes` 形状保持不变。
+   */
+  symbols?: GraceMarkCode[]
 }
 
 /** 休止符：0 可见，8 隐藏（占空间不显示） */

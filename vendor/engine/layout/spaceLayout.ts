@@ -12,7 +12,7 @@
  * 供后续 P2（每元素时值宽度分配/放置）、P3（断行）、P4（layoutScore 分流）、
  * P5（多声部）复用。均为纯函数，零 React/DOM 依赖。
  */
-import { DOT_R_DOT, BRACKET_PAD, noteScaleOf } from './spacing'
+import { DOT_R_DOT, BRACKET_PAD, GRACE_SIZE_RATIO, GRACE_SLOT_RATIO, GRACE_SLOT_RATIO_MULTI, GRACE_MARK_GAP, GRACE_MARK_HUG_GAP, DIGIT_INK_ASC_RATIO, digitInkH, digitInkW, noteScaleOf } from './spacing'
 import { tokenDuration } from '../duration'
 // adj479：滑音图形的宽高比来自矢量修饰符表（由 scripts/gen-modifier-glyphs.mjs 生成的数据文件）——
 // 只共享**图形度量**，不依赖 render 的绘制逻辑
@@ -277,4 +277,80 @@ interface GraceShape {
 export function graceAtTail(t: GraceShape | undefined): boolean {
   if (!t || !t.gracenotes || t.gracenotes.notes.length === 0) return false
   return t.gracenotes.after && (t.augmentCount > 0 || t.dots > 0)
+}
+
+// ============================================================
+// 倚音组槽位几何（adj632/adj632b：`&tu`/`&die`/`&da` 上方、`&shy`/`&xhy` 右侧）
+// ============================================================
+
+/**
+ * adj632b：倚音**右侧**修饰符（`&shy` 上滑音 / `&xhy` 下滑音）的**墨迹几何**——渲染与布局共用。
+ *
+ * 与主音符那套 `slideGlyphInk` **不是一回事**（adj632b 用户口径明确三条）：
+ *  · **大小与倚音一样大** ⇒ 墨迹高 = 倚音**数字墨迹**高（`digitInkH`）；
+ *  · **与倚音水平** ⇒ 墨迹纵向范围与数字墨迹**完全对齐**（同顶同底，而非主音符那套"偏数字上半截"）；
+ *  · **紧跟倚音** ⇒ 左缘贴数字**墨迹**右缘（不是数字槽右缘，槽比墨迹宽 0.1~0.27em）+ 一点净距。
+ *
+ * 返回相对量：`dx` 相对倚音**数字左缘**、`dy` 相对倚音**基线**（向上为负）；`w`/`h` 为墨迹宽高。
+ * @param digit 该倚音的数字字符（1-7）——逐数字墨迹宽不同（`1` 最窄），"紧跟"要按各自的墨迹算
+ */
+export function graceSlideInk(sym: 'shy' | 'xhy', gSize: number, digit: string): { dx: number; dy: number; w: number; h: number } {
+  const h = digitInkH(gSize)
+  return {
+    dx: digitInkW(digit, gSize) + GRACE_MARK_HUG_GAP * (gSize / 18),
+    dy: -DIGIT_INK_ASC_RATIO * gSize,
+    w: h * glyphInkAspect(MODIFIER_GLYPHS[sym]),
+    h,
+  }
+}
+
+/** 单个倚音的**最右墨迹**（从该倚音数字左缘算起；无右侧修饰时 = 数字槽右缘 `gW`） */
+function graceRightExtent(
+  note: { pitch?: number; symbols?: readonly string[] },
+  gSize: number,
+  gW: number,
+): number {
+  let r = gW
+  for (const sym of note.symbols ?? []) {
+    if (sym === 'shy' || sym === 'xhy') {
+      const ink = graceSlideInk(sym, gSize, String(note.pitch ?? ''))
+      r = Math.max(r, ink.dx + ink.w)
+    }
+  }
+  return r
+}
+
+/**
+ * adj632：倚音组内**每个倚音的槽位几何**——渲染（摆放）与布局（占宽）的**唯一来源**。
+ *
+ * 为什么抽到这里：倚音右侧修饰符（`&shy`/`&xhy`）会把墨迹伸出数字槽右缘，
+ * 而倚音组的右缘是**贴住主音符左缘**的（前倚音）——不出占宽就会压到主音符数字上；
+ * 多倚音时还会压到后一个倚音。与 adj479 同一条教训：一份几何两处消费，绝不各算一套。
+ *
+ * 返回（长度与 `notes` 一致的数组）：
+ *  · `offs[i]`：第 i 个倚音**数字左缘**相对「组首数字左缘」的偏移；
+ *  · `width`：组首数字左缘 → 组内**最右墨迹**（含末个倚音的右侧修饰）的宽；
+ *  · `gSize`/`gW`/`gapW`：倚音字号 / 数字槽宽 / 无修饰时的相邻槽位间距（渲染端还要用）。
+ *
+ * 间距规则：无右侧修饰时**原样沿用** adj103 的紧凑间距 `GRACE_SLOT_RATIO_MULTI`（多倚音时比槽宽还窄，
+ * 观感紧凑且是既有行为）；只有该倚音**确有**右侧修饰，才把下一个槽位推到「最右墨迹 + GRACE_MARK_GAP」之外。
+ */
+export function graceSlotLayout(
+  notes: readonly { pitch?: number; symbols?: readonly string[] }[],
+  noteSize: number,
+): { offs: number[]; width: number; gSize: number; gW: number; gapW: number } {
+  const gSize = noteSize * GRACE_SIZE_RATIO
+  const gW = gSize * GRACE_SLOT_RATIO
+  const gapW = notes.length >= 2 ? gSize * GRACE_SLOT_RATIO_MULTI : gW
+  const gs = gSize / 18 // 倚音缩放因子（同渲染端）
+  const offs: number[] = []
+  let off = 0
+  for (let i = 0; i < notes.length; i++) {
+    offs.push(off)
+    const r = graceRightExtent(notes[i], gSize, gW)
+    off += r > gW ? Math.max(gapW, r + GRACE_MARK_GAP * gs) : gapW
+  }
+  const last = notes.length - 1
+  const width = last < 0 ? 0 : offs[last] + graceRightExtent(notes[last], gSize, gW)
+  return { offs, width, gSize, gW, gapW }
 }

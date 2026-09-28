@@ -244,6 +244,55 @@ export const GRACE_SLOT_RATIO_MULTI = 0.5
 export const GRACE_BEAM_GAP = 1.2
 /** 倚音减时线/连接弧线线宽设计值（px，adj97；实际 ×s） */
 export const GRACE_LINE_W = 0.6
+/**
+ * adj632：倚音**右侧**修饰符（`&shy`/`&xhy`）的墨迹与「下一个倚音数字」之间的净距（px，实际 ×倚音缩放因子 gs）。
+ * 只在「该倚音确有右侧修饰」时才把下一个槽位推开——无修饰时仍走 adj103 的紧凑间距 `GRACE_SLOT_RATIO_MULTI`。
+ */
+export const GRACE_MARK_GAP = 1
+
+// ---- adj632b：倚音修饰符的**尺寸尺子**（用户要求：记号要随倚音变小，别比倚音还大） ----
+/**
+ * **修饰符字号 / 记号所属音符字号**的设计比例 = `10 / 18`。
+ *
+ * 主音符的 `&tu`/`&die`/`&da` 就是按它算字号（渲染端 `SYM_FS = Math.round(10 × s)`，
+ * 那个 `round` 是绘制取整、不是设计值）。倚音上的同名记号**沿用同一把尺子**：
+ * `倚音记号字号 = 倚音字号 × SYM_FONT_RATIO` —— 记号随倚音一起等比缩小。
+ *
+ * 依据：用户示例图（`6/[5/&tu]`）实测 T 墨迹高 13px、倚音数字 **5** 墨迹高 24px，比值 **0.542**；
+ * 按本式算（T 墨迹 0.76em ÷ 数字墨迹 0.785em × 10/18）得 **0.538**，与示例图逐像素吻合。
+ * （adj632 首版把字号取成 `gSize`——CJK 字形「又/扌」几乎填满字身框，看起来就比倚音数字还大。）
+ */
+export const SYM_FONT_RATIO = 10 / 18
+
+/**
+ * adj632b：**数字墨迹**的字形度量（YaHei 粗体 Chrome `measureText` 实测，100px 基准；随字号等比）。
+ *
+ * 为什么要量墨迹而不是用数字槽：用户对倚音右侧滑音提了三条——
+ * 「大小与倚音音符一样大 / 与倚音音符水平 / 紧跟倚音音符」，
+ * 三条都得按**数字墨迹**算（槽宽 0.62em 比墨迹宽 0.1~0.27em，用槽算就会"离得远"、纵向对不齐）。
+ * 字体是用户可配的 `shuzi_font`，这里按默认无衬线栈的实测值近似（同 `META_GLYPH_W` 的既有做法）。
+ */
+export const DIGIT_INK_ASC_RATIO = 0.765
+/** 数字墨迹 descent / 字号（实测 0~0.02，取 0.02） */
+export const DIGIT_INK_DESC_RATIO = 0.02
+/** 逐数字墨迹宽 / 字号（实测 1→0.35、2→0.52、3→0.49、4→0.60、5→0.48、6→0.54、7→0.54） */
+export const DIGIT_INK_W_RATIO: Record<string, number> = {
+  '1': 0.35,
+  '2': 0.52,
+  '3': 0.49,
+  '4': 0.6,
+  '5': 0.48,
+  '6': 0.54,
+  '7': 0.54,
+}
+/** 数字**墨迹高** = 数字顶到底（asc + desc）× 字号；默认字号下 ≈ 0.785em */
+export const digitInkH = (noteSize: number) => (DIGIT_INK_ASC_RATIO + DIGIT_INK_DESC_RATIO) * noteSize
+/** 数字**墨迹宽**（按具体数字取表；未知回退 0.48） */
+export const digitInkW = (digit: string, noteSize: number) => (DIGIT_INK_W_RATIO[digit] ?? 0.48) * noteSize
+/** 倚音修饰符字号 = 记号所属音符字号 × `SYM_FONT_RATIO` */
+export const markFontSize = (noteSize: number) => noteSize * SYM_FONT_RATIO
+/** adj632b：倚音右侧滑音记号**紧贴**数字墨迹右缘的净距（px，× 倚音缩放因子 gs） */
+export const GRACE_MARK_HUG_GAP = 1
 
 // ---- 临时叠加段（adj428：{bz … } / {dsb … } 上下层纵向间距；adj629：加 {tp … }）----
 /**
