@@ -10,6 +10,12 @@
  *  - **保存为插件默认**（次）：写入插件设置，作为所有未自带设置谱面的本库全局默认
  *
  * 对话框只改自己这份草稿，取消即丢弃（与 iJipu「关闭未保存则恢复快照」一致）。
+ *
+ * 用户要求（本轮，插件侧 UI）：
+ *  ① 字段组改成**页签**（页面 / 字体 / 行距 / 渲染）——与「设置 → iJipu」的多页签同款，
+ *     一屏只看一组、少滚动；
+ *  ② 原先挂在**预览工具条**上的「未随谱携带 N 项」挪到这里，紧跟「谱面自带设置 N 项」那块展示
+ *     （工具条只留可点的按钮，提示统一进对话框）。
  */
 import { App, Modal, Setting } from 'obsidian'
 import { defaultConfigForReset, type PageConfig } from '@ijipu/engine'
@@ -25,12 +31,21 @@ export interface ConfigDialogOptions {
   sourceFields: string[]
   /** 与 `sourceFields` 对应的取值（用于列表展示） */
   sourceValues: Record<string, unknown>
+  /**
+   * 用户要求：**未随谱携带**的项（值来自插件设置 / 笔记 frontmatter，源码里没写）——
+   * 引擎 `configCarryover(code, effective).missing` 的原样透传；空数组 = 已随谱携带。
+   */
+  carryover: { key: string; value: unknown }[]
   /** 关闭后回调（点「取消」不触发） */
   onApply: (target: ConfigTarget, config: PageConfig) => void
 }
 
 export class ConfigDialog extends Modal {
   private draft: PageConfig
+  /** 页签：四组字段各一页 + 一页「说明」（与「设置 → iJipu」的多页签同款） */
+  private readonly tabs = [...GROUPS, '说明'] as const
+  /** 当前页签（会话内保持：切页签 / 恢复默认重画后都停在同一页） */
+  private activeTab: (typeof this.tabs)[number] = GROUPS[0]
 
   constructor(
     app: App,
@@ -53,17 +68,6 @@ export class ConfigDialog extends Modal {
       cls: 'ijipu-config-hint-sub',
       text: '下面显示的是**这一份谱的生效值**（含笔记 frontmatter 与源内 `# jps-config`），与「设置 → iJipu」里的**本库全局默认**不是同一层——两者值不同是正常的。',
     })
-    hint.createDiv({
-      cls: 'ijipu-config-hint-sub',
-      text:
-        this.opts.sourceFields.length > 0
-          ? '本谱已自带 # jps-config 行：「保存到谱面」只更新**本次改动**（原位更新，优先级最高）；要把插件设置 / frontmatter 的差异也写进去（分享给他人显示一致）用「随谱固化」。'
-          : '「保存到谱面」只会写入**本次改动**（不把插件设置 / frontmatter 顺手烧进谱面）；要把当前生效的全部非默认项写进谱面（复制给他人也一模一样）用「随谱固化」。',
-    })
-    hint.createDiv({
-      cls: 'ijipu-config-hint-sub',
-      text: '「保存为插件默认」= 只把**你在本对话框里改动过的项**写进本库全局默认（不会把这份谱 frontmatter / 源内的值顺手变成全库默认）。',
-    })
 
     // 「谱面自带设置 N 项」——原先挂在谱面工具栏上（挤占按钮位置、详情只能悬停看），
     // 移到对话框里：既能一眼看到哪几项、值是多少，也正好解释下面控件的初值从哪来。
@@ -81,20 +85,47 @@ export class ConfigDialog extends Modal {
       }
     }
 
-    for (const group of GROUPS) {
-      const items = DEFS.filter((d) => d.group === group)
-      if (items.length === 0) continue
-      new Setting(contentEl).setName(group).setHeading()
-      for (const def of items) {
-        // adj629q：嵌套字段（`segmentRowGap.bz` 等）按子项取值/写值，同一字段的其它子项保留
-        const row = new Setting(contentEl)
-          .setName(def.label)
-          .setDesc(def.sub ? `frontmatter 键：${def.key}（子项 ${def.sub}）` : `frontmatter 键：${def.key}`)
-        addConfigControl(row, def, readDef(this.draft, def), (_k, v) => {
-          writeDef(this.draft, def, v)
-        })
+    // adj480（用户要求：从预览工具条挪到这里、紧跟上面那块）：**分享保真提示**——
+    // 本谱有"非默认值来自插件设置 / frontmatter、但没随谱携带"的项：
+    // 在 Obsidian 里分享整篇笔记时这些值会跟着走，但只复制代码块给他人（或在 iJipu 应用里打开）就不一致。
+    if (this.opts.carryover.length > 0) {
+      const box = contentEl.createDiv({ cls: 'ijipu-config-src ijipu-config-src--carry' })
+      box.createDiv({
+        cls: 'ijipu-config-src-head',
+        text: `未随谱携带 ${this.opts.carryover.length} 项（只在本库生效，源码里没有写）`,
+      })
+      const list = box.createEl('ul', { cls: 'ijipu-config-src-list' })
+      for (const m of this.opts.carryover) {
+        const def = DEFS.find((d) => (d.key as string) === m.key)
+        list.createEl('li', { text: `${def ? def.label : m.key}：${m.value === undefined ? '—' : String(m.value)}` })
       }
+      box.createDiv({
+        cls: 'ijipu-config-hint-sub',
+        text: '要把这份谱（或只把代码块）复制给别人也显示一致，用下面的「随谱固化（分享用）」。',
+      })
     }
+
+    // —— 字段组页签（用户要求：与「设置 → iJipu」的多页签同款，一屏只看一组）——
+    //   外加一页「说明」：把三个保存去向的差别讲清楚（原先挤在对话框顶部，现在各归其位）
+    const tabsEl = contentEl.createDiv({ cls: 'ijipu-config-tabs' })
+    const panel = contentEl.createDiv({ cls: 'ijipu-config-panel' })
+    const buttons = new Map<string, HTMLButtonElement>()
+    const paintActive = (): void => {
+      for (const [id, btn] of buttons) btn.toggleClass('is-active', id === this.activeTab)
+      panel.empty()
+      if (this.activeTab === '说明') this.renderAbout(panel)
+      else this.renderGroup(panel, this.activeTab)
+    }
+    for (const id of this.tabs) {
+      const btn = tabsEl.createEl('button', { cls: 'ijipu-settings-tab', text: id })
+      btn.setAttr('type', 'button')
+      btn.onclick = () => {
+        this.activeTab = id
+        paintActive()
+      }
+      buttons.set(id, btn)
+    }
+    paintActive()
 
     const footer = contentEl.createDiv({ cls: 'ijipu-config-footer' })
     const mk = (text: string, cls: string, fn: () => void): HTMLButtonElement => {
@@ -130,11 +161,43 @@ export class ConfigDialog extends Modal {
     })
   }
 
+  /** 「说明」页签：三个保存去向的差别（原先挤在对话框顶部，现在各归其位） */
+  private renderAbout(host: HTMLElement): void {
+    const note = (text: string): void => {
+      host.createDiv({ cls: 'ijipu-settings-note', text })
+    }
+    note(
+      this.opts.sourceFields.length > 0
+        ? '**保存到谱面**：本谱已自带 `# jps-config` 行 ⇒ 只更新**本次改动**（原位更新，优先级最高）。'
+        : '**保存到谱面**：只写入**本次改动**——不会把插件设置 / frontmatter 的值顺手烧进谱面。',
+    )
+    note('**随谱固化（分享用）**：把当前生效的**全部非默认项**写进谱面（差量）⇒ 把这份谱或只把代码块复制给别人（或在 iJipu 应用里打开）都显示一致。')
+    note('**保存为插件默认**：只把**你在本对话框里改动过的项**写进本库全局默认（不会把这份谱 frontmatter / 源内的值顺手变成全库默认）。')
+  }
+
+  /** 渲染**当前页签**那一组字段（草稿是对话框级状态，切页签不丢改动） */
+  private renderGroup(host: HTMLElement, group: string): void {
+    const items = DEFS.filter((d) => d.group === group)
+    if (items.length === 0) {
+      host.createDiv({ cls: 'ijipu-settings-empty', text: '（这一组还没有设置项）' })
+      return
+    }
+    for (const def of items) {
+      // adj629q：嵌套字段（`segmentRowGap.bz` 等）按子项取值/写值，同一字段的其它子项保留
+      const row = new Setting(host)
+        .setName(def.label)
+        .setDesc(def.sub ? `frontmatter 键：${def.key}（子项 ${def.sub}）` : `frontmatter 键：${def.key}`)
+      addConfigControl(row, def, readDef(this.draft, def), (_k, v) => {
+        writeDef(this.draft, def, v)
+      })
+    }
+  }
+
   onClose(): void {
     this.contentEl.empty()
   }
 
-  /** 恢复默认后重画（草稿已换，控件需按新值重建） */
+  /** 恢复默认后重画（草稿已换，控件需按新值重建；当前页签保持不变） */
   private refresh(): void {
     this.contentEl.empty()
     this.onOpen()

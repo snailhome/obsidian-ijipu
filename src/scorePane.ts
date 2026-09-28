@@ -156,18 +156,10 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
           .join('\n')}`,
       )
     }
-    // adj480：**分享保真提示**——本谱有"非默认值来自插件设置/frontmatter、但没随谱携带"的项：
-    // 在 Obsidian 里分享整篇笔记时这些值会跟着走，但只复制代码块给他人（或在 iJipu 应用里打开）就会不一致。
-    const carryover = configCarryover(host.getSource(), resolved.config)
-    if (!carryover.ok) {
-      const badge = toolbar.createSpan({ cls: 'ijipu-fm-badge', text: `未随谱携带 ${carryover.missing.length} 项` })
-      badge.setAttr(
-        'title',
-        `这些设置只在本库生效（来自插件设置 / 笔记 frontmatter），谱面源码里没有写：\n${carryover.missing
-          .map((m) => `${m.key} = ${String(m.value)}`)
-          .join('\n')}\n\n要把这份谱（或只把代码块）复制给别人也显示一致，请在「设置」里点「随谱固化」。`,
-      )
-    }
+    // 用户要求（本轮）：**工具条只留按钮**——「谱面自带设置 N 项」与「未随谱携带 N 项」两块提示
+    // 都搬进「⚙ 设置」对话框（前者原有、后者本轮从工具条挪过去，放在它下面）；
+    // 未随谱携带的明细在点开对话框时用 `configCarryover(...)` 现算（见下面 cfgBtn 的点击回调）。
+    // 工具条这里保留的只有 frontmatter 徽标（它解释的是"值从哪来"，与谱面自带设置并列还看得见）。
 
     // —— 试听（播放/停止 + RAF 驱动色块跟随，与 iJipu 一致）——
     let playing: { cancel: () => void; totalMs: number; track: PlayheadSeg[] } | null = null
@@ -305,11 +297,15 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       cfgBtn.appendChild(settingsIcon(15))
       cfgBtn.createSpan({ cls: 'ijipu-btn-label', text: '设置' })
       cfgBtn.addEventListener('click', () => {
+        // 用户要求：**未随谱携带 N 项**从工具条挪进本对话框（紧跟「谱面自带设置 N 项」展示），
+        // 明细在这里现算：非默认、源码里又没写的项（值只来自插件设置 / 笔记 frontmatter）。
+        const carry = configCarryover(host.getSource(), resolved.config)
         new ConfigDialog(plugin.app, {
           current: resolved.config,
           // 「谱面自带设置 N 项」不再挂工具栏，改写进对话框（含具体是哪几项、值是什么）
           sourceFields: resolved.sourceFields,
           sourceValues: resolved.config as unknown as Record<string, unknown>,
+          carryover: carry.ok ? [] : carry.missing,
           onApply: (target, next) => {
             if (target === 'plugin') {
               /**

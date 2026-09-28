@@ -334,6 +334,56 @@ console.log('[3g] adj631 设置面板：多页签 / 收藏音色分类列表 / �
       /from !== 'settingsTab'/.test(mainSrc) && /saveSettings\(\{ from: 'settingsTab' \}\)/.test(settingsSrc))
   check('⑥e 对话框写清"生效值 ≠ 本库全局默认"（用户报两边不同步的口径说明）',
     /这一份谱的生效值/.test(String(readFileSync('src/configDialog.ts', 'utf8'))))
+
+  // ---- ⑦ 用户要求（插件侧 UI）：排版对话框**页签化** + 「未随谱携带 N 项」从工具条移入对话框 ----
+  const dlgSrc = String(readFileSync('src/configDialog.ts', 'utf8'))
+  // 断言前先剥注释：注释里**故意写了**被禁用的旧写法/说明（同 E-2026-237 的坑）
+  const stripComments = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const paneCode = stripComments(paneSrc)
+  check('⑦a 排版对话框按页签组织（页面/字体/行距/渲染 + 说明，与设置页签同款样式）',
+    /readonly tabs = \[\.\.\.GROUPS, '说明'\]/.test(dlgSrc) &&
+      /ijipu-config-tabs/.test(dlgSrc) && /ijipu-settings-tab/.test(dlgSrc) &&
+      /toggleClass\('is-active'/.test(dlgSrc) && /\.ijipu-config-tabs \{/.test(cssSrc),
+    `tabs=${/readonly tabs = \[\.\.\.GROUPS, '说明'\]/.test(dlgSrc)} cls=${/ijipu-config-tabs/.test(dlgSrc)}`)
+  check('⑦b 「未随谱携带 N 项」已从工具条移进对话框（工具条只剩可点按钮）',
+    !/未随谱携带/.test(paneCode) && /未随谱携带/.test(dlgSrc) &&
+      /carryover: carry\.ok \? \[\] : carry\.missing/.test(paneSrc) &&
+      /opts\.carryover\.length > 0/.test(dlgSrc) && /ijipu-config-src--carry/.test(cssSrc),
+    `pane 残留=${/未随谱携带/.test(paneCode)} 对话框有=${/未随谱携带/.test(dlgSrc)}`)
+  check('⑦c 两块提示的顺序 = 「谱面自带设置」在上、「未随谱携带」紧跟其下（用户要求）',
+    dlgSrc.indexOf('谱面自带设置 ${this.opts.sourceFields.length} 项') <
+      dlgSrc.indexOf('未随谱携带 ${this.opts.carryover.length} 项') &&
+      dlgSrc.indexOf('未随谱携带 ${this.opts.carryover.length} 项') < dlgSrc.indexOf('ijipu-config-tabs'))
+  // 页签化后不能有字段"点不到"：DEFS 里每个 group 都必须是 GROUPS 的一员，且四组都有项
+  {
+    const defsSrc7 = String(readFileSync('src/defs.ts', 'utf8'))
+    const rows = [...defsSrc7.matchAll(/\{\s*group:\s*'([^']+)',\s*key:\s*'([^']+)'/g)].map((m) => m[1])
+    const groups = [...new Set(rows)]
+    const declared = (defsSrc7.match(/GROUPS = \[([^\]]*)\]/)?.[1] ?? '')
+      .split(',')
+      .map((s) => s.trim().replace(/^'|'$/g, ''))
+      .filter(Boolean)
+    check('⑦d 页签化后没有字段被"藏起来"：DEFS 的每个 group 都在 GROUPS 里，且四组都有项',
+      groups.every((g) => declared.includes(g)) && declared.length === 4 && declared.every((g) => groups.includes(g)),
+      `DEFS 组=${groups.join('/')} GROUPS=${declared.join('/')}`)
+  }
+
+  // ---- ⑧ 用户要求（插件侧 UI）：排版对话框**固定大小** + 页签内容滚动 + 底部按钮常驻可见 ----
+  check('⑧a 对话框固定大小（宽 + 高都定死，不再是随内容长高矮的 560px 宽）',
+    /\.ijipu-config-modal \{[\s\S]*?width: min\(720px, 94vw\);[\s\S]*?height: min\(82vh, 720px\);/.test(cssSrc) &&
+      /\.ijipu-config-modal \{[\s\S]*?display: flex;[\s\S]*?flex-direction: column;/.test(cssSrc))
+  check('⑧b 内容区不再自己滚（`overflow: hidden`）——只让页签内容区滚，顶部提示与按钮组不动',
+    /\.ijipu-config-modal \.modal-content \{[\s\S]*?flex: 1 1 auto;[\s\S]*?min-height: 0;[\s\S]*?overflow: hidden;/.test(cssSrc) &&
+      !/\.ijipu-config-modal \.modal-content \{[\s\S]*?max-height: 70vh/.test(cssSrc))
+  check('⑧c 页签内容区提供滚动（`flex:1` + `overflow-y: auto`）⇒「页面」等长页签一次看到更多',
+    /\.ijipu-config-panel \{[\s\S]*?flex: 1 1 auto;[\s\S]*?min-height: 0;[\s\S]*?overflow-y: auto;/.test(cssSrc))
+  check('⑧d 按钮组常驻对话框底部（`flex: 0 0 auto`），页签栏同样固定在滚动区上方',
+    /\.ijipu-config-footer \{[\s\S]*?flex: 0 0 auto;/.test(cssSrc) &&
+      /\.ijipu-config-tabs \{[\s\S]*?flex: 0 0 auto;/.test(cssSrc) &&
+      /\.ijipu-config-src \{[\s\S]*?flex: 0 1 auto;[\s\S]*?max-height: 32%;[\s\S]*?overflow-y: auto;/.test(cssSrc))
+  check('⑧e 页面元素顺序 = 顶部提示 → 信息卡 → 页签栏 → 内容区 → 按钮组（滚动区在按钮组之上）',
+    dlgSrc.indexOf("cls: 'ijipu-config-tabs'") < dlgSrc.indexOf("cls: 'ijipu-config-panel'") &&
+      dlgSrc.indexOf("cls: 'ijipu-config-panel'") < dlgSrc.indexOf("cls: 'ijipu-config-footer'"))
 }
 
 console.log('[3d] adj629q 段层虚线与应用同口径（拖 bz/dsb/tp 改 segmentRowGap.*，不是谱面行距）')

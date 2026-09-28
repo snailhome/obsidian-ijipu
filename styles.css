@@ -382,15 +382,41 @@
 }
 
 /* ---------- 「⚙ 排版」对话框 ---------- */
+/* 排版对话框：**固定大小** + 页签内容滚动 + 底部按钮常驻可见（用户要求） */
+/*
+ * 布局：`.modal` 自身 flex 列（标题 → 内容），内容区也是 flex 列：
+ *   ① 顶部提示（不滚）  ② 两块信息卡（很长时自己滚，最多 32%）
+ *   ③ 页签栏（不滚）    ④ 字段面板（flex:1 + 滚动 ←「页面」等长页签靠它一次看到更多）
+ *   ⑤ 按钮组（flex:0 0 auto，永远贴在对话框底部）
+ */
 .ijipu-config-modal {
-  width: min(560px, 92vw);
+  display: flex;
+  flex-direction: column;
+  /* 固定大小：宽高都定死（高度按视口夹一下，小屏也不会把按钮挤出屏幕）；切页签不再跳高矮 */
+  width: min(720px, 94vw);
+  height: min(82vh, 720px);
+}
+.ijipu-config-modal .modal-title {
+  flex: 0 0 auto;
 }
 .ijipu-config-modal .vertical-tab-content,
 .ijipu-config-modal .modal-content {
-  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none; /* 覆盖旧的 70vh：现在由上面的固定高度决定 */
+  overflow: hidden; /* 滚动交给内部各区域——顶部提示与底部按钮组不跟着滚 */
+}
+/* 页签内容区：唯一滚动区（`flex:1` 吃掉剩余高度，长页签也一次看到更多） */
+.ijipu-config-panel {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
+  padding-right: 4px;
 }
 .ijipu-config-hint {
+  flex: 0 0 auto; /* 顶部提示不参与滚动（固定大小布局里的定高块） */
   margin: 0 0 10px;
   padding: 6px 10px;
   border-radius: 6px;
@@ -405,6 +431,10 @@
 /* 「谱面自带设置 N 项」——原先挂在谱面工具栏上（挤占按钮位置、详情只能悬停看），
    现在放在对话框里：一眼看到是哪几项、值多少，也解释了下面控件初值的来源 */
 .ijipu-config-src {
+  /* 信息卡很高时自己滚（最多 32%），不把页签与字段区挤没 */
+  flex: 0 1 auto;
+  max-height: 32%;
+  overflow-y: auto;
   margin: 0 0 1em;
   padding: 8px 10px;
   border-radius: 6px;
@@ -426,6 +456,7 @@
   margin: 0;
 }
 .ijipu-config-footer {
+  flex: 0 0 auto; /* 常驻对话框底部：字段区怎么滚它都在（固定大小布局的收尾定高块） */
   display: flex;
   justify-content: flex-end;
   gap: 8px;
@@ -664,6 +695,27 @@
 /* 页签内容区：一屏一组（配合页签减少滚动） */
 .ijipu-settings-panel > .setting-item:first-child {
   border-top: none;
+}
+
+/* 排版对话框（ConfigDialog）：字段组用与设置页签同款的页签组织（用户要求） */
+.ijipu-config-tabs {
+  flex: 0 0 auto; /* 页签栏不参与滚动：它始终在滚动区上方 */
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+/* 内容区跟着页签走：一屏只看一组，少滚动 */
+.ijipu-config-panel > .setting-item:first-child {
+  border-top: none;
+}
+/* 「未随谱携带 N 项」提示块（用户要求：从工具栏挪到对话框、紧跟「谱面自带设置 N 项」）——
+   同样的块样式，只把左侧竖条换成警示色，一眼区分"自带（绿）/ 未携带（黄）" */
+.ijipu-config-src--carry {
+  border-inline-start-color: var(--text-warning, var(--color-yellow, #e0a800));
 }
 /* 「这一页是本库全局默认」的说明条（用户报"与预览页面不同步"的根因说明） */
 .ijipu-settings-note {
