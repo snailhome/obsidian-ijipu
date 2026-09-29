@@ -135,8 +135,10 @@ const META_GLYPH_W: Record<string, number> = {
   '5': 7.62, '6': 7.62, '7': 7.62, '8': 7.62, '9': 7.62,
   'A': 9.15, 'B': 8.16, 'C': 8.7, 'D': 9.9, 'E': 7.15,
   'F': 6.91, 'G': 9.67, '#': 8.3, '$': 7.62,
-  // 升降号占宽：等宽字体下 ♯/♭ 与半角字符同宽，取半角基准 7.62（adj192 用于 1.2×占宽）
-  '♯': 7.62, '♭': 7.62,
+  // 升降号占宽：**实测是全角**——♯/♭ 在简谱字体栈里会回退到 CJK 字体，13px 字号下占宽 ≈ 13px、
+  // 墨迹几乎顶满字身框（adj638 Chrome `getBBox` 实测：9.8px 角标墨迹宽 9.79px）。
+  // 角标让位已改成"移过整个角标占宽 + 净距"（见 `drawKeyName`），不再依赖本表的"半角"假设。
+  '♯': 13.0, '♭': 13.0,
 }
 
 /** 估算 13px 元数据文本宽（px） */
@@ -147,6 +149,19 @@ function metaTextW(s: string): number {
   }
   return w
 }
+
+/**
+ * adj638：调号角标（♯/♭）与右侧字母之间的**净距**（px，**13px 基准调号字号**下）。
+ *
+ * 用户口径演进：先"0.2 个升降符宽度" → "0.1 个墨迹宽" → 最后直接定死「**就 0.2px**」。
+ *
+ * 角标与字母现在是**内联**排版（同一个 `<text>` 里的两个 `<tspan>`）——它们之间的距离由**字体自己的
+ * 推进量**决定，我们只在这之上加这 0.2px。这样无论 ♯/♭ 是西文窄字形还是**全角 CJK 字形**
+ * （占宽 1em、墨迹仅 0.62em、右侧留白 1.75px），都不会再出现"多出一整个右侧留白"的过宽（E-2026-328）。
+ */
+const KEY_ACC_GAP_PX = 0.2
+/** 调号角标的基准字号（`miaoshu_size` 默认值；净距以此为基准等比缩放） */
+const KEY_ACC_BASE_SIZE = 13
 
 /** 按可用宽将一行说明拆成多子行（字符级估算宽、随字号缩放；adj153 内容不超边距） */
 function wrapNotesLine(line: string, availW: number, size: number): string[] {
@@ -188,8 +203,15 @@ function noteFont(style: string): string {
 type RenderFontMeta = {
   /** `1 = ` 实测宽（决定调号字母/角标左缘，adj199） */
   w1eq?: number
-  /** `♯` 实测宽（角标，adj199） */
+  /**
+   * adj638：♯/♭ 的**占宽**（px）与**墨迹右缘**（px）——宿主实测传入，只用来算"右侧留白补偿量"。
+   *
+   * 角标与字母是**内联**排版（字体推进量决定位置），但字形的**右侧留白**（占宽 − 墨迹右缘）会把
+   * 视觉间距撑开：♯ 在简谱字体栈里是全角字形，9.75px 字号下占宽 9.75、墨迹右缘只有 8.00 ⇒ 留白 1.75px。
+   * 宿主给了这两个实测值就把它**补偿掉**（净距严格 = 0.2px）；没给则保留字体自然留白（≥0.2px、绝不压字）。
+   */
   wAcc?: number
+  accInkRight?: number
   /** `1 ` 实测宽（adj629v：调式行 = 号左缘基准） */
   w1sp?: number
   /** `♩` 实测宽（adj629v：节拍行 = 号左缘基准） */
@@ -197,14 +219,15 @@ type RenderFontMeta = {
 }
 /**
  * adj627c（用户要求）：把**调名**画成与描述头 `1 = Ab` 完全同一套效果——
- * 字母 + **左上角 ♯/♭ 角标**（角标字号 = 字母 3/4、上移 0.35×字号、字母右移 0.9×角标宽腾位）。
+ * 字母 + **左上角 ♯/♭ 角标**（角标字号 = 字母 3/4、上移 0.35×字号；adj638 起两者**内联**排版，
+ * 之间只加固定 0.2px 净距，位置由字体推进量决定）。
  *
  * 描述头调式行（`data-meta="keyline"`）与临时转调记号（`转1=Ab`）**共用本函数**，两处预览因此长得一模一样；
  * 此前转调记号是整串文字，`Ab` 的降号会显示成普通字母 `b`，与描述头的 `A♭` 不是一回事。
  *
  * @param prefix   调名前的固定文字（`1 = ` / `转1=`）
- * @param prefixW  前缀实际占宽（px）：角标左缘 = `x + prefixW`
- * @param accW     角标字形实测宽（浏览器 measureText 传入）；缺省按角标字号估算
+ * @param prefixW  前缀实际占宽（px）：角标紧随其后（内联，无需再算它的 x）
+ * @param accW     角标**占宽**实测（px）——只影响拍号落点（adj638）
  */
 function drawKeyName(o: {
   x: number
@@ -215,7 +238,10 @@ function drawKeyName(o: {
   keyRaw: string
   prefix: string
   prefixW: number
+  /** 角标**占宽**实测（px）——既用于拍号定位，也用于算右侧留白补偿（adj638） */
   accW?: number
+  /** 角标**墨迹右缘**实测（px）——与 `accW` 一起给出时，右侧留白会被补偿掉，净距严格 = 0.2px */
+  accInkRight?: number
   /** 写在 `<text>` 开头的额外属性（如 `data-meta="keyline" `） */
   headAttrs?: string
   /** 写在 `font-family` 与 `fill` 之间的额外属性（如 ` text-anchor="start"`） */
@@ -228,21 +254,47 @@ function drawKeyName(o: {
   const acc = m ? m[1] || m[3] : '' // 升降号（# 或 $/b）
   const symb = acc ? (acc === '#' ? '♯' : '♭') : '' // 升降号字形（$ 与 b 等价 → ♭）
   const symSize = symb ? o.size * (3 / 4) : 0 // 角标字号 = 字母 3/4
-  const symW = symb ? (o.accW ?? symSize) : 0
-  const accShift = symb ? 0.9 * symW : 0 // 字母右移 = 0.9×角标实际宽（角标略叠入字母约 0.1×占宽，更贴）
+  const raise = symb ? 0.35 * o.size : 0 // 角标上移量（下沿贴字母中线）
+  /**
+   * adj638（用户报「描述头 `D: C#` 的两个符号还有重叠／间距过宽」三轮后的最终口径）：
+   * 角标与字母写在**同一条 `<text>` 内联**（角标是个变小上移的 `<tspan>`），二者之间只加
+   * `KEY_ACC_GAP_PX`（固定 0.2px，随调号字号等比）——**位置完全由字体自己的推进量决定**。
+   *
+   * 为什么要内联（不再"让位 + 猜字宽"）：引擎零 DOM，拿不到字形度量，之前只能估算 ♯/♭ 的宽度，
+   * 而各字体差异极大——♯ 可能是西文窄字形，也可能是**全角 CJK 字形**（占宽 1em、墨迹只有 0.62em、
+   * 右侧留白 1.75px）。按占宽让位会多出一整个右侧留白（用户看到的"明显过宽"），按墨迹让位又依赖
+   * 宿主实测（插件里一旦实测没生效就退回估算，误差照旧）。内联后**浏览器用真实推进量排版**：
+   * 墨迹紧邻、天然不会压字，我们只负责那 0.2px 的净距。
+   */
+  const gapDx = symb ? KEY_ACC_GAP_PX * (o.size / KEY_ACC_BASE_SIZE) : 0
+  /**
+   * adj638：字形**右侧留白**补偿。
+   *
+   * 内联排版下，字母起点 = 角标**占宽**之后 ⇒ 视觉净距 = 占宽 − 墨迹右缘（即字形的右侧留白）+ 我们的 0.2px。
+   * ♯ 在简谱字体栈里是全角字形，这留白有 1.75px（实测），用户看到的"缝"主要就是它。
+   * 宿主给了 `accW` + `accInkRight` 两个实测值就按差值补偿；否则不动（保留字体自然留白，≥0.2px、绝不压字）。
+   * 防御：实测值明显不合理（≤0 或超过占宽）时不补偿，避免把字母推进角标里。
+   */
+  const rsb =
+    symb && o.accW !== undefined && o.accInkRight !== undefined && o.accInkRight > 0 && o.accInkRight <= o.accW
+      ? o.accW - o.accInkRight
+      : 0
+  const letterDx = gapDx - rsb
   const parts: string[] = []
   if (letter) {
-    const body = symb ? `<tspan dx="${r1n(accShift)}">${xmlEsc(letter)}</tspan>` : xmlEsc(letter)
+    const body = symb
+      ? `<tspan font-size="${r1n(symSize)}" dy="${r1n(-raise)}">${symb}</tspan>` +
+        `<tspan dy="${r1n(raise)}" dx="${r2n(letterDx)}">${xmlEsc(letter)}</tspan>`
+      : xmlEsc(letter)
     parts.push(
       `<text ${o.headAttrs ?? ''}x="${o.x}" y="${o.y}" font-size="${o.size}" font-family="${o.font}"${o.midAttrs ?? ''} fill="#1b1b1b"${o.tailAttrs ?? ''}>${o.prefix}${body}</text>`,
     )
-    if (symb) {
-      // 字母右移后其左上角即原字母左缘：x=原字母左缘，y 抬升至字母中线；下沿与中线对齐
-      parts.push(
-        `<text x="${r1n(o.x + o.prefixW)}" y="${r1n(o.y - 0.35 * o.size)}" font-size="${r1n(symSize)}" font-family="${o.font}" fill="#1b1b1b">${symb}</text>`,
-      )
-    }
   }
+  /**
+   * 拍号定位要用的"调名区总占宽" = 角标占宽 + 净距（补偿后的实际位移）。角标占宽优先用宿主实测（`wAcc`），
+   * 缺省按角标字号（全角字形，偏保守 ⇒ 拍号只会更靠右，不会压字）。
+   */
+  const accShift = symb ? (o.accW ?? symSize) + letterDx : 0
   return { parts, letter, accShift }
 }
 
@@ -294,6 +346,7 @@ function renderMeta(page: ScorePage, config: PageConfig, opts?: RenderFontMeta):
     prefix: '1 = ',
     prefixW: W1eq,
     accW: opts?.wAcc,
+    accInkRight: opts?.accInkRight,
     headAttrs: 'data-meta="keyline" ',
   })
   const keyLetter = keyName.letter // 调号字母（拍号定位要用）
@@ -1565,6 +1618,8 @@ function computeBeams(notes: PlacedToken[], noteSize = 18): Beam[] {
 }
 
 const r1n = (v: number) => Math.round(v * 10) / 10
+/** adj638：角标净距是**亚像素**量（13px 调号下 0.2px、16px 下 0.25px），必须保留 2 位小数，否则被舍成同一个值 */
+const r2n = (v: number) => Math.round(v * 100) / 100
 
 /** 供冒烟测试：计算减时线横线组 */
 export function computeBeamsForTest(notes: PlacedToken[], noteSize = 18): Beam[] {

@@ -29,6 +29,47 @@ export type { ResolvedConfig } from './config'
 export { splitParseIssues } from './parseIssues'
 export type { ParseIssues, ParseIssue } from './parseIssues'
 
+/**
+ * adj638（用户报"描述头 `D: C#` 的升降符与字母还重叠 / 又过宽"）：**插件也实测字体**。
+ *
+ * 插件此前调用 `renderScoreToSvg(layout)` **不传任何实测值** ⇒ 引擎只能按"估算宽"（角标宽度 = 角标字号）
+ * 摆放调号角标；而 ♯/♭ 在简谱字体栈里是**全角字形**（占宽 1em、墨迹仅 0.62em、右侧留白 1.75px），
+ * 估算必然让角标与字母之间空出一大截（用户在插件里看到的那条明显缝隙）。
+ *
+ * 这里按应用 `PreviewPane` 同一套口径用 canvas 实测后传入：
+ *  · `w1eq`/`w1sp`/`wTempo`：`1 = ` / `1 ` / `♩` 的**占宽**（adj199/adj629v 的 = 号对齐）；
+ *  · `wAcc` + `accInkRight`：`♯` 的**占宽**与**墨迹右缘**——占宽用于拍号定位，两者之差（右侧留白）
+ *    交给引擎补偿掉 ⇒ 角标与字母的墨迹净距严格 = 0.2px（adj638）。
+ * 无 DOM 环境（冒烟/单测）返回 `undefined`，引擎自动回落到"字体自然留白 + 0.2px"（绝不压字）。
+ */
+function measureMeta(
+  cfg: PageConfig,
+): { w1eq?: number; w1sp?: number; wTempo?: number; wAcc?: number; accInkRight?: number } {
+  try {
+    if (typeof document === 'undefined') return {}
+    const ctx = document.createElement('canvas').getContext('2d')
+    if (!ctx) return {}
+    const size = cfg.miaoshu_size
+    const font = cfg.miaoshu_font
+    const adv = (text: string, px = size): number => {
+      ctx.font = `${px}px ${font}`
+      return ctx.measureText(text).width
+    }
+    const accPx = size * (3 / 4)
+    ctx.font = `${accPx}px ${font}`
+    const inkRight = ctx.measureText('♯').actualBoundingBoxRight
+    return {
+      w1eq: adv('1 = '),
+      w1sp: adv('1 '),
+      wTempo: adv('♩'),
+      wAcc: adv('♯', accPx),
+      ...(Number.isFinite(inkRight) ? { accInkRight: inkRight } : {}),
+    }
+  } catch {
+    return {}
+  }
+}
+
 /** 渲染 .jps → 每页 SVG 字符串（**错误**才返回 error 信息；告警随 `warnings` 一并返回，不阻断） */
 export function renderScore(
   source: string,
@@ -38,7 +79,10 @@ export function renderScore(
   const { errors, warnings } = splitParseIssues(parsed)
   if (errors.length > 0) return { svgs: [], error: errors.map((e) => e.text).join('\n'), warnings }
   const layout = layoutScore(parsed, pageConfig)
-  return { svgs: renderScoreToSvg(layout), warnings: warnings.length > 0 ? warnings : undefined }
+  return {
+    svgs: renderScoreToSvg(layout, measureMeta(layout.config)),
+    warnings: warnings.length > 0 ? warnings : undefined,
+  }
 }
 
 /**
@@ -55,7 +99,11 @@ export function renderScoreFull(
     return { svgs: [], layout: null, error: errors.map((e) => e.text).join('\n'), warnings, errorIssues: errors }
   }
   const layout = layoutScore(parsed, pageConfig)
-  return { svgs: renderScoreToSvg(layout), layout, warnings: warnings.length > 0 ? warnings : undefined }
+  return {
+    svgs: renderScoreToSvg(layout, measureMeta(layout.config)),
+    layout,
+    warnings: warnings.length > 0 ? warnings : undefined,
+  }
 }
 
 /**
