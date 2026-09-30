@@ -6,6 +6,8 @@ import {
   inferBpm,
   schedulePlay,
   defaultPageConfig,
+  noteFontFamily,
+  type AccidentalInkMetrics,
   type PageConfig,
   type ScoreLayout,
 } from '@ijipu/engine'
@@ -70,6 +72,37 @@ function measureMeta(
   }
 }
 
+/**
+ * adj647（用户要求"墨迹来源也统一"）：**插件也实测变音角标的字形度量**。
+ *
+ * 与应用 `preview/fontMeta.ts` 同一套口径（两个宿主各自量、引擎消费）：
+ * `#`/`b`/`♮` 的**墨迹宽与左偏**（比值 = px ÷ 实测字号），交给 `layoutScore` 的 `fontMeta` 第 4 参
+ * ⇒ 布局按**本机字体**算角标占宽（不再假设默认字体栈），并把解析结果写进 `PlacedToken.accidentalGeo`
+ * 供渲染直接消费。量不到（无 DOM / 老引擎）时返回 `undefined`，引擎自动回退内置常量表。
+ */
+function measureAccidentalInk(cfg: PageConfig): AccidentalInkMetrics | undefined {
+  try {
+    if (typeof document === 'undefined') return undefined
+    const ctx = document.createElement('canvas').getContext('2d')
+    if (!ctx) return undefined
+    // ⚠ 必须用**大基准字号**量：角标实际只有 ~8.67px，这个尺寸上浏览器会把墨迹包围盒量化到整像素
+    // （实测 `#` 的 inkW 比值 0.605 → 0.808、偏大 ~33%）⇒ 只取比值，让引擎按真实角标字号换算
+    const REF = 100
+    const font = noteFontFamily(cfg.shuzi_font) // 必须与渲染用同一串 font-family
+    const one = (ch: string): { inkW: number; lsb: number } | undefined => {
+      ctx.font = `${REF}px ${font}`
+      const m = ctx.measureText(ch)
+      const left = m.actualBoundingBoxLeft
+      const right = m.actualBoundingBoxRight
+      if (!Number.isFinite(left) || !Number.isFinite(right)) return undefined
+      return { inkW: (right + left) / REF, lsb: -left / REF }
+    }
+    return { '#': one('#'), b: one('b'), '♮': one('♮') }
+  } catch {
+    return undefined
+  }
+}
+
 /** 渲染 .jps → 每页 SVG 字符串（**错误**才返回 error 信息；告警随 `warnings` 一并返回，不阻断） */
 export function renderScore(
   source: string,
@@ -78,7 +111,7 @@ export function renderScore(
   const parsed = parseJps(source)
   const { errors, warnings } = splitParseIssues(parsed)
   if (errors.length > 0) return { svgs: [], error: errors.map((e) => e.text).join('\n'), warnings }
-  const layout = layoutScore(parsed, pageConfig)
+  const layout = layoutScore(parsed, pageConfig, undefined, { accidentalInk: measureAccidentalInk(pageConfig) })
   return {
     svgs: renderScoreToSvg(layout, measureMeta(layout.config)),
     warnings: warnings.length > 0 ? warnings : undefined,
@@ -98,7 +131,7 @@ export function renderScoreFull(
   if (errors.length > 0) {
     return { svgs: [], layout: null, error: errors.map((e) => e.text).join('\n'), warnings, errorIssues: errors }
   }
-  const layout = layoutScore(parsed, pageConfig)
+  const layout = layoutScore(parsed, pageConfig, undefined, { accidentalInk: measureAccidentalInk(pageConfig) })
   return {
     svgs: renderScoreToSvg(layout, measureMeta(layout.config)),
     layout,

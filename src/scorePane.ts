@@ -298,8 +298,11 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       cfgBtn.createSpan({ cls: 'ijipu-btn-label', text: '设置' })
       cfgBtn.addEventListener('click', () => {
         // 用户要求：**未随谱携带 N 项**从工具条挪进本对话框（紧跟「谱面自带设置 N 项」展示），
-        // 明细在这里现算：非默认、源码里又没写的项（值只来自插件设置 / 笔记 frontmatter）。
-        const carry = configCarryover(host.getSource(), resolved.config)
+        // 明细在这里现算：非默认、源码里又没写的项。
+        // adj639（用户要求"插件的默认值体系与应用保持一致，在应用正常的谱面在插件里不要提示"）：
+        // 以 `resolved.baseline`（代码默认 ← **插件设置**，不含 frontmatter）为基线 ⇒ 插件设置里的值
+        // 不再被当成"该随谱携带"，提示只剩**这篇笔记特有**的差异（典型来源 = frontmatter）。
+        const carry = configCarryover(host.getSource(), resolved.config, resolved.baseline)
         new ConfigDialog(plugin.app, {
           current: resolved.config,
           // 「谱面自带设置 N 项」不再挂工具栏，改写进对话框（含具体是哪几项、值是什么）

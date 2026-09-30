@@ -345,9 +345,10 @@ console.log('[3g] adj631 设置面板：多页签 / 收藏音色分类列表 / �
       /ijipu-config-tabs/.test(dlgSrc) && /ijipu-settings-tab/.test(dlgSrc) &&
       /toggleClass\('is-active'/.test(dlgSrc) && /\.ijipu-config-tabs \{/.test(cssSrc),
     `tabs=${/readonly tabs = \[\.\.\.GROUPS, '说明'\]/.test(dlgSrc)} cls=${/ijipu-config-tabs/.test(dlgSrc)}`)
-  check('⑦b 「未随谱携带 N 项」已从工具条移进对话框（工具条只剩可点按钮）',
+  check('⑦b 「未随谱携带 N 项」已从工具条移进对话框（工具条只剩可点按钮；且按 adj639 口径传 baseline）',
     !/未随谱携带/.test(paneCode) && /未随谱携带/.test(dlgSrc) &&
       /carryover: carry\.ok \? \[\] : carry\.missing/.test(paneSrc) &&
+      /configCarryover\(host\.getSource\(\), resolved\.config, resolved\.baseline\)/.test(paneSrc) &&
       /opts\.carryover\.length > 0/.test(dlgSrc) && /ijipu-config-src--carry/.test(cssSrc),
     `pane 残留=${/未随谱携带/.test(paneCode)} 对话框有=${/未随谱携带/.test(dlgSrc)}`)
   check('⑦c 两块提示的顺序 = 「谱面自带设置」在上、「未随谱携带」紧跟其下（用户要求）',
@@ -638,11 +639,29 @@ console.log('[10b] 分享保真：本地层（插件设置 / frontmatter）不�
   check('adj480 保存到谱面：只含本次改动（不含插件设置/frontmatter 的项）', Object.keys(edits).join(',') === 'height_quci', Object.keys(edits).join(','))
   const savedLine = writeJpsConfig(src, edits)
   check('adj480 保存到谱面后：本库层仍然生效（源码没写就还会兜底）', resolvePageConfig(savedLine, { note_size: 15 }, { ijipu_margin_left: 66 }).config.note_size === 15)
-  // ② 分享保真检查：这份谱有 2 项非默认值没随谱携带
+  // ② 分享保真检查：引擎口径（不传 baseline）仍列出 2 项非默认值没随谱携带
   const gap = configCarryover(savedLine, resolvePageConfig(savedLine, { note_size: 15 }, { ijipu_margin_left: 66 }).config)
   check('adj480 configCarryover 列出未随谱携带项（note_size / margin_left）',
     !gap.ok && gap.missing.length === 2 && gap.missing.some((m) => m.key === 'note_size') && gap.missing.some((m) => m.key === 'margin_left'),
     JSON.stringify(gap.missing))
+  // ②b adj639（用户要求"插件的默认值体系与应用保持一致、应用正常的谱面在插件里不要提示"）：
+  //     传 `baseline`（代码默认 ← 插件设置，不含 frontmatter）后，**插件设置那一层不再算未随谱携带**，
+  //     只剩"这篇笔记特有"的 frontmatter 差异。
+  {
+    const res = resolvePageConfig(savedLine, { note_size: 15 }, { ijipu_margin_left: 66 })
+    const withBase = configCarryover(savedLine, res.config, res.baseline)
+    check('adj639 传 baseline 后：插件设置的项不再提示（只剩 frontmatter 的 margin_left）',
+      !withBase.ok && withBase.missing.length === 1 && withBase.missing[0].key === 'margin_left',
+      JSON.stringify(withBase.missing))
+    check('adj639 baseline = 代码默认 ← 插件设置（不含 frontmatter）：note_size=15 在基线里、margin_left 不在',
+      res.baseline.note_size === 15 && res.baseline.margin_left === defaultPageConfig.margin_left,
+      `note_size=${res.baseline.note_size} margin_left=${res.baseline.margin_left}`)
+    // 用户的原始诉求：插件设置里有非默认值（含可选字段）而源码没写 ⇒ **零提示**
+    const res2 = resolvePageConfig(src, { note_size: 15, align_min_bars: 3, showInstrument: true }, {})
+    const carry2 = configCarryover(src, res2.config, res2.baseline)
+    check('adj639 插件设置（note_size / align_min_bars / showInstrument）≠ 引擎默认时也不提示（应用里正常的谱零提示）',
+      carry2.ok, JSON.stringify(carry2.missing))
+  }
   // ③ 「随谱固化」= 差量模式写**生效配置** → 非默认项全部落盘，且不再写成全量（不出现与默认相同的项）
   const solidified = writeJpsConfig(src, resolvePageConfig(savedLine, { note_size: 15 }, { ijipu_margin_left: 66 }).config)
   const solidLine = solidified.split('\n').find((l) => l.startsWith('# jps-config:')) ?? ''

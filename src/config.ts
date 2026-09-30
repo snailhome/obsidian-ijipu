@@ -19,6 +19,13 @@ import { applyFrontmatter, type AppliedOverride, type DeprecatedKey, type Unknow
 export type ResolvedConfig = {
   /** 最终生效的页面配置 */
   config: PageConfig
+  /**
+   * adj639（用户要求"插件的默认值体系与应用保持一致，在应用正常的谱面在插件里不要提示"）：
+   * **本库默认层** = 代码默认 ← 插件设置（**不含**笔记 frontmatter）。
+   * 「未随谱携带」提示以它为基线 ⇒ 插件设置里的值（用户眼里的"本库默认"）不再被当成"该随谱携带"，
+   * 提示只剩**这篇笔记特有**的差异（典型来源 = frontmatter）。
+   */
+  baseline: PageConfig
   /** frontmatter 里生效的项（原键名 + 值，供徽标/提示显示） */
   applied: AppliedOverride[]
   /** 未识别的 frontmatter 键（含最近键名建议） */
@@ -43,7 +50,11 @@ export function resolvePageConfig(
   const fm = applyFrontmatter(settings, frontmatter)
   // 源内配置字段（也用于徽标告知用户"这份谱自带设置"）
   const sourceFields = Object.keys(extractJpsConfig(source) ?? {})
+  // adj639：本库默认层（只到"插件设置"这一层，不含 frontmatter）——供"未随谱携带"提示当基线。
+  // `mergeJpsConfig` 会先把 `defaultPageConfig` 铺底再盖 fallback，所以传 Partial 是安全的
+  //（类型上它要完整 PageConfig，这里显式收窄即可）。
+  const baseline = mergeJpsConfig('', settings as PageConfig)
   // mergeJpsConfig 的语义即「默认 < fallback < 源内」，恰好是本插件需要的优先级
   const config = mergeJpsConfig(source, fm.config)
-  return { config, applied: fm.applied, unknown: fm.unknown, deprecated: fm.deprecated, sourceFields }
+  return { config, baseline, applied: fm.applied, unknown: fm.unknown, deprecated: fm.deprecated, sourceFields }
 }

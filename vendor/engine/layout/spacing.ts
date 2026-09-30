@@ -289,6 +289,80 @@ export const DIGIT_INK_W_RATIO: Record<string, number> = {
 export const digitInkH = (noteSize: number) => (DIGIT_INK_ASC_RATIO + DIGIT_INK_DESC_RATIO) * noteSize
 /** 数字**墨迹宽**（按具体数字取表；未知回退 0.48） */
 export const digitInkW = (digit: string, noteSize: number) => (DIGIT_INK_W_RATIO[digit] ?? 0.48) * noteSize
+
+/**
+ * adj645：变音角标（`#` / `b` / `♮`）的**墨迹**度量（正常字重，Edge/Chrome 像素扫描实测，
+ * 200px 基准 → 比值；默认无衬线栈 `'Microsoft YaHei', 'SimHei', 'Segoe UI', sans-serif`）。
+ *
+ * 为什么必须按**墨迹**而不是**字宽**（同 `E-2026-328` 的教训）：
+ *  · 角标画在数字**左侧**、独占一段空隙，它真实占的只有墨迹那点宽度；按 advance 算会多留一条缝
+ *    （`#` advance 0.638em vs 墨迹 0.600em，`b` 0.639 vs 0.515，`♮` 更是 **1.000 vs 0.355**）；
+ *  · `♮`（U+266E）在本字体栈里落到**全角 CJK 字形**：advance 整 1em、墨迹只有 0.355em 且**居中**
+ *    （左偏 lsb 0.325em）——按 advance 定位会把墨迹推到数字身上（实测会压进数字 0.8px）。
+ *
+ * 交叉校验：同一份实测里粗体数字墨迹宽 1→0.34、2→0.51、3→0.485、4→0.60、5→0.48、6→0.535、7→0.535，
+ * 与上表 `DIGIT_INK_W_RATIO`（0.35/0.52/0.49/0.60/0.48/0.54/0.54）逐项吻合 ⇒ 量测环境与既有基准同一套字体。
+ */
+export const ACC_INK_W_RATIO: Record<'#' | 'b' | '♮', number> = { '#': 0.6, b: 0.515, '♮': 0.355 }
+/** 角标墨迹**左偏** / 角标字号（定位用：`pen = 墨迹右缘 − 墨迹宽 − 左偏`） */
+export const ACC_INK_LSB_RATIO: Record<'#' | 'b' | '♮', number> = { '#': 0.015, b: 0.08, '♮': 0.325 }
+
+/**
+ * adj647（用户要求"墨迹来源也统一"）：**宿主实测的角标字形度量**。
+ *
+ * 值一律是**相对角标字号的比值**（宿主在任意参考字号上量，除以该字号即得）——引擎再乘角标字号，
+ * 于是与字号设置解耦。宿主没给 / 给得不合理 ⇒ 退回上面的内置常量表（默认字体栈实测基准）。
+ *
+ * 为什么让宿主给：引擎零 DOM、拿不到字形度量，而 `shuzi_font` 是用户可配的——`♮` 在有些字体里是
+ * 全角字形（字宽 1em、墨迹 0.355em 且居中）、有些是窄字形；常量表只覆盖默认栈（与 `DIGIT_INK_W_RATIO`
+ * 同一取舍）。宿主一次性实测三个字形即可（`canvas.measureText` 的 `actualBoundingBoxLeft/Right`：
+ * `inkW = right + left`、`lsb = −left`）。
+ */
+export interface AccidentalGlyphInk {
+  /** 墨迹宽（比值） */
+  inkW: number
+  /** 墨迹左偏：墨迹左缘相对笔位（比值，一般 ≥0） */
+  lsb: number
+}
+/** 逐字形的宿主实测度量（可只给一部分字形，其余用常量表） */
+export type AccidentalInkMetrics = Partial<Record<'#' | 'b' | '♮', AccidentalGlyphInk>>
+
+/**
+ * adj647：实测值的**合理性闸门**——比值必须有限且落在合理区间，否则视为无效、退回常量表
+ * （同 adj638 对 `wAcc`/`accInkRight` 的"不合理就拒绝补偿"）。
+ */
+export const isValidAccidentalInk = (v: AccidentalGlyphInk | undefined): v is AccidentalGlyphInk =>
+  !!v &&
+  Number.isFinite(v.inkW) &&
+  Number.isFinite(v.lsb) &&
+  v.inkW > 0.05 &&
+  v.inkW <= 2 &&
+  v.lsb >= -0.5 &&
+  v.lsb <= 1
+
+/** 取生效度量：**宿主实测优先**（合理时），否则退回内置常量表 */
+export const accidentalInkOf = (glyph: '#' | 'b' | '♮', ink?: AccidentalInkMetrics): AccidentalGlyphInk => {
+  const m = ink?.[glyph]
+  return isValidAccidentalInk(m) ? m : { inkW: ACC_INK_W_RATIO[glyph], lsb: ACC_INK_LSB_RATIO[glyph] }
+}
+
+/** 角标字号 = 音符字号 × 此比率（render 一直用 `12 × s`，s = 字号/18） */
+export const ACCIDENTAL_FONT_RATIO = 12 / 18
+
+/**
+ * adj646：**角标 ↔ 相邻字符的净距**——描述头调号（`D: C#`）与音符变音（`3#`）**共用这一条规则**。
+ *
+ * `0.2px @ 13px 基准，随所在字号等比`（所在字号 = 调号行的 `miaoshu_size` / 音符行的 `note_size`）。
+ * 描述头那条是 `adj638` 用户四轮口径定下来的（"就 0.2px"），本次把音符变音也并到同一条上：
+ * 它此前用的是 `0.05 × 角标字号`（13px 音符下 0.43px，是描述头的 **2.4 倍**）——两处都是"角标紧贴邻字"，
+ * 没有理由差一倍多。统一后 13px 字号下两处净距都是 **0.2px**（角标字号不同 ⇒ em 比略有差异，可忽略）。
+ */
+export const ACC_GAP_PX = 0.2
+/** 净距的基准字号（调号/音符的默认字号） */
+export const ACC_GAP_BASE_SIZE = 13
+/** 角标与相邻字符的净距（`contextSize` = 该行的字号：调号行 / 音符行） */
+export const accidentalGap = (contextSize: number) => ACC_GAP_PX * (contextSize / ACC_GAP_BASE_SIZE)
+
 /** 倚音修饰符字号 = 记号所属音符字号 × `SYM_FONT_RATIO` */
 export const markFontSize = (noteSize: number) => noteSize * SYM_FONT_RATIO
 /** adj632b：倚音右侧滑音记号**紧贴**数字墨迹右缘的净距（px，× 倚音缩放因子 gs） */

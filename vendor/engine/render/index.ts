@@ -63,9 +63,11 @@ import {
 } from '../layout/spacing'
 import { tempoLabel } from '../parser/parser'
 import { parseInstrumentRef } from '../playback/instruments'
-import { graceAtTail, graceSlideInk, graceSlotLayout, mordentInkW, slideGlyphInk } from '../layout/spaceLayout'
+import { graceAtTail, graceSlideInk, graceSlotLayout, mordentInkW, slideGlyphInk, BRACE_ARC_DX_RATIO, BRACE_ARC_R_RATIO, BRACE_LINE_DX, accidentalPenDx, accidentalFontSize } from '../layout/spaceLayout'
 // adj636b：变音角标占位（滑音记号改画在数字左侧后，要与角标并排——渲染与布局同一把尺子）
 import { accidentalBodyW } from '../layout/spaceLayout'
+// adj646：角标 ↔ 相邻字符净距（描述头调号与音符变音**共用一条规则**）
+import { accidentalGap } from '../layout/spacing'
 // adj458：波音/滑音改用**用户提供的矢量修饰符**（生成文件，见 scripts/gen-modifier-glyphs.mjs）
 import { MODIFIER_GLYPHS, glyphMarkup, type ModifierGlyphKey } from './modifierGlyphs'
 
@@ -151,17 +153,17 @@ function metaTextW(s: string): number {
 }
 
 /**
- * adj638：调号角标（♯/♭）与右侧字母之间的**净距**（px，**13px 基准调号字号**下）。
+ * adj638：调号角标（♯/♭）与右侧字母之间的**净距**。
  *
  * 用户口径演进：先"0.2 个升降符宽度" → "0.1 个墨迹宽" → 最后直接定死「**就 0.2px**」。
  *
  * 角标与字母现在是**内联**排版（同一个 `<text>` 里的两个 `<tspan>`）——它们之间的距离由**字体自己的
  * 推进量**决定，我们只在这之上加这 0.2px。这样无论 ♯/♭ 是西文窄字形还是**全角 CJK 字形**
  * （占宽 1em、墨迹仅 0.62em、右侧留白 1.75px），都不会再出现"多出一整个右侧留白"的过宽（E-2026-328）。
+ *
+ * adj646：这条净距抽成**与音符变音共用**的 `accidentalGap(所在字号)`（spacing.ts）——
+ * 两处都是"角标紧贴邻字"，此前音符那边是 `0.05×角标字号`（13px 下 0.43px，是这里的 2.4 倍）。
  */
-const KEY_ACC_GAP_PX = 0.2
-/** 调号角标的基准字号（`miaoshu_size` 默认值；净距以此为基准等比缩放） */
-const KEY_ACC_BASE_SIZE = 13
 
 /** 按可用宽将一行说明拆成多子行（字符级估算宽、随字号缩放；adj153 内容不超边距） */
 function wrapNotesLine(line: string, availW: number, size: number): string[] {
@@ -183,9 +185,18 @@ function wrapNotesLine(line: string, availW: number, size: number): string[] {
   return subs.length ? subs : ['']
 }
 
+/**
+ * 音符字体栈（`shuzi_font` 为空时的兜底）。
+ * adj647：**导出**给宿主实测用——宿主量字形时必须与渲染用**同一串 font-family**，
+ * 否则量到的是另一套字体（量测与绘制两套账）。
+ */
+export function noteFontFamily(style: string): string {
+  return style || "'Microsoft YaHei', 'SimHei', 'Segoe UI', sans-serif"
+}
+
 /** 音符字体：直接使用页面设置中的字体名（adj105：原 a/b/c 字形改为字体名） */
 function noteFont(style: string): string {
-  return style || "'Microsoft YaHei', 'SimHei', 'Segoe UI', sans-serif"
+  return noteFontFamily(style)
 }
 
 // ============================================================
@@ -200,7 +211,7 @@ function noteFont(style: string): string {
  *  - metaPos 可覆盖任意元素位置（key: title/subtitle_i/author_i/keyline/tempo）
  *    值为相对各自锚点的偏移（adj16）：区域宽/高变化时元素跟随锚点。
  */
-type RenderFontMeta = {
+export type RenderFontMeta = {
   /** `1 = ` 实测宽（决定调号字母/角标左缘，adj199） */
   w1eq?: number
   /**
@@ -258,15 +269,16 @@ function drawKeyName(o: {
   /**
    * adj638（用户报「描述头 `D: C#` 的两个符号还有重叠／间距过宽」三轮后的最终口径）：
    * 角标与字母写在**同一条 `<text>` 内联**（角标是个变小上移的 `<tspan>`），二者之间只加
-   * `KEY_ACC_GAP_PX`（固定 0.2px，随调号字号等比）——**位置完全由字体自己的推进量决定**。
+   * `accidentalGap(调号字号)`（adj646 起与音符变音共用；13px 下 = 0.2px）——
+   * **位置完全由字体自己的推进量决定**。
    *
    * 为什么要内联（不再"让位 + 猜字宽"）：引擎零 DOM，拿不到字形度量，之前只能估算 ♯/♭ 的宽度，
    * 而各字体差异极大——♯ 可能是西文窄字形，也可能是**全角 CJK 字形**（占宽 1em、墨迹只有 0.62em、
    * 右侧留白 1.75px）。按占宽让位会多出一整个右侧留白（用户看到的"明显过宽"），按墨迹让位又依赖
    * 宿主实测（插件里一旦实测没生效就退回估算，误差照旧）。内联后**浏览器用真实推进量排版**：
-   * 墨迹紧邻、天然不会压字，我们只负责那 0.2px 的净距。
+   * 墨迹紧邻、天然不会压字，我们只负责那点净距。
    */
-  const gapDx = symb ? KEY_ACC_GAP_PX * (o.size / KEY_ACC_BASE_SIZE) : 0
+  const gapDx = symb ? accidentalGap(o.size) : 0
   /**
    * adj638：字形**右侧留白**补偿。
    *
@@ -577,10 +589,15 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
   if (t.kind === 'rest' && t.hidden) return ''
 
   // 变音符号（数字左侧上方，随字号）
+  // adj645：位置与字号按**墨迹**算——`accidentalPenDx` 让墨迹右缘离数字左缘固定净距
+  //   （原来写死 `x − 7s`：对 `#`/`b` 是"多留一段空"，对全角字形 `♮` 则是墨迹**压进数字**）。
+  // adj647：锚点优先取**布局解析好**的 `accidentalGeo`（布局可能收到宿主实测的字形度量）；
+  //   没有该字段（老调用点/无变音）时才回退到内置常量表算一遍。
   if (t.kind === 'note' && t.accidental) {
     const sym = t.accidental === '#' ? '#' : t.accidental === '$' ? 'b' : '♮'
+    const penDx = note.accidentalGeo?.penDx ?? accidentalPenDx(size, t.accidental)
     parts.push(
-      `<text x="${x - 7 * s}" y="${y - 10 * s}" font-size="${r1n(12 * s)}" font-family="${font}" fill="#1b1b1b">${sym}</text>`,
+      `<text x="${r1n(x + penDx)}" y="${y - 10 * s}" font-size="${r1n(accidentalFontSize(size))}" font-family="${font}" fill="#1b1b1b">${sym}</text>`,
     )
   }
 
@@ -928,7 +945,11 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
           // adj636b（用户要求）：记号改画在数字**左侧**（`dx` 为负）——"滑进本音"的记号写在音的左边；
           //   再让开该音左侧已有的东西：变音角标占位、前倚音组占用的横向范围（否则会压在 `#` 或倚音上）。
           //   高度/大小不变。
-          const accW = t.kind === 'note' && t.accidental ? accidentalBodyW(size) : 0
+          // adj647：角标占宽优先用布局解析好的 `accidentalGeo.leadW`（可能来自宿主实测）
+          const accW =
+            t.kind === 'note' && t.accidental
+              ? (note.accidentalGeo?.leadW ?? accidentalBodyW(size, t.accidental))
+              : 0
           const gnSlide = t.kind === 'note' ? t.gracenotes : undefined
           const graceL = gnSlide && !gnSlide.after ? 1 * s + graceSlotLayout(gnSlide.notes, size).width : 0
           const ink = slideGlyphInk(sym, size, Math.max(accW, graceL))
@@ -1240,12 +1261,14 @@ function renderLyric(lyric: PlacedLyric, config: PageConfig): string {
 // ============================================================
 
 /** adj276：多声部括号——左粗(2.1)右细(1.125)双竖线（间距 3px）；上下弧各自以弧两端点为轴翻转（sweep 交换）、
- *  上弧顺转 30°、下弧逆转 30°，弧 = 1/6 圆。 */
+ *  上弧顺转 30°、下弧逆转 30°，弧 = 1/6 圆。
+ *  adj644：几何常量与"墨迹右缘"收敛到 `layout/spaceLayout.ts`（布局要按同一份几何把括号
+ *  贴到音符一侧，见 `braceInkRightOffset`）——渲染只消费，不再自己写 3 / 0.15 / 0.866。 */
 function bracePath(x: number, yTop: number, yBottom: number, noteSize: number): { arc: string; lineL: string; lineR: string } {
-  const R = Math.min(noteSize / 2, (yBottom - yTop) * 0.15)
-  const dx = 3 // 粗/细线间距 ×1.5（2 → 3）
+  const R = Math.min(noteSize / 2, (yBottom - yTop) * BRACE_ARC_R_RATIO)
+  const dx = BRACE_LINE_DX // 粗/细线间距 ×1.5（2 → 3）
   // 弧 = 1/6 圆（60°）；上下弧各以两端点为轴翻转一次（sweep 1↔0），凸向翻到另一侧
-  const endX = x + R * 0.866
+  const endX = x + R * BRACE_ARC_DX_RATIO
   const endTopY = yTop + R * 0.5
   const endBotY = yBottom - R * 0.5
   const aTop = `M ${x} ${yTop + R} A ${R} ${R} 0 0 0 ${endX.toFixed(2)} ${endTopY.toFixed(2)}`
@@ -1489,10 +1512,24 @@ function renderSlur(s: PlacedSlur, noteSize = 18): string {
   }
   // 完整：二次贝塞尔（两端低、中间高）；正中（顶点）标连音组数字
   const midX = (x1 + x2) / 2
-  const midY = y - 9
+  /**
+   * adj649（用户反馈多声部拍内 `(5 5/)` / `(7 7/)` 的连音线"跑偏"）：**垂度随跨度自适应**。
+   *
+   * 原为固定 `9px`：两音符连音线的跨度只有 8~25px（多声部拍内相邻音符，adj648 起随拍宽摊开），
+   * 弧高≈跨度 ⇒ 画出来是"立起来的半圆"——两端很陡、看着像悬在两个数字之间，而不是连着它们
+   * （用户原话"连音线跑偏了"）。
+   *
+   * 取 `垂度 = clamp(跨度 × 0.28, 2.5, 9)`：
+   *  · 跨度 ≥ 32px（长连音线）仍是原来的 **9px** —— 观感一字不变；
+   *  · 两个音符的常见跨度 18~22px ⇒ **5.0~6.2px**（浅弧，两端贴住数字）；
+   *  · 极窄（≤9px）取下限 2.5px，不至于细成一条看不见的线。
+   * 只改顶点高度：两端 `x`/`y` 与连音组数字的居中都随之（`y − 垂度/2`），长连音线数值不变。
+   */
+  const sag = Math.max(2.5, Math.min(9, Math.abs(x2 - x1) * 0.28))
+  const midY = y - sag
   return (
     `<path d="M ${x1} ${y} Q ${midX} ${midY} ${x2} ${y}" fill="none" stroke="#1b1b1b" stroke-width="${SLUR_W}"/>` +
-    label(midX, topY)
+    label(midX, y - sag / 2)
   )
 }
 

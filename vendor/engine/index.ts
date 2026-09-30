@@ -32,10 +32,19 @@ export { buildPlaySequence, inferBpm, countScoreInstrumentSwitches, createBacken
 export { codePosToNoteId, noteIdToCodePos, parseNoteId, buildIndexToPage } from './cursorMap'
 export { computeRowTops, computeRowGuides, dragDelta, clamp, metaAreaH, GUIDE_ITEMS, GUIDE_LIMITS, GUIDE_LIMITS_EX } from './layout/guides'
 export { metaAnchorOf, metaAnchorPt, clampMetaPos, metaCornerOffsets, metaAuthorRowY } from './layout/metaAnchors'
-export { splitNoteDur, digitSlotW, dotBodyW, augBodyW, slideBodyW, bracketBodyW, noteBodyW, nonDurGap, accidentalBodyW, hxBodyW, slideGlyphInk, slideExtraW, graceSlotLayout, graceSlideInk, mordentInkW } from './layout/spaceLayout'
+export { splitNoteDur, digitSlotW, dotBodyW, augBodyW, slideBodyW, bracketBodyW, noteBodyW, nonDurGap, accidentalBodyW, accidentalPenDx, accidentalInkLeftDx, accidentalInkRightDx, accidentalFontSize, accidentalGlyphOf, braceInkRightOffset, BRACE_LINE_DX, hxBodyW, slideGlyphInk, slideExtraW, graceSlotLayout, graceSlideInk, mordentInkW } from './layout/spaceLayout'
 // adj630b：谱尾说明（`S:`）的行基线——渲染端与预览端拖拽基准共用（不得各写一份）
 export { notesRowBaseline, NOTES_LINE_H_RATIO, NOTES_BOTTOM_GAP, NOTES_DESCENT_RATIO } from './layout/spacing'
 export type { NoteDurSplit } from './layout/spaceLayout'
+// adj647：变音角标的字形度量（宿主实测 ⇒ 引擎算占宽/锚点）——两处共用的类型与解析函数
+export { ACC_INK_W_RATIO, ACC_INK_LSB_RATIO, ACCIDENTAL_FONT_RATIO, ACC_GAP_PX, ACC_GAP_BASE_SIZE, accidentalGap, accidentalInkOf, isValidAccidentalInk } from './layout/spacing'
+export type { AccidentalGlyphInk, AccidentalInkMetrics } from './layout/spacing'
+export { accidentalGeometry } from './layout/spaceLayout'
+export type { LayoutFontMeta } from './layout/index'
+// adj638：渲染端可选入参（宿主实测的 `1 = ` / ♯ / ♩ 宽）——应用与插件都按同一份口径传
+export type { RenderFontMeta } from './render/index'
+// adj647：音符字体栈（宿主实测字形时必须与渲染用同一串 font-family）
+export { noteFontFamily } from './render/index'
 // adj428：临时叠加段（{bz … } / {dsb … }）上下两行纵向间距的默认常量；UI 显示缺省值用
 export { SEGMENT_ROW_GAP_DEFAULT } from './layout/spacing'
 // adj427：临时段（{bz … } / {dsb … }）拍位包络计算——layout/render 共用，纯函数

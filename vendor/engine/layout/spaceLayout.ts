@@ -12,7 +12,7 @@
  * 供后续 P2（每元素时值宽度分配/放置）、P3（断行）、P4（layoutScore 分流）、
  * P5（多声部）复用。均为纯函数，零 React/DOM 依赖。
  */
-import { DOT_R_DOT, BRACKET_PAD, GRACE_SIZE_RATIO, GRACE_SLOT_RATIO, GRACE_SLOT_RATIO_MULTI, GRACE_MARK_GAP, GRACE_MARK_HUG_GAP, DIGIT_INK_ASC_RATIO, digitInkH, noteScaleOf } from './spacing'
+import { DOT_R_DOT, BRACKET_PAD, GRACE_SIZE_RATIO, GRACE_SLOT_RATIO, GRACE_SLOT_RATIO_MULTI, GRACE_MARK_GAP, GRACE_MARK_HUG_GAP, DIGIT_INK_ASC_RATIO, digitInkH, noteScaleOf, ACCIDENTAL_FONT_RATIO, accidentalGap, accidentalInkOf, type AccidentalInkMetrics } from './spacing'
 import { tokenDuration } from '../duration'
 // adj633：倚音上的波音编码（与 `types.ts` 同源，避免布局端另写一份判断）
 import { GRACE_MORDENT_CODES } from '../types'
@@ -106,12 +106,94 @@ export function noteBodyW(noteSize: number, graceExtra = 0): number {
 /** 不带时值元素的默认间距 = 1/2 音符宽（仅用于它与其它元素之间；行首尾贴边的小节线除外） */
 export const nonDurGap = (noteSize: number) => noteSize * 0.5
 
+// ============================================================
+// adj644：多声部大括号的几何（渲染画弧/双线、布局算"括号要让开音符多远"共用一份）
+// ============================================================
+
+/** 括号左粗线 → 右细线的间距（px） */
+export const BRACE_LINE_DX = 3
+/** 弧半径 = min(字号/2, 块高 × 此比率) */
+export const BRACE_ARC_R_RATIO = 0.15
+/** 弧最右点 = 锚点 x + R × 此比率（1/6 圆弧：sin 60°） */
+export const BRACE_ARC_DX_RATIO = 0.866
+/** 括号笔画半宽（右细线/弧线宽 1.125 的一半） */
+export const BRACE_STROKE_HALF = 1.125 / 2
+
 /**
- * 音符变音角标（#/$/=/♯/♭/♮）本体宽（左扩展，画在数字左侧上方）。
- * 参考描述头 keyline（D: 调式）处升降号占宽 ♯/♭ = 7.62（13px 半角基准，随字号缩放）。
- * 否则空间优先下角标会向左越界与前一个音符重叠。
+ * 多声部大括号的**墨迹右缘**相对锚点 `x` 的偏移。
+ *
+ * 为什么要单独给：adj644 用户反馈"大括号与首个音符之间间距较大"，修法是**只挪括号、不挪音符**
+ * ——布局要算"括号该画在哪才能让墨迹右缘离内容左端固定净距"。弧的最右点和右细线哪个更右
+ * 取决于块高（矮块 R 小），渲染端画弧/双线用的是同一组常量 ⇒ 一份几何两处消费
+ * （同 adj458/adj479/adj632b 的纪律，避免"渲染改了、布局占位没同步"）。
  */
-export const accidentalBodyW = (noteSize: number) => 7.62 * (noteSize / 13)
+export function braceInkRightOffset(yTop: number, yBottom: number, noteSize: number): number {
+  const R = Math.min(noteSize / 2, (yBottom - yTop) * BRACE_ARC_R_RATIO)
+  return Math.max(BRACE_LINE_DX, R * BRACE_ARC_DX_RATIO) + BRACE_STROKE_HALF
+}
+
+/**
+ * 音符变音角标（`#`/`$`/`=` → 字形 `#`/`b`/`♮`）的**占宽**（左扩展，画在数字左侧上方）。
+ *
+ * adj645（用户要求"升降符的占宽按**墨宽**而非字宽来计算"）：
+ * 占宽 = 角标**墨迹宽** + 与数字的净距（都在**角标字号**上量），角标字号 = 音符字号 × 12/18
+ * （与 render 画角标的 `font-size` 同一把尺子）。
+ *
+ * 此前用的是 keyline 处 `♯` 的**字宽** 7.62（13px 基准）× 字号/13 —— 两处不对：
+ *  ① 那是**字宽**（advance）不是墨迹；② 该值对应 13px 字号，而角标实际画在 `12×s ≈ 0.667×字号`
+ *  上（13px 音符 ≈ 8.67px）⇒ 每个角标白留 ≈2.4px（密集多声部里就是一条看得见的缝）。
+ * 按墨迹算后（13px 音符）：`#` 7.62 → **5.40**、`b` → 4.66、`♮` → 3.28，且 `♮` 不再压到自己的数字上。
+ *
+ * adj646：净距并到**与描述头调号同一条规则**（`accidentalGap(所在字号)` = 0.2px @13px 基准，见 spacing.ts）
+ * —— 此前音符这边用 `0.05 × 角标字号`（13px 下 0.43px），是描述头 0.2px 的 2.4 倍。
+ */
+export const accidentalGlyphOf = (acc: '#' | '$' | '=' | null | undefined): '#' | 'b' | '♮' | null =>
+  acc === '#' ? '#' : acc === '$' ? 'b' : acc === '=' ? '♮' : null
+
+/** 角标字号（= 音符字号 × 12/18；render 画角标用它，布局量占宽也用它） */
+export const accidentalFontSize = (noteSize: number) => noteSize * ACCIDENTAL_FONT_RATIO
+
+/**
+ * 角标**占宽**（= 墨迹宽 + 与数字的净距）——数字相对所在时值段起点要右移这么多，
+ * 也是它在本体宽里占的那一份。`acc` 缺省按升号算（旧调用点兼容）。
+ */
+export const accidentalBodyW = (noteSize: number, acc: '#' | '$' | '=' = '#', ink?: AccidentalInkMetrics) => {
+  const g = accidentalGlyphOf(acc) ?? '#'
+  return accidentalInkOf(g, ink).inkW * accidentalFontSize(noteSize) + accidentalGap(noteSize)
+}
+
+/**
+ * 角标文字的**绘制锚点**相对数字左缘的偏移（负值 = 向左；render 用）。
+ * 定位基准是**墨迹右缘**：`墨迹右缘 = 数字左缘 − 净距` ⇒ `pen = 数字左缘 − 净距 − 墨迹宽 − 左偏`。
+ */
+export const accidentalPenDx = (noteSize: number, acc: '#' | '$' | '=' = '#', ink?: AccidentalInkMetrics) => {
+  const g = accidentalGlyphOf(acc) ?? '#'
+  const { inkW, lsb } = accidentalInkOf(g, ink)
+  return -(accidentalGap(noteSize) + (inkW + lsb) * accidentalFontSize(noteSize))
+}
+
+/** 角标**墨迹左缘**相对数字左缘的偏移（负值）——由渲染锚点公式推出，供断言核对"占宽 = 墨迹" */
+export const accidentalInkLeftDx = (noteSize: number, acc: '#' | '$' | '=' = '#', ink?: AccidentalInkMetrics) => {
+  const g = accidentalGlyphOf(acc) ?? '#'
+  return accidentalPenDx(noteSize, acc, ink) + accidentalInkOf(g, ink).lsb * accidentalFontSize(noteSize)
+}
+
+/** 角标**墨迹右缘**相对数字左缘的偏移（负值 = 离数字 `净距`；各字形同一个值，`acc` 仅为调用点统一） */
+export const accidentalInkRightDx = (noteSize: number, _acc: '#' | '$' | '=' = '#') => -accidentalGap(noteSize)
+
+/**
+ * adj647（用户要求"墨迹来源也统一"）：解析出本音符角标的**实际几何**（px，相对数字左缘）——
+ * `penDx` = 文字锚点、`leadW` = 占宽（左伸量）。布局把它存进 `PlacedToken.accidentalGeo`，
+ * 渲染端直接消费 ⇒ "占宽"与"锚点"永远同一份度量（不会因为两处各传一套实测而变成两套账）。
+ */
+export const accidentalGeometry = (
+  noteSize: number,
+  acc: '#' | '$' | '=' = '#',
+  ink?: AccidentalInkMetrics,
+): { penDx: number; leadW: number } => ({
+  penDx: accidentalPenDx(noteSize, acc, ink),
+  leadW: accidentalBodyW(noteSize, acc, ink),
+})
 
 /**
  * &hx（滑音/呼吸记号，右侧）无时值元素本体宽。

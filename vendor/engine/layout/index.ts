@@ -29,9 +29,9 @@ import type {
   ScorePageMeta,
   VoiceBlock,
 } from '../types'
-import { DIGIT_HEIGHT_RATIO, LAYER_GAP, SLUR_W, octaveTopY, BRACKET_PAD, H_GAP, noteScaleOf, VOLTA_BAR_GAP, VOLTA_RAISE, DYN_HALF_H, barlinePad, barlineTotalW, DOT_AFTER_DIGIT_GAP, DOT_R, SEGMENT_ROW_GAP_DEFAULT, SEGMENT_LAYER_YSCALE, TP_BRACKET_GAP, barNumberGapNeed } from './spacing'
+import { DIGIT_HEIGHT_RATIO, LAYER_GAP, SLUR_W, octaveTopY, BRACKET_PAD, H_GAP, noteScaleOf, VOLTA_BAR_GAP, VOLTA_RAISE, DYN_HALF_H, barlinePad, barlineTotalW, DOT_AFTER_DIGIT_GAP, DOT_R, SEGMENT_ROW_GAP_DEFAULT, SEGMENT_LAYER_YSCALE, TP_BRACKET_GAP, barNumberGapNeed, type AccidentalInkMetrics } from './spacing'
 // adj284：空间优先布局的度量（本体宽 / 时值拆分 / 非时值元素间距）
-import { splitNoteDur, noteBodyW, augBodyW, dotBodyW, accidentalBodyW, markBodyW, digitSlotW, hxBodyW, graceAtTail, graceSlotLayout, nonDurGap, slideExtraW } from './spaceLayout'
+import { splitNoteDur, noteBodyW, augBodyW, dotBodyW, accidentalBodyW, accidentalGeometry, markBodyW, digitSlotW, hxBodyW, graceAtTail, graceSlotLayout, nonDurGap, slideExtraW, braceInkRightOffset, BRACE_LINE_DX } from './spaceLayout'
 import { hairpinEvents, resolveHairpins, type DynEvent, type NoteAnchors } from './hairpins'
 // adj303：乐器名标注需要用 parseInstrumentRef / 库名（@乐器名 / @@ 后下一个音符）
 import { parseInstrumentRef, INSTRUMENT_LIB_NAMES } from '../playback/instruments'
@@ -184,8 +184,12 @@ function graceTailW(t: Extract<MusicToken, { kind: 'note' }> | undefined, noteSi
  * 空间优先路径已分别用 grW/accW 单独处理，不引用本函数。
  * adj396：这里只关心**总宽**（行宽/拍宽的最小需求），inline/tail 拆分不影响合计。
  */
-function noteExtraW(t: Extract<MusicToken, { kind: 'note' }> | undefined, noteSize: number): number {
-  return (t ? graceGroupW(t, noteSize) : 0) + (t && t.accidental ? accidentalBodyW(noteSize) : 0)
+function noteExtraW(
+  t: Extract<MusicToken, { kind: 'note' }> | undefined,
+  noteSize: number,
+  ink?: AccidentalInkMetrics,
+): number {
+  return (t ? graceGroupW(t, noteSize) : 0) + (t && t.accidental ? accidentalBodyW(noteSize, t.accidental, ink) : 0)
 }
 /** 小节内左右留白（px） */
 const BAR_PAD = 6
@@ -233,7 +237,7 @@ function meterGapRight(comment: string | undefined, noteSize: number): number | 
 }
 
 /** 小节内每拍信息（adj106：倚音占位按拍记录，不再整小节最大 extra 应用到所有拍——会高估行宽导致早断行） */
-function segBeatMap(seg: BarSeg, noteSize = 18): Map<number, { minDur: number; extra: number }> {
+function segBeatMap(seg: BarSeg, noteSize = 18, ink?: AccidentalInkMetrics): Map<number, { minDur: number; extra: number }> {
   const byBeat = new Map<number, { minDur: number; extra: number }>()
   let beat = 0
   for (const t of seg.notes) {
@@ -244,7 +248,7 @@ function segBeatMap(seg: BarSeg, noteSize = 18): Map<number, { minDur: number; e
       const b = nearInt ? Math.round(beat) : Math.floor(beat + 1e-9)
       const e = byBeat.get(b) ?? { minDur: Infinity, extra: 0 }
       e.minDur = Math.min(e.minDur, dur)
-      if (t.kind === 'note') e.extra = Math.max(e.extra, noteExtraW(t, noteSize))
+      if (t.kind === 'note') e.extra = Math.max(e.extra, noteExtraW(t, noteSize, ink))
       byBeat.set(b, e)
       beat += dur
     }
@@ -253,8 +257,8 @@ function segBeatMap(seg: BarSeg, noteSize = 18): Map<number, { minDur: number; e
 }
 
 /** 小节自然宽（adj35）：逐拍累加每拍 need（密集拍多占、正常拍 14），断行与拍级挤占一致；adj106 拍级倚音占位 */
-function segNeedW(seg: BarSeg, noteSize = 18): number {
-  const byBeat = segBeatMap(seg, noteSize)
+function segNeedW(seg: BarSeg, noteSize = 18, ink?: AccidentalInkMetrics): number {
+  const byBeat = segBeatMap(seg, noteSize, ink)
   let w = 0
   for (const e of byBeat.values()) {
     w += e.minDur > 0 ? Math.max(BPW_NATURAL, minNoteW(noteSize, e.extra) / e.minDur) : BPW_NATURAL
@@ -647,6 +651,26 @@ function slideWOf(t: MusicToken, noteSize: number): number {
   return 0
 }
 
+/**
+ * adj643：音符**画在数字左侧**的墨迹总量 —— 数字相对所在时值段起点要右移的"左伸让位量"。
+ *
+ * = 变音角标 `accidentalBodyW` + **前**倚音组 `graceInlineW` + 滑音记号 `slideWOf`。
+ * （后倚音画在数字右上角，不算左伸；单声部空间优先一直按这个口径算
+ *  `digitLeft = blockX + accW + leftExt`。）
+ *
+ * 为什么抽成函数：**拍宽**与**数字落位**必须用同一份口径。adj640 只把它算进了拍宽、
+ * 却按"整拍所有音符统一右移同一个块级让位量"落位 —— 同拍内有**多个音符起步**时
+ * （密集的八分/十六分），每个音符都白拿一份让位量，而拍内游标只按各自本体宽推进，
+ * 后一个音符的角标就压到前一个音符的数字上（E-2026-330，用户报"音符较密时与前一音符重叠"）。
+ * 与 adj458/adj479/adj632b 同一条纪律：一份几何两处消费。
+ */
+function noteLeftInk(t: MusicToken | undefined, noteSize: number, ink?: AccidentalInkMetrics): number {
+  if (!t || t.kind !== 'note') return 0
+  const gn = t.gracenotes
+  const grBefore = gn && !gn.after ? graceInlineW(t, noteSize) : 0
+  return (t.accidental ? accidentalBodyW(noteSize, t.accidental, ink) : 0) + grBefore + slideWOf(t, noteSize)
+}
+
 /** 排版行：完整小节行（均分撑满）或小节碎片行（超长小节按拍数拆分） */
 type LayoutRow =
   | { kind: 'bars'; start: number; end: number }
@@ -654,18 +678,18 @@ type LayoutRow =
 
 /** 断行：正常小节按逐拍 need 自然宽断行（adj35：密集拍多占、正常拍 14，与拍级挤占一致）；
  *  超长小节（拍数超行上限）拆为碎片行。 */
-function breakRows(segs: BarSeg[], availW: number, noteSize = 18): LayoutRow[] {
+function breakRows(segs: BarSeg[], availW: number, noteSize = 18, ink?: AccidentalInkMetrics): LayoutRow[] {
   const rows: LayoutRow[] = []
   let start = 0
   let w = 0 // 当前行逐拍 need 宽累积
   for (let i = 0; i < segs.length; i++) {
     const sb = segBeats(segs[i])
     // adj106：小节整体超宽判定改用「拍级 need 总和」（原来按最密拍 need 高估，拆得过碎）
-    const segW = segNeedW(segs[i], noteSize) + noteGapOf(Math.ceil(sb))
+    const segW = segNeedW(segs[i], noteSize, ink) + noteGapOf(Math.ceil(sb))
     if (segW > availW - BAR_PAD * 2) {
       // 超长小节：flush 当前行，再按音符拍数拆碎片行（按拍级 need 累计，adj106）
       if (i > start) rows.push({ kind: 'bars', start, end: i })
-      const byBeat = segBeatMap(segs[i], noteSize)
+      const byBeat = segBeatMap(segs[i], noteSize, ink)
       const needOf = new Map<number, number>()
       for (const [p, e] of byBeat) needOf.set(p, Math.max(BPW_NATURAL, minNoteW(noteSize, e.extra) / e.minDur))
       let accNeed = 0
@@ -722,13 +746,13 @@ function breakRows(segs: BarSeg[], availW: number, noteSize = 18): LayoutRow[] {
  * 累计，超过页面有效宽则断行（对应「可分配宽 < 0 一定换行」）。
  * 不再用时值优先的拍级 need（会高估小节宽，导致过早断行）。超长小节首版不拆 frag。
  */
-function breakRowsSpace(segs: BarSeg[], availW: number, noteSize: number): LayoutRow[] {
+function breakRowsSpace(segs: BarSeg[], availW: number, noteSize: number, ink?: AccidentalInkMetrics): LayoutRow[] {
   const segNeed = segs.map((seg) => {
     let durSum = 0
     for (const t of seg.notes) {
       if (t.kind === 'note' || t.kind === 'rest' || t.kind === 'rhythm') {
         const s = splitNoteDur(t)
-        const accW = t.kind === 'note' && t.accidental ? accidentalBodyW(noteSize) : 0
+        const accW = t.kind === 'note' && t.accidental ? accidentalBodyW(noteSize, t.accidental, ink) : 0
         // adj396：带增时线/附点的后倚音占位排在时值元素之后（inline 与 tail 拆分，合计不变）
         const grW = t.kind === 'note' ? graceInlineW(t, noteSize) : 0
         const grTailW = t.kind === 'note' ? graceTailW(t, noteSize) : 0
@@ -781,11 +805,26 @@ interface Unit {
 // 主排版函数
 // ============================================================
 
+/**
+ * adj647：`layoutScore` 的**字体度量入参**（宿主实测，可选）。
+ *
+ * 引擎零 DOM、拿不到字形度量；而 `shuzi_font` 是用户可配的 ⇒ 变音角标的墨迹宽/左偏只能由宿主量。
+ * 宿主一次性实测三个字形（`canvas.measureText` + `actualBoundingBoxLeft/Right`）后传进来，
+ * 布局据此算角标**占宽**（并把解析结果写进 `PlacedToken.accidentalGeo` 供渲染直接消费）；
+ * 不传 / 传得不合理 ⇒ 退回内置常量表（默认字体栈实测基准）。
+ */
+export interface LayoutFontMeta {
+  /** 变音角标 `#`/`b`/`♮` 的墨迹度量（比值：px ÷ 实测时用的字号） */
+  accidentalInk?: AccidentalInkMetrics
+}
+
 export function layoutScore(
   result: ParseResult,
   config: PageConfig,
   defaultInstrumentRef?: string,
+  fontMeta?: LayoutFontMeta,
 ): ScoreLayout {
+  const accInk = fontMeta?.accidentalInk
   const paper = PAPER_SIZE[config.page]
   const m = metrics(config)
   const keySemitone = parseKey(result.header.key)
@@ -930,7 +969,19 @@ export function layoutScore(
     // adj314：多声部空间优先用「音符块本体在时值段内水平居中」（参考单声部 placeNoteSpace）——
     // 提供 space 时按本体居中定位 note.x/width；时值优先路径不传，行为不变。
     // adj319：augW/hxW 含增时线/hx 显示占宽，noteRightX 累加避免色块按段宽算时漏掉
-    space?: { noteBodyW: number; dotBodyW: number; accW: number; leftExt: number; hasDot: boolean; augW: number; hxW: number },
+    // adj640/adj643：`leadInk` = 本音符**实际**左伸让位量（数字相对段起点右移多少）——
+    // 由调用方算好（= max(本音符左伸, 该拍块级让位量[仅本拍第一个起步的音符])，见 placeVoiceBlock）；
+    // 不传则退回本音符自己的左伸量（单声部口径）
+    space?: {
+      noteBodyW: number
+      dotBodyW: number
+      accW: number
+      leftExt: number
+      hasDot: boolean
+      augW: number
+      hxW: number
+      leadInk?: number
+    },
     /** adj627：本音**当下生效的调号**（临时转调 `"d:..."` 之后会变；缺省 = 描述头调号） */
     keyAt: number = keySemitone,
   ) => {
@@ -948,7 +999,22 @@ export function layoutScore(
     let noteW: number
     let noteRightX: number
     if (space) {
-      nx = first.x
+      /**
+       * adj640/adj643（用户报"多声部 + 空间优先：升降符没占宽，压到相邻音符"，截图 `2 3# 4`）：
+       * 数字要**右移让开左伸墨迹**，与单声部空间优先同一口径（`digitLeft = blockX + accW + leftExt`）：
+       *   · 变音角标 `accW`（画在数字**左侧**，见 render 的 `x − 7s`）；
+       *   · 前倚音组 `leftExt`（`[5/]` 向数字左侧排）；
+       *   · 滑音记号（`&shy/&xhy`，adj636b 起也画在数字左侧）。
+       * 此前这里把数字**直接钉在段起点**（`nx = first.x`）——段宽（`headW`）里虽然含这些左伸量，
+       * 但墨迹全在数字左边 ⇒ 溢出到**前一个时值段**，压住相邻音符。
+       *
+       * 右移量 = `leadInk`（adj643 起由调用方逐音符给出）：本音符左伸量，且当它是**本拍第一个
+       * 起步的音符**时取"本拍各声部左伸量的最大值"——多声部同拍必须纵向对齐（adj314），
+       * 各声部各挪各的会让"带角标的那一声部"单独右移一小段。
+       */
+      const ownLead = space.accW + space.leftExt + slideWOf(t, m.noteSize)
+      const leadInk = space.leadInk ?? ownLead
+      nx = first.x + leadInk
       // ★ adj319：noteRightX 累加附点+增时线+hx 显示占宽（照搬单声部 actualW/rightX 计算，
       // 此前多声部 rightX 只含本体宽 → 色块按段滑动时末段 width 用本体宽，且 dot段 x1
       // 小于 dot.x 时附点色块消失）。附点右缘 = 附点圆心 + 圆半径（确保 endX ≥ 附点圆右缘）。
@@ -962,7 +1028,14 @@ export function layoutScore(
       if (space.augW) displayW += space.augW
       if (space.hxW) displayW += space.hxW
       noteW = displayW
-      noteRightX = first.x + displayW
+      /**
+       * adj643：本体右缘必须把**借来的让位量**（`leadInk − ownLead`，本拍其他声部/其他音符
+       * 带来的块级让位）算进去 —— 数字按 `leadInk` 右移了，右缘却仍按段起点起算，
+       * 就会短一个"借来量"（`rightX` 偏小 ⇒ 播放色块宽度趋近 0、后一个音符的角标检测不到重叠）。
+       * `ownLead` 自己的那份让位量本来就在 `displayW` 里（`space.noteBodyW` 含角标/倚音/滑音），
+       * 故右缘 = 段起点 + 让位量 + displayW − 自己的让位量。
+       */
+      noteRightX = first.x + leadInk + displayW - ownLead
       // adj317：多声部 space 显式附点段位置（圆心 = 数字右缘 + 间隙 + 半附点宽），
       // 避免渲染回退公式 seg0.x + mainDur*perBeat 在 perBeat<本体宽时落在数字内
       if (space.hasDot) {
@@ -975,7 +1048,20 @@ export function layoutScore(
         })
       }
     } else {
-      nx = (centerOnFirst ? first.x + first.beats * (first.perBeat / 2) : first.x + w / 2) - 6
+      // adj640：时值优先路径把数字**居中**在自己的时值段里（美观），但左伸墨迹（变音角标 / 前倚音 /
+      // 滑音）会让墨迹溢到段外压住前一个元素 ⇒ 居中位置不够靠右时**钳到"左伸量"处**（只在真会压时生效，
+      // 无左伸墨迹的音符位置一字不变，既有谱面零影响）。
+      const leftInkTime =
+        t.kind === 'note'
+          ? (t.accidental ? accidentalBodyW(m.noteSize, t.accidental, accInk) : 0) +
+            graceInlineW(t, m.noteSize) +
+            slideWOf(t, m.noteSize)
+          : 0
+      nx =
+        Math.max(
+          (centerOnFirst ? first.x + first.beats * (first.perBeat / 2) : first.x + w / 2) - 6,
+          first.x + leftInkTime,
+        ) || 0
       noteW = w
       noteRightX = nx + w
     }
@@ -991,6 +1077,11 @@ export function layoutScore(
       beatPos,
       barIndex,
       segments,
+      // adj647：变音角标的几何由**布局**解析并存下来（宿主实测优先）——渲染直接消费，
+      // 避免"布局按实测、渲染按常量表"两套账
+      ...(t.kind === 'note' && t.accidental
+        ? { accidentalGeo: accidentalGeometry(m.noteSize, t.accidental, accInk) }
+        : {}),
       audioPitch: toPlayable(t)
         ? pitchToName(t.pitch, t.octaveShift, t.accidental, keyAt)
         : null,
@@ -1054,7 +1145,7 @@ export function layoutScore(
           const b = s.startBeat + (Math.abs(beat - Math.round(beat)) < 1e-3 ? Math.round(beat) : Math.floor(beat + 1e-9))
           const e = out.get(b) ?? { minDur: Infinity, extra: 0 }
           e.minDur = Math.min(e.minDur, d)
-          if (t.kind === 'note') e.extra = Math.max(e.extra, noteExtraW(t, m.noteSize))
+          if (t.kind === 'note') e.extra = Math.max(e.extra, noteExtraW(t, m.noteSize, accInk))
           out.set(b, e)
           beat += d
         }
@@ -1185,7 +1276,7 @@ export function layoutScore(
           // adj106：倚音占位记到音符起始拍（该拍分配更宽，避免倚音与相邻音符重叠）
           if (t.kind === 'note') {
             const p0 = Math.floor(fgBeat + 1e-9)
-            if (beatsInfo[p0]) beatsInfo[p0].extra = Math.max(beatsInfo[p0].extra, noteExtraW(t, m.noteSize))
+            if (beatsInfo[p0]) beatsInfo[p0].extra = Math.max(beatsInfo[p0].extra, noteExtraW(t, m.noteSize, accInk))
           }
           fgBeat += dur
         }
@@ -1390,7 +1481,7 @@ export function layoutScore(
           if (t.kind === 'note') {
             const p0 = Math.floor(gBeat + 1e-9)
             if (beatsInfo[p0]) {
-              beatsInfo[p0].extra = Math.max(beatsInfo[p0].extra, noteExtraW(t, m.noteSize))
+              beatsInfo[p0].extra = Math.max(beatsInfo[p0].extra, noteExtraW(t, m.noteSize, accInk))
               // adj435：段层同拍的倚音额外宽同样取 max（与 minDur 同一套"取更密"规则）
               const segNeed0 = segNeedsOfRow.get(rowBeatBase + p0)
               if (segNeed0) beatsInfo[p0].extra = Math.max(beatsInfo[p0].extra, segNeed0.extra)
@@ -1823,7 +1914,7 @@ export function layoutScore(
         for (const t of seg.notes) {
           if (t.kind === 'note' || t.kind === 'rest' || t.kind === 'rhythm') {
             const s = splitNoteDur(t)
-            const accW = t.kind === 'note' && t.accidental ? accidentalBodyW(m.noteSize) : 0
+            const accW = t.kind === 'note' && t.accidental ? accidentalBodyW(m.noteSize, t.accidental, accInk) : 0
             // adj396：inline（紧贴数字）/ tail（增时线·附点之后）拆分——合计不变，仅换位置
             const grW = t.kind === 'note' ? graceInlineW(t, m.noteSize) : 0
             const grTailW = t.kind === 'note' ? graceTailW(t, m.noteSize) : 0
@@ -2293,7 +2384,7 @@ export function layoutScore(
     // adj625：本组每个 seg 的**全曲小节序号**（决定哪几个小节画方框序号）
     const ord = barOrdinalsOf(segs, startBar)
     // adj288：空间优先用「本体宽」判据断行，避免时长优先拍级 need 高估导致过早换行
-    const rows = config.noteSpaceLayout === 'space' ? breakRowsSpace(segs, availW, m.noteSize) : breakRows(segs, availW, m.noteSize)
+    const rows = config.noteSpaceLayout === 'space' ? breakRowsSpace(segs, availW, m.noteSize, accInk) : breakRows(segs, availW, m.noteSize, accInk)
     const geciSize = config.geci_size
     const lyricMaps = buildLyricMaps(lyrics)
 
@@ -2367,6 +2458,12 @@ export function layoutScore(
    * 换页清空（跨页对齐没有意义）；中间夹了单声部行也不清（"上一组"就是上一个多声部块）。
    */
   let lastMultiBarW: readonly number[] | null = null
+  /**
+   * adj644：与 `lastMultiBarW` 同批记下的**每小节"内容右端 → 该小节线中心"的偏移**
+   * （= 后间距/2，末小节取尾间隙/2）。对齐时要用它把"本块末小节线"与"上一组内小节线"
+   * 的公式差补回来（原先是写死的 `barlinePad/2`，只在旧公式下成立）。
+   */
+  let lastMultiBarLineOff: readonly number[] | null = null
 
   /** 多声部块：各声部按小节对齐纵向堆叠（块内小节等宽 + 时值等宽） */
   const placeVoiceBlock = (unit: Unit, startBar = 1) => {
@@ -2426,7 +2523,15 @@ export function layoutScore(
      * 打开该选项且**块首小节带序号**时，把空隙撑到 `barNumberGapNeed`（框宽 + 净距 + 括号厚）。
      */
     const blockGapNeed = showBarNo && isNumberedBar(ord[0]) ? barNumberGapNeed(ord[0] as number, m.noteSize) : 0
-    const blockPad = labelPad + Math.max(14, blockGapNeed) - firstLeadMarkW
+    /**
+     * adj644：块首留白的地板值随字号缩放（原先是写死的 `14`，字号调大时不跟着走；
+     * `1.08×字号` 在默认 13px 下 = 14.04，与旧值等价）。
+     * 注意：**这个值不能按"块首是否要画序号"分档** —— 它是 adj601 跨块"小节线对齐"的基准，
+     * 分档会让"本块首小节带序号"的块整体右移、与上一组错开（用户要求过"两组小节线尽量对齐"）。
+     * 所以"括号离音符太远"改成**只挪括号**（见下面 `braceX`），音符位置一字不动。
+     */
+    const NUM_BOX_GAP_MIN = m.noteSize * 1.08
+    const blockPad = labelPad + Math.max(NUM_BOX_GAP_MIN, blockGapNeed) - firstLeadMarkW
     const blockStartX = config.margin_left + blockPad
     const blockAvailW = availW - blockPad
     // 块内每拍宽 = 块可用宽 / 块总拍数（每小节取各声部最大拍数，adj15）
@@ -2479,14 +2584,34 @@ export function layoutScore(
       }
       endMarkPad.push(pad)
     }
-    // 块级每小节间隔空间：统一所有声部（取该小节线上类型；|/ 不占位），保证纵向对齐
-    // adj596：该小节以末尾记号收尾时按 `2×endPad` 加宽（只增不减）
+    /**
+     * 块级每小节间隔空间：统一所有声部（取该小节线上类型；|/ 不占位），保证纵向对齐。
+     *
+     * adj644（用户反馈"小节线与前/后音符紧贴"）：**间距 = 线自身宽 + 两侧净间距 `barlinePad`**，
+     * 与单声部同一口径（单声部 `barOuter = lineW + bp + max(bp, meterGap)`，线画在「内容右端 + 间距/2」⇒
+     * 线墨迹左右各留 `barlinePad`）。此前多声部把整段间距只按 **一份** `barlinePad` 算、线又放在中点 ⇒
+     * 线左右各只剩 ≈1.1px（单声部是 3.25px），密集谱面上就显出"紧贴"。
+     * adj596：该小节以末尾记号收尾时按 `2×endPad` 加宽（**只增不减**，记号让位优先）。
+     */
+    const barTypeAt = (b: number): BarlineType => {
+      for (const p of parts) {
+        const s = p.segs[b]
+        if (s?.bar) return s.bar.type
+      }
+      return '|'
+    }
+    /** 一条小节线的完整占位（线宽 + 两侧净间距）——与单声部 `barOuter` 同源 */
+    const barSlotOf = (b: number): number => barlineTotalW(barTypeAt(b)) + 2 * barlinePad(m.noteSize)
     const gapSpaces: number[] = []
     for (let b = 0; b < numBars - 1; b++) {
-      gapSpaces.push(Math.max(barlinePad(m.noteSize), 2 * endMarkPad[b]))
+      gapSpaces.push(Math.max(barSlotOf(b), 2 * endMarkPad[b]))
     }
-    /** 块级两端留白：两个 BAR_PAD + 各小节间距 + **末小节的行末尾间隙**（adj596） */
-    const lastTrailGap = 2 * (endMarkPad[numBars - 1] ?? 0)
+    /**
+     * 块级两端留白：两个 BAR_PAD + 各小节间距 + **末小节的行末尾间隙**。
+     * adj644：末小节也按同一条"线的完整占位"给间隙（原来只有末尾记号让位量 = 0 ⇒
+     * 末小节线墨迹压进末音符本体框半根线宽，与内小节线不是同一套账）。
+     */
+    const lastTrailGap = Math.max(barSlotOf(numBars - 1), 2 * (endMarkPad[numBars - 1] ?? 0))
     const pads = BAR_PAD * 2 + gapSpaces.reduce((a, s) => a + s, 0) + lastTrailGap
     // 块内总拍 = Σ 每小节整数拍（barBeats 已向上取整）
     const totalBeats = blockBeats
@@ -2524,6 +2649,20 @@ export function layoutScore(
     // 每声部每小节本体宽 → 小节基准本体宽 = max(各声部) → 按基准本体宽占比分摊空白。
     // 此时值优先路径仍保留（noteSpaceLayout !== 'space' 时走原切分法则）。
     const useSpace = config.noteSpaceLayout === 'space'
+    /**
+     * adj640/adj643（用户报"多声部 + 空间优先：升降符没占宽，压到相邻音符"，截图 `2 3# 4`）：
+     * **拍级"左伸墨迹"让位量** —— 变音角标（`accW`）、前倚音组、滑音记号都画在数字**左侧**；
+     * 而多声部空间优先把数字锚在**拍起点**（adj314：保证同拍纵向对齐）⇒ 这些墨迹会溢出到
+     * **前一个时值段**里压住相邻音符。修法与 `markShift`（拍首独立标记占位）同款：
+     * 每拍取**各声部左伸量的最大值**，作为该拍的**块级让位量**。
+     *
+     * adj643：块级让位量只发给**本拍第一个起步的音符**（各声部各自的第一个）——
+     * 这样"同拍第一个音符"跨声部对齐（adj314 的不变量）仍然成立，而拍内后续音符按
+     * 自己的左伸量落位。adj640 曾把让位量发给本拍**所有**音符：拍宽里只加了 max 一次、
+     * 落位却人人白拿一份，拍内游标又只按本体宽推进 ⇒ 密集音符（一拍内多个八分/十六分）时
+     * 后一个音符的角标压到前一个音符的数字上（E-2026-330）。
+     */
+    const leftInkShift: number[] = new Array(totalBeats).fill(0)
     // adj316：多声部空间优先——拉伸空白 s_b 均分到「小节头 + 各拍后」，使上/下音符与小节线
     // 间距相对平均（用户要求，替代把 W 摊进每拍段宽导致小节线侧右）。仅 space 路径填充。
     const mspS: number[] = []
@@ -2533,21 +2672,60 @@ export function layoutScore(
       // ---- ③b 每小节每拍最大本体占宽（含拍中标记），跨声部取最大——供小节内拍级分配 ----
       // adj479：拍宽 = 拍首前置占位 + max(各声部本体宽 + 拍中标记宽)；滑音（&shy/&xhy）
       // 的墨迹右伸量计入音符本体宽（无时值但有占宽的元素）。
+      // adj640/adj643：本体宽拆成「左伸墨迹 + 其余」；拍内每个音符的槽宽 = **它的实让位量** + 其余，
+      // 而实让位量 = max(自己的左伸, 本拍块级让位量[仅本拍第一个起步的音符])。
+      // 于是"借来的让位量"也被算进槽宽 —— 否则数字按让位量右移、槽宽却只有本体宽，
+      // 后一个音符的左伸墨迹就落进前一个音符的槽里（E-2026-330）。
       const beatBodyW: number[][] = []
+      /**
+       * adj644（用户反馈"小节线与前/后音符紧贴"）：**末拍"时值比例位置溢出"补偿**（逐小节）。
+       *
+       * 拍内落位 = `max(本体游标, 拍内时值位置 × 拍宽)`，而拍宽是"该拍各音符本体宽之和"——
+       * 拍内**不等长**时两者会打架：`2./ 3//`（附点八分 + 十六分）里十六分的时值位置 = `0.75×拍宽`，
+       * 再加自己的本体宽就**超出该拍** ≈3.3px。落在**末拍**上的溢出直接吃掉末小节线的净距
+       * （实测左净距 −0.1px：音符本体压到线上）。
+       *
+       * 解法：把溢出量补在**本小节末尾**（记进 `mspBarRelW` ⇒ 同时带动小节线位置与下一小节内容），
+       * **不动任何音符、也不改拍宽** —— 时值位置是由拍宽算出来的，改拍宽会让位置再涨（正反馈），
+       * 补在末尾则一次到位、且不动 adj314 的"同拍纵向对齐"。单声部按"元素本体宽 + 剩余宽按比例
+       * 分摊"排位，本来就不会溢出，故只有多声部需要这一笔。
+       */
+      const barSpillPad: number[] = new Array(numBars).fill(0)
       for (let b = 0; b < numBars; b++) {
         const bb = barBeats[b]
         const perBeatMax: number[] = new Array(bb).fill(0)
+        const perBeatLeft: number[] = new Array(bb).fill(0)
+        /** adj644：末拍起步的音符（时值位置比例 + 槽宽），拍宽定下来后再算溢出 */
+        const lastBeatSpills: { frac: number; slotW: number }[] = []
+        // ① 本拍块级让位量 = 各声部左伸量的最大值（必须先算全，落位/槽宽都要用）
+        for (const p of parts) {
+          const seg = p.segs[b] ?? { notes: [], bar: null }
+          let beatAcc = 0
+          for (const t of seg.notes) {
+            if (t.kind !== 'note' && t.kind !== 'rest' && t.kind !== 'rhythm') continue
+            const startBeat = Math.floor(beatAcc + 1e-9)
+            const leftInk = noteLeftInk(t, m.noteSize, accInk)
+            if (leftInk > perBeatLeft[startBeat]) perBeatLeft[startBeat] = leftInk
+            beatAcc += tokenDuration(t)
+          }
+        }
+        for (let k = 0; k < bb; k++) leftInkShift[barStartBeat[b] + k] = perBeatLeft[k]
+        // ② 各声部逐音符槽宽（用上面算好的块级让位量）
         for (const p of parts) {
           const seg = p.segs[b] ?? { notes: [], bar: null }
           const voiceBeats: number[] = new Array(bb).fill(0)
+          /** adj643：本声部本小节里"已经在本拍起步过一次"的拍 —— 块级让位量只发给第一个 */
+          const leadUsed = new Set<number>()
           let beatAcc = 0
           for (const t of seg.notes) {
             if (t.kind === 'note' || t.kind === 'rest' || t.kind === 'rhythm') {
               const s = splitNoteDur(t)
-              const accW = t.kind === 'note' && t.accidental ? accidentalBodyW(m.noteSize) : 0
+              const accW = t.kind === 'note' && t.accidental ? accidentalBodyW(m.noteSize, t.accidental, accInk) : 0
               // adj396：inline/tail 拆分（尾部倚音占位接在增时线/附点之后，合计不变）
               const grW = t.kind === 'note' ? graceInlineW(t, m.noteSize) : 0
               const grTailW = t.kind === 'note' ? graceTailW(t, m.noteSize) : 0
+              // adj643：画在数字左侧、需要从段首让位的墨迹总量（角标 / 前倚音组 / 滑音）
+              const leftInk = noteLeftInk(t, m.noteSize, accInk)
               // adj479：**逐拍归位**——每个元素的本体宽记在它真正被画出来的那一拍：
               //   首拍 = 数字槽 + 变音角标 + 附点 + 滑音墨迹（都画在数字之后、第一拍内）；
               //   第 i 拍 = 第 i 条增时线；末拍再加尾部倚音。
@@ -2561,9 +2739,16 @@ export function layoutScore(
               // 原 `k <= endBeat`（floor）对整拍音符双计宽（本体宽 2 倍 → 段宽远超本体 → 小节线侧右）。
               const endBeat = Math.min(bb, Math.ceil(beatAcc + dur - 1e-9))
               const nSpan = Math.max(1, endBeat - startBeat)
+              // adj643：实让位量 = max(自己的左伸, 本拍块级让位量[仅本拍第一个起步的音符])
+              const lead =
+                !leadUsed.has(startBeat) ? Math.max(leftInk, perBeatLeft[startBeat]) : leftInk
+              leadUsed.add(startBeat)
+              // adj644：末拍起步的音符留一份"时值位置 + 槽宽"，拍宽定下来后算溢出（见 barSpillPad）
+              if (startBeat === bb - 1) lastBeatSpills.push({ frac: beatAcc - startBeat, slotW: lead + headW - leftInk })
               for (let k = startBeat; k < endBeat; k++) {
                 const i = k - startBeat
-                let w = i === 0 ? headW : i <= s.augCount ? augBodyW(m.noteSize) : 0
+                // adj643：首拍 = 实让位量 + 「本体宽刨掉自己的左伸」；借来的让位量由此进入槽宽
+                let w = i === 0 ? lead + headW - leftInk : i <= s.augCount ? augBodyW(m.noteSize) : 0
                 if (i === nSpan - 1) w += grTailW
                 voiceBeats[k] += w
               }
@@ -2577,7 +2762,16 @@ export function layoutScore(
           // 跨声部取最大：同一拍纵向堆叠、同一 x，取最宽声部
           for (let k = 0; k < bb; k++) perBeatMax[k] = Math.max(perBeatMax[k], voiceBeats[k])
         }
-        // 拍首前置占位（块级）加回每拍宽
+        // adj644：末拍"时值位置溢出"补偿（拍宽已定：溢出 = 位置 + 槽宽 − 拍宽，只补正数）
+        if (lastBeatSpills.length > 0) {
+          const wLast = perBeatMax[bb - 1] ?? 0
+          for (const it of lastBeatSpills) {
+            barSpillPad[b] = Math.max(barSpillPad[b], it.frac * wLast + it.slotW - wLast)
+          }
+          if (barSpillPad[b] < 0) barSpillPad[b] = 0
+        }
+        // 拍首前置占位（块级）加回每拍宽 —— adj643：左伸让位量已在上面逐音符计入槽宽，
+        // 此处**不再**重复加一次 perBeatLeft（否则拍宽虚高、与落位口径两套账）
         beatBodyW.push(perBeatMax.map((v, k) => v + markShift[barStartBeat[b] + k]))
       }
       // ---- ⑥ adj317：拍宽 = 该拍最大本体占宽；拉伸空白 s 均分到「(总拍数+numBars-1) 个槽位」——
@@ -2597,14 +2791,14 @@ export function layoutScore(
          */
         baseBarSum +=
           (beatBodyW[b] ?? []).reduce((a, s) => a + (s > 0 ? s : BPW_NATURAL), 0) +
-          (barBeats[b] > 0 ? (barBeats[b] - 1) * NOTE_GAP : 0)
+          (barBeats[b] > 0 ? (barBeats[b] - 1) * NOTE_GAP : 0) +
+          (barSpillPad[b] ?? 0) // adj644：末拍溢出补偿也是本小节真实占了的地方
       }
-      const totalSlots = totalBeats + numBars - 1
       // adj317c：末节线钳制到 rightLimit - halfW（与单声部 atEnd 行末线一致），avStretch 反推 ΣbarBar
       // lineX0末 = blockStartX + ΣbarBar + ΣgapSpaces(前) + BAR（末小节后无 gapSpaces，不加 gap/2），
       // 令 lineX0末 = pageW - margin_right - halfW → ΣbarBar = (pageW - margin_right - halfW) - blockStartX - ΣgapSpaces - BAR
       // adj318：行小节数 < align_min_bars（与单声部 stretch 同步）→ 自然宽，不撑满、不钳制末线
-      // （s=0，avStretch=0，ΣbarBar=baseBarSum，lineX末 自然值 ≤ 钳制上界）
+      // （sBeat=0，avStretch=0，ΣbarBar=baseBarSum，lineX末 自然值 ≤ 钳制上界）
       const stretchBars = numBars >= config.align_min_bars
       const sumGapSpaces = gapSpaces.reduce((a, s) => a + s, 0)
       const halfBarW = barlineTotalW('|') / 2
@@ -2612,7 +2806,18 @@ export function layoutScore(
       // adj596：末小节线要离"小节内容右端" `endPad`（末尾记号让位）⇒ 内容右端相应左移 `endPad`
       const targetBarSum = stretchBars ? Math.max(0, targetEndBarX - blockStartX - sumGapSpaces - BAR_PAD - lastTrailGap / 2) : 0
       const avStretch = stretchBars ? Math.max(0, targetBarSum - baseBarSum) : 0
-      const s = totalSlots > 0 ? avStretch / totalSlots : 0
+      /**
+       * adj648（用户反馈"拍子里的音符没有合理分散，导致拍子之间空白过大"）：富余宽摊进**每一拍自己的拍宽**，
+       * 不再像 adj316 那样摊在"小节头 + 拍与拍之间"。
+       *
+       * 为什么必须摊进拍宽：拍内落位是 `max(本体游标, 拍内时值位置 × 拍宽)`，而 `拍宽` = 该拍各音符
+       * **本体占宽之和**——富余宽只要留在拍外，拍内就永远拿不到 ⇒ 一个数字一个槽宽挤在一起
+       * （八分/十六分密拍尤其明显），而全部富余变成拍与拍之间的大空档（用户截图正是如此）。
+       * 摊进拍宽后：拍内音符按**时值比例**自然分开（十六分比八分靠得近，符合时值），
+       * 拍与拍之间只剩 `NOTE_GAP`（4px）——与"小节线两侧净距"（barlinePad 3.25px）同一量级，通篇均匀。
+       * 这与单声部路径"元素本体宽 + 剩余宽按比例分摊"（adj283）是同一口径。
+       */
+      const sBeat = totalBeats > 0 ? avStretch / totalBeats : 0
       /**
        * adj593（用户反馈"一行放不下"）：**自然宽已经超过可用宽时，等比压缩到刚好放得下**。
        *
@@ -2639,26 +2844,32 @@ export function layoutScore(
       if (alignFloor && alignFloor.length > 0) {
         const naturalOf = (b: number): number => {
           const bb = barBeats[b]
-          let natural = b === 0 ? 0 : s
+          // adj648：小节头不再单独留 s（富余宽全在拍宽里）；`sBeat` 在非撑满行恒为 0，故对齐口径不变
+          let natural = 0
           for (let k = 0; k < bb; k++) {
-            natural += (beatBodyW[b][k] > 0 ? beatBodyW[b][k] : BPW_NATURAL) * shrink + NOTE_GAP * shrink + s
+            natural += (beatBodyW[b][k] > 0 ? beatBodyW[b][k] : BPW_NATURAL) * shrink + NOTE_GAP * shrink + sBeat
           }
           if (bb > 0) natural -= NOTE_GAP * shrink
+          // adj644：本小节的末拍溢出补偿（上一组记下的内容宽里含它，口径要对齐）
+          natural += barSpillPad[b] ?? 0
           return natural
         }
         /**
          * 本小节要"对齐到"的宽度下限。
          *
-         * 末小节的**小节线位置公式**与内小节不同：内小节是 `内容右端 + 后间距/2`，末小节不加
-         * （`barToNextGap` 只有末尾记号让位量）。所以当本块末小节对应的是上一组的**内**小节时，
-         * 目标宽要把那半个后间距补回来，否则末小节线会短 `gap/2`（实测 1.6px）。
+         * 末小节的**小节线位置公式**与内小节不同：内小节是 `内容右端 + 后间距/2`，
+         * 末小节用尾间隙（无末尾记号时 adj644 起 = 同一条"线的完整占位"）。
+         * 所以当本块末小节对应的是上一组的**内**小节时，目标宽要把两者的**偏移差**补回来，
+         * 否则末小节线会错开。adj644：偏移不再靠假设（旧代码写死 `barlinePad/2`，只对旧公式成立），
+         * 直接取上一组记下的 `lastMultiBarLineOff[b]` 减去本块末小节的 `lastTrailGap/2`。
          */
         const floorOf = (b: number): number => {
           const base = b < alignFloor.length ? alignFloor[b] : 0
           const isLast = b === numBars - 1
           const aboveIsInner = b < alignFloor.length - 1
-          // 用**默认小节间距**（两块都是默认；末记号让位只影响各自末小节，不参与这一步）
-          return base + (isLast && aboveIsInner ? barlinePad(m.noteSize) / 2 : 0)
+          // adj644：用上一组记下的**实际偏移**（默认小节间距下就是"后间距/2"）补公式差
+          const prevOff = isLast && aboveIsInner ? (lastMultiBarLineOff?.[b] ?? 0) : 0
+          return base + (isLast && aboveIsInner ? prevOff - lastTrailGap / 2 : 0)
         }
         let total = 0
         let need = false
@@ -2683,22 +2894,25 @@ export function layoutScore(
       for (let b = 0; b < numBars; b++) {
         const bb = barBeats[b]
         const start = barStartBeat[b]
-        mspS[b] = s
-        // 首小节节头 = 0（行首贴左）；中间小节节头 = s（小节线对称）
-        let rel = b === 0 ? 0 : s
+        mspS[b] = sBeat
+        // adj648：小节头不再留富余宽（富余已在各拍拍宽里）——行首/小节线后都贴 `BAR_PAD` + 小节线净距
+        let rel = 0
         // adj601：本小节每拍额外分摊的"对齐加宽"（0 = 无需对齐）
         const add = alignAdd ? (alignAdd[start] ?? 0) : 0
         for (let k = 0; k < bb; k++) {
           const idx = start + k
           // adj593：自然宽超限时按 `shrink` 压缩（拍宽与拍间距同比例），压缩后正好贴右边界
-          const wb = (beatBodyW[b][k] > 0 ? beatBodyW[b][k] : BPW_NATURAL) * shrink + add
+          // adj648：撑满行把富余宽 `sBeat` 加进拍宽本身（拍内按 `时值位置 × 拍宽` 落位 ⇒ 音符自然分开）
+          const wb = (beatBodyW[b][k] > 0 ? beatBodyW[b][k] : BPW_NATURAL) * shrink + add + sBeat
           outPerBeat[idx] = wb
           mspSegX[idx] = rel
-          rel += wb + NOTE_GAP * shrink + s
+          rel += wb + NOTE_GAP * shrink
         }
-        // 末拍后净间隙 = s（去 NOTE_GAP）—— 末小节末拍后 s 撑到内容右界
+        // 末拍后净间隙：撑满行里富余已在拍宽内 ⇒ 末音符右缘 = 内容右界（adj648 起不再额外加 s）
         rel -= NOTE_GAP * shrink
-        mspBarRelW[b] = rel
+        // adj644：末拍"时值位置溢出"补偿补在小节**末尾**（不动任何音符位置；见 barSpillPad 注释）
+        // 注：这里用未压缩的量（`shrink < 1` 时略偏保守 = 线离音符更远一点），与 baseBarSum/naturalOf 同一口径
+        mspBarRelW[b] = rel + (barSpillPad[b] ?? 0)
       }
       while (outPerBeat.length < totalBeats) outPerBeat.push(BPW_NATURAL)
       return outPerBeat
@@ -2716,7 +2930,7 @@ export function layoutScore(
               let pos = barBeatAcc
               let rem = dur
               // adj479：滑音墨迹右伸量并进本体宽（无时值但有占宽的元素）
-              const extra = t.kind === 'note' ? noteExtraW(t, m.noteSize) + slideWOf(t, m.noteSize) : 0
+              const extra = t.kind === 'note' ? noteExtraW(t, m.noteSize, accInk) + slideWOf(t, m.noteSize) : 0
               while (rem > 1e-9) {
                 const nearInt = Math.abs(pos - Math.round(pos)) < 1e-3
                 const pp = nearInt ? Math.round(pos) : Math.floor(pos + 1e-9)
@@ -2789,6 +3003,8 @@ export function layoutScore(
       // adj479：拍内「本体游标」——本声部本拍已放置内容的右缘（相对该拍**内容起点**，即前置占位之后）。
       // 音符与拍中标记都按它推进，保证「本体宽大于该位置时值比例宽」时不互相重叠。
       const beatCursor = new Map<number, number>()
+      /** adj643：本声部"已经在本拍起步过一次"的拍（块级让位量只发给本拍第一个起步的音符） */
+      const leadUsed = new Set<number>()
       // adj479：拍首标记的累计偏移（相对**拍起点**，落在前置占位内；同拍多个记号依次并排）
       const leadCursor = new Map<number, number>()
       // adj393/adj394：本声部行的渐强/渐弱事件流与各音符停靠点（语义见 layout/hairpins.ts；
@@ -2811,7 +3027,7 @@ export function layoutScore(
             const dur = sd.noteDur * (1 + sd.augCount)
             // adj479：本体宽的**逐拍口径**与 ③b 一致——首拍 = 数字槽+变音角标+附点+滑音墨迹；
             // 第 i 拍 = 该拍的增时线；末拍再加尾部倚音。拍内「本体游标」按此推进。
-            const accW0 = t.kind === 'note' && t.accidental ? accidentalBodyW(m.noteSize) : 0
+            const accW0 = t.kind === 'note' && t.accidental ? accidentalBodyW(m.noteSize, t.accidental, accInk) : 0
             const grInlineW = t.kind === 'note' ? graceInlineW(t, m.noteSize) : 0
             const grTailBodyW = t.kind === 'note' ? graceTailW(t, m.noteSize) : 0
             const headBodyW =
@@ -2824,10 +3040,26 @@ export function layoutScore(
               Math.min(barBeats[b], Math.ceil(beatAcc + dur - 1e-9)) - Math.floor(beatAcc + 1e-9),
             )
             const startBeatOfNote = Math.floor(beatAcc + 1e-9)
-            /** 本音符第 i 个覆盖拍的本体宽（i 从 0 起） */
+            /**
+             * adj643：本音符的**实让位量** —— 与 ③b 的槽宽口径逐字对应。
+             * 块级让位量（该拍各声部左伸量的最大值）只发给**本拍第一个起步的音符**：
+             * 各声部各自的第一个都拿同一份 ⇒ 同拍纵向对齐不破（adj314）；
+             * 拍内后续音符只让开自己的左伸量 ⇒ 不会白拿一份让位量把数字推进前一个音符的本体里。
+             * 非空间优先路径不参与块级让位（时值优先按段居中 + 段首钳位，见 placeNoteAt 的 else 支）。
+             */
+            const ownLeadOfNote = noteLeftInk(t, m.noteSize, accInk)
+            const leadInkOfNote =
+              useSpace && !leadUsed.has(startBeatOfNote)
+                ? Math.max(ownLeadOfNote, leftInkShift[barStartB + startBeatOfNote] ?? 0)
+                : ownLeadOfNote
+            leadUsed.add(startBeatOfNote)
+            /** 本音符第 i 个覆盖拍的本体宽（i 从 0 起）——首拍 = 实让位量 + 本体宽刨掉自己的左伸量 */
             const beatBodyOfNote = (i: number): number =>
-              (i === 0 ? headBodyW : i <= sd.augCount ? augBodyW(m.noteSize) : 0) +
-              (i === spanN - 1 ? grTailBodyW : 0)
+              (i === 0
+                ? leadInkOfNote + headBodyW - ownLeadOfNote
+                : i <= sd.augCount
+                  ? augBodyW(m.noteSize)
+                  : 0) + (i === spanN - 1 ? grTailBodyW : 0)
             // adj250：段 x 用拍级每拍宽累计（块内拍位），小节内拍位置从 0 起
             // adj479：拍内内容整体右移「拍首前置占位」markShift（独立标记的空位）；
             // 拍内落位 = max(本体游标, 拍内时值比例位置)——既保持「同拍纵向对齐」的时值比例口径，
@@ -2842,6 +3074,7 @@ export function layoutScore(
                 const blockBeat = barStartB + pp
                 const perBeat = bodyPerBeat[blockBeat] ?? bodyPerBeat[totalBeats - 1]
                 const cursor = beatCursor.get(blockBeat) ?? 0
+                const slotW = beatBodyOfNote(Math.min(spanN - 1, pp - startBeatOfNote))
                 const off = Math.max(cursor, (pos - pp) * perBeat)
                 const piece = Math.min(rem, (nearInt ? Math.round(pos) : Math.floor(pos + 1e-9)) + 1 - pos)
                 segments.push({
@@ -2855,17 +3088,25 @@ export function layoutScore(
                   perBeat,
                   beats: piece,
                 })
-                beatCursor.set(blockBeat, off + beatBodyOfNote(Math.min(spanN - 1, pp - startBeatOfNote)))
+                beatCursor.set(blockBeat, off + slotW)
                 pos += piece
                 rem -= piece
               }
             }
-            // adj226：id.group 用真实组索引（此前误传块内声部序号 vi——
-            // 前面还有单声部行时组序号错位，预览↔编辑器光标联动全偏）
-            // adj314：多声部空间优先——音符块本体在时值段内水平居中（参考单声部）
-            let space: { noteBodyW: number; dotBodyW: number; accW: number; leftExt: number; hasDot: boolean; augW: number; hxW: number } | undefined
+            // adj640/adj643：`leadInk` = 本音符**实际**左伸让位量（数字相对段起点右移多少）——
+            // 本音符自己的左伸量；本拍第一个起步的音符取"该拍块级让位量"（保同拍纵向对齐）
+            let space: {
+              noteBodyW: number
+              dotBodyW: number
+              accW: number
+              leftExt: number
+              hasDot: boolean
+              augW: number
+              hxW: number
+              leadInk: number
+            } | undefined
             if (useSpace) {
-              const accW = t.kind === 'note' && t.accidental ? accidentalBodyW(m.noteSize) : 0
+              const accW = t.kind === 'note' && t.accidental ? accidentalBodyW(m.noteSize, t.accidental, accInk) : 0
               // adj396：inline/tail 拆分——尾部倚音占位接在增时线/附点之后（渲染同位置）
               const grW = t.kind === 'note' ? graceInlineW(t, m.noteSize) : 0
               const grTailW = t.kind === 'note' ? graceTailW(t, m.noteSize) : 0
@@ -2882,6 +3123,8 @@ export function layoutScore(
                 // adj396：尾部倚音占位一并累加（排在增时线/附点之后）
                 augW: (t.kind === 'note' ? splitNoteDur(t).augCount * augBodyW(m.noteSize) : 0) + grTailW,
                 hxW: t.kind === 'note' && t.symbols.includes('hx') ? hxBodyW(m.noteSize) : 0,
+                // adj640/adj643：本音符的实让位量（自己的左伸 ∪ 本拍第一个起步时的块级让位量）
+                leadInk: leadInkOfNote,
               }
             }
             const nIdxBefore = pages[pageIndex].notes.length
@@ -2977,12 +3220,33 @@ export function layoutScore(
       )
       xBar += barWb + (b < numBars - 1 ? (b < gapSpaces.length ? gapSpaces[b] : 0) : 0)
     }
+    /**
+     * adj644（用户反馈"多声部的大括号与首个音符之间间距较大"）：**只把括号贴到音符一侧，音符不动**。
+     *
+     * 内容左端（`blockStartX + BAR_PAD`）由 `blockPad` 决定，而 `blockPad` 是 adj601 跨块
+     * "小节线对齐"的基准 —— 曾经试过"不画序号时把 blockPad 调小"，结果"首小节带序号"的那一块
+     * 整体右移 ≈7px、与上一组的线错开（adj601 的链式对齐断言当场失败）。
+     * 所以改成：括号墨迹右缘离内容左端 `BRACE_CONTENT_GAP`（= 0.5×字号，与单声部
+     * "内容左端 = 边距 + BAR_PAD"同一观感），其余一概不动。
+     *
+     * 块首要画小节序号时（adj625：序号画在括号与音符之间）括号**保持原位**，把那段空隙留给方框。
+     */
+    const BRACE_CONTENT_GAP = m.noteSize * 0.5
+    const braceOldX = config.margin_left + labelPad + 2
+    const braceYTop = voiceYTop[0] ?? blockY
+    const braceYBottom = (voiceYTop[parts.length - 1] ?? blockY) + m.noteSize * 1.7
+    const braceX =
+      blockGapNeed > 0
+        ? braceOldX
+        : Math.max(
+            braceOldX,
+            blockStartX + BAR_PAD - BRACE_CONTENT_GAP - braceInkRightOffset(braceYTop, braceYBottom, m.noteSize),
+          )
     // adj625：**块首那个序号**——多声部块的行首小节线同样不画（隐藏小节线），
     // 序号放在「**大括号与音符之间**」那条空隙里（用户口径），高度按**最上面声部**的小节线底缘算。
     {
-      const braceX = config.margin_left + labelPad + 2
       // 括号双线：左粗线在 braceX、右细线在 braceX + 3 ⇒ 可用空隙是 [braceX+3, blockStartX]，取中点
-      const xGap = (braceX + 3 + blockStartX) / 2
+      const xGap = (braceX + BRACE_LINE_DX + blockStartX) / 2
       const yBottomTop = r1(voiceYTop[0] + m.noteSize * 1.1 + 4.5 * bs)
       const fc = ord.findIndex((v) => v !== null)
       if (fc === 0 && isNumberedBar(ord[0])) {
@@ -3031,7 +3295,8 @@ export function layoutScore(
 
     pages[pageIndex].voiceBlocks.push({
       // adj275：括号在有效范围（margin_left 右侧）、顺延内推；adj276：按本组注释宽（labelPad）独立计算
-      x: r1(config.margin_left + labelPad + 2),
+      // adj644：不画小节序号时把括号**贴到音符一侧**（`braceX`，音符不动）
+      x: r1(braceX),
       yTop: blockY,
       // adj271：yBottom = 最后声部曲部底。声部循环用 voiceHeights（含词行高）推进，
       // 第 2+ 声部位于词部下方；用纯曲 pureH 会偏上、括号没延伸到最后一曲部，
@@ -3047,6 +3312,10 @@ export function layoutScore(
       useSpace
         ? (mspBarRelW[b] ?? 0)
         : ((beatStartX[barStartBeat[b] + barBeats[b]] ?? 0) - (beatStartX[barStartBeat[b]] ?? 0)),
+    )
+    // adj644：同时记下每小节线相对"内容右端"的偏移（对齐时补公式差用）
+    lastMultiBarLineOff = Array.from({ length: numBars }, (_, b) =>
+      ((b < numBars - 1 ? (gapSpaces[b] ?? 0) : lastTrailGap) / 2),
     )
 
     y = blockY + blockH
@@ -3112,6 +3381,7 @@ export function layoutScore(
       startPage()
       y = m.bodyTopH // 后续页不占描述头区域
       lastMultiBarW = null // adj601：跨页不做小节线对齐
+      lastMultiBarLineOff = null
       continue
     }
     const { unit } = ev

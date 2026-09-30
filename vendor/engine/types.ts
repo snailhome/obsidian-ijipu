@@ -561,6 +561,15 @@ export interface PlacedToken {
   audioPitch: string | null
   /** 是否可点击（休止符/隐藏符不可发声） */
   playable: boolean
+  /**
+   * adj647：变音角标的**已解析几何**（相对数字左缘，px）——布局按生效的字形度量算好，
+   * 渲染端直接消费（`penDx` = 角标文字锚点，`leadW` = 角标占宽/左伸量）。
+   *
+   * 为什么由布局存下来：字形度量可以由**宿主实测**（`layoutScore` 的 `fontMeta`）传入，
+   * 渲染若自己再算一遍就可能与布局用的不是同一份 ⇒ "占宽"与"锚点"两套账。
+   * 无变音的音符不带该字段；老调用点（未传度量）渲染端回退到内置常量表。
+   */
+  accidentalGeo?: { penDx: number; leadW: number }
   /** adj303：乐器名注释（@乐器名 / @@ 切换后的下一个音符上方显示；仅 config.showInstrument 时渲染） */
   instrumentLabel?: string
   /**

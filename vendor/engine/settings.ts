@@ -362,29 +362,40 @@ export function defaultConfigForReset(): PageConfig {
 }
 
 /**
- * adj480：**谱面自包含检查**——列出「生效值与代码默认值不同、但谱面 `# jps-config` 没写（或写得不一样）」的字段。
+ * adj480/adj639：**谱面自包含检查**——列出「生效值与代码默认值不同、但谱面 `# jps-config` 没写（或写得不一样）」
+ * 的字段。
  *
  * 为什么需要：`.jps` 要能"复制给别人也一模一样"，就必须**自包含**——凡影响外观的值都得写在谱面里。
  * 应用侧已在 adj480 取消「本机页面设置」这一层（生效 = 代码默认 ← 谱面），所以应用里这里恒为 `ok`；
  * **宿主侧**（如 Obsidian 插件的插件设置 / 笔记 frontmatter）仍是"隐藏默认层"，这份检查把差异显式化，
  * 供"复制给他人前先随谱固化"的提示使用。
  *
+ * adj639（用户要求"插件的默认值体系与应用保持一致，在应用正常的谱面在插件里不要提示"）：
+ * 宿主可以传 `baseline`＝**本库默认层**（插件设置那条基线）。与它一致的字段**不算"未随谱携带"**——
+ * 这类值在用户眼里就是"本库默认值"，跟应用里的代码默认值等价；提示于是只剩**这篇笔记特有**的差异
+ * （典型来源 = 笔记 frontmatter）。
+ *
  * @param code 源码
- * @param effective 当前生效配置（宿主默认 + 谱面合并后的结果）
+ * @param effective 当前生效配置（宿主默认 + 笔记 frontmatter + 谱面合并后的结果）
+ * @param baseline 宿主"本库默认"层（`代码默认 ← 插件设置`，不含 frontmatter）；缺省 = 只按代码默认判定
  */
 export function configCarryover(
   code: string,
   effective: PageConfig,
+  baseline?: Partial<PageConfig> | null,
 ): { ok: boolean; missing: { key: string; value: unknown }[] } {
   const embedded = (extractJpsConfig(code) ?? {}) as unknown as Record<string, unknown>
   const eff = effective as unknown as Record<string, unknown>
   const def = defaultPageConfig as unknown as Record<string, unknown>
+  const base = (baseline ?? null) as Record<string, unknown> | null
   const missing: { key: string; value: unknown }[] = []
   for (const k of CONFIG_FIELDS) {
     const v = eff[k]
     if (v === undefined || v === null) continue
     // 与代码默认值一致 → 不需要随谱携带（对方也用同一个默认值）
     if (sameValue(v, def[k])) continue
+    // adj639：与宿主"本库默认"一致 → 也不算"未随谱携带"（它等价于对方的默认值，不是这份谱特有的差异）
+    if (base !== null && sameValue(v, base[k])) continue
     // 谱面已写且与本机生效值一致 → 已随谱携带
     if (k in embedded && sameValue(embedded[k], v)) continue
     missing.push({ key: k, value: v })
