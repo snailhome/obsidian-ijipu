@@ -54,7 +54,6 @@ import {
   barNumberBoxW,
   noteScaleOf,
   DIGIT_BOTTOM,
-  digitBottomY,
   // adj630b：谱尾说明（S:）的行基线（与预览端拖拽基准共用）
   notesRowBaseline,
   lowDotY,
@@ -536,25 +535,17 @@ function dotRightEdgeOf(note: PlacedToken, noteSize: number): number | null {
 }
 
 /**
- * adj629b：段层（`layerScale` = 整层纵向压缩比 k < 1）里**基线以下那一块**（减时线 + 低八度点）
- * 的**存储坐标补偿**。
+ * adj629b：段层（`layerScale` = 整层纵向压缩比 k < 1）里**减时线那一块**的**存储坐标补偿**。
  *
  * 为什么需要：整层用一个 `<g transform="… scale(1,k)">` 压扁后，`BEAM_H` 只有 0.8px × k ≈ 0.53px
  * ——渲染出来几乎看不见，两级十六分减时线也会挤在一起（用户报「低八度点出现了，但减时线没了」）。
- * 所以这一段在**存储坐标**里预先 ÷k：渲染结果仍是**原尺寸**（线宽、层间距、点半径都不变），
- * 只有「基线 → 块顶」那一段随整层一起被压扁（视觉上整层更贴数字、更扁）。
+ * 所以**减时线的高度与层间距**在存储坐标里预先 ÷k：压扁后仍是原尺寸（线宽、层间距不变）。
+ *
+ * adj650：**低八度点不再做这个补偿**（用户反馈"伴奏段里 `7,` 的低八度点离音符太远"）——
+ * 它跟高八度点一样，随整层一起被压扁即可；否则整层压了 2/3、点却仍在"原尺寸"的距离上
+ * ⇒ 看上去离数字明显偏大。低八度点位置改由 `lowDotY()` 原值给出（见下），层内缩放交给 `<g>`。
  */
 const layerBlockDiv = (v: number, k: number): number => (k === 1 ? v : v / k)
-
-/** adj629b：段层低八度点 cy（块内保持原尺寸；`k === 1` 时与 `lowDotY` 完全一致） */
-function layerLowDotY(y: number, i: number, dc: number, noteSize: number, k: number): number {
-  if (k === 1) return lowDotY(y, i, dc, noteSize)
-  const s = noteScaleOf(noteSize)
-  const top = y + (DIGIT_BOTTOM + LAYER_GAP) * s // 这一段会被 <g> ×k
-  const block = dc > 0 ? ((dc - 1) * (BEAM_H + INNER_GAP) + BEAM_H) * s : 0
-  const first = dc > 0 ? LAYER_GAP * s : digitBottomY(y, noteSize) - y + LAYER_GAP * s
-  return top + (block + first + DOT_R * s + i * (DOT_R * 2 + INNER_GAP) * s) / k
-}
 
 /**
  * adj629b（用户要求）：**临时叠加层整层纵向压扁**（不逐个元素压）。
@@ -609,13 +600,13 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
     // 取消 adj19 的左移 1px——项目中其它居中元素（增时线/上方修饰符/注释）也都用这一中心）
     const dotCx = x + digitW / 2
     const dc = t.diminishCount
-    // adj629b：段层（纵向压缩 k）——低八度点属于"减时线块"，块内在存储坐标里 ÷k 保持原尺寸；
-    // 高八度点在数字上方，随整层一起压扁即可（点半径随之略扁，观感自然）
-    const kL = note.layerScale ?? 1
+    // adj629b/adj650：段层（纵向压缩 k）——低八度点与高八度点**同口径**：位置用原值、随整层一起压扁
+    // （adj629b 曾把低八度点也当"减时线块"预先 ÷k 保持原尺寸 ⇒ 整层压了 2/3、点仍在原距离上，
+    //  用户看到的"低八度点离音符太远"就是这个）。减时线那一块的补偿仍保留（见 `layerBlockDiv`）。
     for (let i = 0; i < n; i++) {
-      const cy = oct > 0 ? octaveDotY(y, i, size) : layerLowDotY(y, i, dc, size, kL)
-      const rr = oct > 0 || kL === 1 ? DOT_R * s : DOT_R * s / kL
-      parts.push(`<circle cx="${dotCx}" cy="${r1n(cy)}" r="${r1n(rr)}" fill="#1b1b1b"/>`)
+      const cy = oct > 0 ? octaveDotY(y, i, size) : lowDotY(y, i, dc, size)
+      // 点半径同样随整层等比压扁（与高八度点一致；k = 1 时就是正圆）
+      parts.push(`<circle cx="${dotCx}" cy="${r1n(cy)}" r="${r1n(DOT_R * s)}" fill="#1b1b1b"/>`)
     }
   }
 

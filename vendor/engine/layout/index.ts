@@ -3398,12 +3398,58 @@ export function layoutScore(
   const notesByIndex = new Map<number, PlacedToken>()
   for (const p of pages) for (const n of p.notes) notesByIndex.set(n.id.index, n)
 
-  const slurPairs: { start: number; end: number; depth: number; tuplet: boolean; plus: number; minus: number }[] = []
+  const slurPairs: {
+    start: number
+    end: number
+    depth: number
+    tuplet: boolean
+    plus: number
+    minus: number
+    /** adj651：孤立 `)` 延续出来的**跨跳房子连音线**（只画「房子起始小节线 → 首音」这半条右弧，
+     *  不再从上一行行末拉一条左半部——上半条由房子 1 的显式连线已经表达） */
+    houseTie?: boolean
+  }[] = []
   // 配对规则：先进后出（LIFO 栈式，adj55）—— 最近打开的先闭合，标准括号嵌套；
   // 栈跨行保留：上一行未闭合的括号延续到下一行配对（跨行两半）
-  const sQueue: { start: number; depth: number; tuplet: boolean; plus: number; minus: number }[] = []
+  const sQueue: { start: number; depth: number; tuplet: boolean; plus: number; minus: number; barSeq: number }[] = []
   let gNote = 0
   let lastNote = -1
+  /**
+   * adj651（用户要求）：**跨跳房子连音线**。
+   *
+   * `(5/ |["1." 5/)` 这种「起点在小节线**之前**、终点是跳房子**首音**」的连音线，
+   * 在后面的房子里用**孤立 `)`**（前面没有未闭合的 `(`）延续——连回**同一条连音线的起点**
+   * （用户原话：「跳房子 2、结束句和跳房子 1 的第一个 5 都是与跳房子 1 的小节线前面的 5 连音」）。
+   *
+   * 为什么不能只认「上一条已闭合的连音线」：房子之间常夹着别的连线
+   * （本例 `(5 |["1." 5/)` 后面紧跟 `(6/ 6)`），取"最近闭合"会连到 6 上。
+   * 所以只记住**跨过房子起始小节线**那一条的起点。
+   */
+  let houseTieStart = -1
+  /** 已扫描到的小节线根数（含纯跳房子起点）——判断连音线是否跨过房子起始线 */
+  let barSeq = 0
+  /** 「跳房子首音」音符索引集合 + 各自起始小节线的小节线序号（配对时判定跨线） */
+  const voltaFirstNotes = new Set<number>()
+  const voltaFirstBarSeq = new Map<number, number>()
+  let expectVoltaFirst = false
+  let pendingVoltaBarSeq = -1
+  /**
+   * adj651：登记一条连音线；若它「跨过房子起始小节线且终点是该房子首音」，
+   * 就记下它的起点，供后续房子里的孤立 `)` 延续。
+   */
+  const pushSlurPair = (
+    start: number,
+    end: number,
+    depth: number,
+    tuplet: boolean,
+    plus: number,
+    minus: number,
+    openBarSeq: number,
+    houseTie = false,
+  ) => {
+    slurPairs.push({ start, end, depth, tuplet, plus, minus, houseTie })
+    if (voltaFirstNotes.has(end) && openBarSeq < (voltaFirstBarSeq.get(end) ?? -1)) houseTieStart = start
+  }
   // adj54：每个音符索引对应的「音符单位数」——基础 1，增时线每根折算 +1、
   // 附点按 (1+0.5×附点数) 乘算（如 1- =2、1. =1.5、1-. =3），供自动样式判断连音线长度
   const noteUnits: number[] = []
@@ -3419,13 +3465,26 @@ export function layoutScore(
         for (const s of sQueue) {
           if (s.start === -1) s.start = gNote
         }
+        // adj651：紧跟跳房子起始小节线的第一个音符 = 该房子首音（供跨线判定）
+        if (expectVoltaFirst) {
+          voltaFirstNotes.add(gNote)
+          voltaFirstBarSeq.set(gNote, pendingVoltaBarSeq)
+          expectVoltaFirst = false
+        }
         lastNote = gNote
         // adj54：记录单位数（休止符/节奏符同样按增时线/附点折算）
         noteUnits.push((1 + t.augmentCount) * (1 + 0.5 * t.dots))
         gNote++
+      } else if (t.kind === 'barline') {
+        // adj651：只需数根数与识别房子起始——连音线跨线判定用
+        barSeq++
+        if (t.voltaStart) {
+          pendingVoltaBarSeq = barSeq
+          expectVoltaFirst = true
+        }
       } else if (t.kind === 'slur') {
         if (t.dir === 'open') {
-          sQueue.push({ start: -1, depth: sQueue.length, tuplet: t.tuplet === true, plus: t.plus ?? 0, minus: t.minus ?? 0 })
+          sQueue.push({ start: -1, depth: sQueue.length, tuplet: t.tuplet === true, plus: t.plus ?? 0, minus: t.minus ?? 0, barSeq })
         } else {
           // adj55：先进后出 —— pop 最近打开的开括号；栈跨行保留（未闭合延续到后续行）
           const s = sQueue.pop()
@@ -3442,14 +3501,18 @@ export function layoutScore(
               // 连接点 X：终止栈内前一个未闭合连音（prev）于 X，并以 X 为起点重开新连音
               const prev = sQueue.pop()
               if (prev && prev.start !== -1 && lastNote >= prev.start) {
-                slurPairs.push({ start: prev.start, end: lastNote, depth: prev.depth, tuplet: prev.tuplet, plus: prev.plus, minus: prev.minus })
+                pushSlurPair(prev.start, lastNote, prev.depth, prev.tuplet, prev.plus, prev.minus, prev.barSeq)
               }
               // 新连音从 X 起，层级取被终止的 prev（断开嵌套，保持可渲染）
               sQueue.push({ ...s, start: lastNote, depth: prev ? prev.depth : s.depth })
             } else if (s.depth < 2) {
               // 普通配对（受 adj91 depth<2 渲染限制）
-              slurPairs.push({ start: s.start, end: lastNote, depth: s.depth, tuplet: s.tuplet, plus: s.plus, minus: s.minus })
+              pushSlurPair(s.start, lastNote, s.depth, s.tuplet, s.plus, s.minus, s.barSeq)
             }
+          } else if (!s && houseTieStart >= 0 && lastNote > houseTieStart) {
+            // adj651：孤立 `)`（前面没有未闭合的连音线）= **延续那条跨跳房子的连音线**——
+            // 一律连回它的起点（不改起点 → 跳房子 2 / 结束句 / 跳房子 1 三条共用同一起音）
+            pushSlurPair(houseTieStart, lastNote, 0, false, 0, 0, barSeq, true)
           }
         }
       }
@@ -3623,6 +3686,28 @@ export function layoutScore(
     return minX
   }
 
+  /**
+   * adj651（用户要求）：**跳房子首音的起始小节线 x**（不是则 null）。
+   *
+   * 跨行连音线右半部原先一律从「行首小节线 / 页面左边距」接进来，落在跳房子首音上时
+   * 会拉出一条横贯 `0 2 :|` 之类谱面内容的长线（用户报「跨跳房子时表现不对」）。
+   * 现在改为从**该房子的起始小节线**接进来——线正好从房子线的左端起笔，接住房子首音。
+   */
+  const voltaStartBarX = (rowIdx: number, note: PlacedToken): number | null => {
+    const r = rows[rowIdx]
+    const barY = r.y - 18.4 * noteScaleOf(m.noteSize)
+    let x: number | null = null
+    for (const b of pages[r.page].barlines) {
+      if (Math.abs(b.yTop - barY) >= 1) continue
+      if (!b.voltaStart || b.x >= note.x) continue
+      if (x === null || b.x > x) x = b.x
+    }
+    if (x === null) return null
+    // 必须是**首音**：这根房子线与该音符之间不夹别的音符（线接的是房子开头）
+    for (const n of r.notes) if (n.x > x && n.x < note.x) return null
+    return x
+  }
+
   /** 行末小节线 x（该行 x 最大的小节线；无则 null；adj199 自然宽行连音线左半终点） */
   const rowEndBarX = (rowIdx: number): number | null => {
     const r = rows[rowIdx]
@@ -3682,21 +3767,26 @@ export function layoutScore(
           ? rowAEndBar
           : pages[rA.page].width - config.margin_right
       // adj106：下一行始端 = 行首小节线（有则从其开始）否则从左边距开始
-      const xStartB = rowStartBarX(rowB) ?? config.margin_left
-      pages[rA.page].slurs.push({
-        x1: r1(a.x + halfDig + sSlur),
-        x2: r1(xEndA),
-        y: r1(
-          Math.max(
-            slurYFor(a, maxHiInRange(sp.start, lastA.id.index), maxSymInRange(sp.start, lastA.id.index), raise),
-            voltaFloorY(rowA) ?? -Infinity,
+      // adj651：终点落在跳房子首音时，改为从**该房子的起始小节线**接进来（见 voltaStartBarX）
+      const xStartB = voltaStartBarX(rowB, b) ?? rowStartBarX(rowB) ?? config.margin_left
+      // adj651：跨跳房子的延续线只画右半部——左半部若照画，会从上一行的 5 拉出一小截短线，
+      // 与「房子 1 的显式连线」叠在一起（用户参考图里上行是干净的一条弧）
+      if (!sp.houseTie) {
+        pages[rA.page].slurs.push({
+          x1: r1(a.x + halfDig + sSlur),
+          x2: r1(xEndA),
+          y: r1(
+            Math.max(
+              slurYFor(a, maxHiInRange(sp.start, lastA.id.index), maxSymInRange(sp.start, lastA.id.index), raise),
+              voltaFloorY(rowA) ?? -Infinity,
+            ),
           ),
-        ),
-        depth: sp.depth,
-        style: crossRowStyle,
-        tupletCount: sp.tuplet ? noteCount : undefined,
-        half: 'l', // 左半部：从最低处到行末最高点，右侧开口
-      })
+          depth: sp.depth,
+          style: crossRowStyle,
+          tupletCount: sp.tuplet ? noteCount : undefined,
+          half: 'l', // 左半部：从最低处到行末最高点，右侧开口
+        })
+      }
       const firstB = rows[rowB].notes[0]
       pages[rows[rowB].page].slurs.push({
         x1: r1(xStartB),
