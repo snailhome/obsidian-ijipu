@@ -743,6 +743,20 @@ export function buildPlaySequence(
       else slurOf.set(k, new Set([ri]))
     }
   })
+  /**
+   * adj651c（用户报「对于跳房子 2 和结束句，因为跨了小节或行，却是按两个半拍演奏」）：
+   * **延续类连音线**（跳房子里的孤立 `)`，起点在房子起始小节线之前、终点是该房子首音）。
+   *
+   * 演奏上它和普通同音连线一样要"并成一个长音"（`(5/ |5/)` = 只起奏一次、时值相加），
+   * 但它在**演奏顺序**里两端相邻（第 2 遍跳过房子 1 后，房子 2 的首音紧跟起音）、
+   * 在**源码顺序**里隔着一整段旋律 ⇒ 合并判据里的"源码索引相邻 + 同属一弧"认不出来。
+   * 所以由排版端把这份（起点, 终点）清单带过来：合并判据认「上一发声音符 = 本音符这条延续线的起点」。
+   *
+   * 注意：**不并入 `slurRanges`/`slurOf`**——那套是按源码区间铺满的（`[s, e]` 之间每个音符都算"同属一弧"），
+   * 把一条跨 40 个音符的延续线铺进去，会让区间内**相邻同音**被误判成连线而合并。
+   */
+  const contTieStartOf = new Map<number, number>()
+  for (const t of layout.continuationTies ?? []) contTieStartOf.set(t.end, t.start)
 
   // 3. 跳房子配对：voltaStart 的 seq 索引 → 对应 voltaEnd 的 seq 索引
   // adj359：指向 voltaEnd「本小节线」而非其后一位——使 `:|]["2."`（共用一根线：volta1 结束 + volta2 开始）
@@ -1623,11 +1637,16 @@ export function buildPlaySequence(
           prevRanges !== undefined && curRanges !== undefined && [...prevRanges].some((r) => curRanges.has(r))
         const hasFrontGrace = gn !== undefined && !gn.after && gracePitches.length > 0
         const hasTailGrace = gn !== undefined && gn.after && gracePitches.length > 0
+        /**
+         * adj651c：**延续类连音线**——本音符是某条延续线的终点，且**上一个已发事件正好是它的起点**
+         * （演奏顺序相邻，源码顺序不相邻）。这是"跨跳房子接续"的唯一可判据。
+         */
+        const continuesFromPrev =
+          lastEventNoteIdx >= 0 && contTieStartOf.get(curNoteIdx) === lastEventNoteIdx
         if (
           lastEventNoteIdx >= 0 &&
           sameVoiceAsPrev &&
-          curNoteIdx === lastEventNoteIdx + 1 &&
-          shareSlur &&
+          (continuesFromPrev || (curNoteIdx === lastEventNoteIdx + 1 && shareSlur)) &&
           !hasFrontGrace &&
           ornKind === null &&
           slideKind === null &&

@@ -19,6 +19,24 @@ import { resolvePageConfig } from '../src/config'
 import { codeBlockBody, jpsLinkpath, replaceCodeBlockBody } from '../src/sourceEdit'
 import { computeGuideLines, cropRectFor, guideLimits, guidePlacement } from '../src/guides'
 import { splitParseIssues } from '../src/parseIssues'
+// 新建 JPS 文件（文件夹右键菜单 + 点击未解析链接 + 默认模板）
+import {
+  NEW_JPS_BASE,
+  NEW_JPS_TEMPLATE,
+  consumeJpsLinkCreate,
+  createJpsFile,
+  dirOfPath,
+  jpsLinkTarget,
+  jpsParentFolder,
+  markJpsLinkCreate,
+  materializeJpsFile,
+  nextJpsFileName,
+  planJpsLinkCreate,
+  registerJpsFileCreator,
+  resolveJpsLinkPath,
+  unregisterJpsFileCreator,
+} from '../src/newFile'
+import { TFolder as StubTFolder } from './obsidianStub'
 
 let pass = 0
 let fail = 0
@@ -978,6 +996,345 @@ console.log('[adj452] playhead blocks follow playVoice / instrument / engine bou
     '应用打开：打开前先刷未落盘的编辑（fileView 传 beforeOpenExternal=saveNow，scorePane 先 await 它）',
     /beforeOpenExternal: \(\) => this\.saveNow\(\)/.test(fileViewSrcAp) &&
       /await host\.beforeOpenExternal\?\.\(\)/.test(scorePaneSrc),
+    '',
+  )
+}
+
+// ── 「新建 JPS 文件」（用户要求：文件列表里文件夹右键菜单 + 默认模板内容）────────────
+{
+  const mainSrcNf = readFileSync('src/main.ts', 'utf8')
+  const newFileSrcNf = readFileSync('src/newFile.ts', 'utf8')
+
+  check(
+    '新建 JPS：菜单项注册在 `file-menu` 上、且**只对文件夹**出现（文件右键不出这一项）',
+    /workspace\.on\('file-menu'/.test(mainSrcNf) &&
+      /if \(!\(file instanceof TFolder\)\) return/.test(mainSrcNf) &&
+      mainSrcNf.includes("setTitle('新建 JPS 文件')"),
+    '',
+  )
+  check(
+    '新建 JPS：菜单项带图标，点击后**在该文件夹内**创建（把 `file` 当目标目录传下去）',
+    /setIcon\('file-plus'\)/.test(mainSrcNf) && /createJpsFile\(this\.app, file\)/.test(mainSrcNf),
+    '',
+  )
+  check(
+    '新建 JPS：创建走 vault API（`vault.create`）并**打开新文件**；失败只弹 Notice 不抛',
+    /app\.vault\.create\(path, NEW_JPS_TEMPLATE\)/.test(newFileSrcNf) &&
+      /workspace\.getLeaf\(false\)\.openFile\(file\)/.test(newFileSrcNf) &&
+      /new Notice\(`新建 JPS 文件失败/.test(newFileSrcNf),
+    '',
+  )
+  check(
+    '新建 JPS：库根目录（`path === \'/\'`）不再拼一次分隔符',
+    /folder\.path === '\/' \|\| folder\.path === ''/.test(newFileSrcNf),
+    '',
+  )
+
+  check('新建 JPS 命名：无同名文件 → `未命名.jps`', nextJpsFileName([]) === '未命名.jps', nextJpsFileName([]))
+  check(
+    '新建 JPS 命名：已有 `未命名.jps` → `未命名 1.jps`（与 Obsidian 自带「新建笔记」同款）',
+    nextJpsFileName(['未命名.jps']) === '未命名 1.jps',
+    nextJpsFileName(['未命名.jps']),
+  )
+  check(
+    '新建 JPS 命名：取**第一个空位**（删掉中间那个后不复用已占用的后一个）',
+    nextJpsFileName(['未命名.jps', '未命名 1.jps', '未命名 3.jps']) === '未命名 2.jps',
+    nextJpsFileName(['未命名.jps', '未命名 1.jps', '未命名 3.jps']),
+  )
+  check(
+    '新建 JPS 命名：大小写不敏感（Windows/macOS 上 `未命名.JPS` 与 `.jps` 是同一个文件）',
+    nextJpsFileName(['未命名.JPS']) === '未命名 1.jps' && nextJpsFileName(['未命名 1.Jps']) === '未命名.jps',
+    nextJpsFileName(['未命名.JPS']),
+  )
+  check(
+    '新建 JPS 命名：忽略非 .jps 的同名文件与不相干文件',
+    nextJpsFileName(['未命名.md', '别的.jps']) === '未命名.jps',
+    nextJpsFileName(['未命名.md', '别的.jps']),
+  )
+  check(
+    '新建 JPS 命名：基名可换（`未命名` 是默认口径，能被参数覆盖）',
+    nextJpsFileName([], '我的曲子') === '我的曲子.jps' && NEW_JPS_BASE === '未命名',
+    nextJpsFileName([], '我的曲子'),
+  )
+
+  // 模板：与应用「新建」模板同口径（描述头 + 一行示例 + 页面设置占位），且**引擎解析 0 错 0 警**
+  const tplParsed = parseJps(NEW_JPS_TEMPLATE)
+  check(
+    '新建 JPS 模板：引擎解析**零错误零告警**（新建出来立刻是一份合法谱）',
+    tplParsed.errors.length === 0,
+    JSON.stringify(tplParsed.errors.map((e) => e.message)),
+  )
+  check(
+    '新建 JPS 模板：描述头 + 曲词主体 + 页面设置占位齐备（V/B/Z/D/P/S、Q、C、`# jps-config:{}`）',
+    ['V: 1.0', 'B: ', 'Z: ', 'D: C', 'P: 4/4', 'S: ', 'Q: ', 'C: '].every((k) => NEW_JPS_TEMPLATE.includes(k)) &&
+      NEW_JPS_TEMPLATE.includes('# jps-config:{}') &&
+      NEW_JPS_TEMPLATE.includes('#===========描述头定义===========') &&
+      NEW_JPS_TEMPLATE.includes('#==========以下为简谱主体==========') &&
+      NEW_JPS_TEMPLATE.includes('#===以下为页面设置，请勿手动修改==='),
+    '',
+  )
+  check(
+    '新建 JPS 模板：以换行结尾、且是 LF（与应用模板逐字一致的写法口径）',
+    NEW_JPS_TEMPLATE.endsWith('\n') && !NEW_JPS_TEMPLATE.includes('\r'),
+    JSON.stringify(NEW_JPS_TEMPLATE.slice(-12)),
+  )
+  const tplLayout = layoutScore(tplParsed, defaultPageConfig)
+  check(
+    '新建 JPS 模板：能正常排版（1 小节 4 拍、标题为「未命名」）',
+    tplLayout.pages[0].notes.length === 4 && tplParsed.header.titles[0] === '未命名',
+    JSON.stringify({ notes: tplLayout.pages[0].notes.length, title: tplParsed.header.titles[0] }),
+  )
+
+  // 端到端：用假 vault/app 真跑一遍 `createJpsFile`（路径拼装 + 写入内容 + 打开新文件）
+  const created: { path: string; data: string }[] = []
+  const opened: string[] = []
+  const fakeApp = {
+    vault: {
+      // 父目录已存在的场景：`ensureFolders` 查得到就不再建目录
+      getAbstractFileByPath: () => ({ path: '乐谱' }),
+      create: async (path: string, data: string) => {
+        created.push({ path, data })
+        return { path }
+      },
+    },
+    workspace: {
+      getLeaf: () => ({ openFile: async (f: { path: string }) => void opened.push(f.path) }),
+    },
+  }
+  await createJpsFile(fakeApp as never, { path: '乐谱', children: [{ name: '未命名.jps' }] } as never)
+  check(
+    '新建 JPS：在**该文件夹**内建不重名文件、写入的就是模板内容、并打开它',
+    created.length === 1 &&
+      created[0].path === '乐谱/未命名 1.jps' &&
+      created[0].data === NEW_JPS_TEMPLATE &&
+      opened.length === 1 &&
+      opened[0] === '乐谱/未命名 1.jps',
+    JSON.stringify({ path: created[0]?.path, opened }),
+  )
+  created.length = 0
+  opened.length = 0
+  await createJpsFile(fakeApp as never, { path: '/', children: [] } as never)
+  check(
+    '新建 JPS：库根目录建出来的是 `未命名.jps`（不是 `/未命名.jps`）',
+    created[0]?.path === '未命名.jps',
+    String(created[0]?.path),
+  )
+  let threw = false
+  const badApp = {
+    vault: {
+      create: async () => {
+        throw new Error('磁盘只读')
+      },
+    },
+    workspace: { getLeaf: () => ({ openFile: async () => undefined }) },
+  }
+  try {
+    await createJpsFile(badApp as never, { path: '', children: [] } as never)
+  } catch {
+    threw = true
+  }
+  check(
+    '新建 JPS：创建失败**不向上抛**（只弹 Notice；右键菜单回调里抛出去会成未捕获异常）',
+    !threw,
+    '',
+  )
+
+  // ── 菜单项落在 Obsidian 自带的「新建」组（section = action-primary）────────────────────
+  // 事实来源：`obsidian.asar` 里文件夹右键菜单的构建代码
+  //   `c.addItem(e => e.setSection("action-primary").setTitle(...menuOptNewNote())...)`（新建笔记/新建文件夹同组）
+  check(
+    '新建 JPS 菜单项与 Obsidian 自带「新建笔记 / 新建文件夹」**同组**（section = `action-primary`）',
+    /\.setSection\('action-primary'\)/.test(mainSrcNf) &&
+      /\.setTitle\('新建 JPS 文件'\)\s*\n\s*\.setSection\('action-primary'\)/.test(mainSrcNf),
+    '',
+  )
+
+  // ── 点击「不存在的 [[谱名.jps]]」→ 在**链接所在笔记的同级目录**建文件 ────────────────
+  check(
+    '链接建文件：`[[谱名.jps]]` → 建在**链接所在笔记的目录**下（用户口径：同级目录）',
+    JSON.stringify(planJpsLinkCreate('谱名.jps', '乐谱/笔记.md', () => false)) === JSON.stringify({ path: '乐谱/谱名.jps' }),
+    JSON.stringify(planJpsLinkCreate('谱名.jps', '乐谱/笔记.md', () => false)),
+  )
+  check(
+    '链接建文件：笔记在**库根**时路径不多一层（`谱名.jps` 而不是 `/谱名.jps`）',
+    planJpsLinkCreate('谱名.jps', '笔记.md', () => false)?.path === '谱名.jps',
+    JSON.stringify(planJpsLinkCreate('谱名.jps', '笔记.md', () => false)),
+  )
+  check(
+    '链接建文件：链接带子目录（`[[子/谱.jps]]`）时目录也一起补齐成路径',
+    planJpsLinkCreate('子/谱.jps', '乐谱/笔记.md', () => false)?.path === '乐谱/子/谱.jps',
+    JSON.stringify(planJpsLinkCreate('子/谱.jps', '乐谱/笔记.md', () => false)),
+  )
+  check(
+    '链接建文件：以 `/` 开头 = 从**库根**起算（`[[/谱库/我的谱.jps]]`）',
+    planJpsLinkCreate('/谱库/我的谱.jps', '乐谱/笔记.md', () => false)?.path === '谱库/我的谱.jps',
+    JSON.stringify(planJpsLinkCreate('/谱库/我的谱.jps', '乐谱/笔记.md', () => false)),
+  )
+  check(
+    '链接建文件：别名与子标题先剥掉（`[[谱名.jps|别名]]` / `[[谱名.jps#第2段]]`）',
+    jpsLinkTarget('谱名.jps|别名') === '谱名.jps' && jpsLinkTarget('谱名.jps#第2段') === '谱名.jps' &&
+      planJpsLinkCreate('谱名.jps|别名', '乐谱/笔记.md', () => false)?.path === '乐谱/谱名.jps',
+    JSON.stringify([jpsLinkTarget('谱名.jps|别名'), jpsLinkTarget('谱名.jps#第2段')]),
+  )
+  check(
+    '链接建文件：**不是 `.jps`** 的未解析链接不接管（`[[普通笔记]]` / `[[图.png]]` 仍归 Obsidian，会建 .md）',
+    planJpsLinkCreate('普通笔记', '乐谱/笔记.md', () => false) === null &&
+      planJpsLinkCreate('图.png', '乐谱/笔记.md', () => false) === null &&
+      planJpsLinkCreate('', '乐谱/笔记.md', () => false) === null,
+    JSON.stringify([jpsLinkTarget('普通笔记'), jpsLinkTarget('图.png'), jpsLinkTarget('')]),
+  )
+  check(
+    '链接建文件：**文件已存在**时不接管（把点击还给 Obsidian 原本的打开逻辑）',
+    planJpsLinkCreate('谱名.jps', '乐谱/笔记.md', () => true) === null,
+    '',
+  )
+  check(
+    '链接建文件：`..` 一律拒绝（不往库外/上级乱写）',
+    planJpsLinkCreate('../谱名.jps', '乐谱/笔记.md', () => false) === null &&
+      planJpsLinkCreate('子/../../谱名.jps', '乐谱/笔记.md', () => false) === null &&
+      resolveJpsLinkPath('..', '乐谱/笔记.md') === null,
+    JSON.stringify(resolveJpsLinkPath('子/../../谱名.jps', '乐谱/笔记.md')),
+  )
+  check(
+    '链接建文件：扩展名大小写不敏感（`[[谱名.JPS]]` 也认，路径保留用户写法）',
+    planJpsLinkCreate('谱名.JPS', '乐谱/笔记.md', () => false)?.path === '乐谱/谱名.JPS',
+    JSON.stringify(planJpsLinkCreate('谱名.JPS', '乐谱/笔记.md', () => false)),
+  )
+  // 接线：document 捕获阶段的 click 监听 + 同步判断 + 用 Keymap 决定新叶子
+  check(
+    '链接建文件：接在 document 的 **capture** 阶段 click 上（先拦下再冒泡给 Obsidian）',
+    /registerDomEvent\(document, 'click'/.test(mainSrcNf) && /capture: true/.test(mainSrcNf) &&
+      /a\.classList\.contains\('is-unresolved'\)/.test(mainSrcNf),
+    '',
+  )
+  check(
+    '链接建文件：`preventDefault`/`stopPropagation` 在**同步**路径上（先拦后 await，否则会被 Obsidian 抢走）',
+    mainSrcNf.indexOf('evt.preventDefault()') > mainSrcNf.indexOf('planJpsLinkCreate(href') &&
+      mainSrcNf.indexOf('void (async () =>') > mainSrcNf.indexOf('evt.stopPropagation()'),
+    '',
+  )
+  check(
+    '链接建文件：源码模式（非实时预览）与 Obsidian 一致——要按住 Ctrl/Cmd 才跟随，避免"想放光标却建了文件"',
+    /const inEditor = a\.closest\('\.cm-editor'\) !== null/.test(mainSrcNf) &&
+      /const livePreview = a\.closest\('\.is-live-preview'\) !== null/.test(mainSrcNf) &&
+      /if \(inEditor && !livePreview && !evt\.ctrlKey && !evt\.metaKey\) return/.test(mainSrcNf),
+    '',
+  )
+  check(
+    '链接建文件：嵌入笔记里的链接按**被嵌入那篇**的目录算（`.internal-embed` 的 `src`）',
+    /closest\('\.internal-embed, \.markdown-embed'\)/.test(mainSrcNf) &&
+      /embed\?\.getAttribute\('src'\)/.test(mainSrcNf),
+    '',
+  )
+  check(
+    '链接建文件：Ctrl/Cmd 点链接 = 在新页签/分屏打开（与 Obsidian 同款 `Keymap.isModEvent`）',
+    /Keymap\.isModEvent\(evt\)/.test(mainSrcNf) && /import \{[^}]*Keymap[^}]*\} from 'obsidian'/.test(mainSrcNf),
+    '',
+  )
+  // 端到端：真建一次（含父目录补齐）
+  created.length = 0
+  opened.length = 0
+  const foldersMade: string[] = []
+  const deepApp = {
+    vault: {
+      getAbstractFileByPath: () => null,
+      createFolder: async (p: string) => {
+        foldersMade.push(p)
+      },
+      create: async (path: string, data: string) => {
+        created.push({ path, data })
+        return { path }
+      },
+    },
+    workspace: { getLeaf: () => ({ openFile: async () => undefined }) },
+  }
+  const made = await materializeJpsFile(deepApp as never, '乐谱/子/谱名.jps')
+  check(
+    '链接建文件：父目录缺失时**逐级补齐**，再写入模板内容（`乐谱/子/谱名.jps` → 建 `乐谱`、`乐谱/子`）',
+    made !== null && JSON.stringify(foldersMade) === JSON.stringify(['乐谱', '乐谱/子']) &&
+      created[0]?.path === '乐谱/子/谱名.jps' && created[0]?.data === NEW_JPS_TEMPLATE,
+    JSON.stringify({ foldersMade, created: created.map((c) => c.path) }),
+  )
+
+  // ── 让 Obsidian 自己也认 `.jps` 扩展名（否则 [[谱名.jps]] 会被建成 `谱名.jps.md`）────────
+  // 事实来源：`obsidian.asar` 的 `FileManager.createNewFile`
+  //   `this.fileParentCreatorByType.hasOwnProperty(n) || (n = "md")`  ← 未注册的扩展名一律回退 md
+  //   而 `Workspace.openLinkText` 走的是 `createNewFile(parent, linktext)`（不带扩展名参数）
+  check(
+    '扩展名识别：向 Obsidian 的创建器注册 `jps`（注册后 `[[谱名.jps]]` 才建成 `谱名.jps` 而不是 `.jps.md`）',
+    /registerFileParentCreator\(NEW_JPS_EXT\.slice\(1\)/.test(newFileSrcNf) &&
+      /typeof fm\.registerFileParentCreator !== 'function'/.test(newFileSrcNf),
+    '',
+  )
+  const calls: string[] = []
+  const rootFolder = new StubTFolder()
+  const subFolder = new StubTFolder()
+  let creator: ((p: string) => unknown) | null = null
+  const fmApp = {
+    fileManager: {
+      registerFileParentCreator: (ext: string, fn: (p: string) => unknown) => {
+        calls.push('register:' + ext)
+        creator = fn
+      },
+      unregisterFileCreator: (ext: string) => calls.push('unregister:' + ext),
+    },
+    vault: {
+      getRoot: () => rootFolder,
+      getAbstractFileByPath: (p: string) => (p === '乐谱' ? subFolder : null),
+    },
+  }
+  registerJpsFileCreator(fmApp as never)
+  check(
+    '扩展名识别：注册的键就是 `jps`（不带点），并有对应的注销',
+    calls.includes('register:jps') && creator !== null,
+    JSON.stringify(calls),
+  )
+  consumeJpsLinkCreate() // 清掉注册期间可能留下的标记
+  const parent = creator === null ? null : creator('乐谱/笔记.md')
+  check(
+    '扩展名识别：创建器给出**链接所在笔记的同级目录**，同时打上"这次要补模板"的标记',
+    parent === subFolder && consumeJpsLinkCreate() === true && consumeJpsLinkCreate() === false,
+    '',
+  )
+  check(
+    '扩展名识别：目录取不到时退回**库根**（绝不返回 null——Obsidian 的创建器必须有返回）',
+    jpsParentFolder(fmApp as never, '乐谱/没有这个目录/笔记.md') === rootFolder &&
+      jpsParentFolder(fmApp as never, '根目录笔记.md') === rootFolder,
+    '',
+  )
+  check(
+    '扩展名识别：`dirOfPath` 取目录（`a/b/c.md` → `a/b`；根笔记 → 空串）',
+    dirOfPath('a/b/c.md') === 'a/b' && dirOfPath('c.md') === '' && dirOfPath('a\\b\\c.md') === 'a/b',
+    JSON.stringify([dirOfPath('a/b/c.md'), dirOfPath('c.md'), dirOfPath('a\\b\\c.md')]),
+  )
+  unregisterJpsFileCreator(fmApp as never)
+  check('扩展名识别：注销走 Obsidian 的 `unregisterFileCreator`', calls.includes('unregister:jps'), JSON.stringify(calls))
+  check(
+    '扩展名识别：内部 API 不存在时**静默降级**（不抛错；点击接管那条路仍会建带模板的文件）',
+    (() => {
+      try {
+        registerJpsFileCreator({ fileManager: {}, vault: {} } as never)
+        unregisterJpsFileCreator({ fileManager: {}, vault: {} } as never)
+        return true
+      } catch {
+        return false
+      }
+    })(),
+    '',
+  )
+  check(
+    '扩展名识别：空 `.jps`（Obsidian 那条路径建的）在 `vault.create` 后补默认模板，且只在标记命中时补',
+    /vault\.on\('create'/.test(mainSrcNf) && /consumeJpsLinkCreate\(\)/.test(mainSrcNf) &&
+      /file\.stat\.size === 0\) void this\.app\.vault\.modify\(file, NEW_JPS_TEMPLATE\)/.test(mainSrcNf) &&
+      /registerJpsFileCreator\(this\.app\)/.test(mainSrcNf) &&
+      /this\.register\(\(\) => unregisterJpsFileCreator\(this\.app\)\)/.test(mainSrcNf),
+    '',
+  )
+  check('扩展名识别：标记是"一次性"的（消费后即清零，不会误伤后续创建）',
+    (() => {
+      markJpsLinkCreate()
+      return consumeJpsLinkCreate() === true && consumeJpsLinkCreate() === false
+    })(),
     '',
   )
 }

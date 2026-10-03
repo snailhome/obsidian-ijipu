@@ -3426,6 +3426,14 @@ export function layoutScore(
    * 所以只记住**跨过房子起始小节线**那一条的起点。
    */
   let houseTieStart = -1
+  /**
+   * adj651c：**延续类连音线**的（起点, 终点）音符索引对——随排版结果交给播放端。
+   *
+   * 演奏上它与普通同音连线一样应"并成一个长音"，但它在**演奏顺序**里两端相邻、在**源码顺序**里
+   * 隔着一整段旋律（用户原话：「对于跳房子 2 和结束句，因为跨了小节或行，却是按两个半拍演奏」），
+   * 播放端那套"源码索引相邻 + 同属一弧"的判据认不出来 ⇒ 只能显式带过去。
+   */
+  const continuationTies: { start: number; end: number }[] = []
   /** 已扫描到的小节线根数（含纯跳房子起点）——判断连音线是否跨过房子起始线 */
   let barSeq = 0
   /** 「跳房子首音」音符索引集合 + 各自起始小节线的小节线序号（配对时判定跨线） */
@@ -3513,6 +3521,8 @@ export function layoutScore(
             // adj651：孤立 `)`（前面没有未闭合的连音线）= **延续那条跨跳房子的连音线**——
             // 一律连回它的起点（不改起点 → 跳房子 2 / 结束句 / 跳房子 1 三条共用同一起音）
             pushSlurPair(houseTieStart, lastNote, 0, false, 0, 0, barSeq, true)
+            // adj651c：登记给播放端（同音连线要并成一个长音，见 types.ts 的 `continuationTies`）
+            continuationTies.push({ start: houseTieStart, end: lastNote })
           }
         }
       }
@@ -3869,7 +3879,8 @@ export function layoutScore(
   placeSegmentOverlays(pages, result, config, keySemitone)
 
   const configKey = JSON.stringify(config)
-  return { pages, config, configKey }
+  // adj651c：延续类连音线（跳房子孤立 `)`）随排版结果交给播放端——演奏上要并成一个长音
+  return { pages, config, configKey, continuationTies }
 }
 
 /**

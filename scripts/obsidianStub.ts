@@ -36,6 +36,7 @@ export class Events {
   trigger(..._args: unknown[]): void {}
 }
 export class TFile {}
+export class TFolder {}
 export class Component {}
 export class MarkdownRenderChild {}
 export class TextFileView {}

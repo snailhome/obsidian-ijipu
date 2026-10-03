@@ -1,8 +1,9 @@
-import { Events, MarkdownRenderChild, MarkdownView, Plugin, TFile, type MarkdownSectionInformation } from 'obsidian'
+import { Events, Keymap, MarkdownRenderChild, MarkdownView, Plugin, TFolder, TFile, type MarkdownSectionInformation } from 'obsidian'
 import { IJipuSettingTab } from './settings'
 import { mountScorePane, type ScorePaneHandle } from './scorePane'
 import { registerJpsEmbeds } from './embed'
 import { IJipuFileView, JPS_EXTENSION, VIEW_TYPE_IJIPU } from './fileView'
+import { createJpsFile, consumeJpsLinkCreate, materializeJpsFile, planJpsLinkCreate, registerJpsFileCreator, unregisterJpsFileCreator, NEW_JPS_TEMPLATE } from './newFile'
 import { replaceCodeBlockBody } from './sourceEdit'
 import type { IJipuSettings } from './types'
 // @ts-ignore esbuild 以 text loader 把 worklet 内联为字符串（main.js 单文件自包含，无需插件目录单独 worklet）
@@ -58,8 +59,89 @@ export default class IJipuPlugin extends Plugin {
       ctx.addChild(new IJipuBlock(this, source, el, ctx.sourcePath, () => safeSectionInfo(ctx, el)))
     })
 
+    /**
+     * ④ 文件列表里**文件夹右键菜单** → 「新建 JPS 文件」（用户要求）。
+     *
+     * `file-menu` 对文件与文件夹都会触发，这里只认文件夹（`TFolder`）；
+     * 建好即打开（`.jps` 已注册为简谱视图 ⇒ 直接进谱面），命名与模板见 `newFile.ts`。
+     * `setSection('action-primary')` = Obsidian 自带「新建笔记 / 新建文件夹」同一组
+     * （从 `obsidian.asar` 核实的 section 名，见 `docs/RELEASE-NOTES.md`），排在它们之后。
+     */
+    this.registerEvent(
+      this.app.workspace.on('file-menu', (menu, file) => {
+        if (!(file instanceof TFolder)) return
+        menu.addItem((item) =>
+          item
+            .setTitle('新建 JPS 文件')
+            .setSection('action-primary')
+            .setIcon('file-plus')
+            .onClick(() => void createJpsFile(this.app, file)),
+        )
+      }),
+    )
+
+    /**
+     * ⑤ 点击**指向不存在的 `.jps` 的内部链接**（`[[谱名.jps]]`）→ 自动建文件并打开（用户要求）。
+     *
+     * 为什么用 document 上的**捕获**阶段监听：Obsidian 自己的链接点击处理挂在 `<a>` 元素上
+     * （`t.onClickEvent(...)`，内部还看 `e.defaultPrevented`），捕获阶段先跑才能把它拦下来
+     * ——这一步必须**同步**完成，所以判断逻辑抽成了纯函数 `planJpsLinkCreate`；
+     * 建文件是异步的，放到拦截之后。
+     */
+    this.registerDomEvent(document, 'click', (evt) => this.onLinkClick(evt), { capture: true })
+
+    /**
+     * ⑥ 让 Obsidian 自己也把 `[[谱名.jps]]` 认成 **`.jps` 文件**（用户报：此前会建成 `谱名.jps.md`）。
+     *
+     * 注册创建器后，**非点击**路径（`Ctrl+Enter` 跟随链接、悬浮预览里的"打开链接"、
+     * 其它插件调 `openLinkText`）也会正确建成 `谱名.jps`（落在链接所在笔记的同级目录）。
+     * 那条路径建出来是**空文件** ⇒ 建完补默认模板。
+     */
+    registerJpsFileCreator(this.app)
+    this.register(() => unregisterJpsFileCreator(this.app))
+    this.registerEvent(
+      this.app.vault.on('create', (file) => {
+        if (!(file instanceof TFile) || file.extension !== JPS_EXTENSION) return
+        if (!consumeJpsLinkCreate()) return
+        if (file.stat.size === 0) void this.app.vault.modify(file, NEW_JPS_TEMPLATE)
+      }),
+    )
+
     // 切换笔记时自动结束所有试听（避免试听继续却失去控制）
     this.registerEvent(this.app.workspace.on('active-leaf-change', () => this.stopAll()))
+  }
+
+  /**
+   * 链接点击：只有「未解析 + `.jps` + 文件确实不存在」才接管。
+   *
+   * 与 Obsidian 的跟随语义保持一致：**源码模式**（非实时预览）下要按住 Ctrl/Cmd 才跟随链接，
+   * 这里同样要求修饰键——否则点一下链接想放光标，却把文件建出来了。
+   */
+  private onLinkClick(evt: MouseEvent): void {
+    const el = evt.target as HTMLElement | null
+    const a = el?.closest?.('a.internal-link') as HTMLAnchorElement | null
+    if (!a || !a.classList.contains('is-unresolved')) return
+    const inEditor = a.closest('.cm-editor') !== null
+    const livePreview = a.closest('.is-live-preview') !== null
+    if (inEditor && !livePreview && !evt.ctrlKey && !evt.metaKey) return
+    const href = a.getAttribute('data-href') ?? a.getAttribute('href') ?? ''
+    const plan = planJpsLinkCreate(href, this.linkSourcePath(a), (p) => this.app.vault.getAbstractFileByPath(p) !== null)
+    if (!plan) return
+    // 同步拦下这次点击（再异步建文件）：否则事件会继续冒泡到 Obsidian 的链接处理器
+    evt.preventDefault()
+    evt.stopPropagation()
+    void (async () => {
+      const file = await materializeJpsFile(this.app, plan.path)
+      if (file) await this.app.workspace.getLeaf(Keymap.isModEvent(evt)).openFile(file)
+    })()
+  }
+
+  /** 链接所在笔记的路径（嵌入 `![[笔记]]` 里的链接要按**被嵌入那篇**的目录算） */
+  private linkSourcePath(el: HTMLElement): string {
+    const embed = el.closest('.internal-embed, .markdown-embed') as HTMLElement | null
+    const src = embed?.getAttribute('src')
+    if (src) return src.split('#')[0]
+    return this.app.workspace.getActiveFile()?.path ?? ''
   }
 
   onunload(): void {
