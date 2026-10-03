@@ -23,6 +23,36 @@
 import { FileSystemAdapter, Notice, Platform, type App } from 'obsidian'
 
 /**
+ * adj652（用户要求："链接文本自动转换为链接，点击即可打开链接"）：
+ * **用系统浏览器打开外部链接**（谱面文本里的 URL，如 `S:` 谱尾说明里的官网）。
+ *
+ * 实现：桌面端走 `electron.shell.openExternal(url)`——与上面 `openPath` 同一套宿主 API，
+ * 结果就是"在系统默认浏览器里打开"（而不是在 Obsidian 自己的窗口里跳走）。
+ * 手机端没有 electron，退回 `window.open`（移动端 Obsidian 由宿主接管外部链接）。
+ *
+ * 为什么预览层要**先 `preventDefault` 再调这里**：SVG 里的 `<a target="_blank">`
+ * 在 Electron 里的行为取决于宿主对 `setWindowOpenHandler` 的配置，不能指望；
+ * 自己接管才稳定（同类决策见应用侧 `src/preview/openUrl.ts`）。
+ */
+export async function openUrlExternally(url: string): Promise<void> {
+  const target = url.trim()
+  if (!target) return
+  if (Platform.isDesktopApp) {
+    try {
+      // electron 由宿主提供（esbuild 里已标 external），且只在桌面端走到这里
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const electron = require('electron') as { shell: { openExternal: (u: string) => Promise<void> } }
+      await electron.shell.openExternal(target)
+      return
+    } catch (e) {
+      new Notice(`打开链接失败：${e instanceof Error ? e.message : String(e)}`)
+      return
+    }
+  }
+  window.open(target, '_blank', 'noopener,noreferrer')
+}
+
+/**
  * 当前环境是否支持"用默认应用打开"。
  * 界面据此决定**要不要显示按钮**（用户要求：手机端不出现；代码块没有文件也不出现）。
  */

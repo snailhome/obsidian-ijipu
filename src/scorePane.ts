@@ -21,7 +21,7 @@ import { ConfigDialog } from './configDialog'
 // adj631：「保存为插件默认」要按"本次真正改动过的项"写入（changedDefs）+ 等于引擎默认则不存（isDefaultValue）
 import { changedDefs, isDefaultValue } from './defs'
 import { layoutIcon, modeIcon, settingsIcon, linkIcon, playIcon, stopIcon, appOpenIcon } from './icons'
-import { canOpenWithDefaultApp, openWithDefaultApp } from './openExternal'
+import { canOpenWithDefaultApp, openUrlExternally, openWithDefaultApp } from './openExternal'
 import { computeGuideLines, cropRectFor, guideLimits, guidePlacement, type GuideLine } from './guides'
 import { GUIDES_CHANGED, SETTINGS_CHANGED } from './main'
 import type IJipuPlugin from './main'
@@ -97,6 +97,22 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     stopPlay = null
     cancelAnimationFrame(rafId)
   }
+
+  /**
+   * adj652（用户要求）：谱面文本里的**链接**（引擎把 URL 包成 `a.jp-link`，如 `S:` 谱尾说明里的官网）
+   * 点击 → 用系统浏览器打开。
+   *
+   * 挂在 `container` 上（**委托**）而不是每个 `<a>` 上：`paint()` 每次都 `container.empty()` 重建 SVG，
+   * 挂在容器上只需注册一次。先 `preventDefault`：不让 SVG 自己的 `target="_blank"` 抢着走
+   * （Electron 下它的行为不可靠，见 `openExternal.ts` 的说明）。
+   */
+  container.addEventListener('click', (evt) => {
+    const link = (evt.target as Element | null)?.closest?.('a.jp-link')
+    if (!link) return
+    evt.preventDefault()
+    evt.stopPropagation()
+    void openUrlExternally(link.getAttribute('data-href') ?? link.getAttribute('href') ?? '')
+  })
 
   /** 全量重画（工具条 + 谱面 + 辅助虚线）；拖拽期间按帧节流 */
   const paint = (): void => {

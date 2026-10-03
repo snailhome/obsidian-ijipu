@@ -5,7 +5,7 @@
  * 断言来源：用户反馈「在 frontmatter 里设置像 `ijipu_note_size` 好像没生效」——
  * 覆盖键名写法兼容、值类型转换、未识别键提示、优先级四类。
  */
-import { defaultPageConfig, dragDelta, layoutScore, parseJps, writeJpsConfig, mergeConfigEdits, configCarryover, SCORE_FONT_OPTIONS, buildPlaySequence, GUIDE_LIMITS, GUIDE_LIMITS_EX, SEGMENT_ROW_GAP_DEFAULT, OPTIONAL_CONFIG_FIELDS, defaultConfigForReset, extractJpsConfig, nonDefaultConfigKeys, GM_GROUPS } from '@ijipu/engine'
+import { defaultPageConfig, dragDelta, layoutScore, parseJps, renderScoreToSvg, writeJpsConfig, mergeConfigEdits, configCarryover, SCORE_FONT_OPTIONS, buildPlaySequence, GUIDE_LIMITS, GUIDE_LIMITS_EX, SEGMENT_ROW_GAP_DEFAULT, OPTIONAL_CONFIG_FIELDS, defaultConfigForReset, extractJpsConfig, nonDefaultConfigKeys, GM_GROUPS } from '@ijipu/engine'
 import type { PageConfig } from '@ijipu/engine'
 import { readFileSync } from 'node:fs'
 import { instrumentColorMap, playheadBaseOf, playheadPosIn, trackKeysOf } from '../src/playhead'
@@ -1078,6 +1078,11 @@ console.log('[adj452] playhead blocks follow playVoice / instrument / engine bou
     NEW_JPS_TEMPLATE.endsWith('\n') && !NEW_JPS_TEMPLATE.includes('\r'),
     JSON.stringify(NEW_JPS_TEMPLATE.slice(-12)),
   )
+  check(
+    '新建 JPS 模板：谱尾说明 `S:` 带官网链接（与应用「新建」模板同一句，别只写「爱记谱」）',
+    NEW_JPS_TEMPLATE.includes('S: 本乐谱使用「爱记谱 https://ijipu.pages.dev」编制'),
+    JSON.stringify(NEW_JPS_TEMPLATE.split('\n').filter((l) => l.startsWith('S: '))),
+  )
   const tplLayout = layoutScore(tplParsed, defaultPageConfig)
   check(
     '新建 JPS 模板：能正常排版（1 小节 4 拍、标题为「未命名」）',
@@ -1335,6 +1340,50 @@ console.log('[adj452] playhead blocks follow playVoice / instrument / engine bou
       markJpsLinkCreate()
       return consumeJpsLinkCreate() === true && consumeJpsLinkCreate() === false
     })(),
+    '',
+  )
+}
+
+// ── 谱面文本里的链接（adj652，用户要求："链接文本自动转换为链接，点击即可打开链接"）────────
+{
+  const U = 'https://ijipu.pages.dev'
+  const scorePaneSrc652 = readFileSync('src/scorePane.ts', 'utf8')
+  const openExtSrc652 = readFileSync('src/openExternal.ts', 'utf8')
+  const css652 = readFileSync('styles.css', 'utf8')
+
+  const code652 = `V: 1.0\nB: 测试\nD: C\nP: 4/4\nS: 本乐谱使用「爱记谱 ${U}」编制\nQ: 1 2 3 4 |\nC: 这 是 歌 词\n`
+  const svg652 = renderScoreToSvg(layoutScore(parseJps(code652), defaultPageConfig))[0]
+  const notes652 = /<text data-meta="notes_0"[^>]*>([\s\S]*?)<\/text>/.exec(svg652)
+  check(
+    'adj652 引擎把 `S:` 里的 URL 渲染成 `<a class="jp-link" data-href=…>`（插件用的是同一份引擎）',
+    notes652 !== null &&
+      /<a class="jp-link" href="https:\/\/ijipu\.pages\.dev" data-href="https:\/\/ijipu\.pages\.dev"/.test(notes652[1]),
+    notes652 ? notes652[1].slice(0, 110) : '(未找到 notes_0)',
+  )
+  check(
+    'adj652 点击由 scorePane **委托**接管（挂在 container 上，paint 重建 SVG 后依然有效）',
+    /container\.addEventListener\('click'/.test(scorePaneSrc652) &&
+      /closest\?\.\('a\.jp-link'\)/.test(scorePaneSrc652) &&
+      /void openUrlExternally\(/.test(scorePaneSrc652),
+    '',
+  )
+  check(
+    'adj652 先 `preventDefault` 再自己打开（不让 SVG 自带的 `target="_blank"` 抢着走）',
+    scorePaneSrc652.indexOf('evt.preventDefault()') < scorePaneSrc652.indexOf('void openUrlExternally('),
+    '',
+  )
+  check(
+    'adj652 桌面端走 `electron.shell.openExternal`（系统浏览器打开），非桌面端退回 `window.open`；失败弹 Notice',
+    /electron\.shell\.openExternal/.test(openExtSrc652) &&
+      /Platform\.isDesktopApp/.test(openExtSrc652) &&
+      /window\.open\(target, '_blank'/.test(openExtSrc652) &&
+      /new Notice\(`打开链接失败/.test(openExtSrc652),
+    '',
+  )
+  check(
+    'adj652 链接样式：`.ijipu-svgs a.jp-link` 手型 + 下划线（一眼看出能点）',
+    /\.ijipu-svgs a\.jp-link\s*\{[^}]*cursor:\s*pointer/.test(css652) &&
+      /\.ijipu-svgs a\.jp-link\s*\{[^}]*text-decoration:\s*underline/.test(css652),
     '',
   )
 }

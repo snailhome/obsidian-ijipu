@@ -83,6 +83,56 @@ function xmlEsc(s: string): string {
     .replace(/'/g, '&apos;')
 }
 
+/**
+ * adj652（用户要求："允许将预览页面里的链接文本自动转换为链接，点击即可打开链接"）：
+ * **谱面文本里的 URL 自动变成链接**。
+ *
+ * 场景：`S:` 谱尾说明常写「本乐谱使用「爱记谱 https://ijipu.pages.dev」编制」——
+ * 那串 URL 此前只是普通文字，点不动（预览、导出、打印都一样）。
+ *
+ * 分工：**引擎只产出标记**（`<a class="jp-link" data-href="…" target="_blank">`），
+ * **点击行为交给宿主**（应用预览层 / Obsidian 插件各自调系统浏览器打开）——
+ * 引擎零 DOM，不碰 `window.open`。`data-href` 是**补全协议后的绝对地址**
+ * （`www.x.com` → `https://www.x.com`），宿主直接用它，不必再猜。
+ */
+const URL_RE = /(?:https?:\/\/|ftp:\/\/|mailto:)[^\s<>"'“”‘’（）()【】[\]「」《》]+|www\.[^\s<>"'“”‘’（）()【】[\]「」《》]+/gi
+/** URL 尾巴上粘的句读/右括号/引号不算 URL 的一部分（`见 https://x.com。` 的「。」） */
+const URL_TRAIL_RE = /[.,;:!?，。、；：！？…·）)】\]」》”’"']+$/
+
+/** 找出文本里所有 URL（含补全协议后的 `href`）；纯函数，供换行与冒烟共用 */
+export function findUrls(text: string): { start: number; end: number; url: string; href: string }[] {
+  const out: { start: number; end: number; url: string; href: string }[] = []
+  URL_RE.lastIndex = 0
+  let m: RegExpExecArray | null
+  while ((m = URL_RE.exec(text)) !== null) {
+    let url = m[0]
+    const trail = URL_TRAIL_RE.exec(url)
+    if (trail) url = url.slice(0, -trail[0].length)
+    if (url === '') continue
+    const href = /^(?:https?|ftp|mailto):/i.test(url) ? url : `https://${url}`
+    out.push({ start: m.index, end: m.index + url.length, url, href })
+    // 被截掉的尾巴不参与下一轮匹配（否则 `x.com。。` 会再吃进一个空匹配）
+    URL_RE.lastIndex = m.index + url.length
+  }
+  return out
+}
+
+/** 把纯文本转成「URL 处带 `<a class="jp-link">`」的 SVG 文本片段（其余部分照旧 XML 转义） */
+export function linkifyText(raw: string): string {
+  const urls = findUrls(raw)
+  if (urls.length === 0) return xmlEsc(raw)
+  let out = ''
+  let pos = 0
+  for (const u of urls) {
+    out += xmlEsc(raw.slice(pos, u.start))
+    out +=
+      `<a class="jp-link" href="${xmlEsc(u.href)}" data-href="${xmlEsc(u.href)}"` +
+      ` target="_blank" rel="noopener noreferrer">${xmlEsc(u.url)}</a>`
+    pos = u.end
+  }
+  return out + xmlEsc(raw.slice(pos))
+}
+
 /** 由 LayoutId 生成稳定 notepos 标识 */
 function noteposId(p: { page: number; voice: number; group: number; index: number }): string {
   return `${p.page}_${p.voice}_${p.group}_${p.index}`
@@ -167,18 +217,47 @@ function metaTextW(s: string): number {
 /** 按可用宽将一行说明拆成多子行（字符级估算宽、随字号缩放；adj153 内容不超边距） */
 function wrapNotesLine(line: string, availW: number, size: number): string[] {
   const scale = size / 13
+  const widthOf = (s: string): number => {
+    let w = 0
+    for (const ch of s) w += (META_GLYPH_W[ch] ?? (ch.charCodeAt(0) > 127 ? 13 : 7.62)) * scale
+    return w
+  }
+  /**
+   * adj652：**绝不把 URL 拆到两行**——拆开就是两个半截链接（点哪个都不对）。
+   * 所以把每个 URL 当成**整块 token**：这一行放不下就整体挪到下一行；
+   * 只有"它自己比一整行还宽"时才退回逐字符拆（与旧行为一致，不会为了它把前面的行空着）。
+   */
+  const urlEndAt = new Map(findUrls(line).map((u) => [u.start, u.end]))
   const subs: string[] = []
   let cur = ''
   let curW = 0
-  for (const ch of line) {
-    const w = (META_GLYPH_W[ch] ?? (ch.charCodeAt(0) > 127 ? 13 : 7.62)) * scale
+  let i = 0
+  while (i < line.length) {
+    const end = urlEndAt.get(i)
+    const chunk = end === undefined ? String.fromCodePoint(line.codePointAt(i)!) : line.slice(i, end)
+    const w = widthOf(chunk)
     if (cur && curW + w > availW) {
       subs.push(cur)
       cur = ''
       curW = 0
     }
-    cur += ch
-    curW += w
+    if (chunk.length === 1 || curW + w <= availW) {
+      cur += chunk
+      curW += w
+      i += chunk.length
+      continue
+    }
+    for (const ch of chunk) {
+      const cw = widthOf(ch)
+      if (cur && curW + cw > availW) {
+        subs.push(cur)
+        cur = ''
+        curW = 0
+      }
+      cur += ch
+      curW += cw
+    }
+    i += chunk.length
   }
   if (cur) subs.push(cur)
   return subs.length ? subs : ['']
@@ -412,7 +491,7 @@ function renderMeta(page: ScorePage, config: PageConfig, opts?: RenderFontMeta):
   if (page.meta.titles[0]) {
     const pos = posOf('title', { x: 0, y: titleDefY })
     parts.push(
-      `<text data-meta="title" x="${pos.x}" y="${pos.y}" text-anchor="middle" font-size="${config.biaoti_size}" font-family="${config.biaoti_font}" font-weight="bold" fill="#1b1b1b">${xmlEsc(page.meta.titles[0])}</text>`,
+      `<text data-meta="title" x="${pos.x}" y="${pos.y}" text-anchor="middle" font-size="${config.biaoti_size}" font-family="${config.biaoti_font}" font-weight="bold" fill="#1b1b1b">${linkifyText(page.meta.titles[0])}</text>`,
     )
   }
   // ---- 副标题（上居中锚，主标题下） ----
@@ -421,7 +500,7 @@ function renderMeta(page: ScorePage, config: PageConfig, opts?: RenderFontMeta):
   for (const t of page.meta.titles.slice(1)) {
     const pos = posOf(`subtitle_${subIdx}`, { x: 0, y: subOffY })
     parts.push(
-      `<text data-meta="subtitle_${subIdx}" x="${pos.x}" y="${pos.y}" text-anchor="middle" font-size="${config.fubiaoti_size}" font-family="${config.fubiaoti_font}" fill="#1b1b1b">${xmlEsc(t)}</text>`,
+      `<text data-meta="subtitle_${subIdx}" x="${pos.x}" y="${pos.y}" text-anchor="middle" font-size="${config.fubiaoti_size}" font-family="${config.fubiaoti_font}" fill="#1b1b1b">${linkifyText(t)}</text>`,
     )
     subOffY += config.fubiaoti_size * 1.3
     subIdx++
@@ -433,7 +512,7 @@ function renderMeta(page: ScorePage, config: PageConfig, opts?: RenderFontMeta):
   for (let i = 0; i < page.meta.instruments.length; i++) {
     const pos = posOf(`instrument_${i}`, { x: 0, y: instOffY })
     parts.push(
-      `<text data-meta="instrument_${i}" x="${pos.x}" y="${pos.y}" text-anchor="middle" font-size="${mSize}" font-family="${mFont}" fill="#1b1b1b">${xmlEsc(parseInstrumentRef(page.meta.instruments[i]).display)}</text>`,
+      `<text data-meta="instrument_${i}" x="${pos.x}" y="${pos.y}" text-anchor="middle" font-size="${mSize}" font-family="${mFont}" fill="#1b1b1b">${linkifyText(parseInstrumentRef(page.meta.instruments[i]).display)}</text>`,
     )
     instOffY += mSize * 1.4
   }
@@ -442,7 +521,7 @@ function renderMeta(page: ScorePage, config: PageConfig, opts?: RenderFontMeta):
   for (let i = 0; i < page.meta.authors.length; i++) {
     const pos = posOf(`author_${i}`, { x: 0, y: metaAuthorRowY(i, page.meta.authors.length, mSize) })
     parts.push(
-      `<text data-meta="author_${i}" x="${pos.x}" y="${pos.y}" text-anchor="end" font-size="${Math.max(9, mSize - 1)}" font-family="${mFont}" fill="#1b1b1b">${xmlEsc(page.meta.authors[i])}</text>`,
+      `<text data-meta="author_${i}" x="${pos.x}" y="${pos.y}" text-anchor="end" font-size="${Math.max(9, mSize - 1)}" font-family="${mFont}" fill="#1b1b1b">${linkifyText(page.meta.authors[i])}</text>`,
     )
   }
 
@@ -1001,7 +1080,7 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
     }
     const base = aboveTop - LAYER_GAP * s - cfs * DESC_RATIO - commentRaise * NOTE_COMMENT_RAISE // 注释文字底距上层元素顶 LAYER_GAP×s
     parts.push(
-      `<text x="${r1n(x + digitW / 2)}" y="${r1n(base)}" text-anchor="middle" font-size="${cfs}" font-family="${FONT_CN}" fill="#555">${xmlEsc(t.comment)}</text>`,
+      `<text x="${r1n(x + digitW / 2)}" y="${r1n(base)}" text-anchor="middle" font-size="${cfs}" font-family="${FONT_CN}" fill="#555">${linkifyText(t.comment)}</text>`,
     )
   }
 
@@ -1090,7 +1169,7 @@ function renderBarline(bar: PlacedBarline, noteSize = 18, noteFontFamily = FONT_
       )
     } else {
       parts.push(
-        `<text x="${x}" y="${yBottom + 13}" text-anchor="middle" font-size="10" font-family="${FONT_CN}" fill="#333">${xmlEsc(bar.comment)}</text>`,
+        `<text x="${x}" y="${yBottom + 13}" text-anchor="middle" font-size="10" font-family="${FONT_CN}" fill="#333">${linkifyText(bar.comment)}</text>`,
       )
     }
   }
@@ -1863,7 +1942,7 @@ function renderPage(page: ScorePage, config: PageConfig, pageCount: number, opts
             ? Math.max(rightX, baseX + subW)
             : Math.min(Math.max(pinnedX, baseX), Math.max(baseX, rightX - subW))
         body.push(
-          `<text data-meta="notes_${i}" data-notes-line="${i}" data-notes-sub="${k}" data-notes-row="${row}" data-notes-total="${totalRows}" x="${r1n(x)}" y="${r1n(y)}" text-anchor="${pinnedX === null ? 'end' : 'start'}" font-size="${nSize}" font-family="${nFont}" fill="#1b1b1b">${xmlEsc(sub)}</text>`,
+          `<text data-meta="notes_${i}" data-notes-line="${i}" data-notes-sub="${k}" data-notes-row="${row}" data-notes-total="${totalRows}" x="${r1n(x)}" y="${r1n(y)}" text-anchor="${pinnedX === null ? 'end' : 'start'}" font-size="${nSize}" font-family="${nFont}" fill="#1b1b1b">${linkifyText(sub)}</text>`,
         )
         row++
       }

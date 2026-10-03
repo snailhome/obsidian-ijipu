@@ -16,6 +16,16 @@
   margin: 0 auto;
   background: #ffffff;
 }
+/* adj652（用户要求）：谱面文本里的**链接**（引擎把 URL 包成 `a.jp-link`，如 `S:` 谱尾说明里的官网）——
+   手型光标 + 下划线，一眼看出能点；点击由 scorePane 接管（系统浏览器打开）。 */
+.ijipu-svgs a.jp-link {
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.ijipu-svgs a.jp-link:hover {
+  fill: var(--text-accent);
+}
 .ijipu-score-toolbar {
   display: flex;
   align-items: center;
