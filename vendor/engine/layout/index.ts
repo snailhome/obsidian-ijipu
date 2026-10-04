@@ -466,16 +466,45 @@ function tpGeometry(
     for (let j = 0; j <= r && j < extras.length; j++) s += extras[j]
     return s
   }
-  // 先按"每层占一个 B"累加各行额外高度（层数 = 该行有几个 `{tp}`）
+  /**
+   * adj655（用户要求）：「当同一行歌词里有多个替谱段 `{tp}` 时，应该在**同一条水平线**上显示，
+   * 通常谱不会重叠」。
+   *
+   * 所以先按**水平区间（拍位）分层**，而不是"一个段占一层"：
+   *  · **不重叠**的段共用一层 ⇒ 并排画在同一条线上，整行只多留**一个** B；
+   *  · 真的重叠（例如连写两个 `{tp}`、锚点落在同一拍）才往上叠一层。
+   *
+   * 为什么用**拍位**判而不是 x：这里还没排版（行高要先定下来），而同一歌词行的几个段共享
+   * **同一套主旋律拍位**（段包络本身不占拍位 ⇒ `startBeat` 可直接比较）。
+   */
+  const layerOf = new Map<number, number>()
+  const byLine = new Map<number, SegmentInfo[]>()
   for (const s of tpSegs) {
     const r = Math.max(0, Math.min(lyricCount - 1, s.tpLine ?? 0))
-    extras[r] += band
+    const list = byLine.get(r) ?? []
+    list.push(s)
+    byLine.set(r, list)
   }
-  // 再定位：层基线 = 其下方歌词行基线 − tp（同一行多个层往上叠）
+  for (const [r, list] of byLine) {
+    // 贪心分层：从左到右放，能塞进已有层就塞（= 同一条线），塞不下才新开一层
+    const lineEnds: number[] = []
+    for (const s of [...list].sort((a, b) => a.startBeat - b.startBeat || a.openIndex - b.openIndex)) {
+      let li = lineEnds.findIndex((end) => s.startBeat >= end - 1e-9)
+      if (li < 0) {
+        li = lineEnds.length
+        lineEnds.push(0)
+      }
+      lineEnds[li] = s.startBeat + s.beats
+      layerOf.set(s.openIndex, li)
+    }
+    extras[r] = lineEnds.length * band
+  }
+  // 定位：层基线 = 其下方歌词行基线 − tp（**同层的多个段 y 完全相同**）
   for (let r = 0; r < lyricCount; r++) {
-    const own = tpSegs.filter((s) => Math.max(0, Math.min(lyricCount - 1, s.tpLine ?? 0)) === r)
     const lyricY = rowY(r) + shiftThrough(r)
-    own.forEach((s, i) => ys.set(s.openIndex, r1(lyricY - tp - i * band)))
+    for (const s of byLine.get(r) ?? []) {
+      ys.set(s.openIndex, r1(lyricY - tp - (layerOf.get(s.openIndex) ?? 0) * band))
+    }
   }
   return { extras, ys }
 }
@@ -921,32 +950,6 @@ export function layoutScore(
   let y = m.titleAreaH // 当前行顶 y
   // adj355：上一行/上一组(空间优先)各小节内容宽——跨组共享，供后续自然宽行小节对齐（如 2 行谱第 2 行对齐第 1 行）
   let prevRowMeasW: (number | undefined)[] | undefined
-
-  /** 歌词 → 槽位映射（每行词独立）：标点不占槽位；@ 消耗槽位 */
-  const buildLyricMaps = (lyrics: LyricLine[]): Map<number, LyricChar>[] =>
-    lyrics.map((line) => {
-      const map = new Map<number, LyricChar>()
-      let slot = 0
-      let lastSlot = -1 // 最近放置的字（标点挂其后，adj40）
-      for (const ch of line.chars) {
-        if (ch.punctuation) {
-          // 标点不占音符位，紧跟前面的字（跨 @ 占位也跟前面的字）
-          if (lastSlot >= 0) {
-            const cur = map.get(lastSlot)
-            map.set(lastSlot, cur ? { ...cur, trailing: (cur.trailing ?? '') + ch.text } : { ...ch, skip: false, trailing: ch.text })
-          }
-          continue
-        }
-        if (ch.skip) {
-          slot++
-          continue
-        }
-        map.set(slot, { ...ch }) // 保留解析期挂载的 trailing（adj35：标点紧跟本字渲染）
-        lastSlot = slot
-        slot++
-      }
-      return map
-    })
 
   /**
    * 放置一个音符并处理歌词对齐。
@@ -2056,7 +2059,46 @@ export function layoutScore(
     // 空间优先（avStretch=0）一致：stretch=false 时 W=0，音符按自然本体宽排布、行尾留白。
     const barCount = row.end - row.start - leadingEmpty
     const stretch = barCount >= config.align_min_bars
-    let W = stretch ? Math.max(0, availW - durBodySum - nonDurPad) : 0
+    /**
+     * adj663/adj664（用户要求「末段的 `)` 再宽松一点」＋「**小节线前的音符**都有可能有这个问题，
+     * 需要合理考虑」）：**替谱段在行末收尾时，给"右括号 + 间距"预留行宽**。
+     *
+     * 为什么：替谱末音常正好顶到行内容右缘，`&ykh` 只能挤在音符旁边（用户谱面实测 **0.5px**）。
+     * 预留 ≈ `gapB + 括号宽` 后整行按略窄的可用宽摊（≈1.5%），行末收尾处就拿到完整间距。
+     *
+     * 为什么**只在行末**预留（而不是"任意小节线"）：段中部收尾时括号越过小节线是允许的
+     * （用户口径「`&ykh` 可以扩到小节线位置」），而那一段右侧通常还有余量（实测 12.7px）；
+     * 试过"任意小节线都预留"，会把本来宽松的行也白白收窄（`adj629` 的
+     * 「本行富余充足时主旋律逐项不动」断言立刻失败）⇒ 收窄到"只有行末这一处"。
+     * 硬边界始终是**页面边距线**（见 `placeSegmentOverlays` 的 `marginRightX` 钳制）。
+     */
+    const tpTailReserve = (() => {
+      const segFont = m.noteSize * (2 / 3) // 段层字号 = 主字号 × 2/3（见段层放置）
+      let acc = 0
+      let total = 0
+      const tpEnds: number[] = []
+      for (let b = row.start; b < row.end; b++) {
+        for (const t of segs[b].notes) {
+          if (t.kind === 'segment') {
+            if (t.type !== 'tp') continue
+            let beats = 0
+            for (const c of t.children ?? []) {
+              if (c.kind === 'note' || c.kind === 'rest' || c.kind === 'rhythm') beats += tokenDuration(c)
+            }
+            tpEnds.push(acc + beats)
+            continue
+          }
+          if (t.kind === 'note' || t.kind === 'rest' || t.kind === 'rhythm') {
+            acc += tokenDuration(t)
+            total = acc
+          }
+        }
+      }
+      if (total <= 0 || !tpEnds.some((e) => e >= total - 1e-6)) return 0
+      return TP_BRACKET_GAP(segFont) + markBodyW('ykh', segFont) + 1
+    })()
+    const rowAvailW = Math.max(0, availW - tpTailReserve)
+    let W = stretch ? Math.max(0, rowAvailW - durBodySum - nonDurPad) : 0
     /**
      * adj421（用户规则）：**单行曲部**（本节只有这一行，如新建文件/示例谱）且小节数 <
      * `align_min_bars` 时，把整行占宽**按 align_min_bars 个小节预分**（槽宽 = availW / align_min_bars），
@@ -2066,7 +2108,7 @@ export function layoutScore(
      */
     const slotOuter =
       singleRowGroup && !stretch && leadingEmpty === 0 && barCount >= 1
-        ? availW / config.align_min_bars
+        ? rowAvailW / config.align_min_bars
         : 0
 
     // adj355: 自然宽行——行小节数 < align_min_bars 时各小节对齐上一行对应小节宽度（不窄于它）；
@@ -3898,6 +3940,38 @@ export function layoutScore(
  * 已知局限（后续可完善）：段内容层是**叠加**而非重新回流行间距——若上方行距很紧，
  * 段层可能与上一行靠近；跨行断行的段只在首行内映射（`x` 钳制在行右边界）。
  */
+/**
+ * 歌词 → 槽位映射（每行词独立）：标点不占槽位；`@`（`skip`）**消耗一个槽位**。
+ *
+ * adj658：提到**模块级**——`placeSegmentOverlays`（替谱层的歌词落位）也要用同一张表，
+ * 否则两处各写一份"槽位怎么数"，早晚漂。
+ */
+function buildLyricMaps(lyrics: LyricLine[]): Map<number, LyricChar>[] {
+  return lyrics.map((line) => {
+    const map = new Map<number, LyricChar>()
+    let slot = 0
+    let lastSlot = -1 // 最近放置的字（标点挂其后，adj40）
+    for (const ch of line.chars) {
+      if (ch.punctuation) {
+        // 标点不占音符位，紧跟前面的字（跨 @ 占位也跟前面的字）
+        if (lastSlot >= 0) {
+          const cur = map.get(lastSlot)
+          map.set(lastSlot, cur ? { ...cur, trailing: (cur.trailing ?? '') + ch.text } : { ...ch, skip: false, trailing: ch.text })
+        }
+        continue
+      }
+      if (ch.skip) {
+        slot++
+        continue
+      }
+      map.set(slot, { ...ch }) // 保留解析期挂载的 trailing（adj35：标点紧跟本字渲染）
+      lastSlot = slot
+      slot++
+    }
+    return map
+  })
+}
+
 function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: PageConfig, keySemitone: number): void {
   for (let gi = 0; gi < result.groups.length; gi++) {
     const group = result.groups[gi]
@@ -3994,6 +4068,45 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
       const zoneEnd = nextNote ? Math.min(nextNote.x, nextBarXOf(n.x)) : noteRightOf(n)
       const t = s.beats > 1e-9 ? (beat - s.startBeat) / s.beats : 0
       return n.x + Math.min(1, Math.max(0, t)) * (zoneEnd - n.x)
+    }
+    /**
+     * adj656（用户报「替谱段的音符过密导致重叠」）：**替谱层用"锚点 + 拍格内均匀"映射**。
+     *
+     * 两条要求同时成立：
+     *  ① adj629k（用户要求）**同拍同位**——某拍起点正好有主旋律音时，替谱音就用**那个音的数字位置**
+     *     （若整拍都均匀铺，替谱会与主旋律在 0.5/0.75 这种拍位上错开，用户报过「上下拍子没对齐」）；
+     *  ② 本拍之外的**细分**（该拍主旋律没有音）在**本拍格内均匀分布**——不能像 `beatToX` 那样
+     *     从主旋律某个音线性过渡到下一个音（那会让替谱音**继承主旋律各音的宽窄**：主旋律那里音窄，
+     *     替谱同一拍里的 16 分就被挤到一起，实测只有 6.5px、看着重叠）。
+     */
+    const mainXAtBeat = (beat: number): number | null => {
+      for (let j = 0; j < cnt; j++) if (Math.abs(spans[j].startBeat - beat) < 1e-6) return placed[j].note.x
+      return null
+    }
+    const beatToXTp = (beat: number): number => {
+      const direct = mainXAtBeat(beat)
+      if (direct !== null) return direct
+      /**
+       * adj659b（用户报「替谱里 `7,// 1//` 过密、歌词重叠」）：**在"覆盖该拍位那个主旋律音的槽"
+       * 内按相位插值**，槽右端取"下一个音的 x"（末音取 `x + width`）。
+       *
+       * 两个坑都在这条上：
+       *  ① 旧的 `beatToX(p+1)` 在行末会退化成"末音的**墨迹**右缘"（`noteRightOf`，数字墨迹宽、
+       *     **不含音间距**）⇒ 主旋律 `7,/` 的槽宽 17px、墨迹只有 8.5px，替谱两个 16 分被压进 8.5px
+       *     （实测 5.2px，与歌词重叠）；
+       *  ② 一拍里可能有**多个**主旋律音（`3/ 7,/`）⇒ 必须按"覆盖该拍位的那个音"分段插值，
+       *     不能整拍线性插值（会把后面的音算到前一个音的槽里，替谱音跑到左边去）。
+       */
+      for (let j = 0; j < cnt; j++) {
+        const s = spans[j]
+        if (beat >= s.startBeat - 1e-9 && beat < s.startBeat + s.beats - 1e-9) {
+          const n = placed[j].note
+          const right = placed[j + 1]?.note.x ?? n.x + (n.width ?? 0)
+          const t = s.beats > 1e-9 ? (beat - s.startBeat) / s.beats : 0
+          return n.x + Math.min(1, Math.max(0, t)) * (right - n.x)
+        }
+      }
+      return beatToX(beat)
     }
     /**
      * adj433：**包络终点**用的 x —— `beat` 正好落在音符边界时取**前一个音符的右缘**
@@ -4376,11 +4489,16 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
         const beatAt = beat
         const isLastInSeg = beatAt + dur >= segNaturalTotalBeat - 1e-9
         // bx0/bx1 = 拍位映射（替谱层 segScale 恒为 1 ⇒ **逐拍与主旋律对齐**）
-        let bx0 = xContent0 + (beatToX(envStart + beatAt) - segNaturalXStart) * segScale
+        // adj656：替谱层改用"锚点 + 拍格内均匀"映射（见 `beatToXTp`——修"替谱音继承主旋律宽窄⇒过密重叠"）
+        const mapX = isTp ? beatToXTp : beatToX
+        const mapXEnd = isTp ? beatToXTp : beatToXEndOf
+        let bx0 = xContent0 + (mapX(envStart + beatAt) - segNaturalXStart) * segScale
         // adj433：末音的右缘取"覆盖到的最后那个音的**结束**"（`beatToXEndOf`），与包络终点同口径
-        const naturalX1 = isLastInSeg
-          ? beatToXEndOf(envStart + beatAt + dur)
-          : beatToX(envStart + beatAt + dur)
+        const naturalX1 = isTp
+          ? mapXEnd(envStart + beatAt + dur)
+          : isLastInSeg
+            ? beatToXEndOf(envStart + beatAt + dur)
+            : beatToX(envStart + beatAt + dur)
         let bx1 = xContent0 + (naturalX1 - segNaturalXStart) * segScale
         // 右缘钳制（替谱层钳到**小节线**，不与尾括号挤）
         bx1 = Math.min(bx1, noteClampRight)
@@ -4464,38 +4582,64 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
       }
 
       /**
-       * adj629k（用户要求）：「有替谱的歌词，相应的歌词部分应对齐替谱的音符，而不是对齐主曲部的音符」。
+       * adj629k / adj654（用户报「替谱段对应的歌词显示的乱的」）：
+       * 「有替谱的歌词，相应的歌词部分应对齐替谱的音符，而不是对齐主曲部的音符」。
        *
        * 为什么：歌词字是主旋律放置时按**音符 x** 居中挂上去的；替谱层替换了这一段的旋律，
-       * 该遍真正唱的是替谱层的音 ⇒ 落在替谱覆盖区间（`[envStart, envStart + 段拍数)`）里的那些字，
-       * 要跟着**替谱层的音**走（按先后顺序一一对应），否则替谱层与歌词字错开（用户实测第 5 个字错开 7px）。
+       * 该遍真正唱的是替谱层的音 ⇒ 落在替谱覆盖区间里的那些字，要跟着**替谱层的音**走。
        * 只调**本替谱所属的那条歌词行**（`seg.tpLine`）——其余歌词行仍对主旋律。
        * 字比替谱音多（或少）时只配对前面的 `min(字数, 音数)`，多出来的保持原位。
+       *
+       * ⚠️ adj654 根因：原先按"**拍位覆盖**"配对（`covers(tp音, 主旋律音)` 还要求 `barIndex` 相同），
+       * 而**替谱层的小节号/拍位是它自己的一套坐标系**（`{tp}` 是另起一段、自己的小节从 0 数），
+       * 与主旋律的同名 `barIndex` 只是**数值巧合**、语义无关 ⇒ 配对随机错位：实测
+       * `看` 被配到 515px、`一` 被配到 239px（用户截图里那两个乱字），其余字又有的配、有的没配。
+       * 而 `fallback` 只比 `beatPos` 不比小节 ⇒ 更容易跨小节抓到一个"拍位凑巧更大"的替谱音。
+       *
+       * 现在的口径 = 注释里本来写的那句**「按先后顺序一一对应」**：
+       * 覆盖区间内的字（按拍序，没挂字的音不占位）与替谱音（按源码序）**逐个对齐**。
        */
       if (isTp && seg.tpLine !== undefined && segNoteOrder.length > 0) {
-        const coverMain: PlacedToken[] = []
-        for (let k = 0; k < cnt; k++) {
-          const sb = spans[k].startBeat
-          if (sb >= envStart - 1e-9 && sb < envStart + seg.beats - 1e-9) coverMain.push(placed[k].note)
-        }
-        coverMain.sort((a, b) => a.beatPos - b.beatPos)
-        const tpOrder = segNoteOrder.map((e) => e.note)
         const sameNote = (ly: PlacedLyric, n: PlacedToken): boolean =>
           ly.id.page === n.id.page && ly.id.group === n.id.group && ly.id.index === n.id.index
-        /** 替谱音 `n` 的时值区间是否覆盖主旋律音 `m` 的**起点** */
-        const covers = (n: PlacedToken, m: PlacedToken): boolean =>
-          n.barIndex === m.barIndex && m.beatPos >= n.beatPos - 1e-9 && m.beatPos < n.beatPos + n.duration - 1e-9
-        const used = new Set<number>()
-        for (const mainN of coverMain) {
-          const ly = page.lyrics.find((c) => c.line === seg.tpLine && sameNote(c, mainN))
-          if (!ly) continue
-          // 先找"覆盖本字那拍的替谱音"；没有（替谱比主旋律短）时退而取其后最近的替谱音
-          let k = tpOrder.findIndex((n, i) => !used.has(i) && covers(n, mainN))
-          if (k < 0) k = tpOrder.findIndex((n, i) => !used.has(i) && n.beatPos >= mainN.beatPos - 1e-9)
-          if (k < 0) continue
-          used.add(k)
-          const tpN = tpOrder[k]
-          if (Math.abs(tpN.x - mainN.x) > 1e-6) ly.x = r1(ly.x + (tpN.x - mainN.x))
+        /**
+         * adj657/adj658（用户报「`{tp …}因为你@有梦可做，` 的 `可做，` 没显示」）：替谱层的歌词
+         * **按歌词槽位直接落到替谱音上**。
+         *
+         * 三条事实（`docs/SYNTAX.md` + `buildLyricMaps`）：
+         *  ① 歌词槽位 = 主旋律的**计时 token 序号**（`@` 跳空**照占一槽**、标点不占槽）；
+         *  ② 替谱段是"**这一段换成另一段**"⇒ 它自己的音符就是这一段的"字位"，
+         *     槽位要从替谱的起点重新按替谱音数排下去（用户谱面：C2 那一行有 30 槽，
+         *     而主旋律该行只有 29 个音符 ⇒ **末尾的 `可做，` 在放置阶段就被丢掉**，
+         *     根本进不了 `page.lyrics`，后面对齐无从下手 ⇒ 截图里"没有显示"）；
+         *  ③ 替谱块里写的 `@` 同样跳过一个**替谱音**。
+         *
+         * 所以这里直接查"该行的槽位表"（`lyricMaps`，与放置歌词用的是同一张表）：
+         * 第 `tpSlot + j` 槽的字 → 替谱的第 `j` 个音；槽位没有字（`@` 跳空）就不放。
+         * 已经放在主旋律音上的那条**搬**过来（同时把 y 校正到本行的歌词行），
+         * 主旋律音符不够、没放下的**新建**一条（挂在替谱音上）⇒ 不再丢字。
+         */
+        const lineMap = buildLyricMaps(group.lyrics)[seg.tpLine]
+        const tpSlot = result.groups[gi]?.lyrics?.[seg.tpLine]?.variants?.[seg.tpVariant ?? 0]?.slot
+        if (lineMap && tpSlot !== undefined && tpSlot >= 0) {
+          // 本歌词行在本视觉行的 y（取该行已放置歌词中最近的一条）
+          const yRef = page.lyrics
+            .filter((c) => c.line === seg.tpLine && c.y > row.y - 1)
+            .sort((a, b) => a.y - b.y)[0]?.y
+          for (let j = 0; j < segNoteOrder.length; j++) {
+            const ch = lineMap.get(tpSlot + j)
+            if (!ch) continue
+            const note = segNoteOrder[j].note
+            const x = r1(note.x + halfDigitW(config.note_size) - config.geci_size / 2)
+            const slotNote = placed[tpSlot + j]?.note
+            const hit = slotNote ? page.lyrics.find((c) => c.line === seg.tpLine && sameNote(c, slotNote)) : undefined
+            if (hit) {
+              hit.x = x
+              if (yRef !== undefined) hit.y = r1(yRef)
+            } else if (yRef !== undefined) {
+              page.lyrics.push({ id: note.id, char: ch, x, y: r1(yRef), line: seg.tpLine, slotW: r1(note.width) })
+            }
+          }
         }
       }
 
@@ -4566,7 +4710,22 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
               page.brackets.push({ code: bt.code, dir: bt.dir, x: r1(lx + bw / 2), yTop: r1(yBracket), width: r1(bw), voice: group.music.voice, group: gi, layerScale: segYScale, layerBase: r1(yUpper) })
             }
           } else {
-            page.brackets.push({ code: 'zkh', dir: 'open', x: r1(lslot.x + lslot.w / 2), yTop: r1(yBracket), width: r1(lslot.w), voice: group.music.voice, group: gi, layerScale: segYScale, layerBase: r1(yUpper) })
+            /**
+             * adj657：替谱层的左括号也按**首音的墨迹**定位（与右括号"末音墨迹右缘 + gapB"对称）。
+             *
+             * 槽位给的是"音符块左缘"，而数字在块内居中 ⇒ 按槽位画的左括号实际离数字
+             * 多了半个内边距（实测 +12.2px），右括号只有 gapB（+6.6px）——用户看到的就是
+             * "&zkh 与音符间距过大、&ykh 过小"。两个都以**墨迹**为准就对称了。
+             *
+             * adj664（用户要求「替谱的 `(` 间距还比较大，可以再缩小」）：左括号在**视觉**上仍比右侧松
+             * ——因为 `lfirst.x` 是"音符块左缘"、数字墨迹还往右缩了一段（块内居中留白），
+             * 而右括号的基准是**墨迹右缘**（已经在墨迹上）。所以左侧取**半个间距**，
+             * 让"括号字形内缘 → 数字墨迹"的观感与右侧一致。
+             */
+            const lfirst = segNoteOrder[0]?.note
+            const gapL = isTp ? TP_BRACKET_GAP(ns) * 0.5 : gapB
+            const lx = isTp && lfirst ? Math.max(lfirst.x - gapL - lslot.w, 0) : lslot.x
+            page.brackets.push({ code: 'zkh', dir: 'open', x: r1(lx + lslot.w / 2), yTop: r1(yBracket), width: r1(lslot.w), voice: group.music.voice, group: gi, layerScale: segYScale, layerBase: r1(yUpper) })
           }
         }
         const rslot = rightSlots.find((s) => s.kind === 'bracket')
@@ -4579,8 +4738,24 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
               rx += bw
             }
           } else {
-            // 替谱层：右括号贴最后一个音的墨迹（`tpInkEnd`），其余段型保持原有槽位
-            const rx = isTp && tpInkEnd !== null ? Math.min(rslot.x, tpInkEnd + gapB) : rslot.x
+            /**
+             * 替谱层：右括号贴最后一个音的**墨迹右缘**（`tpInkEnd`），其余段型保持原有槽位。
+             *
+             * adj657（用户报「替谱的 `&zkh` 与音符间距过大、`&ykh` 与音符间距过小」）：
+             * 原来是 `min(槽位, 墨迹右缘 + gapB)` —— 槽位被"小节线内侧"钳住时这个 `min` 只会把括号
+             * **往左拉**，替谱末音又常正好顶到小节线 ⇒ 右括号被压进末音里（用户谱面实测 **−6.2px**）。
+             *
+             * adj661（用户再报「特别是最后一个 `&ykh`」）：上一版又用 `row.right − 括号宽` 兜底，
+             * 而替谱行常排到行右缘 ⇒ 兜底把括号压到**只剩 0.2px**（用户截图里 `71)` 贴在一起）。
+             *
+             * adj662（用户口径）：「`&ykh` **可以扩到小节线位置**，但**超过边距线就不合适了**」——
+             * 所以兜底改成**页面边距线**（`page.width − margin_right`）而不是"行右缘"：
+             * 括号可以越过小节线/行右缘，但绝不越出页面的内容区右边界。
+             */
+            const marginRightX = (pages[row.page]?.width ?? 0) - config.margin_right
+            // −0.1：给 `r1()` 的取整留一点余量，保证**四舍五入后也不会越过边距线**
+            const rx =
+              isTp && tpInkEnd !== null ? Math.min(tpInkEnd + gapB, marginRightX - rslot.w - 0.1) : rslot.x
             page.brackets.push({ code: 'ykh', dir: 'close', x: r1(rx + rslot.w / 2), yTop: r1(yBracket), width: r1(rslot.w), voice: group.music.voice, group: gi, layerScale: segYScale, layerBase: r1(yUpper) })
           }
         }

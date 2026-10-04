@@ -808,12 +808,17 @@ export function buildPlaySequence(
    *  - `num`：引号注释里有数字（`["1."`/`["2."`）→ 番号 = 该遍才演奏
    *  - `text`：引号注释里有文字但无数字（如 `["结束句"`）→ **末遍**房子（本段后续遍次奏响，见 segMaxPass）
    *  - `none`：无注释 → 按第 1 遍（旧行为：第 2 遍起跳过）
+   *
+   * adj653（用户要求，**重叠跳房子**）：数字**取全部**而不只是第一个——
+   * `["2.3."` 表示「第 2 遍和第 3 遍**共用**这一段房子」（用户原话："这里第二、第三个反复里
+   * 跳房子 2 和跳房子 3 的部分是重叠的，以 `["2.3."` 来标记"）。于是 `nums = [2,3]`，
+   * 判据从"番号 == 本遍"变成"**本遍 ∈ nums**"。`["1."` 这类单号房子 nums=[1]，行为与旧版一致。
    */
-  const voltaLabelOf = (it: SeqItem): { kind: 'num' | 'text' | 'none'; num: number } => {
+  const voltaLabelOf = (it: SeqItem): { kind: 'num' | 'text' | 'none'; nums: number[] } => {
     const c = it.kind === 'bar' ? it.bar?.voltaStart?.comment : undefined
-    if (!c || c.trim() === '') return { kind: 'none', num: 1 }
-    const m = /(\d+)/.exec(c)
-    return m ? { kind: 'num', num: Number(m[1]) } : { kind: 'text', num: 1 }
+    if (!c || c.trim() === '') return { kind: 'none', nums: [1] }
+    const nums = [...c.matchAll(/\d+/g)].map((m) => Number(m[0]))
+    return nums.length > 0 ? { kind: 'num', nums } : { kind: 'text', nums: [] }
   }
   const repeatCountAt = new Map<number, number>()
   {
@@ -1773,10 +1778,11 @@ export function buildPlaySequence(
     // adj359：跳房子——本遍不演奏该 volta 时，跳到其末尾小节线
     // （停在末尾线上而非其后一位：`:|]["2."` 共用一根线时，仍需处理该线上的 volta2 番号）
     // adj368：判断依据按标签类型——番号（`["2."`）比遍次；文字标签（`["结束句"`）比该段最终遍数
+    // adj653：番号可以是**多个**（`["2.3."` = 第 2、3 遍共用）⇒ 判"本遍 ∈ nums"
     const trySkipVolta = (): boolean => {
       if (!bar.voltaStart) return false
       const label = voltaLabelOf(item)
-      const skip = label.kind === 'text' ? pass < (segMaxPass[i] ?? 1) : label.num !== pass
+      const skip = label.kind === 'text' ? pass < (segMaxPass[i] ?? 1) : !label.nums.includes(pass)
       if (!skip) return false
       const target = voltaAfter.get(i) ?? i + 1
       landedByVoltaSkip = target
@@ -1794,13 +1800,35 @@ export function buildPlaySequence(
     const landedByVolta = i === landedByVoltaSkip
     if (landedByVolta) {
       landedByVoltaSkip = -1
-      if (trySkipVolta()) continue
+      /**
+       * adj653：落点线上**确实会生效的跳转记号**优先于"再判一次跳房子标签"。
+       *
+       * `… :|&ds]["4." …` 这种"一根线既是上一个房子的终点、又是下一个房子的起点、还挂着 `&ds`"，
+       * 若先按下一个房子的番号再跳一次，就会**把 D.S. 一起跳过去**：用户谱例把 `["2.3."` 换成
+       * `["2."` 时，末遍跳过房子 2 落到这根线，D.S. 丢失 ⇒ 整曲少一遍、`["4."` 一次都不响。
+       */
+      const jumpFires =
+        (bar.marks?.includes('fine') === true && (!hasBigRepeat || bigRepeatDone)) ||
+        (bar.marks?.includes('dc') === true && !bigRepeatDone) ||
+        (bar.marks?.includes('ds') === true && !bigRepeatDone) ||
+        (bar.marks?.includes('ty') === true && bigRepeatDone)
+      if (!jumpFires && trySkipVolta()) continue
     }
     // adj359：小节线修饰符跳转（&fine 曲终 / &dc 从头反复 / &ds 跳花S / &ty 跳越）
     // 规则（用户规范）：&dc/&ds「大反复」全曲各只跳一次（之后再遇不跳，续播到 Fine/终止线，避免死循环）；
     // &ty 第一次遇到忽略，大反复之后再次遇到才跳到下一个 &ty（两 ty 之间不演奏）；
     // &fine 在有 dc/ds 时仅于大反复之后生效（第一遍穿过 Fine 走到大反复）。
-    if (bar.marks?.length) {
+    /**
+     * adj653（用户口径）：同一根线上**既 `:|` 又 `&ds`/`&dc`** 时——**反复优先**。
+     * 本段还有遍次没走完（`pass < count`）就先按 `:|` 回跳；等遍次走完再到这根线，才执行 `&ds`/`&dc`。
+     *
+     * 用户的谱例：`… 1- 0 1/ 6,/ :|&ds][…`，该段共 3 遍（段内两根 `:|`）——第 2 遍到这根线要**回 `|:`**、
+     * 第 3 遍才跳 `&hs`；旧实现先判 `&ds`，于是第 2 遍就跳了花 S，`bigRepeatDone` 提前置位，
+     * 第 3 遍把后面的房子全跳过 ⇒ 整曲只奏 3 遍、房子 4 一次都不响。
+     */
+    const repeatPending =
+      (bar.type === ':|' || bar.type === ':|:') && pass < (repeatCountAt.get(i) ?? 2)
+    if (bar.marks?.length && !repeatPending) {
       if (bar.marks.includes('fine') && (!hasBigRepeat || bigRepeatDone)) {
         i = seq.length // 曲终：播放到此结束
         continue
