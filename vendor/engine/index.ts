@@ -47,9 +47,11 @@ export type { RenderFontMeta } from './render/index'
 export { noteFontFamily } from './render/index'
 // adj428：临时叠加段（{bz … } / {dsb … }）上下两行纵向间距的默认常量；UI 显示缺省值用
 export { SEGMENT_ROW_GAP_DEFAULT } from './layout/spacing'
+// adj672：歌词注释的几何（布局避让与渲染锚点共用同一把尺子；smoke 也用它核对避让结果）
+export { lyricCommentFontSize, lyricCommentWidth, LYRIC_COMMENT_GAP } from './layout/spacing'
 // adj427：临时段（{bz … } / {dsb … }）拍位包络计算——layout/render 共用，纯函数
-export { computeSegments, mainSpans, mainSpansInRange, tokensBeats, segmentBarBeats, beatRatio, isDurational, segmentNoteIndexBase, segmentBarIndexBase, decodeSegmentNoteId, SEG_NOTE_ID_BASE, SEG_BAR_ID_BASE, tpNoteIndexBase, decodeTpNoteId, SEG_TP_NOTE_ID_BASE } from './layout/segments'
-export type { SegmentInfo, MainSpan } from './layout/segments'
+export { computeSegments, mainSpans, mainSpansInRange, tokensBeats, segmentBarBeats, beatRatio, isDurational, segmentNoteIndexBase, segmentBarIndexBase, decodeSegmentNoteId, SEG_NOTE_ID_BASE, SEG_BAR_ID_BASE, tpNoteIndexBase, decodeTpNoteId, SEG_TP_NOTE_ID_BASE, segmentRowExtra } from './layout/segments'
+export type { SegmentInfo, MainSpan, SegmentRowExtra } from './layout/segments'
 // adj454：`mergeConfigEdits` = 写回时只并入「用户本次改动」（缓存来源的值不进谱面）；
 // `inspectJpsConfig`/`inspectJpsConfigLine` = 设置行的类型校验告警（解析器已并入 ParseResult.errors）
 export { extractJpsConfig, mergeJpsConfig, writeJpsConfig, mergeConfigEdits, configCarryover, nonDefaultConfigKeys, inspectJpsConfig, inspectJpsConfigLine, extractLegacyEditorPrefs, JPS_CONFIG_PREFIX, roundPxIntegers, OPTIONAL_CONFIG_FIELDS, defaultConfigForReset } from './settings'

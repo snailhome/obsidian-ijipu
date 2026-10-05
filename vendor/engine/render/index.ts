@@ -29,7 +29,6 @@ import {
   BARLINE_DOT_R,
   BARLINE_DOT_OFF,
   barlineGeometry,
-  COMMENT_FONT_RATIO,
   NOTE_COMMENT_FONT_RATIO,
   NOTE_COMMENT_RAISE,
   DESC_RATIO,
@@ -59,6 +58,13 @@ import {
   lowDotY,
   octaveDotY,
   octaveTopY,
+  // adj670：连音线垂度的上下限（布局算"两层最小间距"时与渲染用同一把尺子）
+  SLUR_SAG_MIN,
+  SLUR_SAG_MAX,
+  // adj672：歌词注释的字号/宽度/净距（布局避让与渲染锚点共用同一把尺子）
+  lyricCommentFontSize,
+  lyricCommentWidth,
+  LYRIC_COMMENT_GAP,
 } from '../layout/spacing'
 import { tempoLabel } from '../parser/parser'
 import { parseInstrumentRef } from '../playback/instruments'
@@ -1306,14 +1312,23 @@ function renderLyric(lyric: PlacedLyric, config: PageConfig): string {
   ]
   // 引号注释（adj58）：双引号文本显示在「注释后面的歌词」前面，不占歌词对齐位（灰色小字）
   if (lyric.char.note) {
-    const noteSize = Math.max(9, Math.round(size * COMMENT_FONT_RATIO))
-    // 宽度估算：汉字按 1 字宽、拉丁/数字按 0.55 字宽
-    const w = [...lyric.char.note].reduce(
-      (acc, ch) => acc + (/\p{Script=Han}/u.test(ch) ? noteSize : noteSize * 0.55),
-      0,
-    )
+    /**
+     * adj672/adj677（用户要求「歌词注释也要不与歌词重叠」+「调整到同一水平线上」）：注释的
+     * **锚点由布局算好**（`noteX` 左缘、`noteY` 基线、`noteSx` 横向压缩比）——布局知道同一行
+     * 全部歌词的最终位置，能在"前后两字之间"重排、放不下时压缩字形；渲染端照搬即可。
+     * 缺省（老数据 / 未走布局）时回退历史公式：紧贴本字左侧、与本字同基线、不压缩。
+     */
+    const noteSize = lyricCommentFontSize(size)
+    const w = lyricCommentWidth(lyric.char.note, noteSize)
+    const nx = lyric.noteX ?? lyric.x - w - LYRIC_COMMENT_GAP
+    const ny = lyric.noteY ?? lyric.y
+    const sx = lyric.noteSx ?? 1
+    const fontAttrs = `y="${r1n(ny)}" font-size="${noteSize}" font-family="${config.geci_font}" fill="#999"`
     parts.unshift(
-      `<text x="${r1n(lyric.x - w - 3)}" y="${lyric.y}" font-size="${noteSize}" font-family="${config.geci_font}" fill="#999">${xmlEsc(lyric.char.note)}</text>`,
+      sx < 0.999
+        ? // 压缩以**右缘**为基准（贴住本字），与布局的落点口径一致
+          `<text x="0" ${fontAttrs} transform="translate(${r1n(nx + w * (1 - sx))},0) scale(${sx.toFixed(3)},1)">${xmlEsc(lyric.char.note)}</text>`
+        : `<text x="${r1n(nx)}" ${fontAttrs}>${xmlEsc(lyric.char.note)}</text>`,
     )
   }
   // 中文标点不占音符位，紧跟本字之后独立渲染（adj35/40）——
@@ -1330,10 +1345,34 @@ function renderLyric(lyric: PlacedLyric, config: PageConfig): string {
 // 多声部括弧与名称（M7a）
 // ============================================================
 
-/** adj276：多声部括号——左粗(2.1)右细(1.125)双竖线（间距 3px）；上下弧各自以弧两端点为轴翻转（sweep 交换）、
+
+/**
+ * adj666（用户要求）：**临时多声部（`{dsb}`）的大括号用图形** `public/icons/大括号.svg`——
+ * 左括号用原图、右括号用**水平翻转**。
+ *
+ * 该图形是 iconfont 的**填充**路径（1024 视口），实测 bbox = `(417.5, 33.5)`、尺寸 `215×877`。
+ * 它是**填充**字形：粗细与形状是同一个轮廓 ⇒ 不能等比铺满段高（段越高越像一坨黑），
+ * 要细只能**横向收**。
+ *
+ * ⚠️ adj667：横向宽度**不再由渲染端按段高算**，而是布局层按"两侧邻居墨迹边界"钳定后
+ * 经 `PlacedSegmentBracket.inkW` 传进来（理想比例见 `layout/spacing.ts` 的
+ * `SEGMENT_BRACE_ASPECT`）——只有布局知道邻居在哪，渲染自己算必然溢出压字。
+ */
+const BRACE_SVG = {
+  d: 'M601.5 632.5c0-66-45.67-119.67-137-161 91.33-42 137-96 137-162 0-13.33-11.67-41.33-35-84s-35-75-35-97c0-38.67 33.67-66 101-82l-7-13c-115.33 4.67-173 45.67-173 123 0 25.33 11.17 64.17 33.5 116.5s33.5 81.5 33.5 87.5c0 25.33-34 59.67-102 103v16c68 43.33 102 78.33 102 105 0 4.67-11.17 33-33.5 85s-33.5 91.33-33.5 118c0 76.67 57.67 117.67 173 123l7-16c-67.33-13.33-101-40.67-101-82 0-20.67 11.67-52.33 35-95s35-71 35-85z',
+  x: 417.5,
+  y: 33.5,
+  w: 215,
+  h: 877,
+}
+
+/**
+ * adj276/adj644：多声部括号——左粗(2.1)右细(1.125)双竖线（间距 3px）；上下弧各自以弧两端点为轴翻转（sweep 交换）、
  *  上弧顺转 30°、下弧逆转 30°，弧 = 1/6 圆。
  *  adj644：几何常量与"墨迹右缘"收敛到 `layout/spaceLayout.ts`（布局要按同一份几何把括号
- *  贴到音符一侧，见 `braceInkRightOffset`）——渲染只消费，不再自己写 3 / 0.15 / 0.866。 */
+ *  贴到音符一侧，见 `braceInkRightOffset`）——渲染只消费，不再自己写 3 / 0.15 / 0.866。
+ *  ⚠️ 这条只服务**多声部块**（`V:` 多行曲部）的大括号；**临时多声部段（`{dsb}`）** 的大括号
+ *  另有 `renderSegmentBracket`（用 `大括号.svg` 图形，见那里的 adj666 说明）。 */
 function bracePath(x: number, yTop: number, yBottom: number, noteSize: number): { arc: string; lineL: string; lineR: string } {
   const R = Math.min(noteSize / 2, (yBottom - yTop) * BRACE_ARC_R_RATIO)
   const dx = BRACE_LINE_DX // 粗/细线间距 ×1.5（2 → 3）
@@ -1387,7 +1426,9 @@ function renderVoltaLine(
   const plus = start.voltaStart?.plus ?? 0
   const minus = start.voltaStart?.minus ?? 0
   // adj60：跳房子线基于小节线定位（距小节线上端 VOLTA_BAR_GAP，+ 修饰每级 VOLTA_RAISE 抬升、- 修饰每级降低，adj356）
-  const y = start.yTop - VOLTA_BAR_GAP - plus * VOLTA_RAISE + minus * VOLTA_RAISE
+  // adj667：`voltaYTop` 由布局给出（该行有 `{dsb … }` 段层时要抬到段层墨迹之上，否则线从多声部音符里穿过）
+  const baseY = (bar: PlacedBarline): number => bar.voltaYTop ?? bar.yTop - VOLTA_BAR_GAP
+  const y = baseY(start) - plus * VOLTA_RAISE + minus * VOLTA_RAISE
   // 起止偏移（adj50）：起点 = 小节线正中右移 2px、终点 = 小节线正中左移 2px
   const x1 = start.x + 2
   const openEnd = !end || !!end.voltaEndSlash // 开口结束：无终点折线（adj26）
@@ -1412,7 +1453,7 @@ function renderVoltaLine(
       `<line x1="${x1}" y1="${y}" x2="${xEndA}" y2="${y}" stroke="#1b1b1b" stroke-width="0.8"/>`,
     )
     parts.push(labelSvg)
-    const yB = end.yTop - VOLTA_BAR_GAP - plus * VOLTA_RAISE + minus * VOLTA_RAISE
+    const yB = baseY(end) - plus * VOLTA_RAISE + minus * VOLTA_RAISE
     const rowFirst = firstOfRow?.get(end.yTop)
     const xStartB =
       rowFirst && rowFirst.x < end.x - 2 ? rowFirst.x : marginLeft + 2
@@ -1505,6 +1546,13 @@ export function renderSlurForTest(s: PlacedSlur, noteSize = 18): string {
 
 function renderSlur(s: PlacedSlur, noteSize = 18): string {
   const { x1, x2, y } = s
+  /**
+   * adj667（用户报「两个声部重叠」）：`dir` = 弧线拱起的方向——
+   * `-1` 往**上**拱（缺省、历史行为一字不变）、`+1` 往**下**拱（dsb 下层声部用）。
+   * 所有"向上偏移"的量统一乘 `dir`，`sweep` 同步取反；文字标注的反向偏移也一并处理。
+   */
+  const dir = s.below ? 1 : -1
+  const sweep = s.below ? 0 : 1
   // 平均连音组标注（adj43）：仅 (y...) 组在弧线/横线正中画数字（不透明背景）；
   // 普通连音线 (…) 不标注。数字向下偏移 2px 使其居于线正中。
   // adj89：数字字号 = 音符字号 × TUPLET_NUM_RATIO（默认 0.2，可调常量）
@@ -1515,7 +1563,7 @@ function renderSlur(s: PlacedSlur, noteSize = 18): string {
     // adj222：不透明背景只包裹文字字形——数字宽 ≈ 0.62em/字 + 两侧各 1px 空隙；
     // 原 max(14, n×7+3) 白底远大于字形（单数字 14px vs 字形约 4px），大片白块遮线
     const w = text.length * size * TUPLET_NUM_W_RATIO + TUPLET_LABEL_PAD * 2
-    const dy = 2 // 数字下移 2px → 位于线正中
+    const dy = 2 * -dir // 数字往"线内侧"偏 2px → 位于线正中（上方线向下偏、下方线向上偏）
     return (
       `<rect x="${(cx - w / 2).toFixed(1)}" y="${(cy - size + 1 + dy).toFixed(1)}" width="${w.toFixed(1)}" height="${size}" rx="2" fill="#ffffff"/>` +
       `<text x="${cx.toFixed(1)}" y="${(cy + dy).toFixed(1)}" text-anchor="middle" font-size="${size}" font-family="${FONT_CN}" fill="#1b1b1b">${text}</text>`
@@ -1525,7 +1573,7 @@ function renderSlur(s: PlacedSlur, noteSize = 18): string {
     // adj96：嵌套内层（depth>0）连音线高度少 1px（横线更贴音符，层次更分明）
     // adj148：平顶线高度 leg 由 7 减小到 5（更贴音符）
     const leg = 5 - (s.depth > 0 ? 1 : 0)
-    const barY = y - leg
+    const barY = y + dir * leg
     // adj147：弧线 = 标准 1/4 圆弧（SVG A 命令），半径 = 平顶线高度 leg，
     // 从音符竖直上弯、平滑转水平接横线（真正的圆弧，非贝塞尔近似）。
     // adj459：弧线半径**统一**为 leg，与连音线总长无关——
@@ -1539,7 +1587,7 @@ function renderSlur(s: PlacedSlur, noteSize = 18): string {
       // 左半部：1/4 圆弧（音符竖直上弯转水平）+ 横线平直延伸到行末（右侧开口）
       return (
         `<path d="M ${x1} ${y} ` +
-        `A ${R.toFixed(1)} ${R.toFixed(1)} 0 0 1 ${(x1 + R).toFixed(1)} ${barY} ` +
+        `A ${R.toFixed(1)} ${R.toFixed(1)} 0 0 ${sweep} ${(x1 + R).toFixed(1)} ${barY} ` +
         `L ${x2} ${barY}" ` +
         `fill="none" stroke="#1b1b1b" stroke-width="${SLUR_W}"/>`
       )
@@ -1549,7 +1597,7 @@ function renderSlur(s: PlacedSlur, noteSize = 18): string {
       return (
         `<path d="M ${x1} ${barY} ` +
         `L ${(x2 - R).toFixed(1)} ${barY} ` +
-        `A ${R.toFixed(1)} ${R.toFixed(1)} 0 0 1 ${x2} ${y}" ` +
+        `A ${R.toFixed(1)} ${R.toFixed(1)} 0 0 ${sweep} ${x2} ${y}" ` +
         `fill="none" stroke="#1b1b1b" stroke-width="${SLUR_W}"/>`
       )
     }
@@ -1557,26 +1605,26 @@ function renderSlur(s: PlacedSlur, noteSize = 18): string {
     const midX = (x1 + x2) / 2
     return (
       `<path d="M ${x1} ${y} ` +
-      `A ${R.toFixed(1)} ${R.toFixed(1)} 0 0 1 ${(x1 + R).toFixed(1)} ${barY} ` +
+      `A ${R.toFixed(1)} ${R.toFixed(1)} 0 0 ${sweep} ${(x1 + R).toFixed(1)} ${barY} ` +
       `L ${(x2 - R).toFixed(1)} ${barY} ` +
-      `A ${R.toFixed(1)} ${R.toFixed(1)} 0 0 1 ${x2} ${y}" ` +
+      `A ${R.toFixed(1)} ${R.toFixed(1)} 0 0 ${sweep} ${x2} ${y}" ` +
       `fill="none" stroke="#1b1b1b" stroke-width="${SLUR_W}"/>` +
       label(midX, barY)
     )
   }
   // 圆弧（adj96：嵌套内层 depth>0 高度少 1px，弧线更贴音符）
-  const topY = y - (s.depth > 0 ? 3.5 : 4.5) // 弧线最高点（与完整弧线顶点同高）
+  const topY = y + dir * (s.depth > 0 ? 3.5 : 4.5) // 弧线最高点（与完整弧线顶点同高）
   if (s.half === 'l') {
     // 左半部：从最低处（x1,y）竖直向上出发，行末为最高点（x2, topY），右侧开口
     return (
-      `<path d="M ${x1} ${y} C ${x1} ${(y - 9).toFixed(1)} ${x2} ${topY.toFixed(1)} ${x2} ${topY.toFixed(1)}" ` +
+      `<path d="M ${x1} ${y} C ${x1} ${(y + dir * 9).toFixed(1)} ${x2} ${topY.toFixed(1)} ${x2} ${topY.toFixed(1)}" ` +
       `fill="none" stroke="#1b1b1b" stroke-width="${SLUR_W}"/>`
     )
   }
   if (s.half === 'r') {
     // 右半部：行首为最高点（x1, topY）水平出发，到最低处（x2,y）竖直向下，左侧开口
     return (
-      `<path d="M ${x1} ${topY.toFixed(1)} C ${x1} ${topY.toFixed(1)} ${x2} ${(y - 9).toFixed(1)} ${x2} ${y}" ` +
+      `<path d="M ${x1} ${topY.toFixed(1)} C ${x1} ${topY.toFixed(1)} ${x2} ${(y + dir * 9).toFixed(1)} ${x2} ${y}" ` +
       `fill="none" stroke="#1b1b1b" stroke-width="${SLUR_W}"/>`
     )
   }
@@ -1595,11 +1643,11 @@ function renderSlur(s: PlacedSlur, noteSize = 18): string {
    *  · 极窄（≤9px）取下限 2.5px，不至于细成一条看不见的线。
    * 只改顶点高度：两端 `x`/`y` 与连音组数字的居中都随之（`y − 垂度/2`），长连音线数值不变。
    */
-  const sag = Math.max(2.5, Math.min(9, Math.abs(x2 - x1) * 0.28))
-  const midY = y - sag
+  const sag = Math.max(SLUR_SAG_MIN, Math.min(SLUR_SAG_MAX, Math.abs(x2 - x1) * 0.28))
+  const midY = y + dir * sag
   return (
     `<path d="M ${x1} ${y} Q ${midX} ${midY} ${x2} ${y}" fill="none" stroke="#1b1b1b" stroke-width="${SLUR_W}"/>` +
-    label(midX, y - sag / 2)
+    label(midX, y + (dir * sag) / 2)
   )
 }
 
@@ -1815,42 +1863,49 @@ function renderBracket(
 /**
  * adj427：临时段（`{bz … }` / `{dsb … }`）的**跨两层大花括号** `{ … }`（dsb 专用）。
  *
- * - 位置由**布局层**给出：`x1` / `x2` 是大括号所占槽位的**左缘**（已排在小节线**内侧**且留了
- *   与小节线的净距）；`yTop` / `yBottomLower` 由布局层按**上下两层音符的外沿**给出
- *   （上过上一行音符上沿、下过下一行音符下沿），故能真正"包住"。
- * - 形状：**自绘描边路径**（`M/Q/L` + `stroke`）——粗细变化版本（自绘填充轮廓 / 字体字形）
- *   经试用观感都不合适，按用户要求**先回退到这种最简绘制方式**；笔画为**细描边**。
- *   路径只在**自己的占宽槽位内**（左 `{` 占 `[x1, x1+w]`、右 `}` 占 `[x2, x2+w]`），不外扩。
+ * - 位置与宽度由**布局层**给出（adj667 起）：
+ *   `x1` = 左大括号**墨迹左缘**、`x2` = 右大括号**墨迹左缘**、`inkW` = 墨迹宽（左右同宽）。
+ *   布局按"两侧邻居的墨迹边界"算准，渲染端**照搬**——不再自己按段高算宽度，
+ *   否则图形会比布局预留的槽位宽、向两侧溢出压到邻居（用户报图 1/图 2 的括号与音符重叠）。
+ *   `yTop` / `yBottomLower` 由布局按上下两层音符的外沿给出（上过上层音符上沿、下过下层音符下沿）。
+ * - 形状：**`大括号.svg` 的填充图形**（左 `{` 原图、右 `}` 水平翻转）。
  * - 圆括号 `( … )` 不在这里画——由布局层发成 `page.brackets`（`zkh`/`ykh` 文本字形），
  *   与全项目其它括号同一套渲染与纵向基准（字形中心 = 数字中心）。
  */
 function renderSegmentBracket(b: PlacedSegmentBracket, config: PageConfig): string {
-  const lo = b.yBottomLower
-  if (b.type !== 'dsb' || lo === undefined || lo <= b.yTop) return ''
-  const ns = config.note_size
-  /** 大括号横向占宽——与布局层 `braceW` 同源（`max(3, 0.32×字号)`） */
-  const w = Math.max(3, ns * 0.32)
-  /** 细描边（先不做粗细变化） */
-  const sw = Math.max(1, ns * 0.1)
-  const cw = w / 2
-  const yTop = b.yTop
-  const yBot = lo
-  const my = (yTop + yBot) / 2
   /**
-   * 单个花括号：两端尖端在中轴一侧、中间尖角在另一侧。
-   * dir=-1 → `{`（cusp 朝左、两端朝右）→ 传 `x = 槽位右缘`，形状正好占满 `[x−w, x]`；
-   * dir=+1 → `}`（镜像）→ 传 `x = 槽位左缘`，形状占满 `[x, x+w]`。
+   * adj685：优先用大括号**自己的**墨迹端点（`braceTop`/`braceBottom`，布局按"内容墨迹 + 对称留白"算），
+   * 缺省时回退 `yTop`/`yBottomLower`（老数据）——后者还被色块等消费，口径偏"块"。
    */
-  const brace = (x: number, dir: 1 | -1): string =>
-    `<path d="M ${r1n(x)} ${r1n(yTop)} ` +
-    `Q ${r1n(x + dir * cw * 2)} ${r1n(yTop)} ${r1n(x + dir * cw)} ${r1n(yTop + cw)} ` +
-    `L ${r1n(x + dir * cw)} ${r1n(my - cw)} ` +
-    `Q ${r1n(x + dir * cw)} ${r1n(my)} ${r1n(x + dir * cw * 2)} ${r1n(my)} ` +
-    `Q ${r1n(x + dir * cw)} ${r1n(my)} ${r1n(x + dir * cw)} ${r1n(my + cw)} ` +
-    `L ${r1n(x + dir * cw)} ${r1n(yBot - cw)} ` +
-    `Q ${r1n(x + dir * cw)} ${r1n(yBot)} ${r1n(x)} ${r1n(yBot)}" ` +
-    `fill="none" stroke="#1b1b1b" stroke-width="${r1n(sw)}" stroke-linecap="round" data-segment-brace="${b.type}"/>`
-  return brace(b.x1 + w, -1) + brace(b.x2, 1)
+  const lo = b.braceBottom ?? b.yBottomLower
+  const top = b.braceTop ?? b.yTop
+  if (b.type !== 'dsb' || lo === undefined || lo <= top) return ''
+  const ns = config.note_size
+  /** 墨迹宽：布局给的优先；缺省（老数据）回退到旧口径 `max(3, 0.32×字号)` */
+  const gw = b.inkW ?? Math.max(3, ns * 0.32)
+  if (!(gw > 0.01)) return ''
+  const yTop = top
+  const yBot = lo
+  /**
+   * 单个大括号。
+   * `dir=-1` → `{`（原图，cusp 朝左），墨迹占 `[x, x + gw]`；
+   * `dir=+1` → `}`（**水平翻转**，cusp 朝右），墨迹同样占 `[x, x + gw]`。
+   *
+   * 纵向铺满段高；横向宽度**由布局钳定**（`SEGMENT_BRACE_ASPECT × 段高` 只是理想值，
+   * 空间不足时会变窄，见 `layout/spacing.ts` 的常量注释）。
+   * 缩放值**不能**用 `r1n()`（只留 1 位小数）——横向 ≈0.02、纵向 ≈0.047，会被舍成 0。
+   */
+  const brace = (x: number, dir: 1 | -1): string => {
+    const sx = gw / BRACE_SVG.w
+    const sy = (yBot - yTop) / BRACE_SVG.h
+    const st = `${sx.toFixed(5)} ${sy.toFixed(5)}`
+    const transform =
+      dir === -1
+        ? `translate(${r1n(x)}) translate(0 ${r1n(yTop)}) scale(${st}) translate(${r1n(-BRACE_SVG.x)} ${r1n(-BRACE_SVG.y)})`
+        : `translate(${r1n(x + gw)}) translate(0 ${r1n(yTop)}) scale(-${st}) translate(${r1n(-BRACE_SVG.x)} ${r1n(-BRACE_SVG.y)})`
+    return `<path d="${BRACE_SVG.d}" transform="${transform}" fill="#1b1b1b" data-segment-brace="${b.type}"/>`
+  }
+  return brace(b.x1, -1) + brace(b.x2, 1)
 }
 
 function renderPage(page: ScorePage, config: PageConfig, pageCount: number, opts?: RenderFontMeta): string {

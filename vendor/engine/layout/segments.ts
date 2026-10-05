@@ -19,6 +19,19 @@
  */
 import type { MusicToken } from '../types'
 import { tokenDuration } from '../duration'
+import {
+  DIGIT_HEIGHT_RATIO,
+  LAYER_GAP,
+  SLUR_W,
+  octaveDotY,
+  DOT_R,
+  noteScaleOf,
+  beamBottomY,
+  lowDotY,
+  NOTE_BASELINE_RATIO,
+  SEGMENT_LAYER_CLEARANCE,
+  SLUR_SAG_MAX,
+} from './spacing'
 
 /** 计时 token 联合（音符 / 休止符 / 节奏符）——由下方 isDurational 收窄 */
 export type DurationalToken = Extract<MusicToken, { kind: 'note' | 'rest' | 'rhythm' }>
@@ -152,6 +165,135 @@ export function mainSpansInRange(spans: MainSpan[], from: number, to: number): M
 export function beatRatio(beatInSegment: number, totalBeats: number): number {
   if (totalBeats <= 0) return 0
   return Math.min(1, Math.max(0, beatInSegment / totalBeats))
+}
+
+// ============================================================
+// adj668：临时段给**所在视觉行**带来的纵向余量
+// ============================================================
+
+/** 一个视觉行因临时段而需要的纵向余量（px，均 ≥ 0） */
+export interface SegmentRowExtra {
+  /** **行顶之上**还需要的高度——段层上层（`{dsb}` 上声部 / `{bz}` 伴奏层）会伸出行顶 */
+  up: number
+  /** 段层墨迹的**底缘**相对"行音符基线"的偏移（px，正值向下；只算 `{dsb}` 的下层声部，`{bz}` 为 0） */
+  botInk: number
+  /**
+   * adj670：本行段层实际采用的**纵向间距**（`{dsb}` = 上下两层间距）。
+   * 它是 `max(用户设置, 容纳两层内容所需的最小值)`（见 `segmentMinGap`）——
+   * 供调用方算 `segH`（大括号高度）等派生量，避免与 `up`／`botInk` 用两套值。
+   */
+  gap: number
+}
+
+/**
+ * adj670（用户口径）：「`{dsb}` 上下两层之间**必须放得下**上层声部的减时线 + 下层声部的连音线」。
+ *
+ * 为什么不能只信 `segmentRowGap.dsb`（默认 22）：两层净空 = `间距 − 数字高`（22 − 10.4 ≈ 11.6px），
+ * 而下层连音线自数字顶再往上要占 `层距 + 描边 + 垂度(≤9)` ≈ 11.4px，**再加**上层的减时线层
+ * （`//` 是十六分音符 ⇒ 2 条线，层底距基线 5.1px）⇒ 必然相撞。撞了只有两条路：把弧线翻到下方
+ * （用户明确否掉：「连音线是在下面的**反转的**」）或**把间距撑开**。这里选后者。
+ */
+export function segmentMinGap(
+  seg: SegmentInfo,
+  rowTokens: MusicToken[],
+  noteSize: number,
+  clearance: number,
+): number {
+  const s = noteScaleOf(noteSize)
+  /** 上层（段内容）的墨迹**下缘**（相对上层基线，正值向下） */
+  let upperBottom = 0
+  for (const t of seg.tokens) {
+    if (!isDurational(t)) continue
+    const dc = t.kind === 'note' ? (t.diminishCount ?? 0) : 0
+    if (dc > 0) upperBottom = Math.max(upperBottom, beamBottomY(0, dc, noteSize))
+    const oct = t.kind === 'note' ? t.octaveShift : 0
+    if (oct < 0) upperBottom = Math.max(upperBottom, lowDotY(0, -oct - 1, dc, noteSize) + DOT_R * s)
+  }
+  /** 下层（包络内的主旋律）墨迹**顶**相对下层基线的距离（正值） */
+  let lowerTop = noteSize * DIGIT_HEIGHT_RATIO
+  let hasSlur = false
+  {
+    let beat = 0
+    for (const t of rowTokens) {
+      if (t.kind === 'segment') continue
+      if (isDurational(t)) {
+        if (beat >= seg.startBeat - 1e-9 && beat < seg.startBeat + seg.beats - 1e-9) {
+          const oct = t.kind === 'note' ? t.octaveShift : 0
+          if (oct > 0) {
+            // 高八度点层顶（相对基线）
+            lowerTop = Math.max(lowerTop, noteSize * DIGIT_HEIGHT_RATIO - (octaveDotY(0, oct - 1, noteSize) - DOT_R * s))
+          }
+        }
+        beat += tokenDuration(t)
+        continue
+      }
+      // 连音线 token：出现在它所覆盖的那些音符**之前**，落在包络内（**开区间**——恰好落在
+      // 包络终点上的那条连音线属于**下一段**，闭区间会让相邻两段都误判成"有连音线"）
+      if (t.kind === 'slur' && beat >= seg.startBeat - 1e-9 && beat < seg.startBeat + seg.beats - 1e-9) hasSlur = true
+    }
+  }
+  if (hasSlur) {
+    lowerTop = Math.max(lowerTop, noteSize * DIGIT_HEIGHT_RATIO + LAYER_GAP * s + (SLUR_W * s) / 2 + SLUR_SAG_MAX + SLUR_W / 2)
+  }
+  return upperBottom + lowerTop + clearance
+}
+
+/**
+ * adj668（用户要求）：「临时多声部通常只涉及部分行，**应该就这些行增加行间距**以容纳多出来的层，
+ * 其它行不受影响」。
+ *
+ * 为什么必须这么做：`{dsb}` 的上层声部基线 = `行基线 − 间距/2`、还要加上高八度点与连音线，
+ * 实测**伸出"行顶"约 11.7px**。此前布局把这部分当作"叠加"直接**外溢**到相邻行的地盘
+ * （上一行的歌词区 / 下一行的内容），于是只能靠"抬跳房子线"这类补丁到处救火。
+ * 现在把它算成**本行的高度预算**：`up` 记在本行之前、下方余量记在本行之后，后续行整体下移
+ * ——只有含段层的行会变高。
+ *
+ * 口径（相对行音符基线，`y` 为负表示在上方）：
+ *  · 段层基线：`{dsb}` = `−间距/2`（上下各半，整块与主旋律居中）；`{bz}` = `−间距`（只在上方）；
+ *  · 段层墨迹顶 = min(数字顶、最高高八度点顶、大括号顶、段层连音线弧顶)；
+ *  · `up` = 行顶（`−1.1×字号`）减该墨迹顶；
+ *  · `botInk` = 下层声部墨迹底（连音线一律画在上方 ⇒ 不再有"翻到下方"的弧底）。
+ *
+ * adj670：间距取 `max(用户设置, segmentMinGap(...))`——**"不重叠"优先于"用户把间距调小"**，
+ * 调大仍然生效（它只是个下限）。
+ *
+ * `{tp}` 不在这里算——替谱层有自己的一套（`tpGeometry`，挂在歌词行上方）。
+ */
+export function segmentRowExtra(
+  segsInRow: SegmentInfo[],
+  rowTokens: MusicToken[],
+  noteSize: number,
+  gapOf: (type: 'bz' | 'dsb' | 'tp') => number,
+): SegmentRowExtra {
+  const s = noteScaleOf(noteSize)
+  /** 段层连音线画在段层音符**上方**时额外占的高度（弧垂度上限 + 层距 + 描边） */
+  const slurExtra = LAYER_GAP * s + (SLUR_W * s) / 2 + SLUR_SAG_MAX + SLUR_W / 2
+  let up = 0
+  let botInk = 0
+  let gap = 0
+  for (const sg of segsInRow) {
+    if (sg.type === 'tp') continue
+    // adj670：间距 = max(用户设置, 容纳两层内容所需的最小值)
+    const dy = Math.max(gapOf(sg.type), segmentMinGap(sg, rowTokens, noteSize, SEGMENT_LAYER_CLEARANCE))
+    gap = Math.max(gap, dy)
+    const baseOff = sg.type === 'dsb' ? -dy / 2 : -dy
+    let maxOct = 0
+    let hasSlur = false
+    for (const t of sg.tokens) {
+      if (t.kind === 'note' && t.octaveShift > maxOct) maxOct = t.octaveShift
+      if (t.kind === 'slur') hasSlur = true
+    }
+    let topInk = baseOff - noteSize * DIGIT_HEIGHT_RATIO
+    if (maxOct > 0) topInk = Math.min(topInk, octaveDotY(baseOff, maxOct - 1, noteSize) - DOT_R * s)
+    // 大括号顶（它的设计口径本就比数字顶更高，取更保守者）
+    topInk = Math.min(topInk, baseOff - noteSize * 1.15)
+    if (hasSlur) topInk -= slurExtra
+    up = Math.max(up, -noteSize * NOTE_BASELINE_RATIO - topInk)
+    if (sg.type === 'dsb') {
+      botInk = Math.max(botInk, dy / 2 + noteSize * 0.3)
+    }
+  }
+  return { up, botInk, gap }
 }
 
 // ============================================================

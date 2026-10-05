@@ -146,7 +146,7 @@ interface SeqItem {
     voltaEnd?: boolean
     /** adj360：|]/ 房子右侧未封闭——该房子延续到其后第一个跳跃小节线(:|)或结束小节线(||) */
     voltaEndSlash?: boolean
-    /** adj627：临时转调指令（小节线引号备注 `"d:<key>"` / `"d:"`）——见 `keyAtSeq` */
+    /** adj627/adj665：临时转调指令（小节线引号备注 `"d:<key>"` / `"d:"`）——见走查里的 `curKey` */
     keyChange?: PlacedBarline['keyChange']
   }
 }
@@ -523,8 +523,9 @@ export function buildPlaySequence(
          *
          * dsb 下层（包络内的主旋律）若不钳制，右边界会取"**包络外**那个主旋律音的 x"
          * ⇒ 色块越过 `}` 一直盖到下一小节（用户截图：下层绿块从 `5` 跨过 `}` 到最后的 `5` 前）。
-         * 上层的段层音符在 `emitSegmentEvents` 里已收在段内容区内（`xContent1` ≤ 大括号槽），
-         * 故这里只对**下层**（`playVoice === 'second'`）钳制到段层右界 `segmentBrackets.x2`。
+         * 上层的段层音符在 `emitSegmentEvents` 里已收在段内容区内（`xContent1` ≤ 大括号内缘），
+         * 故这里只对**下层**（`playVoice === 'second'`）钳制到段层右界 `blockRight`
+         * （adj667 起 = 右大括号**墨迹左缘**；旧数据无该字段时退回 `x2`）。
          */
         const segRight = n.playVoice === 'second' ? segRightByGroupVoice.get(`${n.id.page}|${n.id.group}|${n.id.voice}`) : undefined
         rightEdgeByNoteIdx.set(n.id.index, segRight !== undefined ? Math.min(base, segRight) : base)
@@ -636,7 +637,7 @@ export function buildPlaySequence(
             voltaStart: token.voltaStart,
             voltaEnd: token.voltaEnd,
             voltaEndSlash: token.voltaEndSlash,
-            // adj627：临时转调（小节线引号备注 `"d:..."`）——播放走查据此切调，见 `keyAtSeq`
+            // adj627/adj665：临时转调（小节线引号备注 `"d:..."`）——播放走查据此切调，见 `curKey`
             keyChange: token.keyChange,
           },
         }
@@ -765,7 +766,7 @@ export function buildPlaySequence(
    * adj598（用户口径）：**"下一处跳跃或结束"**的小节线判据——
    * 反复线 `:|`/`:|:`、结束线 `||`/`||/`，以及带 `&ds`（跳花 S）/`&dc`（从头反复）/`&fine`（曲终）修饰的线。
    * 未封闭房子 `|["n." … |]/` 的终点就取**其后第一根**这样的线（见下）。
-   * adj627b：判据本身抽到了布局端 `isJumpOrEndBarline`——**转调复原（`keyAtSeq`）与本处房子终点
+   * adj627b：判据本身抽到了布局端 `isJumpOrEndBarline`——**转调复原（走查里的 `curKey`）与本处房子终点
    * 必须同一口径**，两处各写一份迟早会漂。
    */
   const isJumpOrEndBar = (it: SeqItem): boolean =>
@@ -959,29 +960,18 @@ export function buildPlaySequence(
   const overriddenByVoice = new Map<number, string | null>()
   const keySemitone = parseKey(result.header.key)
   /**
-   * adj627（用户要求）：**临时转调**（小节线引号备注 `"d:<key>"` / `"d:"` 恢复描述头调号）。
+   * adj627/adj665（用户口径，定稿 = Model B）：**临时转调**（小节线引号备注 `"d:<调>"` / `"d:"` 恢复）。
    *
-   * 为什么是"预先扫一遍序列"而不是在走查里维护可变状态：转调是**绝对赋值**（`d:F#` 就是 F#，`d:`
-   * 就是描述头调号），所以**任意位置的生效调号只取决于源码前缀**。预先摊成"序列下标 → 生效调号"后，
-   * 反复（同一段第二次经过那条转调线）、跳越（前跳跳过转调线）、跳房子跳转全都自动正确——
-   * 若用可变状态，前跳会跳过转调线导致调号残留旧值。
+   * 规则：「**转调后，反复/跳跃都继续用转调后的调号；只有再写 `d:<调>` 或 `d:`（恢复）才变**」。
+   * ⇒ 调号是**随演奏过程保持的状态**（不是"按谱面书写位置"的静态表）：
+   *   - 反复线 `:|` / 跳跃记号 `&ds`/`&dc`/`&ty` 等**都不回描述头调号**（adj627b 那条撤销）；
+   *   - 同一小节在不同遍次里可能落在不同调上——这是该口径的**预期**行为（用户已确认）；
+   *   - 只有**真正走到**带 `d:` 的小节线才换调 ⇒ 被跳房子/跳越跳过的段落里的 `d:` 不生效。
    *
-   * adj627b（用户要求）：遇到**跳跃/终结标志**（`isJumpOrEndBarline`）同样回描述头调号；
-   * 顺序是**先隐式回原调、再套本条线上的显式 `d:`**，与布局端 `effectiveKeysOf` 严格同一口径
-   * （否则会出现谱面已回原调、试听还在转调的割裂）。
+   * 实现：走查里维护 `curKey`（不是预扫源码顺序的静态表——那种写法会把被跳过段落的 `d:` 也算进去），
+   * 每走到一根**小节线**时推进一次；小节自身的音符用"进入该小节时的调号"。
    */
-  const keyAtSeq: number[] = (() => {
-    const out: number[] = new Array<number>(seq.length).fill(keySemitone)
-    let cur = keySemitone
-    for (let si = 0; si < seq.length; si++) {
-      out[si] = cur
-      const bar = seq[si].bar
-      if (bar && isJumpOrEndBarline(bar)) cur = keySemitone // adj627b：跳跃/终结 ⇒ 回原调
-      const kc = bar?.keyChange
-      if (kc) cur = kc.clear ? keySemitone : kc.targetKey ?? cur
-    }
-    return out
-  })()
+  let curKey = keySemitone
   // adj88：连音线内相同音高连续音符连奏合并——上一个已发事件的音符索引与音高；
   // 当前音符若与上一个音高相同、同属某连音线且中间无音符（索引相邻），则时值并入前一事件
   let lastEventNoteIdx = -1
@@ -1102,7 +1092,7 @@ export function buildPlaySequence(
     }
     const nextSegBarX = (x: number): number => segBarXs.find((v) => v > x + 1e-3) ?? Number.POSITIVE_INFINITY
     /**
-     * adj440：段层**右界**（大括号槽 `/` 内容区右缘，来自 `segmentBrackets.x2`）。
+     * adj440：段层**右界**（大括号内缘 `/` 内容区右缘，来自 `segmentBrackets.blockRight`）。
      * 用于段内最后一个音的色块右边界——见 `edgeOf` 末尾分支。
      */
     const segBoundKey = segNotes[0] ? `${segNotes[0].id.page}|${segNotes[0].id.group}|${segNotes[0].id.voice}` : ''
@@ -1202,9 +1192,27 @@ export function buildPlaySequence(
       const prevSlurs = lastSegTokIdx > 0 ? segSlurOf.get(lastSegTokIdx) : undefined
       const sameSlur =
         prevSlurs !== undefined && curSlurs !== undefined && [...prevSlurs].some((r) => curSlurs.has(r))
+      /**
+       * adj710（用户报「`{dsb}` 的**前两拍没有按双声部演奏**」）：
+       * **`{dsb}` 段内的连音合并一律关闭。**
+       *
+       * 根因：合并（`prevEv.durationMs += dur2`）的本意是"连音线内同音高连奏"，
+       * 但它把**后一个音的事件整个吞掉**、那个音的**起奏点就没了**。实测
+       * `{dsb (3// 2// 1//) (1// 1/) 7,/ 1- }`：
+       *  · 上层 `(1// 1/)` 同音高、同连音线 ⇒ 合并成 `0.643s` 一个音（`1/` 的事件数 **0**）；
+       *  · 下层 `(6// 6/)` 音高不同 ⇒ 不合并；
+       * ⇒ **两层音符数不再一一对应**，听感上就不是"一个音对一个音的双声部"了
+       * （整曲 31 个上层音里 3 个这样丢起奏点）。
+       *
+       * 为什么只关 `{dsb}`：单声部/多声部块的连音合并是**既有且用户认可**的演奏口径
+       * （`(2 - | 2/)` 连成 2.5 拍）；`{bz}`（临时伴奏）是"上方叠层"、不要求逐音对应。
+       * 只有 `{dsb}` 的语义是"两个声部上下同拍位**逐音对齐**"。
+       */
+      const isDsbSegment = seg.type === 'dsb'
       if (
         prevEv !== undefined &&
         ci === lastEmittedDurIdx + 1 && // 紧邻（中间没有别的时值 token）
+        !isDsbSegment && // adj710：`{dsb}` 内不合并（合并会让两层音符数不再一一对应）
         !lastSegHadGraceOrOrnament &&
         !hasGraceOrOrnament &&
         sameSlur &&
@@ -1410,7 +1418,7 @@ export function buildPlaySequence(
        * `passMs`** 发出（时间落错），听感就是"跳音"。现在先补发再判静音，顺序与时间都稳定。
        */
       if (pendingSegment) {
-        emitSegmentEvents(pendingSegment, passMs, keyAtSeq[Math.min(i, keyAtSeq.length - 1)] ?? keySemitone)
+        emitSegmentEvents(pendingSegment, passMs, curKey)
         pendingSegment = null
       }
       // adj629：本遍若被替谱段替代，则**主旋律这一段不发声**（替谱层已在上面发声）
@@ -1420,8 +1428,8 @@ export function buildPlaySequence(
       }
       const durationMs = (tokenDuration(token) * 60000) / bpm
       // adj627：音高按**当前生效调号**现算（有临时转调时 `placed.audioPitch` 只反映"第一遍"的调号，
-      // 反复/跳转后同一音符可能落在不同的调上；这里用 `keyAtSeq[i]` 与走查位置严格对应）
-      const pitch = token.kind === 'note' ? pitchToName(token.pitch, token.octaveShift, token.accidental, keyAtSeq[i]) : placed.audioPitch
+      // 反复/跳转后同一音符可能落在不同的调上；这里用 `curKey` 与走查位置严格对应）
+      const pitch = token.kind === 'note' ? pitchToName(token.pitch, token.octaveShift, token.accidental, curKey) : placed.audioPitch
       const curNoteIdx = item.noteIdx ?? -1
       // adj282：每个 event 的 atMs 由所属 group 的拍时钟决定（不受源码顺序累加），
       // 保证同组同 (barIndex, beatPos) 的各声部事件 atMs 相同 → 同步播放
@@ -1478,7 +1486,7 @@ export function buildPlaySequence(
       const gn = token.kind === 'note' ? token.gracenotes : undefined
       const gracePitches =
         gn && gn.notes.length > 0
-          ? gn.notes.map((g) => pitchToName(g.pitch, g.octaveShift, g.accidental, keyAtSeq[i]))
+          ? gn.notes.map((g) => pitchToName(g.pitch, g.octaveShift, g.accidental, curKey))
           : []
       /**
        * adj505（用户规范，力度按方案 b「只做力度区分」）：
@@ -1549,14 +1557,14 @@ export function buildPlaySequence(
           let pitchName: string | null = null
           if (step !== 'P' && token.kind === 'note') {
             const nb = neighborDegree(token.pitch, step === 'U')
-            pitchName = pitchToName(nb.pitch, token.octaveShift + nb.octave, null, keyAtSeq[i])
+            pitchName = pitchToName(nb.pitch, token.octaveShift + nb.octave, null, curKey)
           }
           preSeq.push({ pitchName, ms: ornPlan.shortMs })
         }
       } else if (slideKind && token.kind === 'note') {
         // 起点 = 本音在滑动方向上的调内二度（`&shy` 从下方滑进 ⇒ 取**下方**邻音；`&xhy` ⇒ 上方邻音）
         const nb = neighborDegree(token.pitch, slideKind === 'xhy')
-        const fromName = pitchToName(nb.pitch, token.octaveShift + nb.octave, null, keyAtSeq[i])
+        const fromName = pitchToName(nb.pitch, token.octaveShift + nb.octave, null, curKey)
         const toName = pitch ?? placed.audioPitch
         const plan =
           fromName && toName ? slidePlan(pitchToMidiNote(fromName), pitchToMidiNote(toName), mainMs, midiToPitchName) : null
@@ -1589,7 +1597,7 @@ export function buildPlaySequence(
         const k = mainMs > 0 ? graceNoteMs / mainMs : 0
         const nbOf = (up: boolean) => {
           const nb = neighborDegree(g.pitch, up)
-          return pitchToName(nb.pitch, g.octaveShift + nb.octave, null, keyAtSeq[i])
+          return pitchToName(nb.pitch, g.octaveShift + nb.octave, null, curKey)
         }
         // 前置短音（装饰短音 / 滑音阶梯），时值随后统一 ×k（见上面的口径）
         const pre: { pitchName: string | null; ms: number }[] = []
@@ -1651,6 +1659,9 @@ export function buildPlaySequence(
         if (
           lastEventNoteIdx >= 0 &&
           sameVoiceAsPrev &&
+          // adj710：`{dsb}` 的下层（`second`）不合并——与段层同理，
+          // 合并会让"上下两声部逐音一一对应"失效（用户报「没有按双声部演奏」）
+          playRole !== 'second' &&
           (continuesFromPrev || (curNoteIdx === lastEventNoteIdx + 1 && shareSlur)) &&
           !hasFrontGrace &&
           ornKind === null &&
@@ -1775,6 +1786,12 @@ export function buildPlaySequence(
       continue
     }
     const bar = item.bar!
+    /**
+     * adj665：**转调状态在小节线处推进**——本小节的音符已在上面按"进入本小节时的调号"发声，
+     * 这里才套用本线的影响：该线自带显式 `d:<调>` ⇒ 换调；`d:` ⇒ 回描述头调号。
+     * 反复/跳跃记号**不改变调号**（用户口径：转调后反复/跳跃都继续用转调后的调号）。
+     */
+    if (bar.keyChange) curKey = bar.keyChange.clear ? keySemitone : bar.keyChange.targetKey ?? curKey
     // adj359：跳房子——本遍不演奏该 volta 时，跳到其末尾小节线
     // （停在末尾线上而非其后一位：`:|]["2."` 共用一根线时，仍需处理该线上的 volta2 番号）
     // adj368：判断依据按标签类型——番号（`["2."`）比遍次；文字标签（`["结束句"`）比该段最终遍数
@@ -1912,7 +1929,7 @@ export function buildPlaySequence(
   settleBreath()
   // adj427：段落在行尾/后面没有音符时，用最后一遍的 passMs 补发（保证它仍然发声）
   if (pendingSegment) {
-    emitSegmentEvents(pendingSegment, passMs, keyAtSeq[keyAtSeq.length - 1] ?? keySemitone)
+    emitSegmentEvents(pendingSegment, passMs, curKey)
     pendingSegment = null
   }
 

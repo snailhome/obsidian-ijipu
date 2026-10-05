@@ -1,11 +1,21 @@
 /**
  * engine/layout/spacing.ts — 音符修饰符层级与间距常量（adj60 集中管理）
  *
- * 层级规则（间距统一 LAYER_GAP，层内元素间距 INNER_GAP）：
- *  - 音符下方：数字 → 减时线层 → 低八度点层（先减时线、后低八度点，固定顺序）
- *  - 音符上方：数字 → 高八度点层 → 装饰符号/注释/连音线（高八度点最优先；
- *    其余按修饰符书写顺序从下往上依次排，未说明的顺序默认如此，后续可再调整）
- *  - 同层内多个元素（多个八度点 / 多条减时线）中心距 INNER_GAP
+ * **层级规则（adj714 用户主规则，见 `AGENTS.md` 五·10）**：修饰符从音符往上/往下各有固定层级，
+ * 叠加时以**「音符与修饰符的墨迹不重叠」为主要原则**，层级之间留 `LAYER_GAP`、层内 `INNER_GAP`。
+ *
+ * ```
+ *   音符往上（由低到高）              音符往下（由近到远）
+ *   ① 高八度点                      ① 减时线
+ *   ② 本音符修饰符（波音/顿音/颤音/注释）
+ *   ③ 跨音符修饰符（连音线、渐强渐弱）
+ *   ④ 跨小节/章节修饰符（跳房子、反复）  ② 低八度点 → ③ 其它
+ * ```
+ *
+ * - 层级顺序的唯一表述 = `MODIFIER_LAYERS_ABOVE` / `MODIFIER_LAYERS_BELOW`；
+ * - 每层的纵向落点 = `octaveDotY`/`octaveTopY`（①）、`beamY`/`beamBottomY`（下方①）、
+ *   `lowDotY`（下方②）、`slurApexY`（③，**按弧顶**不是弦）；渲染与布局**共用同一函数**；
+ * - 净空判断用 `layerSeparationViolation`（机器闸门，smoke 里有成对断言）。
  *
  * 修改间距只需改本文件常量，全部渲染/布局自动生效。
  */
@@ -157,6 +167,31 @@ export const VOLTA_COMMENT_FONT_RATIO = 0.4
 // ---- 注释 ----
 /** 歌词注释字号与歌词字号的比值（0.8×18≈14） */
 export const COMMENT_FONT_RATIO = 0.8
+
+/**
+ * adj672：**歌词注释**（`C: 一"副歌" 二` 里那个 `"副歌"`）的字号。
+ *
+ * 渲染与布局避让必须用同一把尺子（布局要按它估宽、才能判断"放不放得下"）。
+ */
+export const lyricCommentFontSize = (geciSize: number) => Math.max(9, Math.round(geciSize * COMMENT_FONT_RATIO))
+
+/**
+ * adj672：歌词注释的**墨迹宽估算**——汉字按 1 字宽、拉丁/数字按 0.55 字宽。
+ *
+ * 注释是宿主字体渲染的自由文本，`getBBox` 在布局阶段拿不到；这里用"足够准的估算"即可：
+ * 避让只需要知道"大概多宽"，宁可按上限估（估宽 → 更早触发上下错开，不会压字）。
+ */
+export const lyricCommentWidth = (text: string, fontSize: number) =>
+  [...text].reduce((acc, ch) => acc + (/\p{Script=Han}/u.test(ch) ? fontSize : fontSize * 0.55), 0)
+
+/**
+ * adj672（用户要求）：「歌词的注释，也以**不与歌词重叠**为宜，否则**前后两歌词之间**调整注释的位置
+ * 到不重叠，如果无法不重叠，则再**上下调整**」。
+ *
+ * 这是歌词注释与**所属歌词字左缘**之间的默认净距（注释右缘 → 该字左缘）。
+ * 也是"在前后两字之间的空档里右对齐"时贴住本字的间距。
+ */
+export const LYRIC_COMMENT_GAP = 3
 /** 音符注释字号与音符字号的比值（adj62：音符字体高度的一半，0.5×18=9） */
 export const NOTE_COMMENT_FONT_RATIO = 0.3
 /**
@@ -419,6 +454,82 @@ export const TP_LAYER_TOP_GAP_DEFAULT = 7
  */
 export const TP_BRACKET_GAP = (noteSize: number) => noteSize * 0.75
 
+// ---- 临时多声部段（adj667：{dsb … } 的大括号横向几何）----
+/**
+ * adj667（用户口径「元素布局时不得重叠，除非明确要重叠」）：`{dsb … }` 大括号的**理想横向宽高比**。
+ *
+ * 大括号用填充图形（`public/icons/大括号.svg`）：它是**填充**字形，粗细与形状是同一个轮廓，
+ * 等比铺满段高会越看越像一坨黑；要"细"只能**横向收**。`0.1 × 段高` 是唯一旋钮——
+ * 调大更饱满、调小更细（用户 adj671 口径：由 0.12 调到 **0.1**）。
+ *
+ * ⚠️ 这只是**理想值**：真实宽度由布局按"两侧邻居的墨迹边界"钳制（见 `layout/index.ts`
+ * 的 `placeSegmentOverlays`），空间不足时变窄，**绝不允许越出去压到相邻音符**。
+ * 布局与渲染共用本常量（渲染不再自己按高度算）。
+ */
+export const SEGMENT_BRACE_ASPECT = 0.1
+
+/** adj667：大括号墨迹的**最小宽度**（再窄就看不出来了；此时宁可略微靠近但绝不越界） */
+export const SEGMENT_BRACE_MIN_W = 1.6
+
+/**
+ * adj668：**行内"行顶 → 音符基线"的比例**（行顶 = 基线 − 该比例 × 字号）。
+ *
+ * 数值与布局既有写法一致（`m.noteSize * 1.1`，见 `placeMusicRow*` 的 `barNoteY`）。
+ * 抽出来是因为"临时段的纵向余量"必须按**同一把尺子**判断"是否伸出了行顶/行底"，
+ * 两处各写一个 1.1 早晚会漂。
+ */
+export const NOTE_BASELINE_RATIO = 1.1
+
+/** adj668：**行内"音符基线 → 曲部下沿"的比例**（= 曲部行高 `1.7×字号` − 行顶偏移） */
+export const NOTE_BOTTOM_RATIO = 0.6
+
+/**
+ * adj667：大括号墨迹与相邻元素墨迹之间的**净距上限**（px）。
+ * 空间富余时按此留白；空间紧张时**先让净距、再压括号宽度**（保证不重叠优先）。
+ */
+export const SEGMENT_BRACE_INK_GAP = 0.5
+
+/**
+ * adj699：跳房子线与"下方最高墨迹"（连音线弧顶 / 高八度点顶 / 数字顶）之间的间距（px）。
+ *
+ * 用户口径：「跳房子线与连音线的顶端、高八度点等其它修饰符的**墨迹顶端**间距 **2px** 为宜」。
+ * 与字号无关（固定像素），故不乘 `noteScaleOf`。
+ */
+export const VOLTA_INK_GAP = 2
+/**
+ * adj670（用户口径：「(1'// 7// 6//) (6// 6/) 这部分的连音线是在下面的**反转的**」）：
+ * `{dsb}` 上下两层之间**必须容纳**的内容 = 上层声部的**减时线层底** + 下层声部连音线的**弧顶**。
+ * 于是布局要按需把 `segmentRowGap.dsb` **撑到这个下限**（否则连音线只能翻到下方，用户不接受）。
+ *
+ * 本常量是"上层墨迹底 与 下层弧顶"之间还要留的净距。
+ */
+export const SEGMENT_LAYER_CLEARANCE = 2
+
+/** 连音线垂度（弧高）的**下限**：极窄连音线不至于细成一条看不见的线（adj649） */
+export const SLUR_SAG_MIN = 2.5
+/**
+ * 连音线垂度（弧高）的**上限**：`垂度 = clamp(跨度 × 0.28, SLUR_SAG_MIN, SLUR_SAG_MAX)`（adj649）。
+ *
+ * adj670：布局算"`{dsb}` 两层最小间距"时拿它当**保守上界**——那时还不知道连音线的实际跨度
+ * （x 方向要等放置完），只能按最大垂度预留，宁可略松也不让弧顶压到上层减时线。
+ */
+export const SLUR_SAG_MAX = 9
+
+/**
+ * adj713/adj714：**连音线垂度** `sag = clamp(跨度 × 0.28, SLUR_SAG_MIN, SLUR_SAG_MAX)`。
+ *
+ * 为什么必须是公共纯函数（`AGENTS` 六之二·4「数值口径必须同源」）：
+ *  · 渲染端 `renderSlur` 用它算贝塞尔控制点（`M x1 y Q mid (y − sag) x2 y`）；
+ *  · 布局端要按**弧顶**（= `y − sag/2`，二次贝塞尔 `t = 0.5`）算"与下一层的净空"——
+ *    用户口径（`AGENTS` 五·10）要求**跨音符修饰符层**让开高八度点与本音符修饰符。
+ * 两处若各写一份公式，"净空够不够"就会两边算出不同答案（本项目已复发多次）。
+ */
+export const slurSagOf = (span: number): number =>
+  Math.max(SLUR_SAG_MIN, Math.min(SLUR_SAG_MAX, span * 0.28))
+
+/** adj714：连音线**弧顶** y（二次贝塞尔 `t = 0.5` ⇒ `y − sag/2`）——层级净空判断只用它 */
+export const slurApexY = (y: number, x1: number, x2: number): number => y - slurSagOf(Math.abs(x2 - x1)) / 2
+
 // ============================================================
 // 位置计算（纯函数，供 render / layout 共用）
 // ============================================================
@@ -461,12 +572,85 @@ export const beamBottomY = (y: number, dc: number, noteSize: number) => {
   return y + (DIGIT_BOTTOM + LAYER_GAP) * s + (dc - 1) * (BEAM_H + INNER_GAP) * s + BEAM_H * s
 }
 
-/** 低八度点：第 i 个点 cy（点顶距数字底或减时线层底 LAYER_GAP×scale；dc=0 表示无减时线） */
+/**
+ * 低八度点：第 i 个点 cy（点顶距数字底或减时线层底 LAYER_GAP×scale；dc=0 表示无减时线）
+ */
 export const lowDotY = (y: number, i: number, dc: number, noteSize: number) => {
   const s = noteScaleOf(noteSize)
   const top =
     dc > 0 ? beamBottomY(y, dc, noteSize) + LAYER_GAP * s : digitBottomY(y, noteSize) + LAYER_GAP * s
   return top + DOT_R * s + i * (DOT_R * 2 + INNER_GAP) * s
+}
+
+// ============================================================
+// 修饰符「层级栈」（adj714，用户口径；见 AGENTS 五·10）
+// ============================================================
+
+/**
+ * adj714（用户 2026-10 给出的**主规则**，见 `AGENTS.md` 五·10）：
+ * 音符的修饰符从音符往上/往下各有**固定层级**，叠加时以
+ * **「音符与修饰符的墨迹不重叠（不覆盖）」为主要原则**，层级之间适当留白（`LAYER_GAP`）。
+ *
+ * ```
+ *   音符往上（由低到高）        音符往下（由近到远）
+ *   ① octave    高八度点        ① beam      减时线
+ *   ② noteMark  本音符修饰符    ② lowDot    低八度点
+ *   ③ spanMark  跨音符修饰符    ③ belowMark 其它下方修饰符
+ *   ④ section   跨小节/章节修饰符
+ * ```
+ *
+ * 本常量是**层级顺序的唯一表述**（AGENTS 六之二·4「数值口径必须同源」）：
+ * 布局端与渲染端都从这里取顺序，不许各自现排。
+ */
+export const MODIFIER_LAYERS_ABOVE = ['octave', 'noteMark', 'spanMark', 'section'] as const
+export const MODIFIER_LAYERS_BELOW = ['beam', 'lowDot', 'belowMark'] as const
+export type ModifierLayerAbove = (typeof MODIFIER_LAYERS_ABOVE)[number]
+export type ModifierLayerBelow = (typeof MODIFIER_LAYERS_BELOW)[number]
+
+/** 某音符上方各修饰层的**墨迹顶** y（由低到高；`null` = 该层没有元素） */
+export interface NoteModifierGeometry {
+  /** 该音符的画音基线 y */
+  y: number
+  /** 高八度点个数（0 = 无） */
+  octaves: number
+  /** 本音符修饰符（波音/顿音/颤音/注释…）的**墨迹高**（0 = 无，按 `LAYER_GAP` 直接叠） */
+  noteMarkInkH: number
+  /** 跨音符修饰符（连音线弧顶 / 渐强渐弱的**墨迹高**） */
+  spanMarkInkH: number
+  /** 跨小节修饰符（跳房子线）的**墨迹高** */
+  sectionInkH: number
+}
+
+/**
+ * 按层级栈自下而上算出**每层墨迹顶**的 y（adj714）。
+ *
+ * 语义：第 ① 层紧贴音符；其后每层的**底**都在上一层**顶**之上 `LAYER_GAP`。
+ * 返回的 `top` 是"该层最高元素的墨迹顶"，供再上一层与"行顶预算"使用。
+ */
+export function modifierLayerTops(g: NoteModifierGeometry, noteSize: number): Record<ModifierLayerAbove, number | null> {
+  const s = noteScaleOf(noteSize)
+  const gap = LAYER_GAP * s
+  let cursor = octaveTopY(g.y, Math.max(1, g.octaves), noteSize)
+  const octave = g.octaves > 0 ? cursor : null
+  if (g.octaves > 0) cursor -= gap
+  else cursor = digitTopY(g.y, noteSize) - gap
+  const noteMark = g.noteMarkInkH > 0 ? cursor : null
+  if (g.noteMarkInkH > 0) cursor -= g.noteMarkInkH + gap
+  const spanMark = g.spanMarkInkH > 0 ? cursor : null
+  if (g.spanMarkInkH > 0) cursor -= g.spanMarkInkH + gap
+  const section = g.sectionInkH > 0 ? cursor : null
+  return { octave, noteMark, spanMark, section }
+}
+
+/**
+ * adj714：层级顺序的**机器闸门**——校验"上一层墨迹底 ≥ 下一层墨迹顶 + `LAYER_GAP`"。
+ *
+ * 供 smoke 断言直接调用：传入实测的相邻两层边界，返回违反量（≤ 0 = 合规）。
+ * 之所以做成纯函数：层级的正确性是**跨元素**的（漏一层就整段错位），
+ * 靠人眼看图很容易漏（连音线垂度那次就是这么漏掉的）。
+ */
+export function layerSeparationViolation(lowerInkTop: number, upperInkBottom: number, noteSize: number): number {
+  return upperInkBottom - (lowerInkTop - LAYER_GAP * noteScaleOf(noteSize))
 }
 
 // ============================================================

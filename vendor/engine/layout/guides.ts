@@ -138,8 +138,9 @@ export function computeRowGuides(
        * 临时叠加层整层纵向压扁到 `SEGMENT_LAYER_YSCALE`（以层基线为不动点），
        * 视觉中心随之从 `基线 − 0.4×字号` 变为 `基线 − 0.4×字号×压缩比`；
        * 仍用未压缩值会把虚线画在数字上方（拖起来也对不上那层）。
+       * adj666j：`{dsb}`（临时多声部）不压扁 ⇒ 压缩比取 1，虚线仍画在数字中心。
        */
-      const yScale = r.segType ? SEGMENT_LAYER_YSCALE : 1
+      const yScale = r.segType ? (r.segType === 'dsb' ? 1 : SEGMENT_LAYER_YSCALE) : 1
       const lyricTop = rowYs.length > 0 ? rowYs[0] : null
       return {
         yTop: r.yTop,
