@@ -78,10 +78,14 @@ export function computeRowGuides(
     for (const n of page.notes) {
       const yTop = Math.round((n.y - off) * 10) / 10
       const cur = rowMap.get(yTop)
-      // 段层标记来源：① 段内容层（`n.segment` 已置 type/layer）；② dsb 下层 = 被下移的主旋律
-      // （`playVoice === 'second'`，`shiftEnvelopeDown` 只设 playVoice、不设 segment）
-      const segType = n.segment?.type ?? (n.playVoice === 'second' ? 'dsb' : undefined)
-      const segLayer = n.segment?.layer ?? (n.playVoice === 'second' ? 'lower' : undefined)
+      /**
+       * 段层标记来源：① 段内容层（`n.segment` 已置 type/layer）；
+       * ② `{dsb}` 的**包络外主旋律**（视觉下排）—— adj722 起它**不再**被标 `playVoice = 'second'`
+       * （它现在是主声部），改用 **`parentY` 有值**识别（`shiftEnvelopeDown` 只写在它身上）。
+       */
+      const isDsbOutsideRow = n.segment === undefined && n.parentY !== undefined
+      const segType = n.segment?.type ?? (isDsbOutsideRow ? 'dsb' : undefined)
+      const segLayer = n.segment?.layer ?? (isDsbOutsideRow ? 'lower' : undefined)
       if (!cur) {
         rowMap.set(yTop, {
           yTop,

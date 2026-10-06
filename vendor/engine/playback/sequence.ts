@@ -8,7 +8,18 @@
  *  - `[ ]` 跳房子：第一遍经过 [ 段，第二遍跳过
  *  - `||` / `||/`：终止线，播放到此结束
  */
-import type { BarlineMark, BarlineType, MusicToken, ParseResult, PlacedBarline, PlacedToken, ScoreLayout, ScorePage, VoiceBlock } from '../types'
+import type {
+  BarlineMark,
+  BarlineType,
+  MusicToken,
+  ParseResult,
+  PlacedBarline,
+  PlacedSegmentBracket,
+  PlacedToken,
+  ScoreLayout,
+  ScorePage,
+  VoiceBlock,
+} from '../types'
 import { tokenDuration } from '../duration'
 import { parseKey, pitchToName, isJumpOrEndBarline } from '../layout/index'
 import { graceGroupBeats, gracePerNoteBeats } from '../layout/spaceLayout'
@@ -191,7 +202,16 @@ function computeColorBounds(
   //  - bz 没有"下层"概念（main melody 不动），bz 的下层就是普通主旋律 → 走 ② 多声部 / ③ 单声部路径
   const isDsbUpper = plc.segment?.layer === 'upper' && plc.segment.type === 'dsb'
   const isBzUpper = plc.segment?.layer === 'upper' && plc.segment.type === 'bz'
-  const isDsbLower = !plc.segment && plc.playVoice === 'second'
+  /**
+   * adj722（用户口径翻转）：`{dsb}` **包络外的主旋律** = 视觉下排，**现在是主声部**
+   * （保持主音色、力度 1、主色块），所以**不能再靠 `playVoice === 'second'` 认它**。
+   *
+   * 新判据 = **`parentY` 有值**：它由 `shiftEnvelopeDown` 只写在"被下移的包络内主旋律"上
+   * （`alignLyricsToLowestVoice` 也用同一信号），因此**精确等于"`{dsb}` 的下排"**，
+   * 不会把同一 x 区间里、与段内容不对齐的普通主旋律音也误判进来
+   * （早前用"落在段 x 区间内"判过，实测把 `00 3'` 这类音也算进去了 ⇒ 色块高度算成 0）。
+   */
+  const isDsbLower = !plc.segment && plc.parentY !== undefined
 
   if (isBzUpper) {
     // bz：对侧 = 该 group 的**主旋律基线 row.y**（bz 不移动主旋律）。
@@ -206,16 +226,21 @@ function computeColorBounds(
     return { yTopMin, yBottomMax }
   }
   if (isDsbUpper) {
-    // dsb upper：对侧 = 下层 baseline（row.y + dy/2）
-    const lowerY = pageVoiceBaselineForSegmentLower(page, plc.id.group, plc.id.voice, noteSize)
-    if (lowerY === null) return null
-    // adj429：上下色块**严格等高**——把"对称中线" midEqual 从 row.y 上移 `0.25×ns`，
-    // 让 upper 用 TOP_EXT(1.1ns)、lower 用 BOT_EXT(0.6ns) 各自延伸后，两块高度相等。
-    // 视觉上"上盖减时线、下不压歌词"的设计意图保留（TOP_EXT > BOT_EXT 是覆盖减时线的代价），
-    // 但通过中线偏移把不对称性消化在**位置**而不是**高度**里 → 上下看起来完全等高。
-    // 整组随之轻微上移 0.25×ns；上一行曲部底 − quci=15 远大于此偏移，无侵入风险。
-    const offset = (TOP_EXT - BOT_EXT) / 2 // 0.25 × ns
-    const midEqual = (y + lowerY) / 2 - offset
+    /**
+     * `{dsb}` **段内容** = 视觉**上排**（`segment.layer === 'upper'`）。
+     *
+     * adj722：它现在是**副声部**（副音色 + 0.75 + 副色块），视觉位置不变 ⇒ 仍取**上半**。
+     *
+     * 对侧（下排主声部的基线）= **行基线 `parentY`**（`shiftEnvelopeDown` 写在每一个
+     * 包络外主旋律音上）——**不能**再用"该段 x 区间内的上层音符"去反推：
+     * 段内容区间之外的音（如 `(1'// 7// 6//) 5/ 6-` 里的 `5/ 6-`）在区间内找不到上层音
+     * ⇒ 定界返回 null ⇒ 该段色块退化成"默认单声部高度"（实测 42 段里 17 段如此，
+     * 用户看到的就是"这段没有色块/不对"）。
+     */
+    const rows = dsbRowBaselines(page, plc, noteSize)
+    if (rows === null) return null
+    const offset = (TOP_EXT - BOT_EXT) / 2
+    const midEqual = (rows.upper + rows.lower) / 2 - offset
     const yTopMin = y - TOP_EXT
     const yBottomMax = midEqual
     const h = yBottomMax - yTopMin
@@ -223,12 +248,14 @@ function computeColorBounds(
     return { yTopMin, yBottomMax }
   }
   if (isDsbLower) {
-    // dsb 包络内的主旋律音（下层 = 第二声部）：对侧 = 上层 baseline
-    // adj429：与 upper 共享 midEqual（中线不在 row.y，往上偏 0.25×ns），保证上下严格等高。
-    const upperY = pageVoiceBaselineForSegmentUpper(page, plc.id.group, plc.id.voice)
-    if (upperY === null) return null
+    /**
+     * `{dsb}` **包络外的主旋律** = 视觉**下排**，adj722 起是**主声部** ⇒ 色块取**下半**。
+     * 两排基线同样取自段括号（与上排**同一把尺子** ⇒ 两块严格相接、等高）。
+     */
+    const rows = dsbRowBaselines(page, plc, noteSize)
+    if (rows === null) return null
     const offset = (TOP_EXT - BOT_EXT) / 2
-    const midEqual = (y + upperY) / 2 - offset
+    const midEqual = (rows.upper + rows.lower) / 2 - offset
     const yTopMin = midEqual
     const yBottomMax = y + BOT_EXT
     const h = yBottomMax - yTopMin
@@ -283,38 +310,45 @@ function pageVoiceBaselineOutsideSegment(
 }
 
 /**
- * adj429：取该页该 group 的 dsb 段**下层基线 y**（= row.y + dy/2）。
+ * adj720/adj722：取**本音符所属** `{dsb}` 段的段括号。
  *
- * 通过 `segmentBrackets` 间接得到：`PlacedSegmentBracket.yBottomLower` = 下层基线 + 0.3×字号，
- * 故反推下层基线 = `yBottomLower − noteSize × 0.3`。
+ * ⚠️ adj720（用户报「图2 里下层绿色块没有/位置不对」）：**必须按"本音符落在哪一段"取**，
+ * 不能取"该页第一段"——同一视觉行可以有**多段 `{dsb}`、各段几何不同**（实测差 2.4px）。
+ *
+ * 判定：`x` 落在括号区间内（同 x 不同行的段用 group/voice 区分）；多段都命中时取中心最近的。
  */
-function pageVoiceBaselineForSegmentLower(
-  page: ScorePage,
-  group: number,
-  voice: number,
-  noteSize: number,
-): number | null {
-  const sb = page.segmentBrackets?.find((s: { group: number; voice: number; type: string }) => s.group === group && s.voice === voice && s.type === 'dsb')
-  if (!sb || sb.yBottomLower === undefined) return null
-  return sb.yBottomLower - noteSize * 0.3 // 把 "+0.3×字号" 减回去，得到下层基线
+function dsbSegmentOf(page: ScorePage, plc: PlacedToken): PlacedSegmentBracket | undefined {
+  const bars = page.segmentBrackets ?? []
+  const cands = bars.filter((s) => s.type === 'dsb' && s.group === plc.id.group && s.voice === plc.id.voice)
+  if (cands.length === 0) return undefined
+  const inX = cands.filter((s) => plc.x >= s.x1 - 2 && plc.x <= s.x2 + 2)
+  if (inX.length === 0) return cands.length === 1 ? cands[0] : undefined
+  if (inX.length === 1) return inX[0]
+  return inX.reduce((best, s) =>
+    Math.abs((s.x1 + s.x2) / 2 - plc.x) < Math.abs((best.x1 + best.x2) / 2 - plc.x) ? s : best,
+  )
 }
 
 /**
- * adj429：取该页该 group 的 dsb 段**上层基线 y**（= row.y − dy/2）。
+ * adj722：`{dsb}` 两排色块的**上下界**。
  *
- * 段层音符（layer='upper'）的 y 本身就是上层基线。直接取第一个 dsb upper 音符的 y 即可。
+ * 两排基线**都从段括号本身取**（不再反推）：
+ *  · 上排（段内容）基线 = `sb.yUpper`；
+ *  · 下排（包络外主旋律）基线 = `sb.yBottomLower − 0.3×字号`（`yBottomLower` 口径 = 下排墨迹底 + `0.35×字号`）。
+ *
+ * 为什么不用 `rowSlides`/`parentY` 反推：那条链给的是"**行基点**"，与"段内容实际落在哪"
+ * 差 **3.3px**（实测行基点 168.2、两排实际 153.9 / 182.5）⇒ 上下两块各错 3~7px、
+ * 两块之间露出缝（`smoke` 的 `Z8d` 报 `contentBot=157.8 vs outsideTop=164.95`、`V3b` 报高度不等）。
+ * 而 `parentY` 只在"**段内容区间之外**的主旋律音"上才是唯一可用信息（那时用行基点兜底）。
  */
-function pageVoiceBaselineForSegmentUpper(
+function dsbRowBaselines(
   page: ScorePage,
-  group: number,
-  voice: number,
-): number | null {
-  for (const n of page.notes) {
-    if (n.id.group === group && n.id.voice === voice && n.segment?.type === 'dsb' && n.segment.layer === 'upper') {
-      return n.y
-    }
-  }
-  return null
+  plc: PlacedToken,
+  noteSize: number,
+): { upper: number; lower: number } | null {
+  const sb = dsbSegmentOf(page, plc)
+  if (sb?.yUpper === undefined || sb.yBottomLower === undefined) return null
+  return { upper: sb.yUpper, lower: sb.yBottomLower - noteSize * 0.3 }
 }
 
 /** adj320：构建一个音符的播放拍段——按「时值元素」分块：
@@ -501,33 +535,60 @@ export function buildPlaySequence(
         ;(byGroupBars.get(b.id.group) ?? byGroupBars.set(b.id.group, []).get(b.id.group)!).push(b)
       }
     }
-    for (const [group, notes] of byGroupNotes) {
+    for (const [, notes] of byGroupNotes) {
       const sorted = [...notes].sort((a, b) => a.x - b.x)
-      const bars = (byGroupBars.get(group) ?? []).slice().sort((a, b) => a.x - b.x)
-      sorted.forEach((n, i) => {
-        const nextNote = i < sorted.length - 1 && sorted[i + 1].x > n.x + 1e-3 ? sorted[i + 1].x : Infinity
-        const nextBar = bars.find((b) => b.x > n.x + 1e-3)?.x ?? Infinity
-        const edge = Math.min(nextNote, nextBar)
-        // adj374：本音符「时值元素实际右缘」——增时线每条各占一个时值元素槽，
-        // 而音符声明的 rightX = x + width 是按更窄的槽宽累加的，**末条增时线可能越过 rightX**；
-        // 末元素（后面既无音符也无小节线）时若直接用 rightX，末段色块宽度会被算成 0/极小
-        // → 观感"增时线没有色块"。故色块右边界取 max(下一时值元素/小节线左缘, 本音符实际右缘)，
-        // 保证「一个时值元素一块」且块至少盖住它自己画出来的笔画。
+      sorted.forEach((n) => {
+        // adj722：`edge`（下一个音符的块左缘 / 下一根小节线）**不再参与色块右界**——
+        // 它含槽尾留白与布置网格的间隙，会把色块撑到后面那个音符上（见下方 `base` 的说明）。
         const segs = n.segments ?? []
         const lastSeg = segs[segs.length - 1]
         const inkRight = lastSeg ? lastSeg.x + lastSeg.perBeat * lastSeg.beats : (n.rightX ?? n.x + n.width)
-        const own = Math.max(n.rightX ?? inkRight, inkRight)
-        const base = edge === Infinity ? own : Math.max(edge, own)
+        /**
+         * adj722（用户报「下面声部色块不正确 / 色块跑到后面的音符上」；AGENTS 五·9「区间一律用**墨迹**算」）：
+         *
+         * 色块右界 = **本音符自己的墨迹右缘**（`x + width`，即数字槽右缘；含增时线/附点时取更右者），
+         * **不再**把 `edge`（下一个音符的**块左缘**）算进来——它多含两样东西：
+         *  ① **槽尾留白**（每个音会**右出约 1.0px**）；
+         *  ② **布置网格的间隙**（下层音符的 x 由上层网格决定：`5/` 墨迹到 `140.7`、
+         *     下一个 `6-` 从 `151.5` 起，中间空 **9.7px**）⇒ 色块宽 19.8px、
+         *     **比自己的音符宽出 10.8px、盖到后面那个音符上**（实测数据）。
+         *
+         * 曾经写成 `Math.max(edge, own)`（"至少占满到下一个音符"）⇒ 就是上面这个缺陷；
+         * 现改为**以本音符墨迹为准**（`edge` 只在它更小、且确实需要收窄时不起作用——
+         * 即块永远是"一个音一块"）。
+         */
+        const own = Math.max(n.rightX ?? 0, n.x + n.width, inkRight)
+        const base = own
         /**
          * adj439：**重叠区的色块以段层右界（大括号 `}`）为界限**（用户要求）。
          *
          * dsb 下层（包络内的主旋律）若不钳制，右边界会取"**包络外**那个主旋律音的 x"
          * ⇒ 色块越过 `}` 一直盖到下一小节（用户截图：下层绿块从 `5` 跨过 `}` 到最后的 `5` 前）。
          * 上层的段层音符在 `emitSegmentEvents` 里已收在段内容区内（`xContent1` ≤ 大括号内缘），
-         * 故这里只对**下层**（`playVoice === 'second'`）钳制到段层右界 `blockRight`
+         * 故这里只对**下层**（包络外主旋律，`parentY !== undefined`）钳制到段层右界 `blockRight`
          * （adj667 起 = 右大括号**墨迹左缘**；旧数据无该字段时退回 `x2`）。
          */
-        const segRight = n.playVoice === 'second' ? segRightByGroupVoice.get(`${n.id.page}|${n.id.group}|${n.id.voice}`) : undefined
+        /**
+         * adj722b（用户报「`(1'// 7// 6//) (6// 6/)` 这部分没有色块显示」）：
+         * **钳制必须按"本音符所属那一段"取**，不能取"该组所有段的 `min`"。
+         *
+         * 根因：`segRightByGroupVoice` 对 `(页|组|声部)` 取**所有段的最小右界**
+         * （本意是"别越出任何一段"，实际成了"别越出最窄那段"）。实测第 1 行三段 `{dsb}` 的
+         * `blockRight` = `151.5 / 303.5 / 530.1`，取 min ⇒ **151.5**，
+         * 于是第 2、3 段包络外的主旋律全被钳到 `151.5`，而它们本身 x 已在 `197.6` 之后
+         * ⇒ `width = max(0, 151.5 − 197.6) = 0` ⇒ **色块宽度为 0、完全画不出来**
+         * （实测 21 个段宽度为 0，正是用户截图里"这一段没有色块"）。
+         *
+         * 改为用 `dsbSegmentOf` 取**本音符所属段**的 `blockRight`（`adj720` 的同一口径）。
+         * 取不到（音符在段内容区间之外、又不在任何段的 x 范围内）时退回组级 min——
+         * 那正是"包络之后的主旋律"以外的边界情形，保守钳制不会造成 0 宽（它 x 本来就靠左）。
+         */
+        const ownPage = pageByNoteIdx.get(n.id.index)
+        const ownSeg = ownPage ? dsbSegmentOf(ownPage, n) : undefined
+        const segRight =
+          n.parentY !== undefined
+            ? (ownSeg?.blockRight ?? segRightByGroupVoice.get(`${n.id.page}|${n.id.group}|${n.id.voice}`))
+            : undefined
         rightEdgeByNoteIdx.set(n.id.index, segRight !== undefined ? Math.min(base, segRight) : base)
       })
     }
@@ -1659,9 +1720,13 @@ export function buildPlaySequence(
         if (
           lastEventNoteIdx >= 0 &&
           sameVoiceAsPrev &&
-          // adj710：`{dsb}` 的下层（`second`）不合并——与段层同理，
-          // 合并会让"上下两声部逐音一一对应"失效（用户报「没有按双声部演奏」）
-          playRole !== 'second' &&
+          /**
+           * adj710/adj722：**`{dsb}` 两层都不合并**——合并会吞掉起奏点，让"上下两声部逐音一一对应"失效
+           * （用户报「没有按双声部演奏」）。
+           * adj722 起判据从"`playRole === 'second'`"改为"**`parentY` 有值**"：
+           * 翻转后包络外主旋律是**主声部**（`playVoice` 未设），但它同样必须保留每个音的起奏点。
+           */
+          placed.parentY === undefined &&
           (continuesFromPrev || (curNoteIdx === lastEventNoteIdx + 1 && shareSlur)) &&
           !hasFrontGrace &&
           ornKind === null &&

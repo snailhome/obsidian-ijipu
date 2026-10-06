@@ -5135,9 +5135,11 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
           segment: { type: seg.type, layer: 'upper', ...(seg.pass !== undefined ? { pass: seg.pass } : {}) },
           // adj689：记下所属视觉行的行顶——段层是"叠加后处理"，按行对齐歌词/推移都要靠它反查
           parentY: r1(row.y),
-          // bz：段内容 = 伴奏声部；dsb：段内容 = 主声部（音色与主旋律一致）；
+          // bz：段内容 = 伴奏声部；
+          // adj722（用户口径翻转）：**dsb 段内容 = 副声部（`second`）**——包络外的主旋律才是主声部
+          // （演奏音色/色块随单声部）。**显示不变**：dsb 仍是两行、与单声部居中对齐。
           // adj629 tp：替谱段 = **该遍的主旋律本体**（音色/力度与主旋律一致，色块同色）
-          playVoice: isDsb || isTp ? 'main' : 'accomp',
+          playVoice: isTp ? 'main' : isDsb ? 'second' : 'accomp',
           // adj629b：段层**纵向压扁到 2/3**（字号不变；渲染端以本音基线为不动点做 scale(1,k)）
           layerScale: segYScale,
         })
@@ -5398,6 +5400,9 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
         yBottom: r1(yUpper + ns * 0.4),
         // dsb：下层声部（包络内主旋律）**下沿**——供渲染画跨两层的大花括号
         yBottomLower: isDsb ? r1(lowerBaseline + ns * 0.3) : undefined,
+        // adj722：段内容层（视觉上排）**基线**——色块上下界要按"两排真实中线"切，
+        // 由 `rowSlides`/`parentY` 反推会偏 3.3px（见 `PlacedSegmentBracket.yUpper` 的说明）
+        yUpper: isDsb ? r1(yUpper) : undefined,
         // adj685/686：大括号**自己的**墨迹端点（上下对称留白，不复用上面几个"块级"字段）
         braceTop: r1(inkT - bracePadY),
         braceBottom: isDsb ? r1(inkB + bracePadY) : undefined,
@@ -5859,10 +5864,16 @@ function shiftEnvelopeDown(
     const p = placed[k]
     if (Math.abs(p.note.y - row.y) > 0.5) continue
     p.note.y = r1(p.note.y + dy)
-    // adj427：dsb 重叠区的下层主旋律 = **第二声部**（用第 2 可用音色 + 0.75 力度，
-    // 色块也随之换色）——上层（段内容）仍为主声部，音色与色块不变。
-    p.note.playVoice = 'second'
-    // adj689：记下所属视觉行的行顶（段层叠加后"这段属于哪一行"要靠它反查）
+    /**
+     * adj722（用户口径翻转）：**不再**标 `playVoice = 'second'`。
+     *
+     * 包络外的主旋律现在是**主声部**——演奏音色、力度、色块都与"没有 `{dsb}` 的单声部"一致
+     * （用户口径：「下面声部的演奏音色、色块随单声部」）。
+     * 副声部改由**段内容**承担（见段内音符放置处的 `playVoice`）。
+     * **显示效果不变**：本函数仍照旧把这一行下移 `dy/2`、两行仍以行基线居中。
+     *
+     * adj689：仍记下所属视觉行的行顶——`parentY` 同时是播放端识别"下排"的信号。
+     */
     p.note.parentY = r1(row.y)
     movedIds.add(p.note.id.index)
     xMin = Math.min(xMin, p.note.x)

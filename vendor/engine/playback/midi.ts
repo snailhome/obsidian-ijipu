@@ -107,16 +107,34 @@ export function eventsToMidi(events: PlayEvent[], opts: MidiExportOptions): Uint
   const beatMs = 60000 / opts.bpm
   const toTick = (ms: number) => Math.max(0, Math.round((ms / beatMs) * DIV))
 
-  // 可发声事件 → 音符（按声部分组；adj357：每个音符记录其乐器 program，
-  // 支持曲内 @乐器名 切换 / @@ 回默认——旧实现每声部只取「第一个音符的乐器」发一次
-  // Program Change，导致整轨（含多声部、单/多声部混合）导出只用一个音色、@@ 不生效）
-  const voices = [...new Set(events.map((e) => e.placed.id.voice))].sort((a, b) => a - b)
-  const notesByVoice = new Map<number, { tick: number; durTick: number; note: number; program: number }[]>()
+  /**
+   * 可发声事件 → 音符（按**声部 + 声部角色**分组）。
+   *
+   * adj357：每个音符记录其乐器 program，支持曲内 `@乐器名` 切换 / `@@` 回默认——
+   * 旧实现每声部只取「第一个音符的乐器」发一次 Program Change，
+   * 导致整轨（含多声部、单/多声部混合）导出只用一个音色、`@@` 不生效。
+   *
+   * ⚠️ **adj719（用户报「`{dsb}` 没能实现多声部演奏」）**：分组键**必须带 `playVoice`**。
+   * `{dsb}` 的上下两层**共用同一个 `id.voice`**（靠 `PlacedToken.playVoice` 区分：
+   * 上层 = `'main'`/未设、下层 = `'second'`）⇒ 只按 `id.voice` 分组会把两层塞进
+   * **同一条轨、同一个 MIDI 通道**，而该轨只在音色变化处发一次 Program Change
+   * ⇒ 后一个音色覆盖前一个，**导出的 MIDI/音频里听起来只有一个声部**
+   * （实时试听走 `schedulePlay` + `GmChannelAllocator`，故不受影响——这也是
+   * 为什么"试听正常、导出不对"）。
+   */
+  const roleOf = (e: PlayEvent): 'main' | 'accomp' | 'second' => e.playVoice ?? 'main'
+  const keyOf = (e: PlayEvent): string => `${e.placed.id.voice}|${roleOf(e)}`
+  const keys = [...new Set(events.map(keyOf))].sort((a, b) => {
+    const [va, ra] = a.split('|')
+    const [vb, rb] = b.split('|')
+    return Number(va) - Number(vb) || ra.localeCompare(rb)
+  })
+  const notesByVoice = new Map<string, { tick: number; durTick: number; note: number; program: number }[]>()
   for (const e of events) {
     if (!e.placed.playable || !e.placed.audioPitch) continue
     const pitch = e.pitch ?? e.placed.audioPitch
     if (!pitch) continue
-    const v = e.placed.id.voice
+    const v = keyOf(e)
     if (!notesByVoice.has(v)) notesByVoice.set(v, [])
     notesByVoice.get(v)!.push({
       tick: toTick(e.atMs),
@@ -136,8 +154,9 @@ export function eventsToMidi(events: PlayEvent[], opts: MidiExportOptions): Uint
   // 同 tick 事件排序：Program Change 最先（先切音色再发声），Note Off 先于 Note On
   const orderOf = (t: 'on' | 'off' | 'prog') => (t === 'prog' ? 0 : t === 'off' ? 1 : 2)
 
-  // 每声部一条音符轨
-  const noteTracks = voices.map((v, ti) => {
+  // 每「声部 + 声部角色」一条音符轨（adj719：`{dsb}` 上下两层各占一条，
+  // 否则两层共用一条轨/一个通道，程序变更互相覆盖 ⇒ 导出只有一个声部）
+  const noteTracks = keys.map((v, ti) => {
     const chan = ti % 16
     // 音符按 tick 排序，乐器变化处插入 Program Change（含曲首第一个音色、曲内 @ 切换、@@ 回默认）
     const notes = (notesByVoice.get(v) ?? []).slice().sort((a, b) => a.tick - b.tick)

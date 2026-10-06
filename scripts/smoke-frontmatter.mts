@@ -939,19 +939,33 @@ console.log('[adj452] playhead blocks follow playVoice / instrument / engine bou
       })),
     )
     const gD = [...trackKeysOf(trackD).entries()].filter(([k]) => k.startsWith('0|0|'))
-    const keyMain = gD.find(([k]) => k.endsWith('|main'))
+    /**
+     * adj722（应用侧同批）：`{dsb}` 的**主副声部对换**了——**段内容 = 副声部**（`second`）、
+     * **包络外主旋律 = 主声部**（**不再设 `playVoice`** ⇒ 分组键尾为空）。
+     * 旧断言写死 `|main`，翻转后自然取不到（插件 `smoke` 报 `键=0|0|1|| / 0|0|1||second`）。
+     * 新口径：主声部 = `|main` **或**键尾为空；副声部 = `|second`。
+     */
+    const keyMain = gD.find(([k]) => k.endsWith('|main') || /^0\|0\|\d+\|(?:[^|]*)\|$/.test(k))
     const keySecond = gD.find(([k]) => k.endsWith('|second'))
-    check('adj452 dsb 同一曲行上下两层各成一组（playVoice 进键；段外主旋律另算一组）',
+    check('adj452/adj722 dsb 同一曲行上下两层各成一组（playVoice 进键；段内容=副声部、段外主旋律=主声部）',
       keyMain !== undefined && keySecond !== undefined,
       `键=${gD.map(([k]) => k).join(' / ')}`)
     if (keyMain && keySecond) {
       const ns = layoutD.config.note_size
-      // dsb 段从第 3 拍起（前面是 `3 4`），故用各层首个拍段的时刻查询
-      const a = playheadPosIn(keyMain[1], keyMain[1][0].atMs + 1, 0, ns)
-      const b = playheadPosIn(keySecond[1], keySecond[1][0].atMs + 1, 0, ns)
-      check('adj452 dsb 上（主声部）下（第二声部）色块纵向不重叠、各用各自定界',
+      /**
+       * adj722：必须取**同一时刻、且都在 `{dsb}` 段内**的一对来比——
+       * 主声部组的**首个**拍段是段**之前**的普通主旋律音（走默认定界 `[y−1.6ns, y+0.6ns]`），
+       * 与副声部（段内、走上半定界）比会得出"重叠"的假象
+       * （实测 `[147.4, 176] vs [139.6, 164.95]`）。
+       * 判据：主声部组里**带头一个带 `yTopMin` 的拍段**（带定界 = 在 `{dsb}` 段内）。
+       */
+      const inSeg = keyMain[1].find((t) => t.yTopMin !== undefined && t.yBottomMax !== undefined)
+      const t0 = inSeg?.atMs
+      const a = t0 !== undefined ? playheadPosIn(keyMain[1], t0 + 1, 0, ns) : null
+      const b = t0 !== undefined ? playheadPosIn(keySecond[1], t0 + 1, 0, ns) : null
+      check('adj452 dsb 下（主声部）上（副声部）色块纵向不重叠、各用各自定界',
         a !== null && b !== null && (a.yBottom <= b.yTop + 0.01 || b.yBottom <= a.yTop + 0.01),
-        a && b ? `[${a.yTop},${a.yBottom}] vs [${b.yTop},${b.yBottom}]` : 'null')
+        a && b ? `t=${t0} [${a.yTop},${a.yBottom}] vs [${b.yTop},${b.yBottom}]` : `null t0=${t0}`)
     }
   }
 }
