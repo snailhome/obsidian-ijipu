@@ -747,6 +747,23 @@ export interface PlacedSlur {
   x2: number
   /** 线的 y（音符上方） */
   y: number
+  /**
+   * adj723l：**不含嵌套抬升（`raise`）的基础 y**——只给"同行齐平"用。
+   *
+   * 用户口径：「中间的 `1'` **既归于前一个连音线、也归于后一个连音线**」
+   * ⇒ 同一行的线必须**同高**（`adj689` 记谱惯例）。
+   * 齐平时只统一**基础高度**，再把各条自己的 `raise`（嵌套错开 `SLUR_NEST_RAISE` / `(+` `(-`）加回去——
+   * 若连 `raise` 一起抹平，嵌套线会叠在一起（实测打红 `adj95` 等 4 条断言）。
+   */
+  baseYNoRaise?: number
+  /**
+   * adj723l：本行跳房子线给出的**下限**（`voltaFloorY`；无跳房子时缺省）。
+   *
+   * 连音线不得高于跳房子线（`adj134`），故最终 `y = max(齐平后的 y, voltaFloor)`。
+   * 该钳制**放在"同行齐平"之后**做，否则钳制量会污染 `baseYNoRaise`/`raise` 的推导
+   * （实测 `raise` 被算成 15.80 / 8.60 这种荒谬值，齐平随之算错）。
+   */
+  voltaFloor?: number
   /** 嵌套深度（错开高度） */
   depth: number
   /** 样式：arc 圆弧 / flat 平顶 */

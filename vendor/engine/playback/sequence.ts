@@ -2012,9 +2012,40 @@ export function buildPlaySequence(
      * 现在：**先按 id 精确命中**（段层音符就是事件里的那一个），命中不了再退回原来的"主旋律序号 ≥"口径。
      */
     const segTarget = decodeSegmentNoteId(startIdxByPage.index) ?? decodeTpNoteId(startIdxByPage.index)
-    const from = segTarget
+    let from = segTarget
       ? events.findIndex((e) => e.placed.id.index === startIdxByPage.index)
       : events.findIndex((e) => !e.placed.segment && e.placed.id.index >= startIdxByPage.index)
+    /**
+     * adj723f（用户报「点 `{dsb}` **下声部**只演奏该声部，点第一声部才是多声部演奏」）：
+     *
+     * **从该音符所属的"那一拍"起播，而不是从该事件本身起播。**
+     *
+     * 为什么：`{dsb}` 里"一个音"在事件流里其实是**一对**（段内容 = 副声部 + 包络外主旋律 = 主声部），
+     * 两者 `atMs` 相同但**在事件数组里不相邻**——段内容事件集中在前面、包络外在后面
+     * （实测本句：段内容 `#1e12+…` 七条在 `atMs` 0…1.71s，包络外 `#0..6` 七条同样 0…1.71s）。
+     * 于是：
+     *  · 点**上排段内容** ⇒ `from` 落在段内容那一条 ⇒ 后面**包含**包络外全部 ⇒ 正常多声部；
+     *  · 点**下排包络外** ⇒ `from` 落在包络外那一条 ⇒ `slice(from)` 把**前面整段段内容全切掉**
+     *    ⇒ 只剩主声部（用户看到的现象）。
+     *
+     * 修法：把 `from` 回退到"**所有与之同刻（`atMs` 相同）的事件中最小的下标**"。
+     * 注意**不能**只比较相邻前一条（`events[from-1]`）——实测事件数组里
+     * 上下两声部并非"两段连续排列"，而是**交错**的（`atMs` 序列形如
+     * `0,214,428,…,1714` **再** `0,214,428,…,1714`，且同一拍内还可能夹着装饰/倚音短音），
+     * 只用相邻比较会在"前一条恰好是另一遍/更长音"时提前停下（实测 `from` 只回退 1 步）。
+     * 故用**向前扫描取最小下标**（每次起播只算一次，代价可忽略）。
+     *
+     * 容差用的 `0.5ms` 远小于最小拍长（120bpm 下 32 分音符也有 62.5ms），
+     * 只用来吸收浮点累积误差，不会把相邻两拍并进来。
+     */
+    if (from > 0) {
+      const t0 = events[from].atMs
+      let lo = from
+      for (let k = from - 1; k >= 0; k--) {
+        if (Math.abs(events[k].atMs - t0) < 0.5) lo = k
+      }
+      from = lo
+    }
     if (from > 0) {
       const base = events[from].atMs
       const sliced = events.slice(from).map((e) => ({ ...e, atMs: Math.max(0, e.atMs - base) }))

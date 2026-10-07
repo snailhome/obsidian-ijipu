@@ -159,6 +159,102 @@ export const barlinePad = (noteSize: number): number => noteSize / 4
 export const VOLTA_BAR_GAP = 8
 /** 跳房子 + 修饰（抬高）每级间距（px） */
 export const VOLTA_RAISE = 2
+
+// ---- 小节线修饰符记号（`&ty` 大跳跃 / `&hs` 花 S；画在小节线正上方）----
+/**
+ * `&ty`（大跳跃 `𝄌`）**基础字号**（px；渲染端 `font-size`）。
+ *
+ * 历史：`adj130` 引入 Unicode `U+1D10C`；`adj131` 调大并下移靠近小节线；
+ * `adj182` 定为 `16×s×1.2`，且**记号下端与小节线上端（`yTop`）齐平**；
+ * `adj183`/`adj184` 又按"自身高度百分比"微调纵向落点（净 +10%）。
+ *
+ * `adj723h`（用户三轮口径，最终）：**只把高度放大 1.25 倍，宽度保持原样**。
+ * 因此"字号"（同时决定宽与高）**回到 `adj182` 的原值**，
+ * 横向维持原宽由 `TY_WIDTH_SCALE` 说明、纵向 1.25 倍由 `TY_HEIGHT_SCALE` 用 `transform` 单独拉伸
+ * —— `font-size` 一刀切会让宽度也跟着变大，正是用户此前说"效果不对"的原因。
+ */
+export const TY_FONT_SIZE = (noteSize: number): number => {
+  const s = noteScaleOf(noteSize)
+  return Math.max(14, Math.round(16 * s * 1.2))
+}
+
+/**
+ * `&ty` 的**横向**缩放（相对 `TY_FONT_SIZE`）：`1` = 宽度保持原样（用户口径「宽度不调整」）。
+ *
+ * 之所以要有它：`font-size` 同时决定宽与高，若靠字号放大高度，宽度会一起变大。
+ * 故宽度固定为 1、高度单独拉伸（见 `TY_HEIGHT_SCALE`）。
+ */
+export const TY_WIDTH_SCALE = 1
+
+/**
+ * `&ty` 的**纵向**缩放：高度为原（`adj182`）的多少倍（用户口径）。
+ *
+ * 沿革：`adj723h` 定为 **1.25**（用户："&ty 高度调整 1.25 倍"）；
+ * 期间曾按"还要高些"试过 1.5，用户随即澄清「**还要上移一点，不是要高度增加**」⇒ **回到 1.25**，
+ * "上移"改由 `TY_BAR_GAP`（间距）实现。
+ *
+ * 渲染端以**基线**为不动点纵向拉伸（记号长在基线上方），于是：
+ *  · 记号**高度** ×本值；
+ *  · **宽度不变**；
+ *  · **墨迹下端**由 `TY_BAR_GAP` 决定（拉伸不动下端，见 `tyBaselineY`）。
+ */
+export const TY_HEIGHT_SCALE = 1.25
+
+/**
+ * `&ty` **墨迹下端到小节线上端（`yTop`）的间距**（px，**正 = 记号在小节线之上**）。
+ *
+ * 沿革：旧写法 `y = yTop + 0.35×fs`（按"记号下端 ≈ `y + 0.15×fs`"反推）。
+ * `adj723h` 先后试过"+2px"、"1px"、"0"，用户随后：
+ * 「**&ty 还要上移一点**，……与小节线的墨迹间距 **0.5px** 试试」⇒ `0.5`；
+ * `adj723t`：「**之前调整的 `&ty` 再往上调整 2px**」⇒ **`0.5 + 2 = 2.5`**。
+ *
+ * ⚠ 这里刻意选用**绝对 px** 而非按字号缩放：用户是按"看起来的间隙"给的数，
+ * 与字号无关（与 `VOLTA_BAR_GAP` 等同类常量一致）。
+ */
+export const TY_BAR_GAP = 2.5
+
+/**
+ * `&ty` **基线 → 墨迹下端**的偏移（em 的倍数；**正 = 墨迹下端在基线之下**）。
+ *
+ * ⚠ 这个量一直是**估算**，而估算错了"间距 0"就老是差一截（本轮为此白改了四版）。
+ * 现在用**真实像素扫描**标定（`noteSize=13 ⇒ fs=14、ky=1.25`；扫描窗口避开小节线本身的抗锯齿）：
+ *
+ * ```
+ * 基线 y（attrY）      = 145.41
+ * 实测记号墨迹         = 133.25 → 139.25（高 6.0px）
+ * 目标：墨迹下端应落在 yTop = 141  ⇒ 还差 1.75px
+ * 初始值 0.252（由未含 transform 的布局盒推得：152.23 − 148.7 = 3.53px = 0.252×fs）
+ * ⇒ 标定后 = 0.252 + 1.75 / (14 × 1.25) = **0.352**
+ * ```
+ *
+ * 渲染端据此反推基线：`y = yTop + TY_BAR_GAP + TY_INK_BOTTOM_EM × fs × ky`
+ * ⇒ 记号墨迹下端落在 `yTop + TY_BAR_GAP`（= 0，即**与小节线上端齐平**）。
+ *
+ * 另注：`𝄌` 是 `U+1D10C` 音乐符号，需要音乐字体（Bravura / Finale Maestro / Noto Music …）。
+ * 实测这些字体在环境里**都不可用**（各字体测得宽度完全相同 ⇒ 回退到系统符号字体），
+ * 故字形观感依机器而异；本常量是按"当前回退字形"实测标定的，换机器可能需微调。
+ */
+export const TY_INK_BOTTOM_EM = 0.352
+
+/**
+ * `&ty` 记号的**文字基线 y**（渲染端 `y=` 属性）。
+ *
+ * `y = yTop − TY_BAR_GAP + TY_INK_BOTTOM_EM × fs × ky`
+ * ⇒ 墨迹下端落在 `yTop − TY_BAR_GAP`（**在线上端之上** `TY_BAR_GAP`）。
+ *
+ * ⚠ 符号方向：SVG 的 **y 越小越靠上**，故"上移"是**减** `TY_BAR_GAP`。
+ * 本轮一开始写成 `+`，那会让记号反而**下调**（与"上移"相反）。
+ *
+ * 常量 `TY_INK_BOTTOM_EM` 已按"最终缩放后的墨迹位移"实测标定，故**不要再单独乘一次 `ky`**。
+ *
+ * 抽成函数而非在渲染端内联：**渲染端与断言消费同一个式子**（`六之二·4`「数值口径必须同源」）——
+ * 本轮连续多次对不上（把 `ky` 乘重、符号写反），根因就是"渲染端一份、断言各写一份"。
+ */
+export const tyBaselineY = (yTop: number, noteSize: number): number =>
+  yTop - TY_BAR_GAP + TY_INK_BOTTOM_EM * TY_FONT_SIZE(noteSize) * TY_HEIGHT_SCALE
+
+/** `&hs`（花 S `𝄋`）字号（px；`adj129` 引入、`adj182` 定为 `12×s`） */
+export const HS_FONT_SIZE = (noteSize: number): number => Math.max(10, Math.round(12 * noteScaleOf(noteSize)))
 /** 渐强渐弱 hairpin（尖括号）上下张开半高（px，与连音线弧高近似；实际 ×s 随音符字号） */
 export const DYN_HALF_H = 4
 /** 跳房子注释（番号）字号与音符字号的比值（adj71：音符高度的 0.4） */
@@ -298,6 +394,80 @@ export const GRACE_MARK_GAP = 1
  * （adj632 首版把字号取成 `gSize`——CJK 字形「又/扌」几乎填满字身框，看起来就比倚音数字还大。）
  */
 export const SYM_FONT_RATIO = 10 / 18
+
+/**
+ * adj723p：**修饰符"让位量"查表**——连音线为"本音符修饰符"让开多少（单位 ×`s`）。
+ *
+ * ## 为什么必须查表
+ * 旧口径一律让 `10×s + LAYER_GAP×s`（`10×s` 是**符号字号**、不是墨迹高）⇒ 用户反复报
+ * 「抬得过高、间距较大」；本轮先改成单个常量（用户确认间距可用），但那对各类符号**必然有偏**：
+ * 修饰符有两类几何——
+ * · **矢量图形**（`MODIFIER_GLYPHS`：波音 / 滑音 / 延长记号）：渲染端 `glyphMarkup()`
+ *   把源紧包围盒按 `translate(tx,ty) scale(s)` 对齐到目标框
+ *   （`s = w / g.box.w`、`ty = y - g.box.y*s`）⇒ **目标框的 `y` 就是墨迹顶**，
+ *   墨迹高 = `g.box.h × s`；
+ * · **文字记号**（颤音 `tr` / `cy` 等）：`<text>` 字号 `SYM_FS = 10×s`，墨迹高按字身比估。
+ *
+ * 表值 = **墨迹高**（`glyphMarkup` 保证墨迹顶 = 目标框顶，故无需再加"顶距"项）。
+ *
+ * ⚠ 与 `MODIFIER_GLYPHS[].box` **同源**：改图形、或改宽度算式（`mordentInkW` 的 `9 / 13.5×s`）
+ * 都要重算此表——`smoke` 里有一条断言按 `box` 现算并与本表比对，防止悄悄失配。
+ */
+export const MARK_INK_H_RATIO: Readonly<Record<string, number>> = {
+  /** 上波音：`951.6×349.91`，目标宽 `9×s` ⇒ 高 `349.91 × 9/951.6 = 3.309×s` */
+  sby: (349.91 * 9) / 951.6,
+  /** 下波音：`951.6×363.16` */
+  xby: (363.16 * 9) / 951.6,
+  /** 复上波音（3.5 齿）：`1003.8×264.78`，目标宽 `13.5×s` */
+  'sby+': (264.78 * 13.5) / 1003.8,
+  /** 复下波音：`1003.8×410.26` */
+  'xby+': (410.26 * 13.5) / 1003.8,
+  /** 上滑音：`755.98×684.72` */
+  shy: (684.72 * 9) / 755.98,
+  /** 下滑音：`729.81×716.92` */
+  xhy: (716.92 * 9) / 729.81,
+  /** 延长记号：`524.6×278.2` */
+  yc: (278.2 * 9) / 524.6,
+}
+
+/** 文字类修饰符的墨迹高（×`s`）：`<text font-size="10×s">` 按字身比 `0.72` 估 ⇒ `7.2×s` */
+export const MARK_TEXT_INK_H_RATIO = 10 * 0.72
+
+/** 单个修饰符的**墨迹高**（×`s`；不含 `LAYER_GAP`）。未知符号退回文字类估值——宁可略松 */
+export function markInkHRatio(sym: string): number {
+  return MARK_INK_H_RATIO[sym] ?? MARK_TEXT_INK_H_RATIO
+}
+
+/**
+ * adj723n：连音线为修饰符让位的**总高度**（= 墨迹高 + `LAYER_GAP`），供 `slurYFor` 消费。
+ *
+ * 旧口径一律 `10×s + LAYER_GAP×s`（`10×s` 是**符号字号**）⇒ 用户报「明显抬得过高、间距较大」；
+ * 本轮一度改成单个常量 `6×s`（用户确认"间距可以"），但各类符号墨迹高不同 ⇒ 现改为**查表**：
+ * `让位量 = markInkHRatio(sym) + LAYER_GAP`（比例形式，调用方再 `× s`）。
+ */
+export function markReserveRatio(sym: string): number {
+  return markInkHRatio(sym) + LAYER_GAP
+}
+
+/**
+ * adj723m：（**已被 `markReserveRatio()` 取代**，保留常量仅供对照与回退）
+ * 每个"本音符修饰符"占的纵向高度的**单值近似**（`6×s`；实测 `sby` 的墨迹高只有 `3.31×s`）。
+ *
+ * ## 为什么不能只用它
+ * `slurYFor` 原来每个修饰符按整层 `10×s + LAYER_GAP×s ≈ 8.67px` 让位（`10×s` 是
+ * **符号字号**，不是墨迹高）。用户例 `(1/ (1&sby)- | 1)` 实测：波音**墨迹顶**距音符中心
+ * 只有 `2s + 0.95×fs = 8.31px`。按整层让位 ⇒ 连线被多抬 **≈ 8.4px**
+ * ⇒ 用户报「**明显抬得过高、间距较大**」。
+ *
+ * ## 取值（与渲染端几何同源，按**渲染出的 SVG 坐标**反推）
+ * 渲染端：`<g transform="translate(cx, wy) scale(K)">`，`K = fs/1024`、`fs = 10×s`、
+ * `wy = symY − 2×s`（图形**中心**，`symY` 是文字基线）；`sby` 的 path 在源坐标 `y ∈ [327.15, 677.06]`。
+ * ⇒ 墨迹顶的 **SVG y** = `wy + K × 327.15`，而该音符数字的基线 `y`（`symY` 以它为基准）。
+ *
+ * 实测（用户例 `noteSize=13`、`symY=154.3`）：`wy = 136.9`、`K = 0.006831`
+ * ⇒ 波音目标框顶 = 该字形的**墨迹顶**（`glyphMarkup` 按紧包围盒对齐）。
+ *
+export const MARK_STACK_RATIO = 6
 
 /**
  * adj632b：**数字墨迹**的字形度量（YaHei 粗体 Chrome `measureText` 实测，100px 基准；随字号等比）。

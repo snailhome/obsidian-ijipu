@@ -29,7 +29,7 @@ import type {
   ScorePageMeta,
   VoiceBlock,
 } from '../types'
-import { DIGIT_HEIGHT_RATIO, LAYER_GAP, SLUR_W, octaveTopY, octaveDotY, BRACKET_PAD, H_GAP, noteScaleOf, VOLTA_BAR_GAP, VOLTA_RAISE, DYN_HALF_H, barlinePad, barlineTotalW, DOT_AFTER_DIGIT_GAP, DOT_R, SEGMENT_ROW_GAP_DEFAULT, SEGMENT_LAYER_YSCALE, SEGMENT_LAYER_CLEARANCE, SEGMENT_BRACE_ASPECT, SEGMENT_BRACE_MIN_W, NOTE_BASELINE_RATIO, digitBottomY, beamBottomY, lowDotY, TP_BRACKET_GAP, SLUR_SAG_MAX, SLUR_SAG_MIN, VOLTA_INK_GAP, digitInkW, barNumberGapNeed, lyricCommentFontSize, lyricCommentWidth, LYRIC_COMMENT_GAP, type AccidentalInkMetrics } from './spacing'
+import { DIGIT_HEIGHT_RATIO, LAYER_GAP, SLUR_W, octaveTopY, octaveDotY, BRACKET_PAD, H_GAP, noteScaleOf, VOLTA_BAR_GAP, VOLTA_RAISE, DYN_HALF_H, barlinePad, barlineTotalW, DOT_AFTER_DIGIT_GAP, DOT_R, SEGMENT_ROW_GAP_DEFAULT, SEGMENT_LAYER_YSCALE, SEGMENT_LAYER_CLEARANCE, SEGMENT_BRACE_ASPECT, SEGMENT_BRACE_MIN_W, NOTE_BASELINE_RATIO, digitBottomY, beamBottomY, lowDotY, TP_BRACKET_GAP, SLUR_SAG_MAX, SLUR_SAG_MIN, VOLTA_INK_GAP, digitInkW, barNumberGapNeed, lyricCommentFontSize, lyricCommentWidth, LYRIC_COMMENT_GAP, markReserveRatio, type AccidentalInkMetrics } from './spacing'
 // adj284：空间优先布局的度量（本体宽 / 时值拆分 / 非时值元素间距）
 import { splitNoteDur, noteBodyW, augBodyW, dotBodyW, accidentalBodyW, accidentalGeometry, markBodyW, digitSlotW, hxBodyW, graceAtTail, graceSlotLayout, nonDurGap, slideExtraW, braceInkRightOffset, BRACE_LINE_DX } from './spaceLayout'
 import { hairpinEvents, resolveHairpins, type DynEvent, type NoteAnchors } from './hairpins'
@@ -3523,6 +3523,24 @@ export function layoutScore(
   const notesByIndex = new Map<number, PlacedToken>()
   for (const p of pages) for (const n of p.notes) notesByIndex.set(n.id.index, n)
 
+  /**
+   * adj723q（用户报「`{dsb}` 行的连音线压在段层音符上」的**根因**）：
+   * **段层音符的 `(y, 行)`** —— 主旋律连音线路径**不该**为段落`( … )`建线。
+   *
+   * 段层路径（`placeSegmentOverlays`）已经为段内 `( … )` 建了自己的线
+   * （带 `layerBase`，按**段层**基线定位）。若主旋律路径**再建一份**，那一份是按
+   * **行基线**定位的、随后又被 `shiftEnvelopeDown()` 当作"下层内容"再下移 `dy/2`
+   * ⇒ 线段压到段层音符上（实测 `y=183.8` 而段层墨迹顶 `155.7`，两条线并存）。
+   *
+   * 判据：连音线两端音符的 `y` **都不等于所在行的基线**（段层音符被抬/降到别的 y）⇒ 段内线。
+   * （主旋律音符恒等于行基线 `rows[rowA].y`。）
+   */
+  const segNoteKeys = new Set<string>()
+  for (const n of pages.flatMap((p) => p.notes)) {
+    if (n.parentY === undefined) continue // 段层/包络内音符都带 `parentY`
+    segNoteKeys.add(`${n.y.toFixed(1)}`)
+  }
+
   const slurPairs: {
     start: number
     end: number
@@ -3726,6 +3744,11 @@ export function layoutScore(
       const rowA = a ? rowOfNote.get(s0) : undefined
       const rowB = b ? rowOfNote.get(s1) : undefined
       if (!a || !b || rowA === undefined || rowB === undefined) continue
+      /**
+       * adj723q：**段内连音线交给段层路径**（`placeSegmentOverlays` 会为它建带 `layerBase` 的线）。
+       * 端点都落在段层音符上 ⇒ 主旋律路径不建，避免"两份、其中一份被误下移"。
+       */
+      if (segNoteKeys.has(a.y.toFixed(1)) && segNoteKeys.has(b.y.toFixed(1))) continue
       slurInfos.push({ sp, a, b, rowA, rowB, segs: [[s0, s1]] })
     }
   }
@@ -3759,12 +3782,20 @@ export function layoutScore(
    * adj689：`hi`/`symCount` 一律按**整行**给出（见 `rowSlurY`）——"线要避开其下所有音符的
    * 高八度点/修饰符"这条口径从"本条覆盖的区间"扩到"整行"。
    */
-  const slurYFor = (y: number, hi: number, symCount: number, raise: number) => {
+  const slurYFor = (y: number, hi: number, syms: readonly string[], raise: number) => {
     const s = noteScaleOf(m.noteSize)
     const topY = hi > 0 ? octaveTopY(y, hi, m.noteSize) : y - m.noteSize * DIGIT_HEIGHT_RATIO
     let base = topY - LAYER_GAP * s - (SLUR_W * s) / 2
-    // 每层修饰符：符号字号 10×s + 层距 LAYER_GAP×s（与 render 上方符号堆叠一致）
-    base -= symCount * (10 * s + LAYER_GAP * s)
+    /**
+     * adj723p（用户要求"把查表做了"）：每个"本音符修饰符"的让位高度**按符号查表**
+     * （`markReserveRatio(sym) × s`），不再用整层 `10×s + LAYER_GAP×s`（`10×s` 是**符号字号**），
+     * 也不用单值近似 `MARK_STACK_RATIO`——各符号的**墨迹高**差别很大
+     * （实测 `sby` 3.31×s 而 `xhy` 8.84×s）。
+     *
+     * 波音与高八度点、其它上方修饰符**同等对待**（用户明确）。
+     * 表面值由 `MODIFIER_GLYPHS[].box` 推导，同源；见 `spacing.ts` 的 `MARK_INK_H_RATIO`。
+     */
+    for (const sym of syms) base -= markReserveRatio(sym) * s
     return base - raise
   }
   /**
@@ -3778,25 +3809,107 @@ export function layoutScore(
    * 记谱惯例也是"同一行连音线同高"。所以改成按**整行**求"该行最高的元素顶"，
    * 行内共用；`raise`（嵌套错开 / `(+` `(-` 手动升降）仍在基准之上逐条叠加——那才是该错开的部分。
    */
-  const maxHiOfRow = (rowIdx: number): number => {
+  /**
+   * ⚠ `adj723r`：`maxHiOfRow` / `maxSymListOfRow` / `rowSlurY` **已删除**——
+   * 用户口径「**都就自己范围内的修饰符来定连音线高度，不要求整行的连音线水平对齐**」
+   * 明确否掉了"行级取最大"。连音线一律走 `spanSlurY()`（按本线区间），跨行两半也一样。
+   */
+
+  /**
+   * adj723i（用户口径）：「**以元素墨迹不重叠、不覆盖为原则，让层级间保持适当间距即可**」
+   * ⇒ 连音线只需避开**自己下方**的元素，**能低就低**；不为了"整行齐平"而让全行都被无关音符抬高。
+   *
+   * ## 根因（实测）
+   * `adj689` 为了让同行线齐平，把 `hi`（高八度点数）与 `sym`（上方修饰符层数）**都**扩到整行。
+   * 于是行内**任意一个**音符带高八度点/修饰符，**全行每条线**都多抬：
+   * ```
+   * 一行里只有一个 `1'/` ⇒ 全行线多抬 1×3.6px
+   * 一行里只有一个 `3//&sby` ⇒ 全行线多抬 10×s + LAYER_GAP×s ≈ 8.0px
+   * ```
+   * 实测（用户先后给的两批原谱，弧顶到数字墨迹顶的间隙）：
+   * 修前中位 **8.42px / 最大 15.25px**；按本线区间后有 18/21 条落到 **2.95~4px**。
+   *
+   * ## 现行口径
+   * · `hi` / `sym` **都按"本线覆盖的音符区间"**求（判据 `x ∈ [x1−2, x2+2]`，与旧实现同源）；
+   * · 锚点 y 取**该行最低音符的 y**（行内各线共用基准，避免同行不同高）；
+   * · **行内齐平**只保留 `alignRowSlurBaselines` 那一条路径（`{dsb}` 多段下移量不同时才需要）。
+   *
+   * ⚠ 权衡：行内若有**别的**音符带高八度点，而本线区间内没有，则本线可以更低（可能与那条点同高）。
+   * 这是用户明确选择的方向（"不重叠即可、能低就低"）——`adj60` 那条"避让高八度点"的断言
+   * 仍然成立，因为它用的用例里高八度点**就在本线区间内**。
+   */
+  const spanSlurY = (anchor: PlacedToken, rowIdx: number, x1: number, x2: number, raise: number): number => {
+    /**
+     * 区间判据：**音符槽中心**落在 `[x1−半槽, x2+半槽]`。
+     *
+     * 为什么用"中心 ± 半槽"而不是直接比 `n.x`：连音线端点相对音符中心是**内缩**的
+     * （`x1 = 中心 + halfDig + s`、`x2 = 中心 − halfDig − s` ⇒ 每端内缩约 `halfDig + s ≈ 7.2px`）。
+     * 直接比 `n.x` 会把**被点的那个音符本身**漏掉——实测 `1 ( 2' 3 ) 4` 里 `2'`（高八度点）
+     * 就被漏掉，线不再避让高音点（`adj60` 断言 `y=142.2 expect=138.84`）。
+     */
+    const halfSlot = 4.5
+    const cLo = Math.min(x1, x2) - halfSlot
+    const cHi = Math.max(x1, x2) + halfSlot
+    const rowNotes = rows[rowIdx]?.notes ?? []
     let hi = 0
-    for (const n of rows[rowIdx]?.notes ?? []) hi = Math.max(hi, highOf(n))
-    return hi
-  }
-  const maxSymOfRow = (rowIdx: number): number => {
-    let sym = 0
-    for (const n of rows[rowIdx]?.notes ?? []) {
-      if (n.token.kind === 'note') sym = Math.max(sym, n.token.symbols.filter((x) => x !== 'hx').length)
+    /** adj723p：让位量按符号查表 ⇒ 收集**本线区间内**的修饰符清单（取层数最多者） */
+    let symList: string[] = []
+    /**
+     * 锚点 y：取**本线区间内**音符的最低 y（**不是**整行的最低）。
+     *
+     * adj723k（用户口径 b）：「**各线按自己区间定位、能低就低**」。
+     * 原口径用"整行最低音符的 y"，于是行内只要有一个**低八度**音符（如 `6,/`），
+     * 全行连线都被顶到那个低位置之上——实测用户原谱
+     * `Q :|/["结束句" 2/ 1/ 2/ (1/ 1)- …]` 三条线全骑在 `y=142.2`，看着"整行偏高"。
+     * 本线只该避开**自己下方**的音符（与"层级④跳房子在③连音线之上"配套）。
+     */
+    let baseY = Number.NaN
+    /**
+     * ⚠ 必须**限定在本行内**（`rowIdx`）！
+     *
+     * `rows` 是**整页/整组的所有行**，只按 x 过滤会把**别的行**同列的音符算进来——
+     * 各行的行首 x 相同，于是本行的线会拿到第 1 行的 y，**整条线跳到第一行去**
+     * （用户报「连音线没有在当前行，都跳到第一行了」）。
+     * 上一版用 `rows[rowIdx].notes` 求行内最低 y，天然只在本行；改成"本线区间"时
+     * 遍历了全部 `rows` 却漏了行过滤，这是那次改动的回归。
+     */
+    for (const r of [rows[rowIdx]].filter(Boolean)) {
+      for (const n of r.notes) {
+        const c = n.x + n.width / 2
+        if (c < cLo || c > cHi) continue
+        if (Number.isNaN(baseY) || n.y < baseY) baseY = n.y
+        hi = Math.max(hi, highOf(n))
+        if (n.token.kind === 'note') {
+          /**
+           * adj723m（用户**更正**口径，附例 `(1/ (1&sby)- | 1)`）：
+           * 「波音与连音线**明显会重叠**，不符合元素墨迹不重叠不覆盖原则，
+           *  这里的前后连音**都应该抬高**，**与高八度点或其它修饰符一样**」。
+           *
+           * ⚠ 本轮早前我按"波音在连音线**下方**"把波音类记号排除在避让高度之外，
+           * 那是**理解错了**（那个说法原本指的是"波音应当被连音线让开"，不是"不用让"）。
+           * 实测 `(1&sby)` 的波音墨迹顶与相邻连音线弧顶**相交**，必须计入。
+           *
+           * 故这里恢复"**所有上方修饰符都让位**"（只排除不占纵向的 `hx`）——
+           * 与高八度点（`hi`）同等对待。
+           */
+          const above = n.token.symbols.filter((x) => x !== 'hx')
+          if (above.length > symList.length) symList = [...above]
+        }
+      }
     }
-    return sym
+    if (Number.isNaN(baseY)) baseY = rowNotes.length > 0 ? Math.min(...rowNotes.map((n) => n.y)) : anchor.y
+    return slurYFor(baseY, hi, symList, raise)
   }
-  /** 某行连音线的基准 y（不含该条自己的嵌套抬升 / `(+` `(-` 升降） */
-  const rowSlurY = (rowIdx: number, anchor: PlacedToken, raise: number): number =>
-    slurYFor(anchor.y, maxHiOfRow(rowIdx), maxSymOfRow(rowIdx), raise)
+  /**
+   * adj723l：同上，但**不含 `raise`**（= 该线"基础高度"）——供"同行齐平"只统一基础高度用。
+   * 齐平后再把各条自己的 `raise` 加回去，嵌套错开（`adj95`）才不被抹平。
+   */
+  const spanSlurBaseY = (anchor: PlacedToken, rowIdx: number, x1: number, x2: number): number =>
+    spanSlurY(anchor, rowIdx, x1, x2, 0)
   /** 行内跳房子线最低 y + 2s（adj134：连音线不得高于跳房子线，避免与其重叠） */
   const voltaFloorY = (rowIdx: number): number | null => {
     const r = rows[rowIdx]
-    const barY = r.y - 18.4 // 小节线上端 = 音符基线 - 18.4（adj50）
+    const barY = r.y - 18.4 * noteScaleOf(m.noteSize)
     let floor: number | null = null
     for (const b of pages[r.page].barlines) {
       if (Math.abs(b.yTop - barY) < 1 && b.voltaStart) {
@@ -3875,12 +3988,23 @@ export function layoutScore(
     // adj44 嵌套抬升 + adj135：(+ 抬升 / adj136：(- 下降（每级 2px，与跳房子类似）
     const raise = nestedRaise[si] + (sp.plus ?? 0) * VOLTA_RAISE - (sp.minus ?? 0) * VOLTA_RAISE
     if (rowA === rowB) {
+      // adj723i：端点先算出来，供"按本线区间求基准 y"使用
+      const sx1 = r1(a.x + halfDig + sSlur)
+      const sx2 = r1(b.x + halfDig - sSlur)
       pages[a.id.page].slurs.push({
         // 起点=开始音符数字槽中心右 1px×s、终点=结束音符数字槽中心左 1px×s
-        x1: r1(a.x + halfDig + sSlur),
-        x2: r1(b.x + halfDig - sSlur),
-        // adj689：基准 y 取**整行**的（不再取本条覆盖区间的）⇒ 同行连音线齐平
-        y: r1(Math.max(rowSlurY(rowA, a, raise), voltaFloorY(rowA) ?? -Infinity)),
+        x1: sx1,
+        x2: sx2,
+        // adj689：同行线**齐平**（由 `alignRowSlurBaselines` 收成一条）；
+        // adj723i：但基准改按**本线自己覆盖的音符区间**求——不再被行内**无关**音符的
+        // 高八度点/修饰符抬高（用户报「连音线离音符太远」，实测多抬 3.6~8.7px）
+        // adj723l：`y` 只按**本线自身区间**算（不含跳房子下限钳制——那一步在齐平之后做，
+        // 否则 `baseYNoRaise`/`raise` 会被钳制量污染，齐平就算错了）
+        y: r1(spanSlurY(a, rowA, sx1, sx2, raise)),
+        // adj723l：基础高度（不含 `raise`）——"同行齐平"只统一它，之后再各自加回 `raise`
+        baseYNoRaise: r1(spanSlurBaseY(a, rowA, sx1, sx2)),
+        // adj723l：本行的跳房子下限（`voltaFloorY`）——齐平之后再统一钳制（见 `alignRowSlurBaselines`）
+        voltaFloor: voltaFloorY(rowA) ?? undefined,
         depth: sp.depth,
         style,
         // 仅平均连音组 (y...) 标数字（普通连音线 (…) 不加，adj43）
@@ -3911,10 +4035,19 @@ export function layoutScore(
       // adj651：跨跳房子的延续线只画右半部——左半部若照画，会从上一行的 5 拉出一小截短线，
       // 与「房子 1 的显式连线」叠在一起（用户参考图里上行是干净的一条弧）
       if (!sp.houseTie) {
+        /**
+         * adj723r（用户报「最后一个跨行连音线抬得过高」）：**左半部也按自己区间定高**。
+         *
+         * 原用 `rowSlurY(rowA, a, raise)`——**行级** `maxHiOfRow`/`maxSymListOfRow`，
+         * 于是同行的**任一**音符带高八度点/修饰符，这条跨行线就被抬上去（与用户
+         * 「都就自己范围内的修饰符来定连音线高度」相悖）。
+         * 其"区间" = `a.x` → 行末（`xEndA`），故按该区间求 `hi`/`sym`。
+         */
+        const sx1 = r1(a.x + halfDig + sSlur)
         pages[rA.page].slurs.push({
-          x1: r1(a.x + halfDig + sSlur),
+          x1: sx1,
           x2: r1(xEndA),
-          y: r1(Math.max(rowSlurY(rowA, a, raise), voltaFloorY(rowA) ?? -Infinity)),
+          y: r1(Math.max(spanSlurY(a, rowA, sx1, xEndA, raise), voltaFloorY(rowA) ?? -Infinity)),
           depth: sp.depth,
           style: crossRowStyle,
           tupletCount: sp.tuplet ? noteCount : undefined,
@@ -3923,10 +4056,14 @@ export function layoutScore(
           rowTop: r1(rows[rowA].y), // adj689b：行基准统一落地用
         })
       }
+      /**
+       * adj723r：右半部同理——"区间" = 行首（`xStartB`）→ `b.x`。
+       */
+      const sx2 = r1(b.x + halfDig - sSlur)
       pages[rows[rowB].page].slurs.push({
         x1: r1(xStartB),
-        x2: r1(b.x + halfDig - sSlur),
-        y: r1(Math.max(rowSlurY(rowB, b, raise), voltaFloorY(rowB) ?? -Infinity)),
+        x2: sx2,
+        y: r1(Math.max(spanSlurY(b, rowB, xStartB, sx2, raise), voltaFloorY(rowB) ?? -Infinity)),
         depth: sp.depth,
         style: crossRowStyle,
         tupletCount: sp.tuplet ? noteCount : undefined,
@@ -3996,6 +4133,50 @@ export function layoutScore(
   placeSegmentOverlays(pages, result, config, keySemitone)
 
   /**
+   * adj723q（用户报「`{dsb}` 行的连音线压在段层音符上」）：
+   * **删掉主旋律路径为"段内连音线"重复建的那一份。**
+   *
+   * ## 现象与根因
+   * 段层路径（`placeSegmentOverlays`）已为段内 `( … )` 建了**带 `layerBase`** 的线
+   * （按段层基线定位，位置正确）。但主旋律路径（更早跑）**也**为同一段 token 建了一份
+   * 不带 `layerBase` 的线——那份按**行基线**定位，随后被 `shiftEnvelopeDown()`
+   * 当作"下层内容"又下移 `dy/2` ⇒ **线段压到段层音符上**
+   * （实测 `y=183.8` 而段层墨迹顶 `155.7`；两条线同时存在）。
+   *
+   * ## 判据（"同 x 区间 + 段层线存在"）
+   * 主旋律线若与某条**段层线**（`layerBase !== undefined`）的 x 区间实质重合
+   * （两端各容差 `2px`）⇒ 它就是那一条的重复，删除。
+   *
+   * 为什么不在建线时就跳过：`slurInfos` 在**段层叠加之前**就建好了，那时
+   * `pages[].notes` 里还没有段层音符，"端点是否属段层"判不出来（实测该判据不生效）。
+   */
+  for (const p of pages) {
+    const segSlurs = p.slurs.filter((s) => s.layerBase !== undefined)
+    if (segSlurs.length === 0) continue
+    p.slurs = p.slurs.filter((s) => {
+      if (s.layerBase !== undefined) return true
+      /**
+       * adj723s（用户报「主声部的连音线给修没了」）：判据必须**同时看 x 与纵向**。
+       *
+       * 只比 x 会误删：实测最小复现
+       * `Q: 6// 0/ 5/ | {dsb (3// 2// 1//) 1// } (1'// 7// 6//) 6// 0/ 5/ |`
+       * 里主路径那条是 `(1'// 7// 6//)`（端点 `y=181.9` ⇒ 线 `y=182.0`），
+       * 段层那条是 `(3// 2// 1//)`（`y=154.0`）——**两条完全不同的线，x 恰好重合**
+       * （`[208.4,240.0]`），按只看 x 的判据把主旋律那条删掉了。
+       *
+       * 真正的"重复"是**同一条线被两条路径各建一份** ⇒ 除 x 相同外，
+       * **纵向也应吻合**（都是按同一条线的音符算出来的；差异只在"段层线跳过
+       * `shiftEnvelopeDown` 的位移"这点上）。故要求 `|Δy| ≤ 4`（远小于 28 的两线间距，
+       * 又足以容纳段层线未随包络下移的那点偏差）。
+       */
+      const dup = segSlurs.some(
+        (g) => Math.abs(g.x1 - s.x1) <= 0.5 && Math.abs(g.x2 - s.x2) <= 0.5 && Math.abs(g.y - s.y) <= 4,
+      )
+      return !dup
+    })
+  }
+
+  /**
    * adj689（用户口径）：**同组词部与曲部的间距，以上面曲部最低的那个声部的位置为曲部的基线**。
    *
    * 放在段层叠加**之后**：`{dsb}` 把包络内的主旋律下移 `dy/2`（下层 = 最低的那个声部），
@@ -4050,24 +4231,22 @@ export function layoutScore(
  * 没有 `{dsb}` 的行位移为 0，一字不动。
  */
 function alignRowSlurBaselines(pages: ScorePage[]): void {
+  /**
+   * adj723o（用户口径，**取代 `adj689`/`adj689b`/`adj723l` 的全部"同行齐平"**）：
+   * 「第一个连音线偏高了，是因为要就后面带高八度占的连音线高度吗？
+   *  **之前就有要求都就自己范围内的修饰符来定连音线高度，不要求整行的连音线水平对齐**」。
+   *
+   * ⇒ **每条线只按自己区间内的修饰符定高**，不再有任何"行内统一"。
+   *
+   * 被删掉的两段及其副作用（均为用户否掉的口径）：
+   * · `p.rowSlides` 那段：把被 `{dsb}` 下移过的行统一到 `min(y)`；
+   * · `adj723l` 那段：把**所有**行的基础高度统一到行内最低者。
+   */
   for (const p of pages) {
-    const slides = p.rowSlides
-    if (!slides || slides.size === 0) continue
-    for (const [rowTop] of slides) {
-      /**
-       * 本行的连音线（主旋律线，含跨行半弧；段层自己的弧线不管）。
-       *
-       * 基准 = 该行连线里**最靠上的那一条的 y**：布局期每行的基准已经是
-       * "整行最高的元素顶 − 层距"（`rowSlurY`），而段层下移后**只有落在下移量最大的
-       * 那一段里的线**还在正确高度上 ⇒ 取最小值即为该行应有的基准。
-       * 其余条按**同一位移**平移 ⇒ 嵌套抬升 / `(+` `(-` / 跨行半弧端点差一字不变。
-       */
-      const list = p.slurs.filter(
-        (sl) => sl.layerBase === undefined && sl.rowTop !== undefined && Math.abs(sl.rowTop - rowTop) < 0.5,
-      )
-      if (list.length === 0) continue
-      const target = Math.min(...list.map((x) => x.y))
-      for (const sl of list) sl.y = r1(target)
+    for (const sl of p.slurs) {
+      if (sl.layerBase !== undefined) continue
+      // `voltaFloor`（跳房子下限）仍钳制（`adj134`：线不得高于跳房子线）
+      if (sl.voltaFloor !== undefined) sl.y = r1(Math.max(sl.y, sl.voltaFloor))
     }
   }
 }
@@ -5927,6 +6106,13 @@ function shiftEnvelopeDown(
       } else if (s.group !== undefined && (s.group !== gi || s.voice !== voice)) continue
       if (!(s.x1 >= xMin - 1e-6 && s.x1 <= xMax + 1e-6)) continue
       s.y = r1(s.y + dy)
+      /**
+       * adj723l：`baseYNoRaise` 必须**跟着一起搬**——它是"不含 `raise` 的基础高度"，
+       * 若只搬 `y`，后续"同行齐平"推导 `raise = y − baseYNoRaise` 时会把**下移量当成 raise**
+       * （实测被算成 15.80 / 8.60，齐平随即算错、`adj689b` 转红）。
+       */
+      if (s.baseYNoRaise !== undefined) s.baseYNoRaise = r1(s.baseYNoRaise + dy)
+      if (s.voltaFloor !== undefined) s.voltaFloor = r1(s.voltaFloor + dy)
     }
   }
 }
