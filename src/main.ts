@@ -364,42 +364,46 @@ export default class IJipuPlugin extends Plugin {
   }
 
   /**
-   * adj724b：在**页签区**或**右侧边栏**里打开嵌入版；给了 `file` 就打开那份 `.jps`。
+   * adj724b：按设置把嵌入版开在**右侧边栏 / 新页签 / 当前页签**；给了 `file` 就打开那份 `.jps`。
    *
-   * 位置口径（用户实测反馈 #4 + 本轮要求）：
-   *  · `right`   ⇒ **复用已有的嵌入页签**（在哪就用哪），没有才在**右侧边栏**建一个；
-   *  · `tab`     ⇒ 每次在**主编辑区新建**页签；
-   *  · `current` ⇒ 用**当前页签**（会替换掉它的内容；当前页签本身就是嵌入版时直接复用它）。
+   * ## 为什么不"复用已有嵌入页签"（用户实测）
    *
-   * `WorkspaceLeaf` **没有稳定 id** ⇒ 自增令牌随 `ViewState.state` 传给视图，
-   * 用它从 `pendingOpenPaths` 里取"本页签要打开的文件"。
+   * 用户反馈：「打开 `.jps` 的方式选择**新的页签**和**当前页签**都是在右侧栏打开，没有按设置的要求打开」。
+   *
+   * 根因：我原先加了一条"已有嵌入版页签就一律复用"的规则，而它**压过了模式选择**——
+   * 默认方式"右侧栏"先开了一个右栏页签，之后无论选"新页签"还是"当前页签"，
+   * 都被那条规则吃掉，仍然落在右栏。
+   *
+   * ⇒ **模式是用户显式选择，必须有最终决定权**：每次按模式新开对应位置的页签。
+   * （想避免多开就把模式定成"当前页签"，或手动关掉不用的那个页签。）
+   *
+   * `WorkspaceLeaf` **没有稳定 id** ⇒ 自增令牌随 `ViewState.state` 传给视图做兜底；
+   * 正常路径是 `setViewState()` 之后**直接驱动视图实例**（`view.openFile()`），
+   * 因为复用 leaf 时 Obsidian 不会重建视图（见 `embed/appView.ts` 的 `openFile()`）。
    */
   async openEmbedLeaf(file: TFile | null, mode: EmbedOpenMode = DEFAULT_EMBED_OPEN_MODE): Promise<void> {
     const { workspace } = this.app
-    const existing = workspace.getLeavesOfType(VIEW_TYPE_IJIPU_APP)
-
-    let target: WorkspaceLeaf | null = null
-    if (existing.length > 0) {
-      // 已经有嵌入版页签：一律复用并聚焦（再开一个只会让人分不清哪个是哪个）
-      target = existing[0]
-    } else if (mode === 'current') {
+    let target: WorkspaceLeaf | null
+    if (mode === 'current') {
+      // 当前活动页签（`getLeaf(false)` = "返回一个可导航的既有 leaf"，是 `getUnpinnedLeaf` 的替代写法）
       target = workspace.getLeaf(false)
     } else if (mode === 'right') {
-      // 右侧边栏：优先没有就在右侧新建；建不出来再退回主编辑区的页签
+      // 右侧边栏：没有就在右侧新建；建不出来再退回主编辑区页签
       target = workspace.getRightLeaf(false) ?? workspace.getLeaf('tab')
-      if (target) workspace.rightSplit?.expand()
+      workspace.rightSplit?.expand()
     } else {
+      // 'tab'：主编辑区**新建**页签
       target = workspace.getLeaf('tab')
     }
     if (!target) return
 
     /**
-     * adj724b：**先切到这个 leaf**，再**直接驱动视图**打开文件。
+     * 先切到这个 leaf，再**直接驱动视图**打开文件。
      *
      * 早先的做法是把路径塞进 `pendingOpenPaths` 并靠 `ViewState.state` 里的令牌让
      * `onOpen()` 去取——但那依赖"`setViewState()` 会重建视图"这个不成立的假设：
      * **复用同一个 leaf 时 Obsidian 不会重建视图**，`onOpen` 不再跑 ⇒ 令牌没人读 ⇒
-     * 表现为"只展开了右栏/切了页签，应用里没打开文件"（用户实测 ①②）。
+     * 表现为"只展开了右栏/切了页签，应用里没打开文件"（用户实测）。
      */
     await target.setViewState({ type: VIEW_TYPE_IJIPU_APP, active: true })
     await workspace.revealLeaf(target)
@@ -407,7 +411,6 @@ export default class IJipuPlugin extends Plugin {
 
     const view = target.view as unknown as { openFile?: (path: string) => void | Promise<void> }
     if (typeof view.openFile === 'function') {
-      // 视图已存在（新建成复用都算）⇒ 直接交给它；应用未就绪时桥会记下来，`ready` 后补发
       await view.openFile(file.path)
     } else {
       // 兜底：视图实现变了（拿不到 `openFile`）⇒ 退回令牌机制

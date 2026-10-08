@@ -393,6 +393,31 @@ console.log('[3g] adj631 设置面板：多页签 / 收藏音色分类列表 / �
         /if \(info\.ready\) \{[\s\S]{0,160}?info\.pendingOpen = path/.test(bridgeSrc2))
   }
   /**
+   * adj724b（用户实测）：「打开 `.jps` 的方式选择**新的页签**和**当前页签**都是在右侧栏打开，
+   * 没有按设置的要求打开」。
+   *
+   * 根因：`openEmbedLeaf` 里曾有一条"**已有嵌入版页签就一律复用**"的规则，
+   * 而它**压过了模式选择**——默认"右侧栏"先开一个右栏页签后，之后无论选哪种模式都落在右栏。
+   *
+   * 断言（口径）：**模式是用户显式选择 ⇒ 必须有最终决定权**——
+   * `openEmbedLeaf` 里不得出现"优先复用已有嵌入页签"的分支；三种位置各自走对应的 API。
+   */
+  {
+    const fnStart = mainSrc.indexOf('async openEmbedLeaf(')
+    const fnEnd = mainSrc.indexOf('\n  }\n', fnStart) // 方法体结束（缩进两格的右花括号）
+    const body = fnStart >= 0 ? mainSrc.slice(fnStart, fnEnd > 0 ? fnEnd : fnStart + 2000) : ''
+    check('adj724b 「打开方式」不被"复用已有页签"压过：按模式新开对应位置（右栏/新页签/当前页签）',
+      fnStart >= 0 &&
+        // 不得把"已有嵌入页签"当作 target（那正是压过模式选择的写法）
+        !/getLeavesOfType\(VIEW_TYPE_IJIPU_APP\)/.test(body) &&
+        // 三种模式各自走对应 API
+        /mode === 'current'[\s\S]{0,160}?getLeaf\(false\)/.test(body) &&
+        /mode === 'right'[\s\S]{0,200}?getRightLeaf\(false\)/.test(body) &&
+        /getLeaf\('tab'\)/.test(body) &&
+        // 仍要直接驱动视图实例（否则又会退回"只展开、不打开"）
+        /await view\.openFile\(file\.path\)/.test(body))
+  }
+  /**
    * adj724b：原「收藏音色」页签（`renderVoiceList` 流式分类列表）**已随设置整并删除**。
    *
    * 这里不再断言它存在，而是断言**它确实不在了**——音色选择只保留在嵌入版 iJipu 里
