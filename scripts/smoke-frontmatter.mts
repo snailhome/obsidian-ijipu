@@ -336,16 +336,27 @@ console.log('[3g] adj631 设置面板：多页签 / 收藏音色分类列表 / �
   const mainSrc = String(readFileSync('src/main.ts', 'utf8'))
   const paneSrc = String(readFileSync('src/scorePane.ts', 'utf8'))
   const cssSrc = String(readFileSync('styles.css', 'utf8'))
-  check('⑥a 设置面板有页签栏（页面/字体/行距/渲染/音色库/**嵌入版**/说明 七个页签，一屏一组）',
-    // adj724b：新增「嵌入版」页签（完整 iJipu 的开关/工作区子目录/主题跟随）。
-    // 本断言按**新口径**更新（不是放宽）：页签集合变了，就用新的完整集合来钉住顺序与命名。
-    /SETTINGS_TABS: SettingsTabId\[\] = \['页面', '字体', '行距', '渲染', '音色库', '嵌入版', '说明'\]/.test(settingsSrc) &&
+  /**
+   * adj724b（用户实测反馈 #3，口径变更）：设置页签从 7 个**收敛为 2 个**——
+   * 「嵌入版」+「说明」。用户要求"只开一处"：排版/音色设置统一在**嵌入版 iJipu** 里改，
+   * 插件侧不再重复提供（否则两处值不一致，且要改两遍）。
+   * 本断言按**新口径**更新（不是放宽）：钉住"只剩这两页、且顺序如此"，
+   * 并**反向**钉住那四类排版页签与音色库页签**不再出现**（防止有人又加回来）。
+   */
+  check('⑥a 设置面板只剩「嵌入版」「说明」两页（排版/音色统一在嵌入版 iJipu 里改）', 
+    /SETTINGS_TABS: SettingsTabId\[\] = \['嵌入版', '说明'\]/.test(settingsSrc) &&
       /ijipu-settings-tabs/.test(settingsSrc) && /ijipu-settings-tab/.test(cssSrc))
-  check('⑥b 收藏音色是**流式分类列表**（分类容器 + 折叠 + 组内 flex-wrap + 工具条全选/全消/反选/搜索）',
-    /ijipu-voice-groups/.test(settingsSrc) && /renderVoiceList/.test(settingsSrc) &&
-      /全选/.test(settingsSrc) && /反选/.test(settingsSrc) && /ijipu-voice-search/.test(settingsSrc) &&
-      /\.ijipu-voice-rows \{[\s\S]*?flex-wrap: wrap/.test(cssSrc) &&
-      /\.ijipu-voice-group\.is-collapsed \.ijipu-voice-rows/.test(cssSrc))
+  /**
+   * adj724b：原「收藏音色」页签（`renderVoiceList` 流式分类列表）**已随设置整并删除**。
+   *
+   * 这里不再断言它存在，而是断言**它确实不在了**——音色选择只保留在嵌入版 iJipu 里
+   * （用户要求"只开一处"）。样式类 `.ijipu-voice-*` 仍留在 `styles.css`（嵌入版目前用自己的样式，
+   * 插件侧这套已无消费者，后续可清理，但删样式不属于本次范围）。
+   */
+  check('⑥b 插件侧不再有「收藏音色」设置页（音色统一在嵌入版 iJipu 里改）',
+    // 先**剥注释**再查：文件头的历史说明里会提到这两个标识符（同 E-2026-237 的坑）
+    !/renderVoiceList/.test(settingsSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')) &&
+      !/ijipu-voice-groups/.test(settingsSrc))
   check('⑥c 「保存为插件默认」只写改动项（`changedDefs` + 等于默认则删除该键），不再整份覆盖',
     /changedDefs\(resolved\.config, next\)/.test(paneSrc) && /isDefaultValue\(def, src\[k\]\)\) delete bag\[k\]/.test(paneSrc) &&
       !/for \(const def of DEFS\) bag\[def\.key as string\] = src\[def\.key as string\]/.test(paneSrc))
@@ -811,10 +822,15 @@ console.log('[adj450] plugin playback timbre parity with the app')
   // ③ 默认音色不得覆盖伴奏/第二声部与曲内 @乐器名@（引擎 schedulePlay 会传 keepInstrument）
   check('adj450 play() 支持 opts.keepInstrument（伴奏/@乐器名@ 保留自身音色）',
     soundbankSrc.includes('keepInstrument') && soundbankSrc.includes('opts?.keepInstrument'))
-  // ④ 默认值 = 自动（settings.hqVoice 未设置 → null → 声部路由），且设置项说明覆盖关系
+  // ④ 默认值 = 自动（settings.hqVoice 未设置 → null → 声部路由）
   check('adj450 默认音色未设置时为「自动」（render 传 null）', renderSrc.includes('opts?.hqVoice ?? null'))
-  check('adj450 设置项说明写明「选具体音色会覆盖谱面 Y:」',
-    settingsSrcSb.includes('覆盖谱面里的 Y:'))
+  /**
+   * adj724b：原断言核的是**插件设置页**里那句"选具体音色会覆盖谱面 Y:"的说明；
+   * 该设置页已随设置整并删除（音色只在嵌入版 iJipu 里改）⇒ 断言对象改为
+   * **插件设置里不再出现音色设置**，覆盖关系的口径仍由引擎/嵌入版负责。
+   */
+  check('adj750 插件设置里不再重复提供音色设置（统一在嵌入版 iJipu 里改）',
+    !/GM_VOICE_OPTIONS|hqVoice/.test(settingsSrcSb))
   // ⑤ 试听走引擎的事件序列（音色由 Y:/@ 决定；被全局覆盖时才用默认音色）
   check('adj450 试听调用引擎 schedulePlay（音色链路与应用一致）',
     renderSrc.includes('schedulePlay(seq, backend') && !renderSrc.includes('backend.play('))

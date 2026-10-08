@@ -220,7 +220,7 @@ class JpsEmbedHost {
          * 实现：在页签里打开该文件 ⇒ 命中 `.jps` 文件视图的嵌入分支 ⇒ 进完整编辑器。
          */
         onEdit: () => {
-          void this.plugin.app.workspace.getLeaf('tab').openFile(file)
+          void this.plugin.openEmbedLeaf(file)
         },
       })
       el.dataset.ijipuPainted = '1'

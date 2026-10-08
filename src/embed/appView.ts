@@ -17,6 +17,8 @@ const DISPLAY_TEXT = '爱记谱'
 
 export class IJipuAppView extends ItemView {
   private frame: HTMLIFrameElement | null = null
+  /** adj724b：本页签的令牌（`main.ts` 开页签时随 ViewState 传入），用于取"要打开的文件" */
+  private openToken = ''
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -42,6 +44,15 @@ export class IJipuAppView extends ItemView {
     contentEl.empty()
     contentEl.addClass('ijipu-web-root')
 
+    /**
+     * 取本页签"要打开的文件"：`main.ts` 开页签时把令牌放进 `ViewState.state`，
+     * `ItemView` 的既有机制会经 `getState()` 交回来。取到即从待办表摘掉（一次性）。
+     */
+    const st = this.getState() as { openToken?: string } | null
+    this.openToken = typeof st?.openToken === 'string' ? st.openToken : ''
+    const pending = this.openToken !== '' ? this.plugin.pendingOpenPaths.get(this.openToken) : undefined
+    if (this.openToken !== '') this.plugin.pendingOpenPaths.delete(this.openToken)
+
     const url = await this.plugin.getEmbedUrl()
     if (!url) {
       contentEl.createDiv({
@@ -54,7 +65,13 @@ export class IJipuAppView extends ItemView {
     const frame = createEmbedFrame(this.app, contentEl, url)
     fitEmbedFrame(frame)
     this.frame = frame
-    this.plugin.bridge.attach(frame)
+    /**
+     * adj724b：登记这个页签"待打开的文件"。
+     *
+     * 应用加载完成后会发 `ready`，桥**此刻**才把这个路径推给它——
+     * 推早了应用还没装监听，消息会丢（表现为"打开 `.jps` 却是空白/未命名"）。
+     */
+    this.plugin.bridge.attach(frame, pending)
 
     // 桥的消息监听：由插件统一注册（见 main.ts），此处只负责登记/摘除 iframe
   }

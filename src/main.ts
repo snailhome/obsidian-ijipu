@@ -51,6 +51,10 @@ export default class IJipuPlugin extends Plugin {
   bridge!: IJipuBridge
   /** 左侧栏图标元素（设置开关切换时显隐） */
   private ribbonEl: HTMLElement | null = null
+  /** adj724b：每个应用页签"待打开的文件"（`.jps` 的文库相对路径），应用 `ready` 后由桥取走 */
+  readonly pendingOpenPaths = new Map<string, string>()
+  /** 自增的页签令牌（`WorkspaceLeaf` 没有稳定 id ⇒ 自己发一个，随 ViewState 传给视图） */
+  private leafSeq = 0
 
   /** 切换排版辅助虚线（显示后可拖动虚线调边距/行距），并通知所有面板重画 */
   toggleGuides(): boolean {
@@ -149,6 +153,20 @@ export default class IJipuPlugin extends Plugin {
       callback: () => void this.openIjipuApp(),
     })
     this.syncEmbedRibbon()
+
+    /**
+     * adj724b：**把"库里的 `.jps` 被改了"推给嵌入版**（用户口径：外部修改要能被发现并提示）。
+     *
+     * 注意：嵌入版**自己每次即时保存也会触发这个事件**。所以这里不做判断，
+     * 一律推给应用，由应用**比对内容**决定要不要提示（内容一致 ⇒ 我们自己写的 ⇒ 不打扰）。
+     */
+    this.registerEvent(
+      this.app.vault.on('modify', (file) => {
+        if (!this.embedEnabled) return
+        if (!(file instanceof TFile) || file.extension !== JPS_EXTENSION) return
+        this.bridge.broadcast('fileChanged', { path: file.path })
+      }),
+    )
   }
 
   /**
@@ -264,18 +282,35 @@ export default class IJipuPlugin extends Plugin {
 
   /** 打开「爱记谱」应用页签（已开则聚焦） */
   async openIjipuApp(): Promise<void> {
+    await this.openEmbedLeaf(null)
+  }
+
+  /**
+   * adj724b：在**页签区**里打开嵌入版；给了 `file` 就打开那份 `.jps`。
+   *
+   * 用户口径（2026-10 实测反馈 #4）：「点击 jps 或预览里的编辑打开 ijipu 使用**右侧栏**的 ijipu 打开」
+   * ——注意这里的"右侧栏"指的是"右侧的**编辑区**"（主工作区），**不是** Obsidian 右侧边栏
+   * （那是一个又窄又小的侧边 dock，装不下完整编辑器）。
+   * 因此统一用 `getLeaf('tab')` 在编辑区开页签；侧栏图标（`openIjipuApp`）也走同一条路径，
+   * 免得"点图标"和"点文件"落到两个不同的地方。
+   */
+  async openEmbedLeaf(file: TFile | null): Promise<void> {
     const { workspace } = this.app
-    let leaf = workspace.getLeavesOfType(VIEW_TYPE_IJIPU_APP)[0]
-    if (!leaf) {
-      const target = workspace.getRightLeaf(false) ?? workspace.getLeaf(true)
-      if (!target) return
-      leaf = target
-      await leaf.setViewState({ type: VIEW_TYPE_IJIPU_APP, active: true })
-    }
-    await workspace.revealLeaf(leaf)
-    // 侧栏可能处于收起状态
-    const dock = workspace.rightSplit
-    if (dock && 'expand' in dock) dock.expand()
+    /**
+     * `getLeaf('tab')` = 在**编辑区新建页签**（`'tab'` 是 `PaneType` 里明确支持的值，已核对
+     * `obsidian.d.ts`）。**不是** Obsidian 右侧边栏——那是一个又窄又小的 dock，装不下完整编辑器。
+     */
+    const target = workspace.getLeaf('tab')
+    if (!target) return
+    /**
+     * `WorkspaceLeaf` **没有稳定 id**（`obsidian.d.ts` 里只有 `parent`/`view`/`getViewState` 等）
+     * ⇒ 自己发一个令牌，随 `ViewState` 交给视图，用它从 `pendingOpenPaths` 里取"要打开的文件"。
+     * 这样"新建页签"与"该页签是哪一个"就一一对应了（比按 index/时序猜可靠）。
+     */
+    const token = `ijipu-${++this.leafSeq}`
+    if (file) this.pendingOpenPaths.set(token, file.path)
+    await target.setViewState({ type: VIEW_TYPE_IJIPU_APP, active: true, state: { openToken: token } })
+    await workspace.revealLeaf(target)
   }
 
   /** 释放嵌入版服务（关掉开关 / 卸载插件时） */
