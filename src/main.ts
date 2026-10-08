@@ -394,6 +394,16 @@ export default class IJipuPlugin extends Plugin {
      * 而不是像此前那样只能对 `main.ts` 做**字符串匹配**（脆、且注释里写同样的字会误判）。
      */
     const plan = planEmbedTarget(mode, sourceLeaf !== null)
+    /**
+     * adj724b：**决策日志**。
+     *
+     * 用户实测反复"没生效"时，日志是唯一能看清"到底选了哪个 leaf"的手段——
+     * 这个环境里我无法运行 Obsidian，只能靠这条日志把运行时事实带回来。
+     */
+    console.info(
+      `[iJipu] 打开方式=${mode} 来源页签=${sourceLeaf ? sourceLeaf.getViewState().type : '（无）'}` +
+        ` ⇒ 动作=${plan.kind} detachSource=${plan.detachSource}`,
+    )
     let target: WorkspaceLeaf | null
     if (plan.kind === 'replace-source') {
       // 「当前页签」：
@@ -441,6 +451,8 @@ export default class IJipuPlugin extends Plugin {
     if (plan.detachSource && !isSameLeaf && sourceLeaf) {
       console.info(`[iJipu] 打开方式=${mode}：已在新位置打开，关闭中间页签（${sourceLeaf.getViewState().type}）`)
       sourceLeaf.detach()
+    } else if (isSameLeaf) {
+      console.info(`[iJipu] 打开方式=${mode}：就地替换来源页签（不关）`)
     }
   }
 
