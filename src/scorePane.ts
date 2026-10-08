@@ -69,6 +69,14 @@ export type ScorePaneHost = {
    * 不提供就只在"已经落盘"的状态下打开（嵌入模式的写回是即时的，故嵌入可以不传）。
    */
   beforeOpenExternal?: () => void | Promise<void>
+  /**
+   * adj724b（用户实测 #7 要求）：**用嵌入的 iJipu 编辑这份谱**。
+   *
+   * 提供它就显示「**编辑**」按钮（而不是「应用打开」）——用户的原话是
+   * 「显示的工具栏里的『应用打开』按钮，现在文本应改为『编辑』，并使用嵌入版的 ijipu 来打开」。
+   * 嵌入版的场景下不该再依赖外部桌面端。
+   */
+  onEdit?: () => void
 }
 
 export type ScorePaneHandle = {
@@ -404,12 +412,18 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       menu.showAtPosition({ x: rect.left, y: rect.bottom })
     })
 
-    // —— 「应用打开」（用户要求）：紧跟**显示模式（视图）组**之后，交给系统默认应用去编辑 ——
-    // 只在**桌面端**且**知道当前谱面文件**时出现：
-    //  · 手机端不出现（用户明确要求；`canOpenWithDefaultApp` 同时判了 adapter 能否给绝对路径）；
-    //  · 代码块没有"自己的文件"（`filePath` 只在 .jps 文件视图与嵌入里传）。
-    // 打开前先走 `beforeOpenExternal` 把未落盘的编辑刷下去，否则外部应用看到的是旧内容。
-    if (host.filePath && canOpenWithDefaultApp(plugin.app)) {
+    // —— 「编辑」（用户要求，adj724b 改名并改行为）：优先用**嵌入的完整 iJipu**打开 ——
+    // 用户原话：「工具栏里的『应用打开』按钮，现在文本应改为『编辑』，并使用嵌入版的 ijipu 来打开」。
+    //  · 有 `onEdit` ⇒ 显示「编辑」（走嵌入版 iJipu 的应用页签）；
+    //  · 否则退回旧行为「应用打开」（桌面端用系统默认应用打开；手机端/代码块不出现）。
+    if (host.onEdit && host.filePath) {
+      const editBtn = toolbar.createEl('button', { cls: 'ijipu-play ijipu-app-open-btn' })
+      editBtn.setAttr('title', '用嵌入的爱记谱编辑')
+      editBtn.setAttr('aria-label', '用嵌入的爱记谱编辑')
+      editBtn.appendChild(appOpenIcon(15))
+      editBtn.createSpan({ cls: 'ijipu-btn-label', text: '编辑' })
+      editBtn.addEventListener('click', () => host.onEdit?.())
+    } else if (host.filePath && canOpenWithDefaultApp(plugin.app)) {
       const appOpenBtn = toolbar.createEl('button', { cls: 'ijipu-play ijipu-app-open-btn' })
       appOpenBtn.setAttr('title', '使用默认应用打开')
       appOpenBtn.setAttr('aria-label', '使用默认应用打开')

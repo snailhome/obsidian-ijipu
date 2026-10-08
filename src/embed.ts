@@ -211,9 +211,17 @@ class JpsEmbedHost {
           this.source = next
           await this.plugin.app.vault.modify(file, next)
         },
-        // adj（用户要求）：嵌入模式也对应一个真实文件 ⇒ 工具栏显示「应用打开」（仅桌面端）；
+        // adj（用户要求）：嵌入模式也对应一个真实文件 ⇒ 工具栏显示按钮（仅桌面端）；
         // 嵌入的写回（writeSource）是即时的，故不必额外刷盘
         filePath: file.path,
+        /**
+         * adj724b（用户实测 #7 要求）：`![[xx.jps]]` 里的工具栏按钮改为「**编辑**」，
+         * 点它用**嵌入的完整 iJipu**打开这份谱（不再依赖外部桌面端）。
+         * 实现：在页签里打开该文件 ⇒ 命中 `.jps` 文件视图的嵌入分支 ⇒ 进完整编辑器。
+         */
+        onEdit: () => {
+          void this.plugin.app.workspace.getLeaf('tab').openFile(file)
+        },
       })
       el.dataset.ijipuPainted = '1'
     } catch (e) {

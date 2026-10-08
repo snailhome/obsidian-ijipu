@@ -65,7 +65,21 @@ export async function startEmbedServer(): Promise<EmbedServer> {
       res.writeHead(404).end()
       return
     }
-    const rest = parts.slice(1).join('/')
+    /**
+     * ⚠ **必须 `decodeURIComponent`**：资产里有**中文文件名**（`icons/菜单.png` 等），
+     * 浏览器请求时会把非 ASCII 百分号编码（`/icons/%E8%8F%9C%E5%8D%95.png`）。
+     * 用原始字符串查表 ⇒ **永远查不到**、图标全部 204（用户实测"嵌入版图标都未显示"）。
+     */
+    const rest = parts
+      .slice(1)
+      .map((s) => {
+        try {
+          return decodeURIComponent(s)
+        } catch {
+          return s // 非法百分号编码：保留原样（反正查不到）
+        }
+      })
+      .join('/')
 
     if (rest === '' || rest === 'index.html') {
       res.writeHead(200, {

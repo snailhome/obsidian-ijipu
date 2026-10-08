@@ -145,7 +145,7 @@ export default class IJipuPlugin extends Plugin {
     })
     this.addCommand({
       id: 'open-ijipu-app',
-      name: '打开爱记谱（完整应用）',
+      name: '打开爱记谱',
       callback: () => void this.openIjipuApp(),
     })
     this.syncEmbedRibbon()
@@ -247,7 +247,7 @@ export default class IJipuPlugin extends Plugin {
   syncEmbedRibbon(): void {
     if (this.embedEnabled) {
       if (!this.ribbonEl) {
-        this.ribbonEl = this.addRibbonIcon('music', '打开爱记谱（完整应用）', () => void this.openIjipuApp())
+        this.ribbonEl = this.addRibbonIcon('music', '打开爱记谱', () => void this.openIjipuApp())
         this.ribbonEl.addClass('ijipu-ribbon')
         // 开发/排错用：控制台直接看到服务地址，便于在浏览器里对照排查
         void this.getEmbedUrl().then((u) => {
