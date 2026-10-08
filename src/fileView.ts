@@ -7,7 +7,7 @@
  *  - `![[xxx.jps]]` 嵌入：Obsidian 会把本视图嵌进笔记，自动切到紧凑形态（隐藏页数/编辑器）
  *  - 「⚙ 排版 → 保存到谱面」直接改写文件内容（`# jps-config` 行），与 iJipu 行为一致
  */
-import { Platform, TextFileView, type WorkspaceLeaf } from 'obsidian'
+import { Platform, TextFileView, type TFile, type WorkspaceLeaf } from 'obsidian'
 import { mountScorePane, type ScorePaneHandle } from './scorePane'
 // adj724b：占位说明要显示/判断当前打开方式 ⇒ 引用同一份常量（不写死字面量）
 import { DEFAULT_EMBED_OPEN_MODE } from './types'
@@ -226,37 +226,52 @@ export class IJipuFileView extends TextFileView {
   }
 
   /**
-   * adj724b：整页页签里的**占位说明** —— 真正的编辑器按「打开方式」开在别处。
+   * adj724b（用户要求）：「点击 ob 左侧文件列表的 `.jps` 文件时，**不要再出**那个
+   * 『「xxx」已在爱记谱（嵌入版）中打开 / 当前打开方式见…』的页签，**直接在 ijipu 打开即可**」。
    *
-   * 为什么不再在本页签里渲染 iframe：设置里已经允许选"右侧栏 / 新页签 / 当前页签"，
-   * 若这里再渲染一份，就会出现"同一份谱在两个地方同时编辑"。
-   * 用户点文件、Obsidian 用本视图打开它（这是 `registerExtensions` 的必然结果），
-   * 于是这里只负责**按设置跳到该去的地方**，并给一句可点的说明。
+   * 做法：先按设置把文件路由到该去的地方，**等它成功打开后，把这个中间页签关掉**
+   * （`leaf.detach()`）。于是用户看到的只有"文件直接在 iJipu 里打开了"，不留多余页签。
    *
-   * 只跳一次（`embedRouted`）：视图重画（保存、frontmatter 变化）时不该反复跳。
+   * 两种**不关**的情况：
+   *  · 方式是「**当前页签**」⇒ 路由会**替换掉这个页签本身**（它变成了编辑器），不能关；
+   *  · 路由失败/未就绪 ⇒ 关掉会让用户什么都看不到，此时保留本页签（含「用源码视图编辑」）。
+   *
+   * 本方法只对**同一个文件**执行一次（`embedRoutedFor` 记路径）：视图因保存/frontmatter
+   * 变化重画时不该反复跳；但换文件时必须重新路由。
    */
+  private routeToIjipu(file: TFile): void {
+    if (this.embedRoutedFor === file.path) return
+    this.embedRoutedFor = file.path
+    const mode = this.plugin.settings.embedOpenMode ?? DEFAULT_EMBED_OPEN_MODE
+    /**
+     * 异步执行：`render()` 是同步的，而 `openIjipuFile()` 要 await（服务启动 / 页签状态）。
+     * 也让本视图先把"正在打开…"画出来——路由失败时用户至少知道发生了什么，而不是一片空白。
+     */
+    window.setTimeout(() => {
+      void (async () => {
+        // 先把可能存在的编辑落盘（交给 iJipu 打开的是磁盘上的内容）
+        try {
+          await this.saveNow()
+        } catch {
+          /* 保存失败不阻塞打开 */
+        }
+        await this.plugin.openIjipuFile(file)
+        // 「当前页签」模式下被替换的就是本页签 ⇒ 不能 detach
+        if (mode !== 'current') this.leaf.detach()
+      })()
+    }, 0)
+  }
+
+  /** 中转页签上的一瞬间提示（正常情况下会被 `routeToIjipu()` 立刻关掉） */
   private renderEmbedPlaceholder(): void {
     const { contentEl } = this
     const file = this.file
     if (!file) return
-    const mode = this.plugin.settings.embedOpenMode ?? DEFAULT_EMBED_OPEN_MODE
-    // 视图被复用来打开**另一个**文件时，路由标记要重置（否则新文件不会被路由）
-    if (this.embedRoutedFor !== file.path) {
-      this.embedRoutedFor = file.path
-      // 异步跳：`render()` 是同步的，而 `openIjipuFile()` 要 await（服务启动/页签状态）
-      window.setTimeout(() => void this.plugin.openIjipuFile(file), 0)
-    }
+    this.routeToIjipu(file)
     contentEl.empty()
     contentEl.addClass('ijipu-file-view')
     const box = contentEl.createDiv({ cls: 'ijipu-web-hint' })
-    box.createDiv({ text: `「${file.basename}」已在爱记谱（嵌入版）中打开。` })
-    box.createDiv({
-      cls: 'ijipu-web-hint-sub',
-      text:
-        mode === 'defaultApp'
-          ? '当前打开方式：默认应用（系统里关联 .jps 的程序）。可在「设置 → iJipu → 嵌入版」里更改。'
-          : '当前打开方式见「设置 → iJipu → 嵌入版 → 打开 .jps 的方式」。',
-    })
+    box.createDiv({ text: `正在爱记谱（嵌入版）中打开「${file.basename}」…` })
     const btn = box.createEl('button', { cls: 'ijipu-btn', text: '用源码视图编辑' })
     btn.addEventListener('click', () => {
       this.editing = true

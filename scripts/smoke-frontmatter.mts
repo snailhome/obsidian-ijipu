@@ -418,6 +418,26 @@ console.log('[3g] adj631 设置面板：多页签 / 收藏音色分类列表 / �
         /await view\.openFile\(file\.path\)/.test(body))
   }
   /**
+   * adj724b（用户要求）：「点文件列表的 `.jps` **不要再出**那个『已在爱记谱中打开…』的页签，
+   * 直接在 iJipu 打开即可」。
+   *
+   * 实现口径：文件视图负责**路由 + 关掉自己这个中间页签**（`leaf.detach()`），
+   * 但「当前页签」模式下**不能关**（被替换的就是它自己）。
+   */
+  {
+    const viewSrc = String(readFileSync('src/fileView.ts', 'utf8'))
+    check('adj724b 点 `.jps` 不留中间页签：路由成功后 detach 本页签，且「当前页签」模式不 detach',
+      /private routeToIjipu\(file: TFile\): void \{/.test(viewSrc) &&
+        /await this\.plugin\.openIjipuFile\(file\)[\s\S]{0,220}?if \(mode !== 'current'\) this\.leaf\.detach\(\)/.test(viewSrc) &&
+        // 一个文件只路由一次（视图重画不该反复跳）
+        /if \(this\.embedRoutedFor === file\.path\) return/.test(viewSrc) &&
+        // 中转提示改成"正在打开…"（不再宣称"已打开"并教用户去哪设置）
+        /正在爱记谱（嵌入版）中打开/.test(viewSrc) &&
+        // 注意：看的是**渲染出来的文案**（`createDiv({ text: …`)），不是注释里引用的原文——
+        // 注释里必然会提到旧文案，直接搜整份源码会被自己的注释绊倒（同 E-2026-237 的坑）
+        !/text: `「\$\{file\.basename\}」已在爱记谱/.test(viewSrc))
+  }
+  /**
    * adj724b：原「收藏音色」页签（`renderVoiceList` 流式分类列表）**已随设置整并删除**。
    *
    * 这里不再断言它存在，而是断言**它确实不在了**——音色选择只保留在嵌入版 iJipu 里
