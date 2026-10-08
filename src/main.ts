@@ -385,8 +385,17 @@ export default class IJipuPlugin extends Plugin {
     const { workspace } = this.app
     let target: WorkspaceLeaf | null
     if (mode === 'current') {
-      // 当前活动页签（`getLeaf(false)` = "返回一个可导航的既有 leaf"，是 `getUnpinnedLeaf` 的替代写法）
-      target = workspace.getLeaf(false)
+      /**
+       * 「当前页签」= **用户当前所在的那个页签**。
+       *
+       * ⚠ 不能用 `getLeaf(false)`：它的语义是"返回一个**可导航的既有 leaf**"，
+       * 于是当 iJipu 已经占着右侧边栏的 leaf 时，它会**优先返回那个**——
+       * 用户实测：「设为当前页签时，点击文件列表**未在打开页签中打开，还是在新的页签打开**」。
+       *
+       * 正确取法：**主编辑区最近使用过的那个 leaf**（`getMostRecentLeaf(workspace.rootSplit)`），
+       * 它才是"用户当前所在的页签"。拿不到（例如主编辑区为空）再退回 `getLeaf(false)`。
+       */
+      target = workspace.getMostRecentLeaf(workspace.rootSplit) ?? workspace.getLeaf(false)
     } else if (mode === 'right') {
       // 右侧边栏：没有就在右侧新建；建不出来再退回主编辑区页签
       target = workspace.getRightLeaf(false) ?? workspace.getLeaf('tab')

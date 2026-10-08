@@ -28,6 +28,8 @@ export class IJipuAppView extends ItemView {
    */
   private frameReady: Promise<void> = Promise.resolve()
   private markFrameReady: (() => void) | null = null
+  /** adj724b：本页签当前打开的谱面文件名（`null` = 还没打开任何谱 ⇒ 页签名用「爱记谱」） */
+  private activeFileName: string | null = null
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -43,12 +45,39 @@ export class IJipuAppView extends ItemView {
     return VIEW_TYPE_IJIPU_APP
   }
 
+  /**
+   * adj724b（用户要求 #2）：**页签名显示正在编辑的谱面文件名**；没打开文件时显示「爱记谱」。
+   *
+   * 背景：为**具体文件**打开的视图，Obsidian 的页签名会走"文件名"那条路
+   * （`ViewState` 里没有 `title` 字段可用，名字来自 `getDisplayText()`）。
+   * 用户口径：「如果在页签中打开 ijipu 时，页签名显示文件名，而不是爱记谱」。
+   *
+   * 通过 `.jps` 文件视图路由过来的那些页签会被自动关掉（见 `fileView.ts` 的 `routeToIjipu`），
+   * 所以这里主要影响"应用页签里当前打开的谱"这个名字。
+   */
   getDisplayText(): string {
-    return DISPLAY_TEXT
+    // 先问应用"现在打开的是哪一份谱"（`setActiveFile` 由宿主在推 `openFile` 时告知）
+    return this.activeFileName ?? DISPLAY_TEXT
   }
 
   getIcon(): string {
     return 'music'
+  }
+
+  /**
+   * adj724b：宿主告知"这个页签现在打开的是哪份谱" ⇒ 更新页签名。
+   *
+   * 为什么由宿主告诉、而不是自己读 `getState()`：本视图是**应用级**页签
+   * （可以先后打开很多份谱），而 `ViewState` 只反映"创建它的那一次"。
+   *
+   * ⚠ Obsidian **没有**公开的"刷新页签标题"API（`obsidian.d.ts` 里只有 `getDisplayText()`
+   * 与 `onPaneMenu()`）。所以这里只记状态、更新 `getDisplayText()` 的返回值：
+   * 新建/重开页签时一定正确；对**已经显示着**的页签，标题可能要到下次布局变化才刷新
+   * （这是宿主没给 API 的限制，不是这里疏漏）。
+   */
+  setActiveFileName(name: string | null): void {
+    if (this.activeFileName === name) return
+    this.activeFileName = name
   }
 
   async onOpen(): Promise<void> {
@@ -102,6 +131,8 @@ export class IJipuAppView extends ItemView {
    * 不 await 会把这一次打开静默丢掉。
    */
   async openFile(path: string): Promise<void> {
+    // adj724b：页签名跟着当前打开的谱走（见 `getDisplayText`）
+    this.setActiveFileName(path.split('/').pop() ?? path)
     await this.frameReady
     if (!this.frame) return
     this.plugin.bridge.openFile(this.frame, path)

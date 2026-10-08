@@ -416,6 +416,35 @@ console.log('[3g] adj631 设置面板：多页签 / 收藏音色分类列表 / �
         /getLeaf\('tab'\)/.test(body) &&
         // 仍要直接驱动视图实例（否则又会退回"只展开、不打开"）
         /await view\.openFile\(file\.path\)/.test(body))
+    /**
+     * adj724b（用户实测 #1）：「设为**当前页签**时，点文件列表**未在打开页签中打开，
+     * 还是在新的页签打开**」。
+     *
+     * 根因：用了 `getLeaf(false)`——它的语义是"返回一个**可导航的既有 leaf**"，
+     * 当 iJipu 已占着右侧边栏的 leaf 时它**优先返回那个**，于是"当前页签"解析到了右栏。
+     * ⇒ 必须取**主编辑区最近使用的 leaf**：`getMostRecentLeaf(workspace.rootSplit)`。
+     */
+    const noComments = body.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+    check('adj724b 「当前页签」取的是主编辑区最近使用的页签（不是 getLeaf(false)——它优先返回可导航的右栏 leaf）',
+      // 先**剥注释**再查：函数上方的 JSDoc 为解释原因会引用 `getLeaf(false)`
+      // （同一个坑本文件已踩到第三次，见 E-2026-237 的口径）
+      /mode === 'current'[\s\S]{0,220}?getMostRecentLeaf\(workspace\.rootSplit\)/.test(noComments) &&
+        // 赋值右侧**不得直接**是 getLeaf(false)（那正是 bug 的写法）；作为 `??` 兜底是允许的
+        !/target = workspace\.getLeaf\(false\)/.test(noComments))
+  }
+  /**
+   * adj724b（用户实测 #2）：「在页签中打开 ijipu 时，页签名应显示**文件名**，而不是爱记谱」。
+   *
+   * 页签名来自视图的 `getDisplayText()`（`ViewState` 里**没有** `title` 字段，已核对 `obsidian.d.ts`）。
+   */
+  {
+    const appViewSrc2 = String(readFileSync('src/embed/appView.ts', 'utf8'))
+    check('adj724b 应用页签的标题：打开谱时显示文件名、没打开时显示「爱记谱」',
+      /getDisplayText\(\): string \{[\s\S]{0,200}?return this\.activeFileName \?\? DISPLAY_TEXT/.test(appViewSrc2) &&
+        /private activeFileName: string \| null = null/.test(appViewSrc2) &&
+        /setActiveFileName\(name: string \| null\)/.test(appViewSrc2) &&
+        // `openFile()` 里要把文件名记下来（否则标题永远停在「爱记谱」）
+        /async openFile\(path: string\): Promise<void> \{[\s\S]{0,200}?setActiveFileName\(path\.split\('\/'\)\.pop\(\)/.test(appViewSrc2))
   }
   /**
    * adj724b（用户要求）：「点文件列表的 `.jps` **不要再出**那个『已在爱记谱中打开…』的页签，
