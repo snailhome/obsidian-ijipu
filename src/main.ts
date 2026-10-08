@@ -142,6 +142,13 @@ export default class IJipuPlugin extends Plugin {
       token: '', // 服务启动后由 syncEmbedToken 填
       root: '',
       theme: () => (document.body.classList.contains('theme-dark') ? 'dark' : 'light'),
+      // adj724b：应用侧偏好/设置 → 插件 `data.json`（与 iframe 的 origin/端口解耦）
+      kv: {
+        all: async () => ({ ...this.embedKv }),
+        get: (k) => this.embedKvGet(k),
+        set: (k, v) => this.embedKvSet(k, v),
+        remove: (k) => this.embedKvRemove(k),
+      },
     })
     this.registerView(VIEW_TYPE_IJIPU_APP, (leaf) => new IJipuAppView(leaf, this))
     this.registerDomEvent(window, 'message', (ev) => {
@@ -205,6 +212,8 @@ export default class IJipuPlugin extends Plugin {
   onunload(): void {
     // 插件卸载（禁用/重载）时兜底停止所有试听
     this.stopAll()
+    // adj724b：把嵌入版偏好的最后一次改动立即落盘（防抖窗口内的改动别丢）
+    this.flushEmbedKv()
     // adj724b：释放本地服务（不释放会占着端口直到 Obsidian 退出）
     void this.disposeEmbed()
   }
@@ -261,9 +270,54 @@ export default class IJipuPlugin extends Plugin {
     return null
   }
 
+  /**
+   * adj724b：**嵌入版的偏好/设置存储**（落在插件自己的 `data.json`）。
+   *
+   * 为什么不能只用浏览器的 `localStorage`：它按 **origin** 隔离，而嵌入页面的 origin 是
+   * `http://127.0.0.1:<port>` —— 端口一变就是"另一个站点" ⇒ 设置读不回来
+   * （用户实测：「嵌入版本的全局设置没有保存，ob 重启后恢复为默认」）。
+   * 存进插件设置文件后，与端口/origin 彻底解耦（换电脑/换浏览器都不丢）。
+   */
+  private embedKv: Record<string, string> = {}
+  private embedKvSaveTimer = 0
+
+  /** 读一条（同步，供桥的 `kvGet` 用） */
+  embedKvGet(key: string): string | undefined {
+    return Object.prototype.hasOwnProperty.call(this.embedKv, key) ? this.embedKv[key] : undefined
+  }
+
+  /** 写一条（防抖落盘：设置面板连续改动时不要每次都写文件） */
+  embedKvSet(key: string, value: string): void {
+    if (key === '') return
+    this.embedKv[key] = value
+    this.scheduleEmbedKvSave()
+  }
+
+  embedKvRemove(key: string): void {
+    if (!Object.prototype.hasOwnProperty.call(this.embedKv, key)) return
+    delete this.embedKv[key]
+    this.scheduleEmbedKvSave()
+  }
+
+  /** 防抖 300ms 落盘（与 Obsidian 自身设置写入同一 `data.json`，不额外建文件） */
+  private scheduleEmbedKvSave(): void {
+    if (this.embedKvSaveTimer !== 0) window.clearTimeout(this.embedKvSaveTimer)
+    this.embedKvSaveTimer = window.setTimeout(() => {
+      this.embedKvSaveTimer = 0
+      void this.saveSettings({ from: 'embedKv' })
+    }, 300)
+  }
+
+  /** 立即落盘（插件卸载时调，别丢最后一次改动） */
+  flushEmbedKv(): void {
+    if (this.embedKvSaveTimer === 0) return
+    window.clearTimeout(this.embedKvSaveTimer)
+    this.embedKvSaveTimer = 0
+    void this.saveSettings({ from: 'embedKv' })
+  }
+
   /** 左侧栏图标：按设置开关显隐（Obsidian 的 `addRibbonIcon` 返回元素，直接 detach/append） */
-  syncEmbedRibbon(): void {
-    if (this.embedEnabled) {
+  syncEmbedRibbon(): void {    if (this.embedEnabled) {
       if (!this.ribbonEl) {
         this.ribbonEl = this.addRibbonIcon('music', '打开爱记谱', () => void this.openIjipuApp())
         this.ribbonEl.addClass('ijipu-ribbon')
@@ -337,6 +391,12 @@ export default class IJipuPlugin extends Plugin {
 
   async loadSettings(): Promise<void> {
     this.settings = Object.assign({}, await this.loadData())
+    /**
+     * adj724b：取出嵌入版的偏好/设置表（应用侧 `localStorage` 的替身）。
+     * 单独一个键存着，避免与 `IJipuSettings` 的字段混在一起（那是个平铺对象）。
+     */
+    const raw = (this.settings as { embedKv?: unknown }).embedKv
+    this.embedKv = raw && typeof raw === 'object' ? ({ ...(raw as Record<string, string>) } as Record<string, string>) : {}
   }
 
   /**
@@ -347,11 +407,17 @@ export default class IJipuPlugin extends Plugin {
    *   别处（谱面预览对话框「保存为插件默认」）改完设置后，**让开着的设置页签就地重画**，
    *   否则那一页还停在旧值上、看起来两边不一致；页签自己改的不重画——会打断正在输入的控件焦点。
    */
-  async saveSettings(opts?: { from?: 'settingsTab' }): Promise<void> {
+  async saveSettings(opts?: { from?: 'settingsTab' | 'embedKv' }): Promise<void> {
+    /**
+     * adj724b：把嵌入版偏好表一并落盘。放在 `this.settings` 的一个专用键下，
+     * 不污染 `IJipuSettings` 的平铺字段（那些是插件自己的渲染设置）。
+     */
+    ;(this.settings as { embedKv?: Record<string, string> }).embedKv = this.embedKv
     await this.saveData(this.settings)
     // 设置面板改动后广播：打开中的谱面即时按新设置重渲染（此前要重开笔记才生效）
     this.events.trigger(SETTINGS_CHANGED)
-    if (opts?.from !== 'settingsTab') this.settingsRefresh?.()
+    // 嵌入版存储的落盘**不触发**设置页重画（那是插件设置，跟它无关，重画会打断输入焦点）
+    if (opts?.from !== 'settingsTab' && opts?.from !== 'embedKv') this.settingsRefresh?.()
   }
 
   /** 登记/注销「设置 → iJipu」页签的重画回调（页签 `display()` 时登记、`hide()` 时注销） */

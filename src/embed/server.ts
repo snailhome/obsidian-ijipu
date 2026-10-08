@@ -47,9 +47,27 @@ function decodeAssets(): Map<string, { mime: string; body: Buffer }> {
 }
 
 /**
+ * 优先使用的端口。
+ *
+ * ## 为什么不再让系统随便分配（adj724b 修复）
+ *
+ * 用户实测：「嵌入版本的全局设置没有保存，ob 重启后恢复为默认」。
+ * 根因：**`localStorage` 是按 origin 隔离的**，而 origin 含**端口**
+ * （`http://127.0.0.1:<port>`）。此前用 `listen(0)` 每次随机分配端口 ⇒
+ * 插件每次重载都是一个"新站点" ⇒ 上一轮的 `ijipu.*` 全局设置**读不回来**。
+ *
+ * 两处一起修（双保险）：
+ *  ① 这里**优先固定端口**（被占才回退随机），让 origin 跨会话稳定；
+ *  ② 应用的偏好/设置改走**宿主桥持久化**（`hostBridge` 的 `kvGet/kvSet`），
+ *     这样即便端口被占、回退到别的端口，设置也不会丢。
+ */
+const PREFERRED_PORT = 47821
+
+/**
  * 启动服务。**幂等**：同一个插件实例只起一个（调用方负责缓存返回的 Promise）。
  *
- * 端口用 `0` 交给系统分配（避免固定端口被占），随后读出真实端口。
+ * 端口策略：先试 `PREFERRED_PORT`（让 origin 稳定 ⇒ 浏览器侧的 `localStorage` 得以延续），
+ * 被占用再退回系统分配（此时靠桥存储兜底）。
  */
 export async function startEmbedServer(): Promise<EmbedServer> {
   const token = randomBytes(16).toString('hex')
@@ -101,13 +119,36 @@ export async function startEmbedServer(): Promise<EmbedServer> {
     res.writeHead(204).end()
   })
 
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', () => resolve())
-  })
+  /** 先试固定端口；`EADDRINUSE` 等失败再交给系统分配 */
+  const listen = (port: number): Promise<void> =>
+    new Promise<void>((resolve, reject) => {
+      const onErr = (e: NodeJS.ErrnoException): void => {
+        server.removeListener('listening', onOk)
+        reject(e)
+      }
+      const onOk = (): void => {
+        server.removeListener('error', onErr)
+        resolve()
+      }
+      server.once('error', onErr)
+      server.once('listening', onOk)
+      server.listen(port, '127.0.0.1')
+    })
+
+  let usedPreferred = true
+  try {
+    await listen(PREFERRED_PORT)
+  } catch {
+    // 端口被占（例如开了两个 Obsidian 实例）⇒ 回退随机；此时靠桥存储保证设置不丢
+    usedPreferred = false
+    await listen(0)
+  }
 
   const addr = server.address()
   const port = typeof addr === 'object' && addr ? addr.port : 0
+  if (!usedPreferred) {
+    console.warn(`[iJipu] 固定端口 ${PREFERRED_PORT} 被占用，本次改用 ${port}（设置仍走宿主桥持久化，不受影响）`)
+  }
 
   return {
     url: `http://127.0.0.1:${port}/${token}/`,

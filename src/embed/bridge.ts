@@ -43,6 +43,21 @@ export interface BridgeHost {
   root: string
   /** 取当前主题（跟随 Obsidian） */
   theme: () => 'dark' | 'light'
+  /**
+   * adj724b：**键值存储**（应用侧偏好/设置的持久化落点）。
+   *
+   * 为什么不能只靠浏览器的 `localStorage`：它的作用域是 **origin**，而嵌入页面的
+   * origin 是 `http://127.0.0.1:<port>` —— 端口一变就是"另一个站点"，设置读不回来
+   * （用户实测：「嵌入版本的全局设置没有保存，ob 重启后恢复为默认」）。
+   * 交给插件随 `data.json` 落盘，就与端口/origin 完全解耦。
+   */
+  kv: {
+    /** 读全部（应用启动时一次性预载） */
+    all: () => Promise<Record<string, string>>
+    get: (key: string) => string | undefined
+    set: (key: string, value: string) => void
+    remove: (key: string) => void
+  }
 }
 /**
  * 归一化一个 vault 相对路径；越界/非法返回 `null`。
@@ -192,6 +207,21 @@ export class IJipuBridge {
 
   /** 各 op 的实现（与 `ijipu/src/store/workspace.ts` 的 `WorkspaceFs` 一一对应） */
   private async exec(op: string, args: Record<string, unknown>): Promise<OpResult> {
+    /**
+     * adj724b：**键值存储**优先处理（与文件操作无关，且 `path` 语义不同）。
+     * 应用侧把偏好/设置放这里 ⇒ 与 iframe 的 origin/端口完全解耦。
+     */
+    if (op === 'kvAll') return { ok: true, result: await this.host.kv.all() }
+    if (op === 'kvGet') return { ok: true, result: this.host.kv.get(String(args.key ?? '')) ?? null }
+    if (op === 'kvSet') {
+      this.host.kv.set(String(args.key ?? ''), String(args.value ?? ''))
+      return { ok: true, result: {} }
+    }
+    if (op === 'kvRemove') {
+      this.host.kv.remove(String(args.key ?? ''))
+      return { ok: true, result: {} }
+    }
+
     const adapter = this.host.app.vault.adapter
     const rel = normalizeVaultPath(args.path)
     /** 把 vault 相对路径（这是"工作区内的路径"）换算成实际的 vault 路径 */
