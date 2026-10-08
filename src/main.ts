@@ -143,6 +143,8 @@ export default class IJipuPlugin extends Plugin {
       token: '', // 服务启动后由 syncEmbedToken 填
       root: '',
       theme: () => (document.body.classList.contains('theme-dark') ? 'dark' : 'light'),
+      // adj724b：把设置里的「跟随 Obsidian 主题」告知应用（它据此决定覆盖还是尊重用户选择）
+      followTheme: () => this.settings.embedFollowTheme !== false,
       // adj724b：应用侧偏好/设置 → 插件 `data.json`（与 iframe 的 origin/端口解耦）
       kv: {
         all: async () => ({ ...this.embedKv }),

@@ -43,6 +43,8 @@ export interface BridgeHost {
   root: string
   /** 取当前主题（跟随 Obsidian） */
   theme: () => 'dark' | 'light'
+  /** adj724b：设置里的「跟随 Obsidian 主题」是否开启（决定应用是"跟随"还是"尊重用户自己选的"） */
+  followTheme: () => boolean
   /**
    * adj724b：**键值存储**（应用侧偏好/设置的持久化落点）。
    *
@@ -194,6 +196,15 @@ export class IJipuBridge {
       this.emitTo(entry.frame, 'welcome', {
         vaultName: this.host.app.vault.getName(),
         theme: this.host.theme(),
+        /**
+         * adj724b（用户实测）：「嵌入版 iJipu 深浅主题设置没有记住」。
+         *
+         * 根因在应用侧：它原先**无条件**用宿主主题调 `setThemeMode(dark|light)`，
+         * 于是用户自己选过的深浅模式每次启动都被盖掉（而且还把覆盖值存了下来）。
+         * 现在把「跟随 Obsidian 主题」这个设置一并告知，应用据此决定"覆盖"还是"尊重用户选择"，
+         * 并把 Obsidian 的深浅喂给它的 `systemLight`（走它的 `auto` 语义，而不是抢它的设置）。
+         */
+        followTheme: this.host.followTheme(),
         root: this.host.root,
         capabilities: { write: true, rename: true, remove: true, trash: true },
       })
