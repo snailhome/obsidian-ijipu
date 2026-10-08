@@ -22,6 +22,8 @@ import { App, Notice, PluginSettingTab, Setting } from 'obsidian'
 import { BUILD_STAMP, GIT_COMMIT } from './gen/buildInfo'
 import { buildFrontmatterTemplate, frontmatterKey } from './frontmatter'
 import { DEFS, GROUPS, getDefault, readDef, type SettingDef } from './defs'
+// adj724b：外链统一走这处（Electron 里 `window.open` 不可靠）
+import { openUrlExternally } from './openExternal'
 import type IJipuPlugin from './main'
 
 // frontmatter 键的唯一约定（= `ijipu_` + 引擎 PageConfig 字段名）在 frontmatter.ts 定义，此处转出供外部复用
@@ -237,6 +239,22 @@ export class IJipuSettingTab extends PluginSettingTab {
               '已复制 frontmatter 模板：粘贴到笔记顶部（--- 之间）即可生效',
             ),
           ),
+      )
+
+    new Setting(host)
+      .setName('项目主页与仓库')
+      .setDesc('插件源码、问题反馈与更新说明都在 GitHub 仓库里。')
+      .addButton((b) =>
+        b.setButtonText('打开仓库').onClick(() => {
+          // adj724b：与应用的关于页同一套外链口径（两处都给仓库链接）。
+          // 走 `openUrlExternally`（Electron 里 `window.open` 不可靠，那里已按 `_blank` 处理）。
+          void openUrlExternally('https://github.com/snailhome/obsidian-ijipu')
+        }),
+      )
+      .addButton((b) =>
+        b.setButtonText('打开官网').onClick(() => {
+          void openUrlExternally('https://ijipu.pages.dev')
+        }),
       )
 
     new Setting(host)
