@@ -231,12 +231,14 @@ export class IJipuFileView extends TextFileView {
     return true
   }
 
-  /** 当前文件在工作区里的相对路径（用于交给应用打开） */
+  /**
+   * 当前文件在工作区里的相对路径（用于交给应用打开）。
+   *
+   * 与宿主桥**同口径**：桥的 `root` 一律是 `''`（按文库相对路径读写），
+   * 所以这里直接给 `file.path`（文库相对路径）。
+   */
   private workspaceRelPath(): string {
-    const full = this.file?.path ?? ''
-    const root = this.plugin.bridge.workspaceRoot
-    if (root !== '' && full.startsWith(`${root}/`)) return full.slice(root.length + 1)
-    return full
+    return this.file?.path ?? ''
   }
 
   private teardownEmbedFrame(): void {

@@ -216,8 +216,13 @@ export default class IJipuPlugin extends Plugin {
       this.embedServerStarting = startEmbedServer().then((s) => {
         this.embedServer = s
         this.bridge.setToken(s.token)
-        // 工作区根 = 设置里的子目录（默认空 = vault 根）
-        this.bridge.setRoot((this.settings.embedRoot ?? '').replace(/^\/+|\/+$/g, ''))
+        /**
+         * 工作区根一律是 **`''`（文库根）**：宿主按"文库相对路径"读写，
+         * 应用侧记录的 `path` 也存文库相对路径 ⇒ 两者同口径。
+         * 设置里的「子目录」是**进入工作区后的初始目录**，由应用侧 `makeVaultWorkspaceRecord`
+         * 的 `path` 表达（这样"换目录"仍是应用内的正常导航，不会把用户锁死在子目录里）。
+         */
+        this.bridge.setRoot('')
         return s
       })
     }
