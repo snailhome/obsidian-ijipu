@@ -8,6 +8,7 @@ import { replaceCodeBlockBody } from './sourceEdit'
 import { canOpenWithDefaultApp, openWithDefaultApp } from './openExternal'
 import { DEFAULT_EMBED_OPEN_MODE, type EmbedOpenMode, type IJipuSettings } from './types'
 import { IJipuBridge } from './embed/bridge'
+import { planEmbedTarget } from './embed/openPlan'
 import { startEmbedServer, type EmbedServer } from './embed/server'
 import { IJipuAppView, VIEW_TYPE_IJIPU_APP } from './embed/appView'
 // @ts-ignore esbuild 以 text loader 把 worklet 内联为字符串（main.js 单文件自包含，无需插件目录单独 worklet）
@@ -347,85 +348,99 @@ export default class IJipuPlugin extends Plugin {
    *
    * 用户原话：「在嵌入版页签中添加一个下拉列表选择，默认打开方式，添加以下几个打开方式选择：
    * ① 右侧栏 ② 新的页签 ③ 当前页签 ④ 默认应用；并实现相应的打开方式，**默认选择为右侧栏**」。
+   *
+   * @param sourceLeaf 从 `.jps` 文件视图路由过来时传**它自己那个 leaf**——
+   *   "当前页签"要的就地替换靠它，而不是靠猜（见 `openEmbedLeaf` 的说明）。
    */
-  async openIjipuFile(file: TFile | null): Promise<void> {
+  async openIjipuFile(file: TFile | null, sourceLeaf: WorkspaceLeaf | null = null): Promise<void> {
     const mode = this.settings.embedOpenMode ?? DEFAULT_EMBED_OPEN_MODE
     if (mode === 'defaultApp') {
       if (!file) return // 没指定文件时"默认应用"无从谈起（侧栏图标就是这种情况）
       if (!canOpenWithDefaultApp(this.app)) {
         new Notice('「默认应用」仅在桌面端可用；已改为在右侧栏打开')
-        await this.openEmbedLeaf(file, 'right')
+        await this.openEmbedLeaf(file, 'right', sourceLeaf)
         return
       }
       await openWithDefaultApp(this.app, file.path)
       return
     }
-    await this.openEmbedLeaf(file, mode)
+    await this.openEmbedLeaf(file, mode, sourceLeaf)
   }
 
   /**
    * adj724b：按设置把嵌入版开在**右侧边栏 / 新页签 / 当前页签**；给了 `file` 就打开那份 `.jps`。
    *
-   * ## 为什么不"复用已有嵌入页签"（用户实测）
+   * ## `sourceLeaf`：从文件视图路由过来时，把**它自己那个 leaf** 交进来
    *
-   * 用户反馈：「打开 `.jps` 的方式选择**新的页签**和**当前页签**都是在右侧栏打开，没有按设置的要求打开」。
+   * 这是本方法最关键的参数。用户实测「当前页签没生效」说明：
+   * 靠 `getMostRecentLeaf()` / `getLeaf(false)` 去**猜**"当前页签"不可靠——
+   * Obsidian 的 leaf 调度、以及"右栏是否已有 iJipu 页签"都会改变结果。
    *
-   * 根因：我原先加了一条"已有嵌入版页签就一律复用"的规则，而它**压过了模式选择**——
-   * 默认方式"右侧栏"先开了一个右栏页签，之后无论选"新页签"还是"当前页签"，
-   * 都被那条规则吃掉，仍然落在右栏。
+   * 而点 `.jps` 的真实语义是确定的：**Obsidian 为它创建了一个文件视图页签**。于是：
+   *  · 「当前页签」⇒ **就地替换那个 leaf**（它正是用户点开的页签，最符合预期）；
+   *  · 「新页签」  ⇒ 另开一个，并把那个中间页签**关掉**；
+   *  · 「右侧栏」  ⇒ 在右栏开，并把那个中间页签**关掉**。
    *
-   * ⇒ **模式是用户显式选择，必须有最终决定权**：每次按模式新开对应位置的页签。
-   * （想避免多开就把模式定成"当前页签"，或手动关掉不用的那个页签。）
-   *
-   * `WorkspaceLeaf` **没有稳定 id** ⇒ 自增令牌随 `ViewState.state` 传给视图做兜底；
-   * 正常路径是 `setViewState()` 之后**直接驱动视图实例**（`view.openFile()`），
-   * 因为复用 leaf 时 Obsidian 不会重建视图（见 `embed/appView.ts` 的 `openFile()`）。
+   * 不给 `sourceLeaf`（例如点侧栏图标打开应用）时才退回 `getLeaf(...)` 的猜法。
    */
-  async openEmbedLeaf(file: TFile | null, mode: EmbedOpenMode = DEFAULT_EMBED_OPEN_MODE): Promise<void> {
+  async openEmbedLeaf(
+    file: TFile | null,
+    mode: EmbedOpenMode = DEFAULT_EMBED_OPEN_MODE,
+    sourceLeaf: WorkspaceLeaf | null = null,
+  ): Promise<void> {
     const { workspace } = this.app
+    /**
+     * "开在哪里"由**纯函数**决定（`embed/openPlan.ts`）——这样它可被直接断言，
+     * 而不是像此前那样只能对 `main.ts` 做**字符串匹配**（脆、且注释里写同样的字会误判）。
+     */
+    const plan = planEmbedTarget(mode, sourceLeaf !== null)
     let target: WorkspaceLeaf | null
-    if (mode === 'current') {
-      /**
-       * 「当前页签」= **用户当前所在的那个页签**。
-       *
-       * ⚠ 不能用 `getLeaf(false)`：它的语义是"返回一个**可导航的既有 leaf**"，
-       * 于是当 iJipu 已经占着右侧边栏的 leaf 时，它会**优先返回那个**——
-       * 用户实测：「设为当前页签时，点击文件列表**未在打开页签中打开，还是在新的页签打开**」。
-       *
-       * 正确取法：**主编辑区最近使用过的那个 leaf**（`getMostRecentLeaf(workspace.rootSplit)`），
-       * 它才是"用户当前所在的页签"。拿不到（例如主编辑区为空）再退回 `getLeaf(false)`。
-       */
-      target = workspace.getMostRecentLeaf(workspace.rootSplit) ?? workspace.getLeaf(false)
-    } else if (mode === 'right') {
-      // 右侧边栏：没有就在右侧新建；建不出来再退回主编辑区页签
+    if (plan.kind === 'replace-source') {
+      // 「当前页签」：
+      //  · 由文件视图路由而来 ⇒ 就地替换**它自己**那个 leaf（语义确定，最符合预期）；
+      //  · 否则取**主编辑区最近使用的** leaf。
+      //    ⚠ 不能用 `getLeaf(false)`：它的语义是"返回一个**可导航的既有 leaf**"，
+      //      当 iJipu 已占着右栏 leaf 时它会**优先返回那个**（用户实测踩到）。
+      target = sourceLeaf ?? workspace.getMostRecentLeaf(workspace.rootSplit) ?? workspace.getLeaf(false)
+      if (!sourceLeaf && !target) return
+    } else if (plan.kind === 'right-sidebar') {
       target = workspace.getRightLeaf(false) ?? workspace.getLeaf('tab')
       workspace.rightSplit?.expand()
     } else {
-      // 'tab'：主编辑区**新建**页签
       target = workspace.getLeaf('tab')
     }
     if (!target) return
 
     /**
-     * 先切到这个 leaf，再**直接驱动视图**打开文件。
+     * 切到目标 leaf 并**直接驱动视图**打开文件。
      *
      * 早先的做法是把路径塞进 `pendingOpenPaths` 并靠 `ViewState.state` 里的令牌让
      * `onOpen()` 去取——但那依赖"`setViewState()` 会重建视图"这个不成立的假设：
      * **复用同一个 leaf 时 Obsidian 不会重建视图**，`onOpen` 不再跑 ⇒ 令牌没人读 ⇒
      * 表现为"只展开了右栏/切了页签，应用里没打开文件"（用户实测）。
      */
+    const isSameLeaf = sourceLeaf !== null && target === sourceLeaf
     await target.setViewState({ type: VIEW_TYPE_IJIPU_APP, active: true })
     await workspace.revealLeaf(target)
-    if (!file) return
-
-    const view = target.view as unknown as { openFile?: (path: string) => void | Promise<void> }
-    if (typeof view.openFile === 'function') {
-      await view.openFile(file.path)
-    } else {
-      // 兜底：视图实现变了（拿不到 `openFile`）⇒ 退回令牌机制
-      const token = `ijipu-${++this.leafSeq}`
-      this.pendingOpenPaths.set(token, file.path)
-      await target.setViewState({ type: VIEW_TYPE_IJIPU_APP, active: true, state: { openToken: token } })
+    if (file) {
+      const view = target.view as unknown as { openFile?: (path: string) => void | Promise<void> }
+      if (typeof view.openFile === 'function') {
+        await view.openFile(file.path)
+      } else {
+        // 兜底：视图实现变了（拿不到 `openFile`）⇒ 退回令牌机制
+        const token = `ijipu-${++this.leafSeq}`
+        this.pendingOpenPaths.set(token, file.path)
+        await target.setViewState({ type: VIEW_TYPE_IJIPU_APP, active: true, state: { openToken: token } })
+      }
+    }
+    /**
+     * 关掉中间页签（Obsidian 因 `registerExtensions` 为 `.jps` 必然创建的那个）。
+     * 放在**最后**、且与"目标 leaf"分开判断：这一步此前因调度顺序没生效，
+     * 用户看到的现象是"多余页签还在 / 像开在新页签"。
+     */
+    if (plan.detachSource && !isSameLeaf && sourceLeaf) {
+      console.info(`[iJipu] 打开方式=${mode}：已在新位置打开，关闭中间页签（${sourceLeaf.getViewState().type}）`)
+      sourceLeaf.detach()
     }
   }
 

@@ -19,6 +19,9 @@ import { resolvePageConfig } from '../src/config'
 import { codeBlockBody, jpsLinkpath, replaceCodeBlockBody } from '../src/sourceEdit'
 import { computeGuideLines, cropRectFor, guideLimits, guidePlacement } from '../src/guides'
 import { splitParseIssues } from '../src/parseIssues'
+// adj724b：「打开 .jps 的方式 → 开在哪里」是**纯函数**，冒烟直接跑它
+// （此前只能对 main.ts 做字符串匹配：脆，且注释里写同样的字都会误判）
+import { planEmbedTarget } from '../src/embed/openPlan'
 // 新建 JPS 文件（文件夹右键菜单 + 点击未解析链接 + 默认模板）
 import {
   NEW_JPS_BASE,
@@ -361,12 +364,14 @@ console.log('[3g] adj631 设置面板：多页签 / 收藏音色分类列表 / �
       /addOption\('defaultApp', '默认应用（仅桌面端）'\)/.test(settingsSrc) &&
       settingsSrc.includes('?? DEFAULT_EMBED_OPEN_MODE') &&
       /DEFAULT_EMBED_OPEN_MODE: EmbedOpenMode = 'right'/.test(String(readFileSync('src/types.ts', 'utf8'))) &&
-      /openIjipuFile\(file: TFile \| null\): Promise<void>/.test(mainSrc) &&
+      /openIjipuFile\(file: TFile \| null, sourceLeaf: WorkspaceLeaf \| null = null\): Promise<void>/.test(mainSrc) &&
       // `defaultApp` 分支里夹着"非桌面端 ⇒ 提示并改走右侧栏"的回退，窗口给足
       /mode === 'defaultApp'[\s\S]{0,420}?openWithDefaultApp\(/.test(mainSrc) &&
-      /mode === 'current'[\s\S]{0,120}?getLeaf\(false\)/.test(mainSrc) &&
-      /getRightLeaf\(false\)/.test(mainSrc) &&
-      /target = workspace\.getLeaf\('tab'\)/.test(mainSrc))
+      // 三种嵌入方式各自走对应的 API（"开在哪里"的判定已抽到纯函数，见下面的组合断言）
+      /workspace\.getRightLeaf\(false\)/.test(mainSrc) &&
+      /workspace\.getLeaf\('tab'\)/.test(mainSrc) &&
+      /getMostRecentLeaf\(workspace\.rootSplit\)/.test(mainSrc) &&
+      /planEmbedTarget\(mode, sourceLeaf !== null\)/.test(mainSrc))
   /**
    * adj724b（用户实测 ①②）：「点 `.jps` 只展开了右栏/切了页签，但应用里没打开那份谱」。
    *
@@ -393,44 +398,48 @@ console.log('[3g] adj631 设置面板：多页签 / 收藏音色分类列表 / �
         /if \(info\.ready\) \{[\s\S]{0,160}?info\.pendingOpen = path/.test(bridgeSrc2))
   }
   /**
-   * adj724b（用户实测）：「打开 `.jps` 的方式选择**新的页签**和**当前页签**都是在右侧栏打开，
-   * 没有按设置的要求打开」。
+   * adj724b：「打开 `.jps` 的方式 → 开在哪里」——**直接跑纯函数**断言全部组合。
    *
-   * 根因：`openEmbedLeaf` 里曾有一条"**已有嵌入版页签就一律复用**"的规则，
-   * 而它**压过了模式选择**——默认"右侧栏"先开一个右栏页签后，之后无论选哪种模式都落在右栏。
-   *
-   * 断言（口径）：**模式是用户显式选择 ⇒ 必须有最终决定权**——
-   * `openEmbedLeaf` 里不得出现"优先复用已有嵌入页签"的分支；三种位置各自走对应的 API。
+   * 为什么改成跑函数：这段规则是用户可见行为，此前只对 `main.ts` 做**字符串匹配**，
+   * 结果每轮改实现断言就断（且注释里写同样的字还会误判）；
+   * 更糟的是——用户实测「当前页签没生效」时，**没有任何断言能跑它**。
+   * 抽成 `embed/openPlan.ts` 的 `planEmbedTarget()` 之后，四方式 × 有/无来源页签 全部可断言。
    */
   {
-    const fnStart = mainSrc.indexOf('async openEmbedLeaf(')
-    const fnEnd = mainSrc.indexOf('\n  }\n', fnStart) // 方法体结束（缩进两格的右花括号）
-    const body = fnStart >= 0 ? mainSrc.slice(fnStart, fnEnd > 0 ? fnEnd : fnStart + 2000) : ''
-    check('adj724b 「打开方式」不被"复用已有页签"压过：按模式新开对应位置（右栏/新页签/当前页签）',
-      fnStart >= 0 &&
-        // 不得把"已有嵌入页签"当作 target（那正是压过模式选择的写法）
-        !/getLeavesOfType\(VIEW_TYPE_IJIPU_APP\)/.test(body) &&
-        // 三种模式各自走对应 API
-        /mode === 'current'[\s\S]{0,160}?getLeaf\(false\)/.test(body) &&
-        /mode === 'right'[\s\S]{0,200}?getRightLeaf\(false\)/.test(body) &&
-        /getLeaf\('tab'\)/.test(body) &&
-        // 仍要直接驱动视图实例（否则又会退回"只展开、不打开"）
-        /await view\.openFile\(file\.path\)/.test(body))
-    /**
-     * adj724b（用户实测 #1）：「设为**当前页签**时，点文件列表**未在打开页签中打开，
-     * 还是在新的页签打开**」。
-     *
-     * 根因：用了 `getLeaf(false)`——它的语义是"返回一个**可导航的既有 leaf**"，
-     * 当 iJipu 已占着右侧边栏的 leaf 时它**优先返回那个**，于是"当前页签"解析到了右栏。
-     * ⇒ 必须取**主编辑区最近使用的 leaf**：`getMostRecentLeaf(workspace.rootSplit)`。
-     */
-    const noComments = body.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
-    check('adj724b 「当前页签」取的是主编辑区最近使用的页签（不是 getLeaf(false)——它优先返回可导航的右栏 leaf）',
-      // 先**剥注释**再查：函数上方的 JSDoc 为解释原因会引用 `getLeaf(false)`
-      // （同一个坑本文件已踩到第三次，见 E-2026-237 的口径）
-      /mode === 'current'[\s\S]{0,220}?getMostRecentLeaf\(workspace\.rootSplit\)/.test(noComments) &&
-        // 赋值右侧**不得直接**是 getLeaf(false)（那正是 bug 的写法）；作为 `??` 兜底是允许的
-        !/target = workspace\.getLeaf\(false\)/.test(noComments))
+    // 由 `.jps` 文件视图路由而来（有"用户点开的那个页签"）
+    check('adj724b 打开方式（有来源页签）：当前页签=**就地替换**且不关；新页签=另开并关掉中间页签；右栏=右栏并关掉中间页签',
+      planEmbedTarget('current', true).kind === 'replace-source' &&
+        planEmbedTarget('current', true).detachSource === false &&
+        planEmbedTarget('tab', true).kind === 'new-tab' &&
+        planEmbedTarget('tab', true).detachSource === true &&
+        planEmbedTarget('right', true).kind === 'right-sidebar' &&
+        planEmbedTarget('right', true).detachSource === true,
+      JSON.stringify({
+        current: planEmbedTarget('current', true),
+        tab: planEmbedTarget('tab', true),
+        right: planEmbedTarget('right', true),
+      }))
+    // 没有来源页签（点侧栏图标打开应用）⇒ 不该关任何页签
+    check('adj724b 打开方式（无来源页签）：当前页签=主编辑区最近页签；新页签=新页签；右栏=右栏；都不关页签',
+      planEmbedTarget('current', false).kind === 'replace-source' &&
+        planEmbedTarget('tab', false).kind === 'new-tab' &&
+        planEmbedTarget('right', false).kind === 'right-sidebar' &&
+        [planEmbedTarget('current', false), planEmbedTarget('tab', false), planEmbedTarget('right', false)].every(
+          (p) => p.detachSource === false,
+        ))
+    // ⚠ 关键回归：**「新页签」与「当前页签」必须是两个不同的动作**。
+    // 用户实测的 bug 就是"两者都开在新页签"⇒ 这一条直接钉住它们的差别。
+    check('adj724b 「新页签」与「当前页签」是两个不同动作（此前两者的效果一样 ⇒ 用户报"当前页签没生效"）',
+      planEmbedTarget('current', true).kind !== planEmbedTarget('tab', true).kind &&
+        planEmbedTarget('current', true).kind === 'replace-source' &&
+        planEmbedTarget('tab', true).kind === 'new-tab' &&
+        // 「当前页签」不得把来源页签关掉（它变成了 iJipu 本身）
+        planEmbedTarget('current', true).detachSource === false)
+    // 同一模式下"有/无来源页签"的差别只在"要不要关中间页签"（位置规则一致）
+    check('adj724b 打开方式：位置只由模式决定（有/无来源页签不改变开在哪里）',
+      (['current', 'tab', 'right'] as const).every(
+        (m) => planEmbedTarget(m, true).kind === planEmbedTarget(m, false).kind,
+      ))
   }
   /**
    * adj724b（用户实测 #2）：「在页签中打开 ijipu 时，页签名应显示**文件名**，而不是爱记谱」。
@@ -455,9 +464,12 @@ console.log('[3g] adj631 设置面板：多页签 / 收藏音色分类列表 / �
    */
   {
     const viewSrc = String(readFileSync('src/fileView.ts', 'utf8'))
-    check('adj724b 点 `.jps` 不留中间页签：路由成功后 detach 本页签，且「当前页签」模式不 detach',
+    check('adj724b 点 `.jps` 不留中间页签：把**本页签**交给插件路由（由它按模式决定就地替换/关掉）',
       /private routeToIjipu\(file: TFile\): void \{/.test(viewSrc) &&
-        /await this\.plugin\.openIjipuFile\(file\)[\s\S]{0,220}?if \(mode !== 'current'\) this\.leaf\.detach\(\)/.test(viewSrc) &&
+        // 关键：把 `this.leaf` 交出去 —— 「当前页签」靠它做就地替换，而不是靠猜
+        /await this\.plugin\.openIjipuFile\(file, this\.leaf\)/.test(viewSrc) &&
+        // 关页签的判断已收到插件的纯函数计划里（`plan.detachSource`），视图不再自己判断
+        !/this\.leaf\.detach\(\)/.test(viewSrc) &&
         // 一个文件只路由一次（视图重画不该反复跳）
         /if \(this\.embedRoutedFor === file\.path\) return/.test(viewSrc) &&
         // 中转提示改成"正在打开…"（不再宣称"已打开"并教用户去哪设置）
@@ -465,6 +477,11 @@ console.log('[3g] adj631 设置面板：多页签 / 收藏音色分类列表 / �
         // 注意：看的是**渲染出来的文案**（`createDiv({ text: …`)），不是注释里引用的原文——
         // 注释里必然会提到旧文案，直接搜整份源码会被自己的注释绊倒（同 E-2026-237 的坑）
         !/text: `「\$\{file\.basename\}」已在爱记谱/.test(viewSrc))
+    // 插件侧：按计划关掉中间页签（`plan.detachSource`），且"就地替换"时不关
+    check('adj724b 插件按计划关掉中间页签（`plan.detachSource`），就地替换时不动它',
+      /await this\.plugin\.openIjipuFile\(file, this\.leaf\)/.test(viewSrc) &&
+        /if \(plan\.detachSource && !isSameLeaf && sourceLeaf\)/.test(mainSrc) &&
+        /sourceLeaf\.detach\(\)/.test(mainSrc))
   }
   /**
    * adj724b：原「收藏音色」页签（`renderVoiceList` 流式分类列表）**已随设置整并删除**。

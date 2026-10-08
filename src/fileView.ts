@@ -9,8 +9,6 @@
  */
 import { Platform, TextFileView, type TFile, type WorkspaceLeaf } from 'obsidian'
 import { mountScorePane, type ScorePaneHandle } from './scorePane'
-// adj724b：占位说明要显示/判断当前打开方式 ⇒ 引用同一份常量（不写死字面量）
-import { DEFAULT_EMBED_OPEN_MODE } from './types'
 import type IJipuPlugin from './main'
 
 /**
@@ -242,7 +240,6 @@ export class IJipuFileView extends TextFileView {
   private routeToIjipu(file: TFile): void {
     if (this.embedRoutedFor === file.path) return
     this.embedRoutedFor = file.path
-    const mode = this.plugin.settings.embedOpenMode ?? DEFAULT_EMBED_OPEN_MODE
     /**
      * 异步执行：`render()` 是同步的，而 `openIjipuFile()` 要 await（服务启动 / 页签状态）。
      * 也让本视图先把"正在打开…"画出来——路由失败时用户至少知道发生了什么，而不是一片空白。
@@ -255,9 +252,18 @@ export class IJipuFileView extends TextFileView {
         } catch {
           /* 保存失败不阻塞打开 */
         }
-        await this.plugin.openIjipuFile(file)
-        // 「当前页签」模式下被替换的就是本页签 ⇒ 不能 detach
-        if (mode !== 'current') this.leaf.detach()
+        /**
+         * ⚠ **把 `this.leaf` 交给插件**——这是"当前页签"能生效的关键。
+         *
+         * 用户实测「设为当前页签时，点击文件列表未在打开页签中打开」：根因是我此前让插件用
+         * `getMostRecentLeaf()` / `getLeaf(false)` 去**猜**"当前页签"，而 Obsidian 的 leaf 调度
+         * （以及右栏是否已有 iJipu 页签）都会让猜测落空。
+         *
+         * 但点 `.jps` 的语义是确定的：**这个文件视图页签就是用户点开的那个**。
+         * 于是「当前页签」= 就地替换它（不关），其余方式 = 另开并把这个中间页签关掉——
+         * 关不关由插件按模式统一决定（见 `openEmbedLeaf`），这里不再自己判断。
+         */
+        await this.plugin.openIjipuFile(file, this.leaf)
       })()
     }, 0)
   }
