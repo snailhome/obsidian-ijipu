@@ -282,13 +282,21 @@ export class IJipuSettingTab extends PluginSettingTab {
 
     new Setting(host)
       .setName('工作区子目录')
-      .setDesc('留空 = 以**文库根**为工作区；填了则文件树只显示该子目录下的谱（例：`乐谱`）。')
+      .setDesc(
+        '留空 = 进入**文库根**；填了则打开时**直接进到该子目录**（例：`乐谱`）——' +
+          '之后仍可在应用里自由切换目录（这里只是"起点"，不会把你锁在子目录里）。改动在**下次打开**时生效。',
+      )
       .addText((tx) => {
         tx.setPlaceholder('（留空 = 文库根）')
         tx.setValue(this.plugin.settings.embedRoot ?? '')
         tx.onChange((v) => {
           this.plugin.settings.embedRoot = v.trim()
-          this.plugin.bridge.setRoot(v.trim().replace(/^\/+|\/+$/g, ''))
+          /**
+           * 口径：宿主桥的 `root` **一律是 `''`**（宿主只认文库相对路径），
+           * 子目录表达为**应用侧工作区记录的初始 `path`**（见 `main.tsx` 的
+           * `makeVaultWorkspaceRecord(vaultName, embedRoot)`）。
+           * 因此这里**不**去改桥的 root，只存设置值 ⇒ 下次打开生效。
+           */
           void this.plugin.saveSettings({ from: 'settingsTab' })
         })
       })
