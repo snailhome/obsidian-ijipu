@@ -1,11 +1,12 @@
-import { Events, Keymap, MarkdownRenderChild, MarkdownView, Plugin, TFolder, TFile, type MarkdownSectionInformation } from 'obsidian'
+import { Events, Keymap, MarkdownRenderChild, MarkdownView, Notice, Plugin, TFolder, TFile, type MarkdownSectionInformation, type WorkspaceLeaf } from 'obsidian'
 import { IJipuSettingTab } from './settings'
 import { mountScorePane, type ScorePaneHandle } from './scorePane'
 import { registerJpsEmbeds } from './embed'
 import { IJipuFileView, JPS_EXTENSION, VIEW_TYPE_IJIPU } from './fileView'
 import { createJpsFile, consumeJpsLinkCreate, materializeJpsFile, planJpsLinkCreate, registerJpsFileCreator, unregisterJpsFileCreator, NEW_JPS_TEMPLATE } from './newFile'
 import { replaceCodeBlockBody } from './sourceEdit'
-import type { IJipuSettings } from './types'
+import { canOpenWithDefaultApp, openWithDefaultApp } from './openExternal'
+import { DEFAULT_EMBED_OPEN_MODE, type EmbedOpenMode, type IJipuSettings } from './types'
 import { IJipuBridge } from './embed/bridge'
 import { startEmbedServer, type EmbedServer } from './embed/server'
 import { IJipuAppView, VIEW_TYPE_IJIPU_APP } from './embed/appView'
@@ -336,33 +337,63 @@ export default class IJipuPlugin extends Plugin {
 
   /** 打开「爱记谱」应用页签（已开则聚焦） */
   async openIjipuApp(): Promise<void> {
-    await this.openEmbedLeaf(null)
+    await this.openIjipuFile(null)
   }
 
   /**
-   * adj724b：在**页签区**里打开嵌入版；给了 `file` 就打开那份 `.jps`。
+   * adj724b（用户要求）：按设置里的「打开 .jps 的方式」打开（`null` = 只开应用，不指定文件）。
    *
-   * 用户口径（2026-10 实测反馈 #4）：「点击 jps 或预览里的编辑打开 ijipu 使用**右侧栏**的 ijipu 打开」
-   * ——注意这里的"右侧栏"指的是"右侧的**编辑区**"（主工作区），**不是** Obsidian 右侧边栏
-   * （那是一个又窄又小的侧边 dock，装不下完整编辑器）。
-   * 因此统一用 `getLeaf('tab')` 在编辑区开页签；侧栏图标（`openIjipuApp`）也走同一条路径，
-   * 免得"点图标"和"点文件"落到两个不同的地方。
+   * 用户原话：「在嵌入版页签中添加一个下拉列表选择，默认打开方式，添加以下几个打开方式选择：
+   * ① 右侧栏 ② 新的页签 ③ 当前页签 ④ 默认应用；并实现相应的打开方式，**默认选择为右侧栏**」。
    */
-  async openEmbedLeaf(file: TFile | null): Promise<void> {
+  async openIjipuFile(file: TFile | null): Promise<void> {
+    const mode = this.settings.embedOpenMode ?? DEFAULT_EMBED_OPEN_MODE
+    if (mode === 'defaultApp') {
+      if (!file) return // 没指定文件时"默认应用"无从谈起（侧栏图标就是这种情况）
+      if (!canOpenWithDefaultApp(this.app)) {
+        new Notice('「默认应用」仅在桌面端可用；已改为在右侧栏打开')
+        await this.openEmbedLeaf(file, 'right')
+        return
+      }
+      await openWithDefaultApp(this.app, file.path)
+      return
+    }
+    await this.openEmbedLeaf(file, mode)
+  }
+
+  /**
+   * adj724b：在**页签区**或**右侧边栏**里打开嵌入版；给了 `file` 就打开那份 `.jps`。
+   *
+   * 位置口径（用户实测反馈 #4 + 本轮要求）：
+   *  · `right`   ⇒ **复用已有的嵌入页签**（在哪就用哪），没有才在**右侧边栏**建一个；
+   *  · `tab`     ⇒ 每次在**主编辑区新建**页签；
+   *  · `current` ⇒ 用**当前页签**（会替换掉它的内容；当前页签本身就是嵌入版时直接复用它）。
+   *
+   * `WorkspaceLeaf` **没有稳定 id** ⇒ 自增令牌随 `ViewState.state` 传给视图，
+   * 用它从 `pendingOpenPaths` 里取"本页签要打开的文件"。
+   */
+  async openEmbedLeaf(file: TFile | null, mode: EmbedOpenMode = DEFAULT_EMBED_OPEN_MODE): Promise<void> {
     const { workspace } = this.app
-    /**
-     * `getLeaf('tab')` = 在**编辑区新建页签**（`'tab'` 是 `PaneType` 里明确支持的值，已核对
-     * `obsidian.d.ts`）。**不是** Obsidian 右侧边栏——那是一个又窄又小的 dock，装不下完整编辑器。
-     */
-    const target = workspace.getLeaf('tab')
+    const existing = workspace.getLeavesOfType(VIEW_TYPE_IJIPU_APP)
+
+    let target: WorkspaceLeaf | null = null
+    if (existing.length > 0) {
+      // 已经有嵌入版页签：一律复用并聚焦（再开一个只会让人分不清哪个是哪个）
+      target = existing[0]
+    } else if (mode === 'current') {
+      target = workspace.getLeaf(false)
+    } else if (mode === 'right') {
+      // 右侧边栏：优先没有就在右侧新建；建不出来再退回主编辑区的页签
+      target = workspace.getRightLeaf(false) ?? workspace.getLeaf('tab')
+      if (target) workspace.rightSplit?.expand()
+    } else {
+      target = workspace.getLeaf('tab')
+    }
     if (!target) return
-    /**
-     * `WorkspaceLeaf` **没有稳定 id**（`obsidian.d.ts` 里只有 `parent`/`view`/`getViewState` 等）
-     * ⇒ 自己发一个令牌，随 `ViewState` 交给视图，用它从 `pendingOpenPaths` 里取"要打开的文件"。
-     * 这样"新建页签"与"该页签是哪一个"就一一对应了（比按 index/时序猜可靠）。
-     */
+
     const token = `ijipu-${++this.leafSeq}`
     if (file) this.pendingOpenPaths.set(token, file.path)
+    // 已在目标页签上打开时，setViewState 仍是幂等的（同类型不会重建视图）
     await target.setViewState({ type: VIEW_TYPE_IJIPU_APP, active: true, state: { openToken: token } })
     await workspace.revealLeaf(target)
   }

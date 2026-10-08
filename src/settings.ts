@@ -24,6 +24,7 @@ import { buildFrontmatterTemplate, frontmatterKey } from './frontmatter'
 import { DEFS, GROUPS, getDefault, readDef, type SettingDef } from './defs'
 // adj724b：外链统一走这处（Electron 里 `window.open` 不可靠）
 import { openUrlExternally } from './openExternal'
+import { DEFAULT_EMBED_OPEN_MODE, type EmbedOpenMode } from './types'
 import type IJipuPlugin from './main'
 
 // frontmatter 键的唯一约定（= `ijipu_` + 引擎 PageConfig 字段名）在 frontmatter.ts 定义，此处转出供外部复用
@@ -173,6 +174,25 @@ export class IJipuSettingTab extends PluginSettingTab {
            * `makeVaultWorkspaceRecord(vaultName, embedRoot)`）。
            * 因此这里**不**去改桥的 root，只存设置值 ⇒ 下次打开生效。
            */
+          void this.plugin.saveSettings({ from: 'settingsTab' })
+        })
+      })
+
+    new Setting(host)
+      .setName('打开 .jps 的方式')
+      .setDesc(
+        '在库里打开 `.jps`（或点预览里的「编辑」）时用哪种方式打开。' +
+          '「右侧栏」不抢主编辑区，适合边看谱边写笔记；「当前页签」会替换掉当前页签的内容；' +
+          '「默认应用」交给系统里关联 `.jps` 的程序（仅桌面端）。',
+      )
+      .addDropdown((dd) => {
+        dd.addOption('right', '右侧栏（默认）')
+        dd.addOption('tab', '新的页签')
+        dd.addOption('current', '当前页签')
+        dd.addOption('defaultApp', '默认应用（仅桌面端）')
+        dd.setValue(this.plugin.settings.embedOpenMode ?? DEFAULT_EMBED_OPEN_MODE)
+        dd.onChange((v) => {
+          this.plugin.settings.embedOpenMode = v as EmbedOpenMode
           void this.plugin.saveSettings({ from: 'settingsTab' })
         })
       })

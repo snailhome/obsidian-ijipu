@@ -347,6 +347,27 @@ console.log('[3g] adj631 设置面板：多页签 / 收藏音色分类列表 / �
     /SETTINGS_TABS: SettingsTabId\[\] = \['嵌入版', '说明'\]/.test(settingsSrc) &&
       /ijipu-settings-tabs/.test(settingsSrc) && /ijipu-settings-tab/.test(cssSrc))
   /**
+   * adj724b（用户要求）：**「打开 .jps 的方式」下拉**——四种方式齐全，且**默认是"右侧栏"**。
+   *
+   * 用户原话：「在嵌入版页签中添加一个下拉列表选择，默认打开方式，添加以下几个打开方式选择：
+   * ① 右侧栏 ② 新的页签 ③ 当前页签 ④ 默认应用；并实现相应的打开方式，**默认选择为右侧栏**」。
+   * 断言覆盖：① 四种选项都在下拉里；② 默认值常量为 `'right'`；
+   * ③ 四种方式在 `openIjipuFile`/`openEmbedLeaf` 里都真的有对应实现（不是只加了个下拉）。
+   */
+  check('adj724b 「打开 .jps 的方式」下拉有四种方式，默认「右侧栏」，且四种都真的有实现',
+    /addOption\('right', '右侧栏（默认）'\)/.test(settingsSrc) &&
+      /addOption\('tab', '新的页签'\)/.test(settingsSrc) &&
+      /addOption\('current', '当前页签'\)/.test(settingsSrc) &&
+      /addOption\('defaultApp', '默认应用（仅桌面端）'\)/.test(settingsSrc) &&
+      settingsSrc.includes('?? DEFAULT_EMBED_OPEN_MODE') &&
+      /DEFAULT_EMBED_OPEN_MODE: EmbedOpenMode = 'right'/.test(String(readFileSync('src/types.ts', 'utf8'))) &&
+      /openIjipuFile\(file: TFile \| null\): Promise<void>/.test(mainSrc) &&
+      // `defaultApp` 分支里夹着"非桌面端 ⇒ 提示并改走右侧栏"的回退，窗口给足
+      /mode === 'defaultApp'[\s\S]{0,420}?openWithDefaultApp\(/.test(mainSrc) &&
+      /mode === 'current'[\s\S]{0,120}?getLeaf\(false\)/.test(mainSrc) &&
+      /getRightLeaf\(false\)/.test(mainSrc) &&
+      /target = workspace\.getLeaf\('tab'\)/.test(mainSrc))
+  /**
    * adj724b：原「收藏音色」页签（`renderVoiceList` 流式分类列表）**已随设置整并删除**。
    *
    * 这里不再断言它存在，而是断言**它确实不在了**——音色选择只保留在嵌入版 iJipu 里

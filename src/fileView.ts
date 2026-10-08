@@ -9,7 +9,8 @@
  */
 import { Platform, TextFileView, type WorkspaceLeaf } from 'obsidian'
 import { mountScorePane, type ScorePaneHandle } from './scorePane'
-import { createEmbedFrame, fitEmbedFrame } from './embed/frame'
+// adj724b：占位说明要显示/判断当前打开方式 ⇒ 引用同一份常量（不写死字面量）
+import { DEFAULT_EMBED_OPEN_MODE } from './types'
 import type IJipuPlugin from './main'
 
 /**
@@ -151,6 +152,12 @@ export class IJipuFileView extends TextFileView {
   private unfixHeight: (() => void) | null = null
   /** adj724b：嵌入的完整 iJipu（整页 `.jps` 时用；`![[xx.jps]]` 嵌入态不用） */
   private embedFrame: HTMLIFrameElement | null = null
+  /**
+   * adj724b：本页签是否已经把"打开这份谱"路由到设置指定的位置。
+   *
+   * 视图会因保存/frontmatter 变化重画，而路由只能做一次——否则每存一次就再开一个新页签。
+   */
+  private embedRouted = false
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -211,40 +218,48 @@ export class IJipuFileView extends TextFileView {
     return this.containerEl.closest('.internal-embed') !== null
   }
 
-  /**
-   * adj724b：把当前 `.jps` 交给**嵌入的完整 iJipu** 打开。
-   *
-   * 返回 `false` 表示"嵌入版不可用"（服务没起来/没开开关）⇒ 调用方回退到轻量渲染。
-   * 应用侧加载完成后会发 `ready`，桥在那一刻把本文件的**工作区相对路径**推给它
-   * （见 `embed/bridge.ts` 的 `pendingOpen`）。
-   */
-  private renderEmbed(): boolean {
-    const frame = createEmbedFrame(this.app, this.contentEl, this.plugin.peekEmbedUrl() ?? '')
-    if (!frame.getAttribute('src')) {
-      frame.detach()
-      return false
-    }
-    fitEmbedFrame(frame)
-    this.embedFrame = frame
-    // 登记"这个 iframe 打开的是哪个文件"——应用就绪时桥据此下发 openFile
-    this.plugin.bridge.attach(frame, this.file ? this.workspaceRelPath() : undefined)
-    return true
-  }
-
-  /**
-   * 当前文件在工作区里的相对路径（用于交给应用打开）。
-   *
-   * 与宿主桥**同口径**：桥的 `root` 一律是 `''`（按文库相对路径读写），
-   * 所以这里直接给 `file.path`（文库相对路径）。
-   */
-  private workspaceRelPath(): string {
-    return this.file?.path ?? ''
-  }
-
   private teardownEmbedFrame(): void {
     if (!this.embedFrame) return
     this.plugin.bridge.detach(this.embedFrame)
     this.embedFrame = null
+  }
+
+  /**
+   * adj724b：整页页签里的**占位说明** —— 真正的编辑器按「打开方式」开在别处。
+   *
+   * 为什么不再在本页签里渲染 iframe：设置里已经允许选"右侧栏 / 新页签 / 当前页签"，
+   * 若这里再渲染一份，就会出现"同一份谱在两个地方同时编辑"。
+   * 用户点文件、Obsidian 用本视图打开它（这是 `registerExtensions` 的必然结果），
+   * 于是这里只负责**按设置跳到该去的地方**，并给一句可点的说明。
+   *
+   * 只跳一次（`embedRouted`）：视图重画（保存、frontmatter 变化）时不该反复跳。
+   */
+  private renderEmbedPlaceholder(): void {
+    const { contentEl } = this
+    const file = this.file
+    if (!file) return
+    const mode = this.plugin.settings.embedOpenMode ?? DEFAULT_EMBED_OPEN_MODE
+    if (!this.embedRouted) {
+      this.embedRouted = true
+      // 异步跳：`render()` 是同步的，而 `openIjipuFile()` 要 await（服务启动/页签状态）
+      window.setTimeout(() => void this.plugin.openIjipuFile(file), 0)
+    }
+    contentEl.empty()
+    contentEl.addClass('ijipu-file-view')
+    const box = contentEl.createDiv({ cls: 'ijipu-web-hint' })
+    box.createDiv({ text: `「${file.basename}」已在爱记谱（嵌入版）中打开。` })
+    box.createDiv({
+      cls: 'ijipu-web-hint-sub',
+      text:
+        mode === 'defaultApp'
+          ? '当前打开方式：默认应用（系统里关联 .jps 的程序）。可在「设置 → iJipu → 嵌入版」里更改。'
+          : '当前打开方式见「设置 → iJipu → 嵌入版 → 打开 .jps 的方式」。',
+    })
+    const btn = box.createEl('button', { cls: 'ijipu-btn', text: '用源码视图编辑' })
+    btn.addEventListener('click', () => {
+      this.editing = true
+      this.render()
+    })
   }
 
   private render(): void {
@@ -263,15 +278,15 @@ export class IJipuFileView extends TextFileView {
      * 「ob 内的 jps 文件可以直接使用内部的 ijipu 打开，就不用再安装一套外部的桌面端了」）。
      *
      * 两种形态**分工明确**：
-     *  · **整页页签**（双击 `.jps`）⇒ 完整 iJipu（编辑/排版/试听/导出都在），并由宿主把
-     *    当前文件路径推给应用；
+     *  · **整页页签**（双击 `.jps`）⇒ 按**设置里的打开方式**走（默认"右侧栏"）；
      *  · **`![[xx.jps]]` 笔记内嵌** ⇒ **保持原来的轻量预览**（笔记里塞一个完整编辑器既难看也没必要）。
      *
+     * 打开方式由设置决定（右栏/新页签/当前页签/默认应用）⇒ 本页签不再自己渲染 iframe，
+     * 只显示一句说明（否则会出现"两个地方同时显示同一份谱"）。
      * 关掉「使用嵌入版 iJipu」设置即整体回到旧的轻量渲染（可回退）。
      */
     if (!embedded && !this.editing && this.plugin.embedEnabled && this.file) {
-      if (this.renderEmbed()) return
-      // 嵌入版未就绪（服务启动失败等）⇒ 继续走下面的轻量渲染兜底
+      return this.renderEmbedPlaceholder()
     }
 
     // —— 文件级工具条（嵌入形态只留标题）——

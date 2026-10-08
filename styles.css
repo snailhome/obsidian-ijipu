@@ -873,3 +873,11 @@
   font-size: var(--font-ui-smaller);
   line-height: 1.6;
 }
+
+/* adj724b：整页 `.jps` 页签里的占位说明（真正的编辑器按设置开在右栏/页签/默认应用）。
+   样式与 `.ijipu-web-hint` 同一套，只把副行做弱化。 */
+.ijipu-web-hint-sub {
+  margin-top: 4px;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+}

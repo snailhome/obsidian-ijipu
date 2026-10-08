@@ -27,4 +27,22 @@ export type IJipuSettings = Partial<PageConfig> & {
   embedRoot?: string
   /** 嵌入版是否跟随 Obsidian 主题（默认开） */
   embedFollowTheme?: boolean
+  /**
+   * adj724b（用户要求）：**打开 `.jps` 的方式**。
+   *
+   * 用户原话：「在嵌入版页签中添加一个下拉列表选择，默认打开方式，添加以下几个打开方式选择：
+   * ① 右侧栏 ② 新的页签 ③ 当前页签 ④ 默认应用；并实现相应的打开方式，**默认选择为右侧栏**」。
+   *
+   * - `right`：在**右侧边栏**打开嵌入版（默认；不抢主编辑区，适合边看谱边写笔记）
+   * - `tab`：在主编辑区**新建页签**
+   * - `current`：用**当前页签**（会替换掉当前页签的内容）
+   * - `defaultApp`：交给**系统默认应用**（桌面端；即"外部编辑"）
+   */
+  embedOpenMode?: EmbedOpenMode
 }
+
+/** 打开 `.jps` 的方式（见 `IJipuSettings.embedOpenMode`） */
+export type EmbedOpenMode = 'right' | 'tab' | 'current' | 'defaultApp'
+
+/** 默认打开方式——用户指定为**右侧栏** */
+export const DEFAULT_EMBED_OPEN_MODE: EmbedOpenMode = 'right'

@@ -215,12 +215,12 @@ class JpsEmbedHost {
         // 嵌入的写回（writeSource）是即时的，故不必额外刷盘
         filePath: file.path,
         /**
-         * adj724b（用户实测 #7 要求）：`![[xx.jps]]` 里的工具栏按钮改为「**编辑**」，
-         * 点它用**嵌入的完整 iJipu**打开这份谱（不再依赖外部桌面端）。
-         * 实现：在页签里打开该文件 ⇒ 命中 `.jps` 文件视图的嵌入分支 ⇒ 进完整编辑器。
+         * adj724b（用户要求）：`![[xx.jps]]` 里的工具栏按钮「编辑」**遵循设置里的打开方式**
+         * （右侧栏 / 新的页签 / 当前页签 / 默认应用，默认右侧栏）。
+         * 不再固定在某一种位置上——用户选了哪种就用哪种。
          */
         onEdit: () => {
-          void this.plugin.openEmbedLeaf(file)
+          void this.plugin.openIjipuFile(file)
         },
       })
       el.dataset.ijipuPainted = '1'
