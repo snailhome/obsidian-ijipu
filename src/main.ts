@@ -225,6 +225,19 @@ export default class IJipuPlugin extends Plugin {
     return s.url
   }
 
+  /**
+   * 同步版本的 URL（只读已启动的服务）。
+   *
+   * `.jps` 文件视图的 `render()` 是**同步**的（`TextFileView` 的既有约定），
+   * 没法 `await` 服务启动 ⇒ 用这个：**已启动**就给 URL，没启动就触发一次启动并返回 `null`
+   * （该次渲染回退到轻量渲染，服务就绪后用户再打开就是完整版）。
+   */
+  peekEmbedUrl(): string | null {
+    if (this.embedServer) return this.embedServer.url
+    void this.getEmbedUrl() // 预热：下次打开即完整版
+    return null
+  }
+
   /** 左侧栏图标：按设置开关显隐（Obsidian 的 `addRibbonIcon` 返回元素，直接 detach/append） */
   syncEmbedRibbon(): void {
     if (this.embedEnabled) {

@@ -9,6 +9,7 @@
  */
 import { Platform, TextFileView, type WorkspaceLeaf } from 'obsidian'
 import { mountScorePane, type ScorePaneHandle } from './scorePane'
+import { createEmbedFrame, fitEmbedFrame } from './embed/frame'
 import type IJipuPlugin from './main'
 
 /**
@@ -148,6 +149,8 @@ export class IJipuFileView extends TextFileView {
   private editing = false
   /** adj404：源码态「键盘感知」清理函数（切走/关闭时必须调用，避免留下 app-container 副作用） */
   private unfixHeight: (() => void) | null = null
+  /** adj724b：嵌入的完整 iJipu（整页 `.jps` 时用；`![[xx.jps]]` 嵌入态不用） */
+  private embedFrame: HTMLIFrameElement | null = null
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -192,6 +195,7 @@ export class IJipuFileView extends TextFileView {
   async onClose(): Promise<void> {
     if (this.saveTimer !== 0) window.clearTimeout(this.saveTimer)
     this.teardownHeightFit()
+    this.teardownEmbedFrame()
     this.pane?.destroy()
     this.pane = null
   }
@@ -207,15 +211,66 @@ export class IJipuFileView extends TextFileView {
     return this.containerEl.closest('.internal-embed') !== null
   }
 
+  /**
+   * adj724b：把当前 `.jps` 交给**嵌入的完整 iJipu** 打开。
+   *
+   * 返回 `false` 表示"嵌入版不可用"（服务没起来/没开开关）⇒ 调用方回退到轻量渲染。
+   * 应用侧加载完成后会发 `ready`，桥在那一刻把本文件的**工作区相对路径**推给它
+   * （见 `embed/bridge.ts` 的 `pendingOpen`）。
+   */
+  private renderEmbed(): boolean {
+    const frame = createEmbedFrame(this.app, this.contentEl, this.plugin.peekEmbedUrl() ?? '')
+    if (!frame.getAttribute('src')) {
+      frame.detach()
+      return false
+    }
+    fitEmbedFrame(frame)
+    this.embedFrame = frame
+    // 登记"这个 iframe 打开的是哪个文件"——应用就绪时桥据此下发 openFile
+    this.plugin.bridge.attach(frame, this.file ? this.workspaceRelPath() : undefined)
+    return true
+  }
+
+  /** 当前文件在工作区里的相对路径（用于交给应用打开） */
+  private workspaceRelPath(): string {
+    const full = this.file?.path ?? ''
+    const root = this.plugin.bridge.workspaceRoot
+    if (root !== '' && full.startsWith(`${root}/`)) return full.slice(root.length + 1)
+    return full
+  }
+
+  private teardownEmbedFrame(): void {
+    if (!this.embedFrame) return
+    this.plugin.bridge.detach(this.embedFrame)
+    this.embedFrame = null
+  }
+
   private render(): void {
     const { contentEl } = this
     const embedded = this.embedded
     this.teardownHeightFit() // adj404：重画前先还原上一次源码态的键盘感知
     this.pane?.destroy()
     this.pane = null
+    this.teardownEmbedFrame()
     contentEl.empty()
     contentEl.addClass('ijipu-file-view')
     if (embedded) contentEl.addClass('ijipu-embedded-view')
+
+    /**
+     * adj724b：**整页打开 `.jps` 时用完整 iJipu 编辑器**（用户要求：
+     * 「ob 内的 jps 文件可以直接使用内部的 ijipu 打开，就不用再安装一套外部的桌面端了」）。
+     *
+     * 两种形态**分工明确**：
+     *  · **整页页签**（双击 `.jps`）⇒ 完整 iJipu（编辑/排版/试听/导出都在），并由宿主把
+     *    当前文件路径推给应用；
+     *  · **`![[xx.jps]]` 笔记内嵌** ⇒ **保持原来的轻量预览**（笔记里塞一个完整编辑器既难看也没必要）。
+     *
+     * 关掉「使用嵌入版 iJipu」设置即整体回到旧的轻量渲染（可回退）。
+     */
+    if (!embedded && !this.editing && this.plugin.embedEnabled && this.file) {
+      if (this.renderEmbed()) return
+      // 嵌入版未就绪（服务启动失败等）⇒ 继续走下面的轻量渲染兜底
+    }
 
     // —— 文件级工具条（嵌入形态只留标题）——
     const bar = contentEl.createDiv({ cls: 'ijipu-file-bar' })

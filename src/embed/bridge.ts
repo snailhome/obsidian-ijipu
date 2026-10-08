@@ -73,8 +73,14 @@ function joinRoot(root: string, rel: string): string {
 type OpResult = { ok: true; result: unknown } | { ok: false; error: string }
 
 export class IJipuBridge {
-  /** 当前注册的 iframe（应用页签与文件页签各自注册/注销） */
-  private frame: HTMLIFrameElement | null = null
+  /**
+   * 已登记的 iframe → 它"要打开的文件"（工作区相对路径）。
+   *
+   * 用 `WeakMap` 而不是单个字段：**可能同时存在多个嵌入页签**
+   * （「爱记谱」应用页签 + 若干个 `.jps` 文件页签），各自独立。
+   * 应用加载完成发 `ready` 时，才把对应的文件推给它（推早了应用还没装监听）。
+   */
+  private readonly frames = new WeakMap<HTMLIFrameElement, { pendingOpen?: string }>()
 
   constructor(private readonly host: BridgeHost) {}
 
@@ -88,20 +94,46 @@ export class IJipuBridge {
     this.host.root = root
   }
 
-  /** 某个视图挂载 iframe 后登记（`postMessage` 需要它作为 target） */
-  attach(frame: HTMLIFrameElement): void {
-    this.frame = frame
+  /** 当前工作区根（vault 相对路径；`''` = 文库根） */
+  get workspaceRoot(): string {
+    return this.host.root
+  }
+
+  /** 某个视图挂载 iframe 后登记（`postMessage` 需要它作为 target）；`pendingOpen` = 该页签要打开的文件 */
+  attach(frame: HTMLIFrameElement, pendingOpen?: string): void {
+    this.frames.set(frame, { pendingOpen })
+    if (!this.list.includes(frame)) this.list.push(frame)
   }
 
   detach(frame: HTMLIFrameElement): void {
-    if (this.frame === frame) this.frame = null
+    this.frames.delete(frame)
   }
 
-  /** 宿主 → 应用：推一个事件（主题变化 / 请求打开某文件 / vault 变更） */
-  emit(type: string, payload: Record<string, unknown> = {}): void {
-    const win = this.frame?.contentWindow
+  /** 该 iframe 是否已登记（用于校验消息来源） */
+  private entryOf(event: MessageEvent): { frame: HTMLIFrameElement; pendingOpen?: string } | null {
+    for (const [frame, info] of this.iterFrames()) {
+      if (frame.contentWindow === event.source) return { frame, ...info }
+    }
+    return null
+  }
+
+  /** 遍历已登记且仍在文档里的 iframe（`WeakMap` 不可枚举，故维护一份数组） */
+  private iterFrames(): [HTMLIFrameElement, { pendingOpen?: string }][] {
+    this.list = this.list.filter((f) => f.isConnected)
+    return this.list.map((f) => [f, this.frames.get(f) ?? {}])
+  }
+  private list: HTMLIFrameElement[] = []
+
+  /** 宿主 → 应用：推一个事件（只发给某个具体 iframe） */
+  emitTo(frame: HTMLIFrameElement, type: string, payload: Record<string, unknown> = {}): void {
+    const win = frame.contentWindow
     if (!win) return
     win.postMessage({ ch: BRIDGE_CHANNEL, type, ...payload }, '*')
+  }
+
+  /** 宿主 → 应用：推给**所有**已登记的 iframe（主题变化这类全局事件） */
+  broadcast(type: string, payload: Record<string, unknown> = {}): void {
+    for (const [frame] of this.iterFrames()) this.emitTo(frame, type, payload)
   }
 
   /**
@@ -112,14 +144,15 @@ export class IJipuBridge {
   handle(event: MessageEvent): boolean {
     const data = event.data as BridgeRequest | undefined
     if (!data || typeof data !== 'object' || data.ch !== BRIDGE_CHANNEL) return false
-    // ① 来源必须是当前登记的 iframe
-    if (!this.frame || event.source !== this.frame.contentWindow) return false
+    // ① 来源必须是**已登记**的 iframe（可能同时有多个：应用页签 + 各文件页签）
+    const entry = this.entryOf(event)
+    if (!entry) return false
     // ② token 必须匹配（握手消息带 token；后续消息用同一帧，已通过来源校验）
     if (data.token !== undefined && data.token !== this.host.token) return false
 
-    // 事件型（应用 → 宿主）：目前只需要握手的回执
+    // 事件型（应用 → 宿主）
     if (data.type === 'hello') {
-      this.emit('welcome', {
+      this.emitTo(entry.frame, 'welcome', {
         vaultName: this.host.app.vault.getName(),
         theme: this.host.theme(),
         root: this.host.root,
@@ -127,22 +160,32 @@ export class IJipuBridge {
       })
       return true
     }
+    /**
+     * ③ `ready`：应用已挂好监听 ⇒ 现在才把"这个页签要打开的文件"推给它。
+     * 推早了应用还没装监听（`openFile` 会丢），推晚了用户会先看到一个空工作区。
+     */
+    if (data.type === 'ready') {
+      if (entry.pendingOpen !== undefined && entry.pendingOpen !== '') {
+        this.emitTo(entry.frame, 'openFile', { path: entry.pendingOpen })
+      }
+      return true
+    }
     if (data.type !== undefined && data.id === undefined) return true // 其它事件型：已消费
 
     // 请求型：{ id, op, args }
     if (typeof data.id !== 'number' || typeof data.op !== 'string') return true
-    void this.run(data.id, data.op, data.args ?? {})
+    void this.run(entry.frame, data.id, data.op, data.args ?? {})
     return true
   }
 
-  private async run(id: number, op: string, args: Record<string, unknown>): Promise<void> {
+  private async run(frame: HTMLIFrameElement, id: number, op: string, args: Record<string, unknown>): Promise<void> {
     let out: OpResult
     try {
       out = await this.exec(op, args)
     } catch (e) {
       out = { ok: false, error: e instanceof Error ? e.message : String(e) }
     }
-    const win = this.frame?.contentWindow
+    const win = frame.contentWindow
     if (!win) return
     win.postMessage({ ch: BRIDGE_CHANNEL, id, ...out }, '*')
   }
