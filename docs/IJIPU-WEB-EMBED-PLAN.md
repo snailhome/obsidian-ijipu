@@ -5,7 +5,49 @@
 > ② 在插件设置里加一个**复选框**，控制是否在**左侧栏放一个图标**；
 > ③ 点图标 → 在 **Obsidian 内部页签**里打开这个 iJipu；
 > ④ **OB 里的 `.jps` 直接用内部这个 iJipu 打开**——于是**不必再装外部桌面端**；
-> ⑤ 嵌入版**默认以当前 Obsidian 文库（vault）为工作区**，从而免去"选文件夹 / 文件系统授权"。
+> ⑤ 嵌入版**默认以当前 Obsidian 文库（vault）为工作区**，从而免去"选文件夹 / 文件系统授权"；
+> ⑥ 未使用的 PNG/SVG **不打包**；
+> ⑦ 发布物**仍是 `main.js`/`manifest.json`/`styles.css` 三个文件**。
+
+---
+
+## 实施进度（2026-10-08）
+
+| # | 项 | 状态 | 落点 |
+|---|---|---|---|
+| ① | 插件内本地 HTTP 服务（内存资产、`127.0.0.1`+token） | ✅ 完成 | `obsidian-ijipu/src/embed/server.ts` |
+| ② | 桥协议（vault 作工作区） | ✅ 完成 | 插件 `src/embed/bridge.ts` ↔ 应用 `src/store/hostBridge.ts` + `workspace.ts` 的 `'vault'` 后端 |
+| ③ | 侧栏图标 + 设置开关 | ✅ 完成 | 插件 `src/main.ts`（`addRibbonIcon` 受设置控制）、`src/settings.ts`「嵌入版」页签 |
+| ④ | 双击 `.jps` 用完整 iJipu 打开；`![[xx.jps]]` 保持预览 | ✅ 完成 | 插件 `src/fileView.ts` 的**嵌入分支**（按 `embedded` 分流） |
+| ⑤ | 免授权以文库为工作区 | ✅ 完成 | 应用 `main.tsx` 启动握手 ⇒ `setWorkspace(makeVaultWorkspaceRecord(...))` |
+| ⑥ | 未使用 PNG/SVG 不打包 | ✅ 完成 | `ijipu/scripts/embed-assets.mjs`（白名单：icons **48→37 个、383→142.5 KB**） |
+| ⑦ | 发布物仍 3 个文件 | ✅ 完成 | 网页产物 → `src/gen/webappAssets.ts`（**入库**）→ 由 esbuild 打进 `main.js`（**2.84 MB**） |
+| ⑧ | 自动化验证 | ✅ 完成 | `ijipu/scripts/embed-smoke.mjs`：真机 Chrome+CDP，**端到端跑通桥协议** |
+| ⑨ | 在**真实 Obsidian** 里手动验收 | ⬜ **待用户执行** | 沙箱内无法运行 Obsidian |
+
+### 端到端验证证据（`npm run smoke:embed`，真机 Chrome + CDP）
+
+```
+[embed-smoke] ✅ 单文件产物启动成功、无运行时报错
+[embed-smoke] ✅ 桥端到端通过：应用 hello→ready、发出 1 次桥调用（list:{"path":""}）、宿主应答后无报错
+[embed-smoke] 应用侧自述：{"vaultName":"测试文库","root":"乐谱","calls":1,"lastOps":["list"]}
+```
+
+两个**只有真机才暴露**的问题就是这样抓到的：
+① 页面必须挂在 `/<token>/` 下（应用从 URL 首段取 token，取不到直接放弃握手）；
+② 底栏默认收起 ⇒ 嵌入版刚打开时**一次桥调用都不会发生**（故启动时主动预热一次文库根）。
+
+### 关键口径（实现时定死，改动前先读）
+
+- **宿主桥的 `root` 一律是 `''`**：宿主只认**文库相对路径**（`vault.adapter.*` 的原生口径）。
+  「子目录」表达为应用侧工作区记录的**初始 `path`** ⇒ 换目录仍是普通导航，不会把用户锁在子目录里。
+- **应用侧 3 秒握手超时**：超时或不在 iframe 里 ⇒ 判定非嵌入环境，照旧走 `fsa`/`path`，
+  **同一份产物在浏览器/桌面壳里不受影响**。
+- **iframe 里不注册 Service Worker**（`main.tsx` 的 `isEmbeddedFrame()`）：SW 作用域是 origin，
+  而嵌入版那个 origin 只为本次会话服务、没有 `/sw.js`，且 SW 会跨会话存活。
+- **`.gitignore` 不能"排除目录再 `!` 放行单个文件"**（git 的否定规则对已排除的父目录无效）⇒
+  改为只逐个排除不该入库的文件（`src/gen/buildInfo.ts`）。
+
 
 ---
 
