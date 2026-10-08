@@ -336,8 +336,10 @@ console.log('[3g] adj631 设置面板：多页签 / 收藏音色分类列表 / �
   const mainSrc = String(readFileSync('src/main.ts', 'utf8'))
   const paneSrc = String(readFileSync('src/scorePane.ts', 'utf8'))
   const cssSrc = String(readFileSync('styles.css', 'utf8'))
-  check('⑥a 设置面板有页签栏（页面/字体/行距/渲染/音色库/说明 六个页签，一屏一组）',
-    /SETTINGS_TABS: SettingsTabId\[\] = \['页面', '字体', '行距', '渲染', '音色库', '说明'\]/.test(settingsSrc) &&
+  check('⑥a 设置面板有页签栏（页面/字体/行距/渲染/音色库/**嵌入版**/说明 七个页签，一屏一组）',
+    // adj724b：新增「嵌入版」页签（完整 iJipu 的开关/工作区子目录/主题跟随）。
+    // 本断言按**新口径**更新（不是放宽）：页签集合变了，就用新的完整集合来钉住顺序与命名。
+    /SETTINGS_TABS: SettingsTabId\[\] = \['页面', '字体', '行距', '渲染', '音色库', '嵌入版', '说明'\]/.test(settingsSrc) &&
       /ijipu-settings-tabs/.test(settingsSrc) && /ijipu-settings-tab/.test(cssSrc))
   check('⑥b 收藏音色是**流式分类列表**（分类容器 + 折叠 + 组内 flex-wrap + 工具条全选/全消/反选/搜索）',
     /ijipu-voice-groups/.test(settingsSrc) && /renderVoiceList/.test(settingsSrc) &&

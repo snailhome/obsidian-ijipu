@@ -9,4 +9,22 @@ export type IJipuSettings = Partial<PageConfig> & {
   hqVoice?: number | null
   /** 收藏音色（GM program 集合；试听可选，默认常用音色） */
   hqEnabled?: number[]
+  /**
+   * adj724b（嵌入版）：是否启用**嵌入的完整 iJipu**。
+   *
+   * 打开后：左侧栏出现「爱记谱」图标、打开 `.jps` 用完整编辑器（`embed/appView.ts`）、
+   * 并以当前文库为工作区。关闭后一切回到原来的轻量渲染（`.jps` → textarea + SVG 预览）。
+   *
+   * 注意：这是**界面偏好**（与具体谱无关），按 `docs/SETTINGS-AUDIT.md` 的分层属 **L1**，
+   * 因此**不能**放进 `defs.ts` 的 `DEFS`（那里的键被钉死为 `keyof PageConfig`），
+   * 也不能写进谱面源码。
+   */
+  embedIjuipu?: boolean
+  /**
+   * 嵌入版的工作区子目录（vault 相对路径；留空 = **vault 根**）。
+   * 例：`乐谱` ⇒ 文件树只显示 `乐谱/` 下的 `.jps`。
+   */
+  embedRoot?: string
+  /** 嵌入版是否跟随 Obsidian 主题（默认开） */
+  embedFollowTheme?: boolean
 }

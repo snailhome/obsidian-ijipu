@@ -20,6 +20,16 @@ const context = await esbuild.context({
     '@codemirror/lang-*',
     '@lezer/*',
     ...builtins,
+    /**
+     * adj724b：**`node:` 前缀的内置模块也要 external**。
+     *
+     * `builtin-modules` 给的是**裸名**（`http`/`crypto`/`fs`…），而现代写法用 `node:` 前缀
+     * （`node:http`、`node:crypto`）——两者不匹配，于是 esbuild 会去文件系统找包并报
+     * `Could not resolve "node:http"`。
+     * 嵌入版的本地服务（`src/embed/server.ts`）正需要这两个。
+     * 运行时由 Obsidian 的 Electron 宿主提供（`require('node:http')` 可用）。
+     */
+    'node:*',
   ],
   format: 'cjs',
   target: 'es2020',

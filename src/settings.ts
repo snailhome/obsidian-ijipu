@@ -36,9 +36,9 @@ import type IJipuPlugin from './main'
 // frontmatter 键的唯一约定（= `ijipu_` + 引擎 PageConfig 字段名）在 frontmatter.ts 定义，此处转出供外部复用
 export { frontmatterKey }
 
-/** 设置页签（adj631：一屏一组，减少滚动） */
-export type SettingsTabId = '页面' | '字体' | '行距' | '渲染' | '音色库' | '说明'
-export const SETTINGS_TABS: SettingsTabId[] = ['页面', '字体', '行距', '渲染', '音色库', '说明']
+/** 设置页签（adj631：一屏一组，减少滚动）；adj724b 增「嵌入版」 */
+export type SettingsTabId = '页面' | '字体' | '行距' | '渲染' | '音色库' | '嵌入版' | '说明'
+export const SETTINGS_TABS: SettingsTabId[] = ['页面', '字体', '行距', '渲染', '音色库', '嵌入版', '说明']
 
 /** 复制文本到剪贴板（优先 Clipboard API；失败回退 execCommand，桌面/移动端均可用） */
 async function copyText(text: string, okTip: string): Promise<void> {
@@ -99,6 +99,7 @@ export class IJipuSettingTab extends PluginSettingTab {
       for (const [id, btn] of tabs) btn.toggleClass('is-active', id === this.activeTab)
       panel.empty()
       if (this.activeTab === '音色库') this.renderSoundbank(panel)
+      else if (this.activeTab === '嵌入版') this.renderEmbed(panel)
       else if (this.activeTab === '说明') this.renderAbout(panel)
       else this.renderGroup(panel, this.activeTab)
     }
@@ -252,6 +253,64 @@ export class IJipuSettingTab extends PluginSettingTab {
   }
 
   /** 「音色库」页签：默认音色 + 收藏音色（流式分类列表）+ 高保真音源缓存 */
+  /**
+   * adj724b：**嵌入版**设置组。
+   *
+   * 这几项都是**界面偏好**（属 L1，见 `docs/SETTINGS-AUDIT.md`），与具体谱无关，
+   * 因此只存 `data.json`，**不写进谱面源码**、也不进 `defs.ts` 的 `DEFS`
+   * （那里的键被钉死为 `keyof PageConfig`）。
+   */
+  private renderEmbed(host: HTMLElement): void {
+    new Setting(host)
+      .setName('使用嵌入版 iJipu（完整应用）')
+      .setDesc(
+        '打开后：左侧栏出现「爱记谱」图标，点开即是一个**完整的 iJipu 编辑器**（编辑/排版/试听/导出都在），' +
+          '并以**当前 Obsidian 文库**为工作区——不需要再选文件夹、也不需要文件系统授权。' +
+          '同时，在库里打开 `.jps` 会用这个完整编辑器打开（笔记里嵌入的 `![[xx.jps]]` 仍是轻量预览）。',
+      )
+      .addToggle((tg) => {
+        tg.setValue(this.plugin.settings.embedIjuipu !== false)
+        tg.onChange((v) => {
+          this.plugin.settings.embedIjuipu = v
+          void this.plugin.saveSettings({ from: 'settingsTab' }).then(() => {
+            // 图标显隐 + 关掉时释放本地服务
+            this.plugin.syncEmbedRibbon()
+            if (!v) void this.plugin.disposeEmbed()
+          })
+        })
+      })
+
+    new Setting(host)
+      .setName('工作区子目录')
+      .setDesc('留空 = 以**文库根**为工作区；填了则文件树只显示该子目录下的谱（例：`乐谱`）。')
+      .addText((tx) => {
+        tx.setPlaceholder('（留空 = 文库根）')
+        tx.setValue(this.plugin.settings.embedRoot ?? '')
+        tx.onChange((v) => {
+          this.plugin.settings.embedRoot = v.trim()
+          this.plugin.bridge.setRoot(v.trim().replace(/^\/+|\/+$/g, ''))
+          void this.plugin.saveSettings({ from: 'settingsTab' })
+        })
+      })
+
+    new Setting(host)
+      .setName('跟随 Obsidian 主题')
+      .setDesc('让嵌入版 iJipu 的深浅色跟随 Obsidian（默认开）。')
+      .addToggle((tg) => {
+        tg.setValue(this.plugin.settings.embedFollowTheme !== false)
+        tg.onChange((v) => {
+          this.plugin.settings.embedFollowTheme = v
+          void this.plugin.saveSettings({ from: 'settingsTab' })
+        })
+      })
+
+    const tip = host.createDiv({ cls: 'ijipu-settings-note' })
+    tip.setText(
+      '说明：嵌入版是把整个 iJipu 网页随插件一起分发（不访问网络），文件读写都通过 Obsidian 的文库接口完成；' +
+        '试听首次会按需下载音源并缓存在本地。',
+    )
+  }
+
   private renderSoundbank(host: HTMLElement): void {
     new Setting(host)
       .setName('默认音色')

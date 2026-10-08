@@ -6,6 +6,9 @@ import { IJipuFileView, JPS_EXTENSION, VIEW_TYPE_IJIPU } from './fileView'
 import { createJpsFile, consumeJpsLinkCreate, materializeJpsFile, planJpsLinkCreate, registerJpsFileCreator, unregisterJpsFileCreator, NEW_JPS_TEMPLATE } from './newFile'
 import { replaceCodeBlockBody } from './sourceEdit'
 import type { IJipuSettings } from './types'
+import { IJipuBridge } from './embed/bridge'
+import { startEmbedServer, type EmbedServer } from './embed/server'
+import { IJipuAppView, VIEW_TYPE_IJIPU_APP } from './embed/appView'
 // @ts-ignore esbuild 以 text loader 把 worklet 内联为字符串（main.js 单文件自包含，无需插件目录单独 worklet）
 import workletCode from '../spessasynth_processor.min.js'
 
@@ -36,6 +39,18 @@ export default class IJipuPlugin extends Plugin {
   private workletUrl = ''
   /** adj631：「设置 → iJipu」页签的"就地重画"回调（别处改了插件设置时保持两边显示一致） */
   private settingsRefresh: (() => void) | null = null
+  /**
+   * adj724b（嵌入版）：本地 HTTP 服务 + 桥。
+   *
+   * 服务**懒启动**（第一次需要 iframe 时才起），启动中保存 Promise 以便并发调用共享同一次启动。
+   * 关掉「使用嵌入版 iJipu」或卸载插件时释放。
+   */
+  private embedServer: EmbedServer | null = null
+  private embedServerStarting: Promise<EmbedServer> | null = null
+  /** 桥（vault 读写 + postMessage 路由）；`onload` 里建，因为要读设置 */
+  bridge!: IJipuBridge
+  /** 左侧栏图标元素（设置开关切换时显隐） */
+  private ribbonEl: HTMLElement | null = null
 
   /** 切换排版辅助虚线（显示后可拖动虚线调边距/行距），并通知所有面板重画 */
   toggleGuides(): boolean {
@@ -109,6 +124,31 @@ export default class IJipuPlugin extends Plugin {
 
     // 切换笔记时自动结束所有试听（避免试听继续却失去控制）
     this.registerEvent(this.app.workspace.on('active-leaf-change', () => this.stopAll()))
+
+    /**
+     * ⑦ adj724b（嵌入版）：完整 iJipu 应用页签。
+     *
+     * 三件事：
+     *  ① 建桥（vault 读写 + postMessage 路由）——需要设置，故在 `loadSettings` 之后；
+     *  ② 注册应用视图 + 左侧栏图标（图标显隐由设置项控制，见 `syncEmbedRibbon`）；
+     *  ③ 全局收一条 `message` 监听（两个页签的 iframe 共用同一个桥）。
+     */
+    this.bridge = new IJipuBridge({
+      app: this.app,
+      token: '', // 服务启动后由 syncEmbedToken 填
+      root: '',
+      theme: () => (document.body.classList.contains('theme-dark') ? 'dark' : 'light'),
+    })
+    this.registerView(VIEW_TYPE_IJIPU_APP, (leaf) => new IJipuAppView(leaf, this))
+    this.registerDomEvent(window, 'message', (ev) => {
+      void this.bridge.handle(ev)
+    })
+    this.addCommand({
+      id: 'open-ijipu-app',
+      name: '打开爱记谱（完整应用）',
+      callback: () => void this.openIjipuApp(),
+    })
+    this.syncEmbedRibbon()
   }
 
   /**
@@ -147,12 +187,85 @@ export default class IJipuPlugin extends Plugin {
   onunload(): void {
     // 插件卸载（禁用/重载）时兜底停止所有试听
     this.stopAll()
+    // adj724b：释放本地服务（不释放会占着端口直到 Obsidian 退出）
+    void this.disposeEmbed()
   }
 
   /** 停止所有进行中的试听 */
   stopAll(): void {
     for (const stop of this.playStops) stop()
     this.playStops = []
+  }
+
+  // ───────────────────────── adj724b：嵌入版（完整 iJipu） ─────────────────────────
+
+  /** 嵌入版是否启用（设置开关；未设置视为开，符合"装上就能用"的预期） */
+  get embedEnabled(): boolean {
+    return this.settings.embedIjuipu !== false
+  }
+
+  /**
+   * 取 iframe 要加载的 URL；**懒启动**本地服务。
+   *
+   * 并发调用共享同一次启动（`embedServerStarting`），避免两个页签同时打开时起两个服务。
+   * 服务启动后把 token 与工作区根告知桥。
+   */
+  async getEmbedUrl(): Promise<string | null> {
+    if (!this.embedEnabled && this.embedServer === null) return null
+    if (!this.embedServerStarting) {
+      this.embedServerStarting = startEmbedServer().then((s) => {
+        this.embedServer = s
+        this.bridge.setToken(s.token)
+        // 工作区根 = 设置里的子目录（默认空 = vault 根）
+        this.bridge.setRoot((this.settings.embedRoot ?? '').replace(/^\/+|\/+$/g, ''))
+        return s
+      })
+    }
+    const s = await this.embedServerStarting
+    return s.url
+  }
+
+  /** 左侧栏图标：按设置开关显隐（Obsidian 的 `addRibbonIcon` 返回元素，直接 detach/append） */
+  syncEmbedRibbon(): void {
+    if (this.embedEnabled) {
+      if (!this.ribbonEl) {
+        this.ribbonEl = this.addRibbonIcon('music', '打开爱记谱（完整应用）', () => void this.openIjipuApp())
+        this.ribbonEl.addClass('ijipu-ribbon')
+        // 开发/排错用：控制台直接看到服务地址，便于在浏览器里对照排查
+        void this.getEmbedUrl().then((u) => {
+          if (u) console.log(`[iJipu] 嵌入版服务已就绪：${u}`)
+        })
+      } else if (!this.ribbonEl.isConnected) {
+        // 之前被移除过：重新挂回左侧栏（`addRibbonIcon` 只在首次创建元素）
+        document.querySelector('.workspace-ribbon .side-dock-actions')?.appendChild(this.ribbonEl)
+      }
+    } else if (this.ribbonEl) {
+      this.ribbonEl.detach()
+    }
+  }
+
+  /** 打开「爱记谱」应用页签（已开则聚焦） */
+  async openIjipuApp(): Promise<void> {
+    const { workspace } = this.app
+    let leaf = workspace.getLeavesOfType(VIEW_TYPE_IJIPU_APP)[0]
+    if (!leaf) {
+      const target = workspace.getRightLeaf(false) ?? workspace.getLeaf(true)
+      if (!target) return
+      leaf = target
+      await leaf.setViewState({ type: VIEW_TYPE_IJIPU_APP, active: true })
+    }
+    await workspace.revealLeaf(leaf)
+    // 侧栏可能处于收起状态
+    const dock = workspace.rightSplit
+    if (dock && 'expand' in dock) dock.expand()
+  }
+
+  /** 释放嵌入版服务（关掉开关 / 卸载插件时） */
+  async disposeEmbed(): Promise<void> {
+    const s = this.embedServer
+    this.embedServer = null
+    this.embedServerStarting = null
+    if (s) await s.dispose()
   }
 
   /** 登记/注销一个试听停止函数（供 active-leaf-change 与卸载时统一停止） */

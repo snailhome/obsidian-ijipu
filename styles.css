@@ -839,3 +839,37 @@
 .ijipu-voice-group.is-collapsed .ijipu-voice-rows {
   display: none;
 }
+
+/* ─────────────── adj724b：嵌入版 iJipu（完整应用）─────────────────
+   发布物只有 main.js / manifest.json / styles.css 三个文件，
+   所以网页产物内联在 main.js 里、由插件内的本地 HTTP 服务提供给 iframe。
+   这里只负责"让 iframe 铺满页签、且没有多余内边距"。 */
+.ijipu-web-root {
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.ijipu-web-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+  /* 与 Obsidian 页签背景一致，避免加载瞬间闪白（深浅主题都跟随） */
+  background: var(--background-primary);
+}
+
+.ijipu-web-hint {
+  padding: 12px 14px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  line-height: 1.6;
+}
+
+/* 设置页里的说明文字（与既有 ijipu-settings-note 口径一致） */
+.ijipu-settings-note {
+  margin-top: 10px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.6;
+}
