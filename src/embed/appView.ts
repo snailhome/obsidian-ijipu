@@ -19,12 +19,24 @@ export class IJipuAppView extends ItemView {
   private frame: HTMLIFrameElement | null = null
   /** adj724b：本页签的令牌（`main.ts` 开页签时随 ViewState 传入），用于取"要打开的文件" */
   private openToken = ''
+  /**
+   * adj724b：`onOpen()` 完成（iframe 已挂好）后 resolve。
+   *
+   * 为什么需要：`setViewState()` 返回时 `onOpen` 可能**还没跑完**（它是异步的），
+   * 此刻若外部立刻调 `openFile()` 就会因为 `this.frame` 还是 null 而**静默丢掉**这一次打开
+   * ——正是用户实测「展开了右栏但没打开文件」的一种成因。
+   */
+  private frameReady: Promise<void> = Promise.resolve()
+  private markFrameReady: (() => void) | null = null
 
   constructor(
     leaf: WorkspaceLeaf,
     private readonly plugin: IJipuPlugin,
   ) {
     super(leaf)
+    this.frameReady = new Promise<void>((resolve) => {
+      this.markFrameReady = resolve
+    })
   }
 
   getViewType(): string {
@@ -45,8 +57,10 @@ export class IJipuAppView extends ItemView {
     contentEl.addClass('ijipu-web-root')
 
     /**
-     * 取本页签"要打开的文件"：`main.ts` 开页签时把令牌放进 `ViewState.state`，
-     * `ItemView` 的既有机制会经 `getState()` 交回来。取到即从待办表摘掉（一次性）。
+     * adj724b：本页签的令牌来自 `ViewState.state`（`main.ts` 开页签时放入）。
+     * ⚠ 只在**没有**用 `openFile()` 直接驱动的情况下才需要它——见 `openFile()` 的说明：
+     * 复用同一个 leaf 时 Obsidian **不会重建视图**，`onOpen` 也不会再跑，
+     * 那条路径完全依赖 `plugin.openEmbedLeaf()` 拿到本视图后直接调用。
      */
     const st = this.getState() as { openToken?: string } | null
     this.openToken = typeof st?.openToken === 'string' ? st.openToken : ''
@@ -59,21 +73,38 @@ export class IJipuAppView extends ItemView {
         cls: 'ijipu-web-hint',
         text: '嵌入版未启用（请在「设置 → iJipu」里打开「使用嵌入版 iJipu」）',
       })
+      this.markFrameReady?.()
       return
     }
 
     const frame = createEmbedFrame(this.app, contentEl, url)
     fitEmbedFrame(frame)
     this.frame = frame
-    /**
-     * adj724b：登记这个页签"待打开的文件"。
-     *
-     * 应用加载完成后会发 `ready`，桥**此刻**才把这个路径推给它——
-     * 推早了应用还没装监听，消息会丢（表现为"打开 `.jps` 却是空白/未命名"）。
-     */
-    this.plugin.bridge.attach(frame, pending)
+    this.plugin.bridge.attach(frame)
+    // 首次打开时，把"要打开的文件"交给桥（应用 `ready` 后下发；此后 `openFile()` 可直接推）
+    if (pending !== undefined && pending !== '') this.plugin.bridge.openFile(frame, pending)
+    // 告诉等待者"iframe 已就绪"（此后 `openFile()` 才有 frame 可用）
+    this.markFrameReady?.()
 
     // 桥的消息监听：由插件统一注册（见 main.ts），此处只负责登记/摘除 iframe
+  }
+
+  /**
+   * adj724b：**让本视图打开一份谱**（由 `main.ts` 的 `openEmbedLeaf()` 直接调用）。
+   *
+   * 为什么不能只靠 `ViewState.state` + `onOpen()`：**复用同一个 leaf 时 Obsidian 不重建视图**，
+   * `onOpen` 不会再跑 ⇒ 令牌没人读 ⇒ 表现为"只展开了右栏、应用里没打开文件"（用户实测 ①②）。
+   * 直接拿视图实例调用就没有这个问题：
+   *  · 应用**已就绪** ⇒ 桥立刻推 `openFile`；
+   *  · 还没就绪（首次打开右栏）⇒ 桥记下来，等 `ready` 补发。
+   *
+   * 先 `await frameReady`：`setViewState()` 返回时 `onOpen` 可能还没跑完（见字段说明），
+   * 不 await 会把这一次打开静默丢掉。
+   */
+  async openFile(path: string): Promise<void> {
+    await this.frameReady
+    if (!this.frame) return
+    this.plugin.bridge.openFile(this.frame, path)
   }
 
   async onClose(): Promise<void> {

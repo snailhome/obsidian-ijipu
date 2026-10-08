@@ -368,6 +368,31 @@ console.log('[3g] adj631 设置面板：多页签 / 收藏音色分类列表 / �
       /getRightLeaf\(false\)/.test(mainSrc) &&
       /target = workspace\.getLeaf\('tab'\)/.test(mainSrc))
   /**
+   * adj724b（用户实测 ①②）：「点 `.jps` 只展开了右栏/切了页签，但应用里没打开那份谱」。
+   *
+   * 根因：原先靠 `ViewState.state` 的令牌让 `onOpen()` 去取"要打开的文件"，
+   * 而这依赖"`setViewState()` 会重建视图"这个**不成立的假设**——
+   * **复用同一个 leaf 时 Obsidian 不重建视图**，`onOpen` 不再跑 ⇒ 令牌没人读。
+   *
+   * 断言：打开路径必须是"**拿到视图实例直接驱动**"，且视图侧要**等 iframe 就绪**
+   * （`setViewState()` 返回时 `onOpen` 可能还没跑完，不等就会静默丢掉这一次打开）。
+   */
+  {
+    const appViewSrc = String(readFileSync('src/embed/appView.ts', 'utf8'))
+    const bridgeSrc2 = String(readFileSync('src/embed/bridge.ts', 'utf8'))
+    check('adj724b 打开 `.jps` 由"直接驱动视图实例"完成（不依赖 setViewState 重建视图），且视图等待 iframe 就绪',
+      /const view = target\.view as unknown as \{ openFile\?:/.test(mainSrc) &&
+        /await view\.openFile\(file\.path\)/.test(mainSrc) &&
+        // 视图侧：openFile 先 await frameReady（否则 this.frame 还是 null ⇒ 这一次打开被丢掉）
+        /async openFile\(path: string\): Promise<void> \{[\s\S]{0,200}?await this\.frameReady/.test(appViewSrc) &&
+        // 桥：应用就绪后可直接推
+        /openFile\(frame: HTMLIFrameElement, path: string\): void \{[\s\S]{0,300}?info\.ready[\s\S]{0,140}?emitTo\(frame, 'openFile'/.test(
+          bridgeSrc2,
+        ) &&
+        // 未就绪则记下来，`ready` 时补发
+        /if \(info\.ready\) \{[\s\S]{0,160}?info\.pendingOpen = path/.test(bridgeSrc2))
+  }
+  /**
    * adj724b：原「收藏音色」页签（`renderVoiceList` 流式分类列表）**已随设置整并删除**。
    *
    * 这里不再断言它存在，而是断言**它确实不在了**——音色选择只保留在嵌入版 iJipu 里

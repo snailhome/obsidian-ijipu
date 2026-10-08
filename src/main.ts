@@ -391,11 +391,28 @@ export default class IJipuPlugin extends Plugin {
     }
     if (!target) return
 
-    const token = `ijipu-${++this.leafSeq}`
-    if (file) this.pendingOpenPaths.set(token, file.path)
-    // 已在目标页签上打开时，setViewState 仍是幂等的（同类型不会重建视图）
-    await target.setViewState({ type: VIEW_TYPE_IJIPU_APP, active: true, state: { openToken: token } })
+    /**
+     * adj724b：**先切到这个 leaf**，再**直接驱动视图**打开文件。
+     *
+     * 早先的做法是把路径塞进 `pendingOpenPaths` 并靠 `ViewState.state` 里的令牌让
+     * `onOpen()` 去取——但那依赖"`setViewState()` 会重建视图"这个不成立的假设：
+     * **复用同一个 leaf 时 Obsidian 不会重建视图**，`onOpen` 不再跑 ⇒ 令牌没人读 ⇒
+     * 表现为"只展开了右栏/切了页签，应用里没打开文件"（用户实测 ①②）。
+     */
+    await target.setViewState({ type: VIEW_TYPE_IJIPU_APP, active: true })
     await workspace.revealLeaf(target)
+    if (!file) return
+
+    const view = target.view as unknown as { openFile?: (path: string) => void | Promise<void> }
+    if (typeof view.openFile === 'function') {
+      // 视图已存在（新建成复用都算）⇒ 直接交给它；应用未就绪时桥会记下来，`ready` 后补发
+      await view.openFile(file.path)
+    } else {
+      // 兜底：视图实现变了（拿不到 `openFile`）⇒ 退回令牌机制
+      const token = `ijipu-${++this.leafSeq}`
+      this.pendingOpenPaths.set(token, file.path)
+      await target.setViewState({ type: VIEW_TYPE_IJIPU_APP, active: true, state: { openToken: token } })
+    }
   }
 
   /** 释放嵌入版服务（关掉开关 / 卸载插件时） */

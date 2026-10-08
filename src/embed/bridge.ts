@@ -95,7 +95,7 @@ export class IJipuBridge {
    * （「爱记谱」应用页签 + 若干个 `.jps` 文件页签），各自独立。
    * 应用加载完成发 `ready` 时，才把对应的文件推给它（推早了应用还没装监听）。
    */
-  private readonly frames = new WeakMap<HTMLIFrameElement, { pendingOpen?: string }>()
+  private readonly frames = new WeakMap<HTMLIFrameElement, { pendingOpen?: string; ready?: boolean }>()
 
   constructor(private readonly host: BridgeHost) {}
 
@@ -114,9 +114,17 @@ export class IJipuBridge {
     return this.host.root
   }
 
-  /** 某个视图挂载 iframe 后登记（`postMessage` 需要它作为 target）；`pendingOpen` = 该页签要打开的文件 */
-  attach(frame: HTMLIFrameElement, pendingOpen?: string): void {
-    this.frames.set(frame, { pendingOpen })
+  /**
+   * 某个视图挂载 iframe 后登记（`postMessage` 需要它作为 target）。
+   *
+   * adj724b：**不再接收 `pendingOpen`** —— 早先的"把待打开文件随视图登记带进去"依赖
+   * `setViewState()` 会重建视图，但**复用同一个 leaf 时 Obsidian 不会重建视图**，
+   * 于是"点 `.jps` 只展开了右栏、应用里没打开文件"（用户实测 ①②）。
+   * 现在改为 `main.ts` 拿到视图实例后直接调 `view.openFile(path)`（见 `openFile` 方法）。
+   */
+  attach(frame: HTMLIFrameElement): void {
+    const prev = this.frames.get(frame)
+    this.frames.set(frame, prev ?? {})
     if (!this.list.includes(frame)) this.list.push(frame)
   }
 
@@ -124,8 +132,24 @@ export class IJipuBridge {
     this.frames.delete(frame)
   }
 
+  /**
+   * adj724b：让**某个具体** iframe 打开一份谱。
+   *
+   * 应用**已就绪**（发过 `ready`）⇒ 立刻推 `openFile`；
+   * 还没就绪 ⇒ 记下来，等它 `ready` 时补发（也就是首次打开右栏的那一次）。
+   */
+  openFile(frame: HTMLIFrameElement, path: string): void {
+    const info = this.frames.get(frame)
+    if (!info) return
+    if (info.ready) {
+      this.emitTo(frame, 'openFile', { path })
+      return
+    }
+    info.pendingOpen = path
+  }
+
   /** 该 iframe 是否已登记（用于校验消息来源） */
-  private entryOf(event: MessageEvent): { frame: HTMLIFrameElement; pendingOpen?: string } | null {
+  private entryOf(event: MessageEvent): { frame: HTMLIFrameElement; pendingOpen?: string; ready?: boolean } | null {
     for (const [frame, info] of this.iterFrames()) {
       if (frame.contentWindow === event.source) return { frame, ...info }
     }
@@ -133,7 +157,7 @@ export class IJipuBridge {
   }
 
   /** 遍历已登记且仍在文档里的 iframe（`WeakMap` 不可枚举，故维护一份数组） */
-  private iterFrames(): [HTMLIFrameElement, { pendingOpen?: string }][] {
+  private iterFrames(): [HTMLIFrameElement, { pendingOpen?: string; ready?: boolean }][] {
     this.list = this.list.filter((f) => f.isConnected)
     return this.list.map((f) => [f, this.frames.get(f) ?? {}])
   }
@@ -176,12 +200,19 @@ export class IJipuBridge {
       return true
     }
     /**
-     * ③ `ready`：应用已挂好监听 ⇒ 现在才把"这个页签要打开的文件"推给它。
-     * 推早了应用还没装监听（`openFile` 会丢），推晚了用户会先看到一个空工作区。
+     * ③ `ready`：应用已挂好监听 ⇒ 标记该 iframe 就绪，并把"欠它的那份文件"补发过去。
+     *
+     * 推早了应用还没装监听（`openFile` 会丢）；标记之后，`openFile()` 就能**立刻**下发，
+     * 因此"应用已经开着、再点另一个 `.jps`"也能正确切换（用户实测 ①② 的修复点之一）。
      */
     if (data.type === 'ready') {
-      if (entry.pendingOpen !== undefined && entry.pendingOpen !== '') {
-        this.emitTo(entry.frame, 'openFile', { path: entry.pendingOpen })
+      const info = this.frames.get(entry.frame)
+      if (info) {
+        info.ready = true
+        if (info.pendingOpen !== undefined && info.pendingOpen !== '') {
+          this.emitTo(entry.frame, 'openFile', { path: info.pendingOpen })
+          info.pendingOpen = undefined
+        }
       }
       return true
     }

@@ -153,11 +153,12 @@ export class IJipuFileView extends TextFileView {
   /** adj724b：嵌入的完整 iJipu（整页 `.jps` 时用；`![[xx.jps]]` 嵌入态不用） */
   private embedFrame: HTMLIFrameElement | null = null
   /**
-   * adj724b：本页签是否已经把"打开这份谱"路由到设置指定的位置。
+   * adj724b：本页签是否已经把"打开这份谱"路由到设置指定的位置（记的是**文件路径**）。
    *
-   * 视图会因保存/frontmatter 变化重画，而路由只能做一次——否则每存一次就再开一个新页签。
+   * 视图会因保存/frontmatter 变化重画，而路由只能做一次——否则每存一次就再开一个新页签；
+   * 但**换文件**时必须重新路由（记路径而不是布尔值，就是为了这个）。
    */
-  private embedRouted = false
+  private embedRoutedFor: string | null = null
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -239,8 +240,9 @@ export class IJipuFileView extends TextFileView {
     const file = this.file
     if (!file) return
     const mode = this.plugin.settings.embedOpenMode ?? DEFAULT_EMBED_OPEN_MODE
-    if (!this.embedRouted) {
-      this.embedRouted = true
+    // 视图被复用来打开**另一个**文件时，路由标记要重置（否则新文件不会被路由）
+    if (this.embedRoutedFor !== file.path) {
+      this.embedRoutedFor = file.path
       // 异步跳：`render()` 是同步的，而 `openIjipuFile()` 要 await（服务启动/页签状态）
       window.setTimeout(() => void this.plugin.openIjipuFile(file), 0)
     }
