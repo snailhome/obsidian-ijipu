@@ -21,8 +21,15 @@ copy2ob.bat
 build *.bat
 dist-*.js
 dist-smoke/
-# adj407：构建信息（scripts/gen-build-info.mjs 生成，勿入库）——设置页显示的「构建 日期 时间 @commit」
-src/gen/
+# adj407 + adj724b：`src/gen/` 里有两类文件，待遇**相反**——
+#   · `buildInfo.ts`：`scripts/gen-build-info.mjs` 每次构建重新生成（含时间戳/commit）⇒ **不入库**
+#   · `webappAssets.ts`：嵌入版网页产物，由 ijipu 仓库生成但**必须入库**
+#     （本仓库 CI 只 checkout 自己、且没有 React 等前端构建依赖，拿不到 ijipu 的 dist，
+#      与 vendor/engine 同一套路）
+# ⚠ git 的否定规则 `!` **不能用于"父目录已被排除"**的情况
+#   （写了 `src/gen/` 再写 `!src/gen/webappAssets.ts` 是**无效**的，实测 `git check-ignore` 仍报忽略）
+#   ⇒ 不能排除整个 `src/gen/`，只能**逐个**排除其中不该入库的文件。
+src/gen/buildInfo.ts
 # adj390：发布正文临时产物（scripts/release-body.mjs 生成，只含当前版本）
 # 带版本号的（release-body-<版本>.md）用于补历史 Release，见 docs/RELEASE-NOTES-ARCHIVE.md 的用法
 release-body.md
