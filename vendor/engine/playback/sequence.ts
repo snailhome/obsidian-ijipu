@@ -21,7 +21,7 @@ import type {
   VoiceBlock,
 } from '../types'
 import { tokenDuration } from '../duration'
-import { parseKey, pitchToName, isJumpOrEndBarline } from '../layout/index'
+import { parseKey, pitchToName, isVoltaCloserBarline } from '../layout/index'
 import { graceGroupBeats, gracePerNoteBeats } from '../layout/spaceLayout'
 // adj629d：段层/替谱音符 id 判定（试听"点音符跳过去"要按 id 精确命中事件）
 import { decodeSegmentNoteId, decodeTpNoteId } from '../layout/segments'
@@ -159,6 +159,13 @@ interface SeqItem {
     voltaEndSlash?: boolean
     /** adj627/adj665：临时转调指令（小节线引号备注 `"d:<key>"` / `"d:"`）——见走查里的 `curKey` */
     keyChange?: PlacedBarline['keyChange']
+    /** adj723aa：小节线自己的引号备注（旧式跳房子的番号写在这里，如 `|"1." [ …`） */
+    comment?: string
+    /**
+     * adj723aa：小节线的**源码原文**——跳房子配对要按 `raw` 里 `[`/`]` 的**出现顺序**判定
+     * （同一根线上可能既有 `]` 又有 `[`，如 `|]["2."`；「`]` 写在 `[` 前面」）。
+     */
+    raw?: string
   }
 }
 
@@ -700,6 +707,14 @@ export function buildPlaySequence(
             voltaEndSlash: token.voltaEndSlash,
             // adj627/adj665：临时转调（小节线引号备注 `"d:..."`）——播放走查据此切调，见 `curKey`
             keyChange: token.keyChange,
+            /**
+             * adj723aa：**小节线自己的引号备注**也要带进走查。
+             * 旧式跳房子把番号写在这里（`|"1." [ …`，示例谱 `fanfu-tiaofangzi`），
+             * `voltaStart` 却落在随后的 `[` 线上——不带上它，那种房子就建不出计数器。
+             */
+            comment: token.comment,
+            // adj723aa：源码原文（跳房子配对按 raw 里 `[`/`]` 的出现顺序判定）
+            raw: token.raw,
           },
         }
         ls.bars.push({ items: [], bar: null })
@@ -742,6 +757,9 @@ export function buildPlaySequence(
     let voltaEndSlash: boolean | undefined
     // adj627：多声部同一根线上的转调指令（各声部写法一致 ⇒ 取首个非空）
     let keyChange: PlacedBarline['keyChange']
+    // adj723aa：小节线引号备注（旧式跳房子番号）——同样取首个非空；`raw` 取**首个非空**（配对要看 `[`/`]` 顺序）
+    let comment: string | undefined
+    let raw: string | undefined
     for (const it of bars) {
       const b = it.bar as PlacedBarline
       for (const m of b.marks ?? []) marks.add(m)
@@ -749,9 +767,14 @@ export function buildPlaySequence(
       if (voltaEnd === undefined) voltaEnd = b.voltaEnd
       if (voltaEndSlash === undefined) voltaEndSlash = b.voltaEndSlash
       if (keyChange === undefined) keyChange = b.keyChange
+      if (comment === undefined) comment = b.comment
+      if (raw === undefined && (b.raw ?? '') !== '') raw = b.raw
     }
     const first = bars[0].bar as PlacedBarline
-    return { kind: 'bar', bar: { type: first.type, marks: [...marks], voltaStart, voltaEnd, voltaEndSlash, keyChange } }
+    return {
+      kind: 'bar',
+      bar: { type: first.type, marks: [...marks], voltaStart, voltaEnd, voltaEndSlash, keyChange, comment, raw },
+    }
   }
   // 组装成 `seq`：单元 = 连续曲行（声部号在本单元内重复即另起单元，与排版同一规则；分页标记也断单元）
   {
@@ -824,37 +847,68 @@ export function buildPlaySequence(
   // adj359：指向 voltaEnd「本小节线」而非其后一位——使 `:|]["2."`（共用一根线：volta1 结束 + volta2 开始）
   // 在跳过 volta1 后仍能处理该线上的 volta2 番号
   /**
-   * adj598（用户口径）：**"下一处跳跃或结束"**的小节线判据——
-   * 反复线 `:|`/`:|:`、结束线 `||`/`||/`，以及带 `&ds`（跳花 S）/`&dc`（从头反复）/`&fine`（曲终）修饰的线。
-   * 未封闭房子 `|["n." … |]/` 的终点就取**其后第一根**这样的线（见下）。
-   * adj627b：判据本身抽到了布局端 `isJumpOrEndBarline`——**转调复原（走查里的 `curKey`）与本处房子终点
-   * 必须同一口径**，两处各写一份迟早会漂。
+   * adj723aa（用户口径）：未封闭房子（`|]/`）的末尾线 = **其后最近的 `:|` / `:|:` / `&dc` / `&ds` / `&fine`**
+   * （**不含** `||`/`||/`）——判据本体在 `layout/index.ts` 的 `isVoltaCloserBarline`。
+   *
+   * `&fine` 分两张表（用户口径：「经过 `&dc`/`&ds` 跳跃后，再进入跳房子，如果这个跳房子里有
+   * `&fine` 则以此作为末尾，否则以其后面的**非 `&fine`** 的反复或跳跃作为末尾」）：
+   *  · `voltaAfterStrict`：**不含 `&fine`**（跳跃前用）；
+   *  · `voltaAfterWithFine`：**含 `&fine`**（跳跃后用）。
    */
-  const isJumpOrEndBar = (it: SeqItem): boolean =>
-    it.kind === 'bar' && !!it.bar && isJumpOrEndBarline(it.bar)
-  const voltaAfter = new Map<number, number>()
+  const isStrictCloserBar = (it: SeqItem): boolean =>
+    it.kind === 'bar' && !!it.bar && isVoltaCloserBarline(it.bar, false)
+  /** 仅反复线（`:|`/`:|:`）——未封闭房子末尾线的**首选** */
+  const isRepeatBar = (it: SeqItem): boolean =>
+    it.kind === 'bar' && !!it.bar && (it.bar.type === ':|' || it.bar.type === ':|:')
+  /** 含 `&fine` 的末尾线（跳跃后备用） */
+  const isFineOrStrictCloserBar = (it: SeqItem): boolean =>
+    it.kind === 'bar' && !!it.bar && isVoltaCloserBarline(it.bar, true)
+  const voltaAfterRepeat = new Map<number, number>()
+  const voltaAfterStrict = new Map<number, number>()
+  const voltaAfterWithFine = new Map<number, number>()
+  /**
+   * adj723aa（用户口径，2026-10）：**按 `raw` 里 `[` / `]` 的"出现顺序"配对**。
+   *
+   * 用户原话：「同小节线后有结束符 `]` 有开始符 `[` 时，**结束符 `]` 写在开始符 `[` 前面**，
+   * 但需要注意小节线、`]`、`[` 之间可能会有穿插其它修饰符」。
+   *
+   * 为什么不能只看 `voltaEnd`/`voltaStart` 两个布尔量：同一根 token 上可能**既有 `]` 又有 `[`**
+   * （`|]["2."`，画法上就是同一根竖线），而两者的**先后**决定了谁关谁开——
+   * 合并成一个 token 会让上一个房子**找不到自己的末尾线**。此处按 `raw` 的出现顺序用栈配对，
+   * **不改解析模型、不改画法**。
+   */
   const pendingStarts: number[] = []
-  seq.forEach((item, si) => {
-    if (item.kind !== 'bar') return
-    // 先收尾（voltaEnd 出栈配对）再开新（voltaStart 入栈）——`:|]["2."` 同一根线上
-    // 同时有 voltaEnd（结束上一房子）与 voltaStart（开始下一房子）时，若先入栈会把自身配成自己的末尾（死循环）
-    if (item.bar?.voltaEnd && pendingStarts.length > 0) {
-      const start = pendingStarts.pop()!
-      // adj360：未封闭房子（|]/）延续到其后第一个「跳跃小节线 :|/：|:」或「结束小节线 ||/||/」处；
-      // 已封闭房子（|]）就以该末尾小节线为界
-      // adj598（用户口径，更严格）：未封闭房子是"**演奏到下一个跳跃或结束**"——
-      // 除 `:|`/`:|:`/`||`/`||/` 外，**带 `&ds`/`&dc`/`&fine` 修饰的小节线同样算**（见 `isJumpOrEndBar`）。
-      // 落到那根线时，它自己的"跳跃/结束"动作照常执行（走查里已按此处理。
-      // 旧口径只认反复/结束线型 ⇒ 房子会一路吞到更远的 `:|`，把本不该跳的音乐也吞掉。
-      if (item.bar.voltaEndSlash) {
-        const ext = seq.findIndex((it, k) => k > si && isJumpOrEndBar(it))
-        voltaAfter.set(start, ext >= 0 ? ext : si)
-      } else {
-        voltaAfter.set(start, si)
+  /** 按出现顺序处理每根线的 `[`/`]`：`[` 入栈、`]` 关掉最近一个未闭合的 `[` */
+  for (let si = 0; si < seq.length; si++) {
+    const item = seq[si]
+    if (item.kind !== 'bar' || !item.bar) continue
+    const raw = String((item.bar as { raw?: string }).raw ?? '')
+    const order: string[] = [...raw].filter((c) => c === '[' || c === ']')
+    // 兜底：`raw` 缺失时退回布尔量（老数据/段层合成项）
+    const seq2 = order.length > 0 ? order : [...(item.bar.voltaStart ? ['['] : []), ...(item.bar.voltaEnd ? [']'] : [])]
+    if (seq2.length === 0) continue
+    for (const ch of seq2) {
+      if (ch === '[') {
+        pendingStarts.push(si)
+      } else if (pendingStarts.length > 0) {
+        const start = pendingStarts.pop()!
+        if (item.bar.voltaEndSlash) {
+          // 未封闭房子（`|]/`）：末尾线优先取 `:|`/`:|:`，其次跳跃线
+          const rep = seq.findIndex((it, k) => k > si && isRepeatBar(it))
+          const strict = seq.findIndex((it, k) => k > si && isStrictCloserBar(it))
+          const withFine = seq.findIndex((it, k) => k > si && isFineOrStrictCloserBar(it))
+          voltaAfterRepeat.set(start, rep >= 0 ? rep : si)
+          voltaAfterStrict.set(start, strict >= 0 ? strict : si)
+          voltaAfterWithFine.set(start, withFine >= 0 ? withFine : si)
+        } else {
+          // 已封闭房子（`|]`）：就以该末尾小节线为界（各表一致）
+          voltaAfterRepeat.set(start, si)
+          voltaAfterStrict.set(start, si)
+          voltaAfterWithFine.set(start, si)
+        }
       }
     }
-    if (item.bar?.voltaStart) pendingStarts.push(si)
-  })
+  }
 
   // 3b. adj359：跳跃展开的预计算
   // - 花 S（&hs）位置：&ds 跳到「全曲第一个 hs」之后（hs 通常写在 ds 之前）
@@ -862,26 +916,19 @@ export function buildPlaySequence(
   // - 每个 :| 的反复遍数 = 「本段内到该线为止出现的 :| 个数 + 1」
   //   （`|: A :|` 2 遍；`|: A |[1. B :|][2. C :|] D` 该段两个 :| → 3 遍，末遍两 volta 皆跳过）
   const segnoIdx = seq.findIndex((it) => it.kind === 'bar' && it.bar?.marks?.includes('hs'))
-  const hasBigRepeat = seq.some(
-    (it) => it.kind === 'bar' && (it.bar?.marks?.includes('dc') || it.bar?.marks?.includes('ds')),
-  )
   /**
-   * adj368：跳房子标签分类——
-   *  - `num`：引号注释里有数字（`["1."`/`["2."`）→ 番号 = 该遍才演奏
-   *  - `text`：引号注释里有文字但无数字（如 `["结束句"`）→ **末遍**房子（本段后续遍次奏响，见 segMaxPass）
-   *  - `none`：无注释 → 按第 1 遍（旧行为：第 2 遍起跳过）
+   * adj723aa（用户口径，2026-10）：**`&ds` 要有对应的花 S（`&hs`）才生效**。
    *
-   * adj653（用户要求，**重叠跳房子**）：数字**取全部**而不只是第一个——
-   * `["2.3."` 表示「第 2 遍和第 3 遍**共用**这一段房子」（用户原话："这里第二、第三个反复里
-   * 跳房子 2 和跳房子 3 的部分是重叠的，以 `["2.3."` 来标记"）。于是 `nums = [2,3]`，
-   * 判据从"番号 == 本遍"变成"**本遍 ∈ nums**"。`["1."` 这类单号房子 nums=[1]，行为与旧版一致。
+   * 用户原话：「**`&ds` 前面没有对应的 `&hs`，因此 `&ds` 应该要不起作用**」——`&ds`（D.S.）的语义是
+   * "跳回花 S"，没有花 S 就没有落点，**不能退回"跳到曲首"**（那是 `&dc` 的语义）。
+   * 旧实现在 `segnoIdx < 0` 时 `i = 0`，等于把 `&ds` 当成了 `&dc`（实测 `adj598` 因此多奏一遍）。
    */
-  const voltaLabelOf = (it: SeqItem): { kind: 'num' | 'text' | 'none'; nums: number[] } => {
-    const c = it.kind === 'bar' ? it.bar?.voltaStart?.comment : undefined
-    if (!c || c.trim() === '') return { kind: 'none', nums: [1] }
-    const nums = [...c.matchAll(/\d+/g)].map((m) => Number(m[0]))
-    return nums.length > 0 ? { kind: 'num', nums } : { kind: 'text', nums: [] }
-  }
+  const dsEffective = segnoIdx >= 0
+  const hasBigRepeat = seq.some(
+    (it) =>
+      it.kind === 'bar' &&
+      (it.bar?.marks?.includes('dc') === true || (dsEffective && it.bar?.marks?.includes('ds') === true)),
+  )
   const repeatCountAt = new Map<number, number>()
   {
     let endCount = 0
@@ -913,30 +960,148 @@ export function buildPlaySequence(
     })
   }
   /**
-   * adj368：每段「最终遍数」——用于「结束句」这类文字标签房子（无番号可依，语义 = 末遍才奏）。
-   * 段 = 最近一个 `|:`（或曲首）起、到下一个 `|:` 之前；段内最后一个 `:|` 的遍数即最终遍数
-   * （无 `:|` 则该段只奏 1 遍）。D.S./D.C. 造成的额外遍次 `pass` 更大，同样视为末遍之后 → 奏响。
+   * adj723aa：原先的「每段最终遍数」`segMaxPass`（`adj368`）**已删除**——它只服务于
+   * 「`["结束句"` = 末遍才奏」这一条旧口径。用户 2026-10 改为**按房子自己的计数器**判定后，
+   * `["结束句"` 与 `["结束句."` 都只是"计数 1"（无数字 → 计数按 `.` 分隔段数算），
+   * 故不再需要"段内最终遍数"这个量。
    */
-  const segMaxPass: number[] = new Array(seq.length).fill(1)
-  {
-    let segStart = 0
-    const fill = (from: number, to: number) => {
-      let max = 1
-      for (let k = from; k < to; k++) {
-        const c = repeatCountAt.get(k)
-        if (c !== undefined && c > max) max = c
-      }
-      for (let k = from; k < to; k++) segMaxPass[k] = max
-    }
-    seq.forEach((it, k) => {
-      if (k > segStart && it.kind === 'bar' && (it.bar?.type === '|:' || it.bar?.type === '||:')) {
-        fill(segStart, k)
-        segStart = k
-      }
-    })
-    fill(segStart, seq.length)
-  }
 
+  /**
+   * adj723aa（用户口径，2026-10）：**跳房子按"自己的计数器"决定奏/路过**。
+   *
+   * 用户原话：「跳房子里注释里的 `1.2.3.` 只是**注释给人看的**，关键信息在于这段跳房子
+   * **要演奏几遍**，因此规定了用 `.` 来分隔遍次信息以得到**计数值**；跳房子只需关注
+   * **演奏到跳房子起点处时，跳房子还有没有计数**；而通常跳房子里的最后通过有 `:|`
+   * 或者 `&dc`、`&ds`、`&fine` 进行跳跃或结束」；并补充「**`["n."` 计数是 1、至少要走一遍，
+   * 也就是进入跳房子范围后才计数减 1**」、「**无注释房子也需要计数为 1**」。
+   *
+   * 实现：
+   *  · 计数 = 注释里 `.` 分隔的**非空段数**，不小于 1（无注释 ⇒ 1）；
+   *  · 走到房子起点：`voltaLeft > 0` ⇒ **奏**（登记"在房子里"）；`= 0` ⇒ **路过**（跳到末尾线）；
+   *  · **减一发生在"走过房子内容、到它末尾线"时**（进入范围才算用掉一次）。
+   *
+   * ⚠ **两种写法的注释位置不同**，都要认（实测）：
+   *  · 新式 `|["1." 2 :|]` ⇒ 注释在房子起点线的 `voltaStart.comment`；
+   *  · 旧式 `|"1." [ 4 4 5 :| "2." ]`（示例谱 `fanfu-tiaofangzi`）⇒ **数字写在 `[` 之前那根
+   *    `|` 小节线自己的 `comment` 上**，`voltaStart` 落在随后的 `[` 线上。
+   *    只认前者会让旧式房子**建不出计数器** ⇒ 第 2 遍不跳过（示例谱 16 音符变 19）。
+   */
+  /**
+   * adj723aa（用户口径，2026-10）：**注释相同的跳房子是"同一个房子"**。
+   *
+   * 用户原话：「不同位置的跳房子，**如果注释相同，视为相同跳房子，在同一反复中演奏**；
+   * 注释不同，视为不同的跳房子，在不同的反复中演奏。按演奏顺序，**第一次遇到的跳房子为第 1 次
+   * 反复中演奏，而后面相同注释的跳房子也都在第 1 次反复中演奏**。跳房子注释只关系到：
+   * a、注释是否相同；b、演奏计数。」
+   *
+   * 故计数器**按注释分组**（`voltaLeftByComment`），而不是按小节线位置：
+   * 同一注释的所有房子**共用一份计数**，走到其中任何一个都从那份额度里扣。
+   * 无注释的房子退回按位置各记一份（计数 1）。
+   */
+  const voltaLimitByComment = new Map<string, number>()
+  const voltaLimitByIndex = new Map<number, number>()
+  /** 每根房子起点线的注释（规范化后；空串 = 无注释） */
+  const voltaCommentAt = new Map<number, string>()
+  for (let k = 0; k < seq.length; k++) {
+    const it = seq[k]
+    if (it.kind !== 'bar' || !it.bar?.voltaStart) continue
+    /**
+     * 注释只从**本线的 `voltaStart`** 取；本线没有时才回看上一根小节线自己的 `comment`
+     * （旧式 `|"1." [ …` 把番号写在 `[` 之前那根 `|` 上）。
+     *
+     * ⚠ **不能无条件回看**：`|["1." 3 3 |]/` 这种把注释写在**房子起点之前那根 `|`** 上的写法，
+     * 走查是在那根 `|` 处**平移到下一个房子**——若在 `[` 线上回看 `|` 的注释，
+     * 就会把**同一个番号**再当成一个房子，于是房子计数永不扣减、大反复后重复奏
+     * （实测 `adj598` 从 12 音变 20 音）。
+     */
+    const own = (it.bar.voltaStart.comment ?? '').trim()
+    const prev = seq[k - 1]
+    const prevBar = prev?.kind === 'bar' ? prev.bar : undefined
+    const raw =
+      own !== ''
+        ? own
+        : // 旧式回看：仅当前一根**不是**房子起点时才认它（否则那根自己就是一个房子，见上）
+          prevBar && !prevBar.voltaStart
+          ? (prevBar.comment ?? '').trim()
+          : ''
+    const count = raw === '' ? 1 : Math.max(1, raw.split('.').filter((s) => s.trim() !== '').length)
+    voltaCommentAt.set(k, raw)
+    if (raw === '') voltaLimitByIndex.set(k, count)
+    else if (!voltaLimitByComment.has(raw)) voltaLimitByComment.set(raw, count)
+  }
+  /** 各注释组"还能走几次"——**进入下一遍次时**扣一次（见 `settlePassVolta`） */
+  const voltaLeftByComment = new Map(voltaLimitByComment)
+  const voltaLeftByIndex = new Map(voltaLimitByIndex)
+  /**
+   * 各注释组的**遍次号**（1 起）——**按出现顺序**编号（顺序是逻辑；注释里的数字仍是给人看的）。
+   *
+   * adj723aa（用户口径，2026-10）：「**不同注释本就属于不同遍次的呀，这是规则里的要求**」。
+   */
+  const voltaGroupOf = new Map<string, number>()
+  /**
+   * 注释所**覆盖的遍次集合**（用户口径 2026-10）。
+   *
+   * 用户原话：「跳房子里注释里的 `1.2.3.` 只是**注释给人看的**，关键信息在于这段跳房子
+   * **要演奏几遍**，因此规定了用 `.` 来分隔遍次信息以得到**计数值**」；
+   * 并明确 `["2.3."` 表示"**第 2、3 两遍各奏一次**"、`["4."` 表示"**只在第 4 遍奏**"。
+   * ⇒ **注释里 `.` 分隔出的编号就是它所属的遍次**：
+   *  · `"1."` ⇒ 第 1 遍；`"2.3."` ⇒ 第 2、3 遍；`"4."` ⇒ 第 4 遍；
+   *  · 无数字（如 `"结束句"`）⇒ 不指定，退回"按出现顺序"取一个遍次。
+   */
+  const voltaPassesOf = new Map<string, Set<number>>()
+  {
+    // 第一轮：先登记**带数字**的注释（它们的遍次是明确的）
+    for (let k = 0; k < seq.length; k++) {
+      const c = voltaCommentAt.get(k) ?? ''
+      if (c === '' || voltaGroupOf.has(c)) continue
+      const nums = c
+        .split('.')
+        .map((s) => s.trim())
+        .filter((s) => /^\d+$/.test(s))
+        .map((s) => Number(s))
+      if (nums.length > 0) {
+        voltaPassesOf.set(c, new Set<number>(nums))
+        voltaGroupOf.set(c, Math.min(...nums))
+      }
+    }
+    // 第二轮：无数字注释（`"结束句"` 等）取**未被占用**的遍次
+    for (let k = 0; k < seq.length; k++) {
+      const c = voltaCommentAt.get(k) ?? ''
+      if (c === '' || voltaGroupOf.has(c)) continue
+      /**
+       * 用户口径「按演奏顺序，**第一次遇到的跳房子为第 1 遍**」——这类注释没有数字，
+       * 只能取"下一个还没被占用的遍次"。**不能**直接用"第几个出现的注释"当遍次，
+       * 否则会与数字组撞在同一遍（实测 `adj368`：`["1."`(第 1 遍) 与 `["结束句"` 撞车
+       * ⇒ 结束句在第 1 遍就被奏、第 3 遍反而跳过）。
+       */
+      const used = new Set<number>()
+      for (const set of voltaPassesOf.values()) for (const v of set) used.add(v)
+      let p = 1
+      while (used.has(p)) p++
+      voltaGroupOf.set(c, p)
+      voltaPassesOf.set(c, new Set([p]))
+    }
+  }
+  /**
+   * 本遍已进入过的注释组——**进入下一遍次时**对每组扣 1（用户口径：
+   * 「这个注释的跳房子**在进入下一遍次时计数减 1**，不管这个注释的跳房子有没有都走完」）。
+   */
+  const passVoltaTouched = new Set<string>()
+  /** 正在走的那个房子（走过它末尾线时退出范围）；-1 = 当前不在房子里 */
+  let insideVolta = -1
+  /** 本遍收尾：对"本遍进入过的注释组"各扣 1（无注释的房子不参与分组） */
+  const settlePassVolta = (): void => {
+    for (const c of passVoltaTouched) {
+      const left = voltaLeftByComment.get(c) ?? 0
+      if (left > 0) voltaLeftByComment.set(c, left - 1)
+    }
+    passVoltaTouched.clear()
+  }
+  /** 取某根房子起点线"所在注释组"的剩余次数（按注释分组；无注释则按位置） */
+  const voltaLeftOf = (k: number): number => {
+    const c = voltaCommentAt.get(k) ?? ''
+    return c === '' ? (voltaLeftByIndex.get(k) ?? 0) : (voltaLeftByComment.get(c) ?? 0)
+  }
   // 4. 展开反复（支持两层：反复内嵌跳房子）
   // adj258：按 voiceBlocks 分块——多声部块内 group 共享 blockStartMs（同一组 Q1/Q2 同时播放），
   // 跨块顺序累加。单声部 group 不在任何 voiceBlock 内，自成块（blockStartMs = 累加）。
@@ -1888,18 +2053,72 @@ export function buildPlaySequence(
     if (bar.keyChange) curKey = bar.keyChange.clear ? keySemitone : bar.keyChange.targetKey ?? curKey
     // adj359：跳房子——本遍不演奏该 volta 时，跳到其末尾小节线
     // （停在末尾线上而非其后一位：`:|]["2."` 共用一根线时，仍需处理该线上的 volta2 番号）
-    // adj368：判断依据按标签类型——番号（`["2."`）比遍次；文字标签（`["结束句"`）比该段最终遍数
-    // adj653：番号可以是**多个**（`["2.3."` = 第 2、3 遍共用）⇒ 判"本遍 ∈ nums"
+    // adj723aa：判据由「番号 == 本遍」改为**房子自己的计数器**（计数 = 注释里 `.` 分隔段数，≥1）
     const trySkipVolta = (): boolean => {
       if (!bar.voltaStart) return false
-      const label = voltaLabelOf(item)
-      const skip = label.kind === 'text' ? pass < (segMaxPass[i] ?? 1) : !label.nums.includes(pass)
-      if (!skip) return false
-      const target = voltaAfter.get(i) ?? i + 1
+      /**
+       * adj723aa（用户口径，2026-10）：**注释只用于两件事——"是否同一个房子"与"计数"**；
+       * **执行的根本是逻辑**（计数 + 谱面自然顺序 + 反复/跳跃），
+       * **不把注释里的数字当作"第几遍"的开关**。
+       *
+       * 故走到房子起点时只看一条逻辑判据：**该房子（按注释分组）还有没有计数**——
+       *  · `> 0` ⇒ 奏（登记"在房子里"，走过末尾线时计数减一）；
+       *  · `= 0` ⇒ 路过（跳到末尾线）。
+       * 计数按注释分组共用（注释相同 = 同一个房子），无注释的按位置各记 1。
+       */
+      const c = voltaCommentAt.get(i) ?? ''
+      /**
+       * adj723aa（用户口径，2026-10）：
+       *  · **不同注释属于不同遍次** ⇒ 该组不是本遍那一组就跳过（留到它自己那一遍）；
+       *  · 是本遍那一组 ⇒ **同注释的房子走到哪处都能进**（"在它们所属的那一遍里都可以进入，
+       *    只要演奏顺序能够走到那处"）；
+       *  · 计数为 0 ⇒ 跳过（该组的遍次任务已用完）。计数在**进入下一遍时**扣（见 `settlePassVolta`）。
+       */
+      /**
+       * 判据（用户口径 2026-10）：**注释 `.` 分隔出的编号就是它所属的遍次**——
+       * 本遍号在它的遍次集合里 ⇒ 才奏；否则跳过（留到它自己那几遍）。
+       * 无数字注释（`"结束句"` 等）按"出现顺序"取一个遍次。
+       * 另需 `voltaLeftOf > 0`（计数在**进入下一遍时**扣，见 `settlePassVolta`）。
+       */
+      const passes = voltaPassesOf.get(c)
+      const groupOk = c === '' || passes === undefined || passes.has(pass)
+      if (groupOk && voltaLeftOf(i) > 0) {
+        insideVolta = i // 进入本房子范围（计数改为**进入下一遍时**扣）
+        if (c !== '') passVoltaTouched.add(c)
+        return false
+      }
+      /**
+       * adj723aa（用户口径）：**未封闭房子的末尾线优先取 `:|`/`:|:`**，其次才是跳跃线
+       * （`&dc`/`&ds`/`&fine`）。**不含** `||`/`||/`。
+       *
+       * 用户给的谱 `… |["1." 3 3 3 3 |]/ 4 4 4 4 |&fine 5 5 5 5 :| 6 6 6 6 ||` 明确说
+       * 「**这里的跳房子为 3-5 小节，还有 `:|`**」⇒ 房子末尾就是那根 `:|`，
+       * **`&fine` 落在房子内部**（房子把 `4 4 4 4`、`5 5 5 5` 都含进去）。
+       * ⇒ 末尾线的选择次序：先找**其后最近的 `:|`/`:|:`**；没有再退到最近的跳跃线。
+       */
+      const allowFine = bigRepeatDone
+      const repeatTarget = voltaAfterRepeat.get(i)
+      const jumpTarget = allowFine ? voltaAfterWithFine.get(i) : voltaAfterStrict.get(i)
+      const after = repeatTarget ?? jumpTarget
+      const target = after === undefined || after <= i ? i + 1 : after
       landedByVoltaSkip = target
       i = target
       pendingJumpMs = lastEndMs // adj361：被跳过的房子不占时，从当前播放时刻无缝接上
       return true
+    }
+    /**
+     * adj723aa：**走过房子末尾线 ⇒ 该房子用掉一次**（`count-1`），退出房子范围。
+     * 用户口径「进入跳房子范围后才计数减 1」——故减一在这里，而不是在起点线"看到就减"。
+     */
+    if (insideVolta >= 0) {
+      /**
+       * 走完本房子的末尾线才算用掉一次。末尾线与"跳过时"取**同一优先次序**：
+       * 先 `:|`/`:|:`，没有再退到跳跃线（含 `&fine` 与否取决于是否已过大反复）。
+       */
+      const end =
+        voltaAfterRepeat.get(insideVolta) ??
+        (bigRepeatDone ? voltaAfterWithFine.get(insideVolta) : voltaAfterStrict.get(insideVolta))
+      if (i === (end ?? insideVolta + 1)) insideVolta = -1
     }
     /**
      * 因跳过 volta 而落在的小节线：**不再触发该线的 `:|` 回跳**（该反复已在跳过时越过）。
@@ -1921,7 +2140,7 @@ export function buildPlaySequence(
       const jumpFires =
         (bar.marks?.includes('fine') === true && (!hasBigRepeat || bigRepeatDone)) ||
         (bar.marks?.includes('dc') === true && !bigRepeatDone) ||
-        (bar.marks?.includes('ds') === true && !bigRepeatDone) ||
+        (bar.marks?.includes('ds') === true && dsEffective && !bigRepeatDone) ||
         (bar.marks?.includes('ty') === true && bigRepeatDone)
       if (!jumpFires && trySkipVolta()) continue
     }
@@ -1940,7 +2159,21 @@ export function buildPlaySequence(
     const repeatPending =
       (bar.type === ':|' || bar.type === ':|:') && pass < (repeatCountAt.get(i) ?? 2)
     if (bar.marks?.length && !repeatPending) {
-      if (bar.marks.includes('fine') && (!hasBigRepeat || bigRepeatDone)) {
+      /**
+       * adj723aa（用户口径，2026-10）：**`&fine` 只有在"生效的大反复确实发生过"之后才终止**。
+       *
+       * 用户给的谱 `Q: 1 1 1 1 |&ds 2 2 2 2 |["1." 3 3 3 3 |]/ 4 4 4 4 |&fine 5 5 5 5 :| 6 6 6 6 ||`
+       * 明确说「**实际上 `&ds` 和 `&fine` 都不会生效**」，其演奏顺序为 `1 2 3 4 5 1 2 6`——
+       * 即：`:|` 把 `1 2 3 4 5` 走完 → 回跳 → 第 2 遍 `1 2`（房子已用完、跳过 `3 4 5`）→ `6`。
+       *
+       * 为什么本谱 `&ds` 不生效：**前面没有对应的花 S（`&hs`）**（见 `dsEffective`）；
+       * 既然从未发生大反复，`&fine` 也就**没有"反复后终点"的语义** ⇒ 不终止。
+       *
+       * ⚠ 旧判据是 `!hasBigRepeat || bigRepeatDone`：当谱里有 `&ds` 但其不生效时
+       * `hasBigRepeat` 为 false ⇒ `!hasBigRepeat` 为真 ⇒ **第一遍就停**（实测本谱只奏 16 音
+       * `1 1 1 1 · 2 2 2 2 · 3 3 3 3 · 4 4 4 4`）。改为只看"是否真的发生过"。
+       */
+      if (bar.marks.includes('fine') && bigRepeatDone) {
         i = seq.length // 曲终：播放到此结束
         continue
       }
@@ -1957,8 +2190,13 @@ export function buildPlaySequence(
         continue
       }
       if (bar.marks.includes('ds')) {
+        // adj723aa：没有花 S（`&hs`）时 `&ds` 不生效——继续往下走，不跳、也不置 `bigRepeatDone`
+        if (!dsEffective) {
+          i++
+          continue
+        }
         if (!bigRepeatDone) {
-          i = segnoIdx >= 0 ? segnoIdx + 1 : 0 // 跳到花 S 之后（hs 通常写在 ds 之前）
+          i = segnoIdx + 1 // 跳到花 S 之后（hs 通常写在 ds 之前）
           bigRepeatDone = true
           // adj362：D.S. 后进入「下一遍」（pass 递增，不重置为 1）——房子番号按遍次选择，
           // 于是跳过前面已奏过的房子、进入下一号房子；repeatStart 保持不变（仍在同一反复段内，
@@ -2025,6 +2263,8 @@ export function buildPlaySequence(
          */
         const lastJump = pass + 1 >= count
         const from = i
+        /** adj723aa：**进入下一遍次时**把本遍进入过的注释组各扣 1（不管该组有没有都走完） */
+        settlePassVolta()
         i = repeatStart
         pass++
         if (lastJump && bar.type === ':|:') repeatStart = from

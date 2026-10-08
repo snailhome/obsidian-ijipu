@@ -650,6 +650,14 @@ export interface PlacedBarline {
   voltaEndSlash?: boolean
   /** 纯跳房子起点（无小节线），不画小节线竖线（adj26） */
   voltaOnly?: boolean
+  /**
+   * adj723aa：小节线的**源码原文**——跳房子配对要按里面 `[`/`]` 的**出现顺序**判定。
+   *
+   * 同一根线上可能既有 `]` 又有 `[`（`|]["2."`，画法上就是同一根竖线），用户的写法约定是
+   * 「**结束符 `]` 写在开始符 `[` 前面**」，而这两个布尔量 `voltaEnd`/`voltaStart` 无法表达先后；
+   * 故把原文带到走查侧，由它按顺序配对（**不改画法**）。
+   */
+  raw?: string
   /** 小节线备注 */
   comment?: string
   /**
