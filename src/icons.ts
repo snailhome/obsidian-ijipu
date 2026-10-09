@@ -95,6 +95,36 @@ const NS = 'http://www.w3.org/2000/svg'
 /** 图标基础线宽（深色主题下过细的笔画会糊成一团，故基准取 1.8） */
 const SW = '1.8'
 
+/**
+ * 「源码」图标：**一对尖括号 `<>`**（切到脚本源码编辑）。
+ *
+ * 为什么手绘而不走 `vendor/icons/`（同 `appOpenIcon` 的口径）：那批 PNG 是**应用顶栏**的图标集，
+ * 应用自己不需要"切源码"（它的编辑器就在旁边）。手绘走 `currentColor` ⇒ 亮/暗主题、
+ * 悬停、选中态自动同色（避免 E-2026-234 那类"图标与文字不同色"）。
+ */
+export function sourceIcon(size = 15): SVGSVGElement {
+  const svg = document.createElementNS(NS, 'svg')
+  svg.setAttribute('width', String(size))
+  svg.setAttribute('height', String(size))
+  svg.setAttribute('viewBox', '0 0 14 14')
+  svg.setAttribute('fill', 'none')
+  svg.setAttribute('stroke', 'currentColor')
+  svg.setAttribute('stroke-width', SW)
+  svg.setAttribute('stroke-linecap', 'round')
+  svg.setAttribute('stroke-linejoin', 'round')
+  svg.setAttribute('aria-hidden', 'true')
+  const add = (d: string): void => {
+    const path = document.createElementNS(NS, 'path')
+    path.setAttribute('d', d)
+    svg.appendChild(path)
+  }
+  // 左尖括号
+  add('M 5.2 3.6 L 2.2 7 L 5.2 10.4')
+  // 右尖括号（与左对称）
+  add('M 8.8 3.6 L 11.8 7 L 8.8 10.4')
+  return svg
+}
+
 export function linkIcon(size = 15): SVGSVGElement {
   const svg = document.createElementNS(NS, 'svg')
   svg.setAttribute('width', String(size))

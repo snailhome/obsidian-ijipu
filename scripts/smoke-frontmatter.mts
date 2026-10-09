@@ -1757,15 +1757,47 @@ console.log('\n[adj724b] community review: forbidden APIs / styles must stay fix
    */
   const cssToolbar = s('styles.css')
   /**
-   * ⚠ 刻意**不**写"尺寸块里不得有 display:flex"那种负向正则，也不数"规则条数"：
+   * 工具条：**绝对定位浮在左上角、悬停淡入、谱面不位移**（用户要求）。
+   *
+   * ⚠ 刻意不写"尺寸块里不得有 display:flex"那种负向正则，也不数"规则条数"：
    * 实测两者都会自伤 —— `.ijipu-score-toolbar\s*\{` 允许零个空白 ⇒ 会误命中
-   * `.is-mobile .ijipu-score-toolbar {…}`；而条数会随 `@container`/媒体查询变化。
-   * 只盯**真正的不变量**：基类隐藏、`is-revealed` 显示、移动端常显。
+   * `.is-mobile .ijipu-score-toolbar {…}`；条数会随 `@container`/媒体查询变化。
+   * 只盯**真正的不变量**。
    */
-  check('adj724b 工具条默认隐藏（display:none）、悬停显示、移动端常显',
-    /\.ijipu-score-toolbar\s*\{\s*display:\s*none/.test(cssToolbar) &&
-      /\.ijipu-score-toolbar\.is-revealed\s*\{\s*display:\s*flex/.test(cssToolbar) &&
-      /\.is-mobile\s+\.ijipu-score-toolbar\s*\{\s*display:\s*flex/.test(cssToolbar))
+  check('adj724b 工具条绝对定位（不占布局 ⇒ 谱面不位移）',
+    /\.ijipu-score\s*\{[^}]*position:\s*relative/.test(cssToolbar) &&
+      /\.ijipu-score-toolbar\s*\{[^}]*position:\s*absolute/.test(cssToolbar) &&
+      /\.ijipu-score-toolbar\s*\{[^}]*z-index:\s*\d/.test(cssToolbar))
+  check('adj724b 工具条默认不可见（visibility:hidden，导出不出现）→ 悬停淡入 → 移动端常显',
+    /\.ijipu-score-toolbar\s*\{[^}]*visibility:\s*hidden/.test(cssToolbar) &&
+      /\.ijipu-score-toolbar\s*\{[^}]*opacity:\s*0/.test(cssToolbar) &&
+      /\.ijipu-score-toolbar\.is-revealed\s*\{[^}]*visibility:\s*visible/.test(cssToolbar) &&
+      /\.ijipu-score-toolbar\.is-revealed\s*\{[^}]*opacity:\s*1/.test(cssToolbar) &&
+      /\.is-mobile\s+\.ijipu-score-toolbar\s*\{[^}]*visibility:\s*visible/.test(cssToolbar) &&
+      // 淡入淡出靠 transition（visibility 延迟到淡出结束再隐藏）
+      /\.ijipu-score-toolbar\s*\{[^}]*transition:[\s\S]{0,80}?visibility 0s linear/.test(cssToolbar))
+  /**
+   * ⚠ adj724b 两个**实测真因**，任何一条写回去都会让浮层坏掉：
+   *  ① `container-type: inline-size` **不能留在工具条自身上** —— 绝对定位 + 尺寸包含 ⇒ 内在宽度算成 0，
+   *     实测 `width: 8px`（只剩 padding）、按钮被挤成竖排、背景看不出边界。
+   *     容器查询必须挂到外层 `.ijipu-score`（按窗外可用宽度判断，也更符合原意）。
+   *  ② 背景要带**兜底值**（`var(--background-secondary, …)`）——否则在没有该主题变量的环境里全透明。
+   */
+  {
+    // ⚠ 必须**先剥掉 CSS 注释**再检查：本轮反复踩同一个坑 ——
+    //    "解释为什么不能用 X"的注释里就写着 X，宽判据会把它当成真的用了 X。
+    const cssNoComments = cssToolbar.replace(/\/\*[\s\S]*?\*\//g, '')
+    const toolbarBlocks = [...cssNoComments.matchAll(/\.ijipu-score-toolbar\s+\{([^}]*)\}/g)].map((m) => m[1])
+    const toolbarHasContainerType = toolbarBlocks.some((b) => b.includes('container-type'))
+    const outerHasContainer = cssNoComments.includes('container-name: ijipu-score')
+    const outerHasContainerType = cssNoComments.includes('container-type: inline-size')
+    const queryRenamed = cssNoComments.includes('@container ijipu-score (max-width: 400px)')
+    check('adj724b 工具条自身不得再挂 container-type（会把浮层宽度算成 0）',
+      toolbarBlocks.length > 0 && !toolbarHasContainerType && outerHasContainer && outerHasContainerType && queryRenamed,
+      `工具条块数=${toolbarBlocks.length} 工具条含container-type=${toolbarHasContainerType} 外层容器=${outerHasContainer}/${outerHasContainerType} 查询已改名=${queryRenamed}`)
+  }
+  check('adj724b 工具条浮层背景带主题变量兜底（否则无该变量的环境里看不清边界）',
+    /\.ijipu-score-toolbar\s*\{[^}]*background:\s*var\(--background-secondary,/.test(cssToolbar))
   check('adj724b 工具条悬停显示/离开收起 + 键盘可唤醒',
     /addEventListener\('pointermove', onPointerMove\)/.test(scorePaneSrc) &&
       /addEventListener\('pointerleave', onPointerLeave\)/.test(scorePaneSrc) &&

@@ -12,7 +12,7 @@
  * 渲染管线与 iJipu 应用一致：`resolvePageConfig`（含源内 # jps-config）→ `layoutScore`
  * → `renderScoreToSvg`；试听走 `@ijipu/engine` 的 `buildPlaySequence` + SpessaSynth。
  */
-import { Menu, Notice, sanitizeHTMLToDom } from 'obsidian'
+import { Menu, Notice, Platform, sanitizeHTMLToDom } from 'obsidian'
 import { writeJpsConfig, mergeConfigEdits, configCarryover, dragDelta, clamp, type PageConfig } from '@ijipu/engine'
 import { renderScoreFull, playScore, unknownKeyHint, deprecatedKeyHint, type PlayheadSeg } from './render'
 import { instrumentColorMap, playheadBaseOf, playheadPosIn, trackKeysOf, type PlayheadPos } from './playhead'
@@ -20,7 +20,7 @@ import { resolvePageConfig } from './config'
 import { ConfigDialog } from './configDialog'
 // adj631：「保存为插件默认」要按"本次真正改动过的项"写入（changedDefs）+ 等于引擎默认则不存（isDefaultValue）
 import { changedDefs, isDefaultValue } from './defs'
-import { layoutIcon, modeIcon, settingsIcon, linkIcon, playIcon, stopIcon, appOpenIcon } from './icons'
+import { layoutIcon, modeIcon, settingsIcon, linkIcon, playIcon, stopIcon, appOpenIcon, sourceIcon } from './icons'
 import { canOpenWithDefaultApp, openUrlExternally, openWithDefaultApp } from './openExternal'
 import { computeGuideLines, cropRectFor, guideLimits, guidePlacement, type GuideLine } from './guides'
 import { GUIDES_CHANGED, SETTINGS_CHANGED } from './main'
@@ -28,6 +28,11 @@ import type IJipuPlugin from './main'
 
 type ViewMode = 'page' | 'full' | 'score'
 const MODE_LABEL: Record<ViewMode, string> = { page: '整页', full: '满宽', score: '谱面' }
+/**
+ * adj724b：源码编辑的自动保存延迟（ms）。
+ * 与 `fileView.ts` 的 `AUTOSAVE_MS`（600）保持一致 —— 同一套"输入停一下即保存"的手感。
+ */
+const SOURCE_AUTOSAVE_MS = 600
 /** 三种显示模式的含义（按钮悬停提示用——图标只表意，文字补足准确含义） */
 const MODE_HINT: Record<ViewMode, string> = {
   page: '完整一页（含页边距），宽度撑满内容区',
@@ -99,6 +104,33 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
   let draft: PageConfig | null = null
   /** 当前拖拽的 window 监听清理函数 */
   let endDragListeners: (() => void) | null = null
+  /**
+   * adj724b：**由本面板自己触发的保存**（切回看谱 / Ctrl+S / 防抖到点 / 失焦时置位）。
+   *
+   * 放在 `paint()` **之外**：`refresh` 回调（由宿主写回后调用）也要读它 ——
+   * 那种情况下**不能重画**，否则源码态正在输入的 textarea 会被重建、光标与滚动位置一起丢。
+   */
+  let savingFromPane = false
+
+  /**
+   * adj724b：**源码态状态**（` ```jps ` 块里的「源码」编辑）。
+   *
+   * ⚠ 这几个变量**必须声明在 `paint()` 之外**。最初我把它们写在 `paint()` 内部，
+   * 结果是：点击「源码」把 `editing` 置 true 后立刻调 `paint()`，
+   * 而 `paint()` 重新执行时**又把它们重新声明为初值** ⇒ 编辑分支永远进不去，
+   * 现象就是"点了没反应"。这是**真机行为验证**抓出来的（`ijipu/scripts/verify-score-crop.mjs`
+   * 的「源码模式」一节：点击前后 DOM 完全一致）。
+   */
+  /** 是否处于源码编辑态（默认看谱） */
+  let editing = false
+  /** 刚进入源码态 ⇒ 下一次重画要抢焦点；之后的重画（宿主写回触发）不抢 */
+  let shouldFocusEditor = true
+  /** 尚未落盘的源码（`input` 时记录，防抖/失焦/Ctrl+S 时写回） */
+  let pendingSource: string | null = null
+  /** 源码编辑区的容器（源码态才有；用于失焦保存与键盘适配） */
+  let contentEl: HTMLElement | null = null
+  /** 源码自动保存的定时器句柄 */
+  let sourceSaveTimer: number | null = null
 
   const stopRuntime = (): void => {
     stopPlay?.()
@@ -123,8 +155,50 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
   })
 
   /** 全量重画（工具条 + 谱面 + 辅助虚线）；拖拽期间按帧节流 */
+    /**
+     * adj724b：源码编辑区的**移动端键盘适配**（与 `fileView.ts` 的 `fitEditorToVisibleArea` 同源思路）。
+     *
+     * 为什么不直接复用那个函数：它依赖 `ijipu-file-editing` / `ijipu-source-editor-fit` 这几个
+     * **文件视图专用类**，块里硬套会出现"类名对不上 ⇒ 高度算错"的静默问题；
+     * 这里只需要"给 textarea 一个经得起键盘的高度"，逻辑短得多，出错面也小。
+     * 桌面端不挂载（与文件视图同一口径）。
+     */
+    const fitBlockSourceEditor = (wrapEl: HTMLElement, ta: HTMLTextAreaElement): (() => void) => {
+      if (!Platform.isMobile) return () => {}
+      const fit = (): void => {
+        const vv = window.visualViewport
+        const visibleBottom = vv ? vv.offsetTop + vv.height : window.innerHeight
+        const top = ta.getBoundingClientRect().top
+        // 下限 140px：键盘弹出后仍要给一行以上可编辑空间，否则等于没得改
+        const h = Math.max(140, Math.round(visibleBottom - top - 24))
+        ta.setCssStyles({ height: `${h}px` })
+      }
+      const onVv = (): void => {
+        window.requestAnimationFrame(fit)
+      }
+      const vv = window.visualViewport
+      vv?.addEventListener('resize', onVv)
+      vv?.addEventListener('scroll', onVv)
+      window.addEventListener('resize', onVv)
+      const timer = window.setInterval(fit, 500)
+      fit()
+      return () => {
+        window.clearInterval(timer)
+        window.removeEventListener('resize', onVv)
+        vv?.removeEventListener('resize', onVv)
+        vv?.removeEventListener('scroll', onVv)
+        ta.setCssStyles({ height: '' })
+        void wrapEl
+      }
+    }
+    /** 源码编辑区的清理函数（重画/销毁时调用） */
+    let endSourceFit: (() => void) | null = null
+
   const paint = (): void => {
     stopRuntime()
+    // 源码编辑区的键盘适配要在重画前拆掉（否则旧监听留在 visualViewport 上）
+    endSourceFit?.()
+    endSourceFit = null
     container.empty()
     container.addClass('ijipu-score')
     if (host.embedded) container.addClass('ijipu-embedded')
@@ -431,6 +505,56 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       })
     }
 
+    /**
+     * adj724b（用户要求）：**「源码」按钮 —— 在当前块里直接编辑 `.jps` 脚本**。
+     *
+     * 用户原话：「jps 预览块的工具栏上增加一个如 <> 这样的进入脚本源码模式的方式，
+     * 可与其它块进入源码模式保持一致的方式」。
+     *
+     * 与 `.jps` 文件视图的「✎ 源码 / 📖 看谱」同一套口径（切换按钮 + textarea + 自动保存）；
+     * 只有在宿主**提供了写回入口**（`host.writeSource`，即 ` ```jps ` 代码块）时才显示 ——
+     * 读不到写回目标却给一个"能编辑"的按钮，改完丢内容更糟。
+     */
+    const scheduleSourceSave = (): void => {
+      if (sourceSaveTimer !== null) window.clearTimeout(sourceSaveTimer)
+      sourceSaveTimer = window.setTimeout(() => void flushSourceEdit(), SOURCE_AUTOSAVE_MS)
+    }
+    /** 立刻把待存的源码写回（切回看谱 / Ctrl+S / 防抖到点 / 失焦时调用） */
+    const flushSourceEdit = async (): Promise<void> => {
+      if (sourceSaveTimer !== null) {
+        window.clearTimeout(sourceSaveTimer)
+        sourceSaveTimer = null
+      }
+      const next = pendingSource
+      pendingSource = null
+      // 与当前源码一致就什么都不做（避免"点一下切换"也写一次盘、进撤销栈）
+      if (next === null || next === host.getSource()) return
+      savingFromPane = true
+      try {
+        await host.writeSource?.(next)
+      } catch (e) {
+        new Notice(`保存失败：${e instanceof Error ? e.message : String(e)}`, 6000)
+      } finally {
+        savingFromPane = false
+      }
+    }
+    const sourceBtn = toolbar.createEl('button', { cls: 'ijipu-play ijipu-source-btn' })
+    sourceBtn.setAttr('type', 'button')
+    sourceBtn.setAttr('title', '编辑脚本源码（改动自动保存；Ctrl/Cmd+S 立即保存）')
+    sourceBtn.appendChild(sourceIcon(15))
+    sourceBtn.createSpan({ cls: 'ijipu-btn-label', text: '源码' })
+    /**
+     * 读不到写回目标（`host.writeSource` 为空）就**不显示**这个按钮，免得"能编辑却存不下去"。
+     * `createEl` 已把它挂在工具栏末尾（显示模式下拉之后），这里只需按需移除。
+     */
+    if (!host.writeSource) sourceBtn.remove()
+    sourceBtn.addEventListener('click', () => {
+      if (editing) void flushSourceEdit()
+      editing = !editing
+      shouldFocusEditor = editing
+      paint()
+    })
+
     // —— 显示模式：下拉列表（整页 / 满宽 / 谱面）——
     // 用普通按钮 + Obsidian 的 Menu，而**不是**原生 <select>：
     //  · 原生 select 会给下拉箭头预留内边距、宽度收不紧（在嵌入容器等上下文里还会参与布局，
@@ -511,6 +635,44 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
         cls: 'ijipu-guide-hint',
         text: '排版：拖动虚线调整边距/行距（松手即写入谱面设置）',
       })
+    }
+
+    /**
+     * adj724b（用户要求）：**源码模式** —— 在当前块里直接编辑 `.jps` 脚本。
+     *
+     * 放在这里（谱面渲染**之前**）意味着：源码态只出"工具条 + 源码编辑区"，
+     * 不再渲染谱面 —— 与 `.jps` 文件视图的「✎ 源码」同一行为。
+     * 解析告警/错误仍留在上方（编辑时正好能看着提示改，比单独的只读源码视图更有用）。
+     */
+
+    if (editing && host.writeSource) {
+      container.addClass('ijipu-source-mode')
+      // 源码态工具条**常显**：隐藏后没法切回看谱（且此时谱面本就不渲染，不会挡内容）
+      revealToolbar(true)
+      contentEl = container.createDiv({ cls: 'ijipu-source-stack' })
+      const ta = contentEl.createEl('textarea', { cls: 'ijipu-block-source-editor' })
+      ta.value = host.getSource()
+      ta.spellcheck = false
+      ta.addEventListener('input', () => {
+        pendingSource = ta.value
+        scheduleSourceSave()
+      })
+      ta.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+          e.preventDefault()
+          void flushSourceEdit()
+        }
+      })
+      // 点到别处（失焦）也要把待存的写回 —— 否则"改完直接去点别的笔记"会丢最后一笔
+      ta.addEventListener('blur', () => void flushSourceEdit())
+      // 移动端：键盘弹出时把编辑区钉在可视区内（桌面端空实现）
+      endSourceFit = fitBlockSourceEditor(contentEl, ta)
+      // 只在**刚进入**源码态时抢焦点；宿主写回触发的重画不要抢（否则光标被夺走）
+      if (shouldFocusEditor) {
+        shouldFocusEditor = false
+        ta.focus()
+      }
+      return
     }
 
     // —— 逐页插入 SVG + 辅助虚线 ——
@@ -746,7 +908,17 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
   paint()
 
   return {
-    refresh: () => paint(),
+    refresh: () => {
+      /**
+       * adj724b：**本面板自己触发的保存**不要再重画。
+       *
+       * 宿主写回后（`IJipuBlock.writeSource`）会调 `pane.refresh()`；若此刻正在源码态输入，
+       * 重画会把 textarea 重建、**光标与滚动位置一起丢**（表现为"打字打一半跳回开头"）。
+       * 源码本身由宿主写回时已更新，下次进入/切回看谱时 `paint()` 会自然取到新值。
+       */
+      if (savingFromPane) return
+      paint()
+    },
     destroy: () => {
       stopRuntime()
       endDragListeners?.()

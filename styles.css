@@ -4,6 +4,13 @@
   padding: 0.4em;
   border-radius: 6px;
   background: var(--background-secondary);
+  /* adj724b：工具条改为**绝对定位浮在左上角**（用户要求：不再让谱面因它显隐而位移），
+     故这里必须成为它的定位上下文。 */
+  position: relative;
+  /* adj724b：容器查询（原本挂在工具条自身上）改挂到这里 —— 见 .ijipu-score-toolbar 里的说明。
+     语义：按"窗外可用宽度"决定是否隐藏按钮文字。 */
+  container-type: inline-size;
+  container-name: ijipu-score;
 }
 /* adj389：谱面纸张样式**只作用于渲染出来的谱面 SVG**。
    此前写的是 `.ijipu-score svg`，而工具栏（试听/排版/设置/模式图标）也在 `.ijipu-score` 内，
@@ -26,34 +33,70 @@
 .ijipu-svgs a.jp-link:hover {
   fill: var(--text-accent);
 }
-/* adj724b（用户要求）：**工具条默认隐藏，鼠标移到谱面上才显示**。
-   原因：Obsidian「导出为 PDF」会把 DOM 一起导出，工具栏属于操作界面、不该进成果。
+/* adj724b（用户要求）：**工具条绝对定位浮在谱面左上角，悬停淡入**。
+   起因：Obsidian「导出为 PDF」会把 DOM 一起导出，工具栏属于操作界面、不该进成果。
 
-   ⚠ 必须用 display:none（而不是只降透明度）：透明元素仍占位，导出时会在谱面顶部留一条空白。
-   ⚠ 移动端 / 触屏**常显**：触屏没有 hover，隐藏后就再也点不到按钮。
-   ⚠ 键盘可达：工具条内控件获得焦点时由 JS 加 is-revealed 保持显示（见 scorePane.ts）。 */
+   方案取舍（三条都验证过）：
+   ① **绝对定位** ⇒ 不参与布局。所以工具条显隐**不会让谱面位移**（此前用普通流会跳一下）。
+   ② **不能用 `display:none`**：`display` 不可动画、没有淡入；且导出安全已由 ③ 保证。
+   ③ **用 `visibility: hidden`（不是只降 `opacity`）**：
+      · `visibility` 参与过渡但**不可动画**，可在隐藏方向加 `transition-delay` 做到"淡出后再隐藏"；
+      · `visibility: hidden` 的元素**不绘制**，导出 PDF 时不会出现，也**不进入 Tab 焦点顺序**
+        （只降 opacity 的话，它仍会被绘制成透明层、并且键盘还能聚焦到看不见的按钮）。
+   ④ 触屏没有 hover ⇒ 移动端**常显**。
+   ⑤ 键盘可达：隐藏时不可聚焦 ⇒ 由 JS 在容器层监听 keydown 唤醒（见 scorePane.ts）。 */
 .ijipu-score-toolbar {
-  display: none;
+  position: absolute;
+  top: 4px;
+  left: 6px;
+  z-index: 5; /* 高于谱面 SVG 层（1）与虚线层 */
+  opacity: 0;
+  visibility: hidden;
+  /* 淡出：opacity 120ms 后再切 visibility（延迟 = 动画时长） */
+  transition:
+    opacity 120ms ease,
+    visibility 0s linear 120ms;
 }
 .ijipu-score-toolbar.is-revealed {
-  display: flex;
+  opacity: 1;
+  visibility: visible;
+  /* 淡入：立即可见，再花 120ms 淡进来（延迟 0） */
+  transition:
+    opacity 120ms ease,
+    visibility 0s linear 0s;
 }
 /* 移动端常显（覆盖默认隐藏）——带 .is-mobile 前缀，特异性足够 */
 .is-mobile .ijipu-score-toolbar {
-  display: flex;
+  opacity: 1;
+  visibility: visible;
 }
 
-/* 尺寸变量/换行/容器查询（**不含 display** —— 显隐由上面的规则与 is-revealed 类决定） */
+/* 尺寸变量/换行/容器查询。`display: flex` 在这里（不影响显隐 —— 显隐由上面的
+   `visibility` + `opacity` 与 `is-revealed` 类控制）。 */
 .ijipu-score-toolbar {
+  display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 6px;
+  /* adj724b：工具条绝对定位后**不占布局**，故不能再用 margin-bottom 参与排版；
+     这里改为"浮层内边距"，保证浮层本身不贴边。 */
+  margin-bottom: 0;
+  padding: 2px 4px;
+  border-radius: 6px;
+  /* 浮在谱面上要能看清：给一层背景 + 细阴影（否则按钮与谱面线条糊在一起）。
+     `--background-secondary` 是 Obsidian 主题变量；给个兜底值，
+     免得在**没有该变量的环境**（如本仓库的浏览器验证页）里变成全透明、看不出浮层边界。 */
+  background: var(--background-secondary, rgb(0 0 0 / 6%));
+  box-shadow: 0 1px 4px rgb(0 0 0 / 18%);
   /* 嵌在窄容器里（右侧栏、分栏）时按钮换行，而不是溢出被裁掉 */
   flex-wrap: wrap;
-  /* 让"打开谱面文件"的文字是否隐藏，按**工具栏自身**宽度判断而不是窗口宽度
-     （否则侧栏里的嵌入会判断错误）——见下方 @container 规则 */
-  container-type: inline-size;
-  container-name: ijipu-toolbar;
+  /*
+   * ⚠ adj724b：这里**不能**再用 `container-type: inline-size`。
+   *
+   * 原意是"按工具栏自身宽度隐藏按钮文字"，但工具条改成**绝对定位的浮层**之后，
+   * 尺寸包含（inline-size containment）会让它的内在宽度算成 **0**：
+   * 实测 `width: 8px`（只剩 padding）、子元素被挤成竖排。
+   * ⇒ 容器查询改挂到外层 `.ijipu-svgs`（按"窗外可用宽度"判断，也更符合原意）。
+   */
   /* 工具栏内所有控件（试听/排版/设置/视图/链接）共用同一个高度；
      图标态下四个按钮还共用同一个宽度，见 --ijipu-ctl-w 与 @container 规则 */
   --ijipu-ctl-h: 24px;
@@ -618,7 +661,7 @@
    ② 只有窄到实在放不下，才把「打开谱面文件」的谱面名图标化
       —— 文件名是"这份谱是什么"的唯一标识，优先保住它。
    阈值按工具栏自身宽度（不是窗口宽度），侧栏/分栏里的嵌入也判断正确。 */
-@container ijipu-toolbar (max-width: 400px) {
+@container ijipu-score (max-width: 400px) {
   .ijipu-btn-label {
     display: none;
   }
@@ -635,7 +678,7 @@
     justify-content: center;
   }
 }
-@container ijipu-toolbar (max-width: 250px) {
+@container ijipu-score (max-width: 250px) {
   .ijipu-embed-link-text {
     display: none;
   }
@@ -954,4 +997,27 @@
   left: -9999px;
   top: 0;
   opacity: 0;
+}
+/* ─────────────── adj724b：「源码」模式（在 ```jps 块里直接编辑脚本）───────────────
+   与 `.jps` 文件视图的「✎ 源码」同一套口径：切换按钮 + textarea + 自动保存。
+   这里的编辑区**在文档流内**（不像文件视图那样铺满页签），所以只给一个舒服的最小高度。 */
+.ijipu-source-stack {
+  display: block;
+  margin-top: 4px;
+}
+
+.ijipu-block-source-editor {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  /* 下限给到能看十来行；上限用 vh 兜住，免得长谱把整篇笔记撑很长 */
+  min-height: 180px;
+  max-height: 60vh;
+  resize: vertical;
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-small, 13px);
+  line-height: 1.5;
+  tab-size: 2;
+  white-space: pre;
+  overflow: auto;
 }
