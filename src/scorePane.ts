@@ -490,21 +490,92 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       const svgEl = wrap.querySelector('svg') as SVGSVGElement | null
       if (!svgEl) return
       svgEls.push(svgEl)
-      applyViewBox(svgEl, paneMode, cfg)
+      /**
+       * adj724b：**插入 DOM 后立刻量一次真实内容包围盒**并记在元素上。
+       *
+       * 为什么要在这一刻量：`getBBox()` 要求元素已在渲染树里（刚 `sanitizeHTMLToDom` 出来的
+       * 游离节点量不到）；而此刻**辅助虚线层还没加**（`addGuideLayer` 在后面），
+       * 量到的就是纯谱面内容。缓存到 dataset，供 `applyViewBox('score')` 与切模式时复用。
+       */
+      const box = measureContentBox(svgEl)
+      if (box) {
+        svgEl.dataset.contentBox = `${box.x} ${box.y} ${box.w} ${box.h}`
+      }
+      // 不在这里 applyViewBox：此刻还是 'page' 模式（viewBox=整页），套上去纯属多余；
+      // 真正的显示模式由下面的 setMode(paneMode) 统一下发（'score' 会用刚量到的内容盒裁剪）。
       if (plugin.showGuides) addGuideLayer(wrap, svgEl, i, cfg)
     })
 
-    /** 按显示模式设置 viewBox（'score' 裁到内容区并去掉纸张宽高，交给 CSS 撑满） */
+    /**
+     * adj724b（用户要求）：算出**真实内容包围盒**（"只显示有内容的部分，四周不留空白"）。
+     *
+     * ⚠ **不能用 `svgEl.getBBox()`**：引擎生成的第一层是整页白底
+     * `<rect data-page-bg="1" width="100%" height="100%">`（见引擎 `render/index.ts` 的
+     * adj629n 注释）—— `getBBox()` 会把白底一起算进去，结果永远等于整页大小。
+     * ⇒ 这里**排除 `data-page-bg`**，对其余元素逐个取 `getBBox()` 求并集。
+     *
+     * 取并集（而不是只取内容 `<g>`）是为了稳妥：引擎的顶层结构可能变化（段层/替换谱层各自包 `<g>`），
+     * 逐个求并集对"元素直接挂在 svg 下"和"包在若干 `<g>` 里"都成立。
+     *
+     * 返回 `null` 表示量不出来（无子元素 / 元素不可见 / 过程中报错）——调用方据此退回"按边距裁"。
+     */
+    function measureContentBox(svgEl: SVGSVGElement): { x: number; y: number; w: number; h: number } | null {
+      let x0 = Infinity
+      let y0 = Infinity
+      let x1 = -Infinity
+      let y1 = -Infinity
+      for (const child of Array.from(svgEl.children)) {
+        const el = child as SVGGraphicsElement
+        if (el.getAttribute('data-page-bg')) continue // 整页白底：不是"内容"
+        if (typeof el.getBBox !== 'function') continue
+        let b: DOMRect
+        try {
+          b = el.getBBox()
+        } catch {
+          continue // 未渲染/不可见元素取不到盒，跳过
+        }
+        if (!(b.width > 0) && !(b.height > 0)) continue
+        if (b.x < x0) x0 = b.x
+        if (b.y < y0) y0 = b.y
+        if (b.x + b.width > x1) x1 = b.x + b.width
+        if (b.y + b.height > y1) y1 = b.y + b.height
+      }
+      if (!Number.isFinite(x0) || !Number.isFinite(y0) || x1 <= x0 || y1 <= y0) return null
+      return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
+    }
+
+    /** 取元素上缓存的内容包围盒（`mountScorePane` 插入 DOM 后量过一次） */
+    function contentBoxOf(svgEl: SVGSVGElement): { x: number; y: number; w: number; h: number } | null {
+      const raw = svgEl.dataset.contentBox
+      if (!raw) return null
+      const [x, y, w, h] = raw.split(/\s+/).map(Number)
+      if (![x, y, w, h].every((v) => Number.isFinite(v)) || w <= 0 || h <= 0) return null
+      return { x, y, w, h }
+    }
+
+    /** 按显示模式设置 viewBox（'score' 裁到**真实内容**，四周不留空白） */
     function applyViewBox(svgEl: SVGSVGElement, mode: ViewMode, c: typeof cfg): void {
       const orig = svgEl.dataset.origVb || svgEl.getAttribute('viewBox') || ''
       svgEl.dataset.origVb = orig
       if (mode === 'score') {
         const [, , w, h] = orig.split(/[\s,]+/).map(Number)
-        const ml = c.margin_left ?? 0
-        const mt = c.margin_top ?? 0
-        const mr = c.margin_right ?? 0
-        const mb = c.margin_bottom ?? 0
-        svgEl.setAttribute('viewBox', `${ml} ${mt} ${Math.max(1, w - ml - mr)} ${Math.max(1, h - mt - mb)}`)
+        /**
+         * adj724b（用户要求）：优先按**实测内容包围盒**裁 —— "只显示有内容的部分"。
+         *
+         * 此前这里只削掉四边距（`ml/mt/w-ml-mr/h-mt-mb`），所以"边距以内的空白"仍在：
+         * 页面上方的大片空白、末尾下方的留白都会显示出来。用户要的是**紧贴内容**。
+         * 拿不到实测盒时退回原口径（削边距），保证不会因为测量失败而显示异常。
+         */
+        const box = contentBoxOf(svgEl)
+        if (box) {
+          svgEl.setAttribute('viewBox', `${box.x} ${box.y} ${box.w} ${box.h}`)
+        } else {
+          const ml = c.margin_left ?? 0
+          const mt = c.margin_top ?? 0
+          const mr = c.margin_right ?? 0
+          const mb = c.margin_bottom ?? 0
+          svgEl.setAttribute('viewBox', `${ml} ${mt} ${Math.max(1, w - ml - mr)} ${Math.max(1, h - mt - mb)}`)
+        }
         svgEl.removeAttribute('width')
         svgEl.removeAttribute('height')
       } else {

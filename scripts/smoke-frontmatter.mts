@@ -1712,8 +1712,19 @@ console.log('\n[adj724b] community review: forbidden APIs / styles must stay fix
   // ⑲ 低频的「复制全部键名」已移除（模板里已含键名，清单本身不能直接生效）
   check('adj724b 已移除「复制全部键名」按钮', !settingsSrc2.includes('复制全部键名'))
   // ⑳ 新增「复制最小模板」：只含与默认不同的项
-  check('adj724b 提供「复制最小模板」（只含与默认不同的项）',
-    settingsSrc2.includes('复制最小模板') && settingsSrc2.includes('当前所有设置都是默认值'))
+  // ㉑ 「谱面」视图必须裁到**真实内容**（用户要求：不要四周空白），且不得踩两个已知陷阱
+  //    ① **不能**用 `svgEl.getBBox()` —— 引擎第一层是整页白底 `<rect data-page-bg>`，
+  //       对 svg 求 bbox 会把它算进去 ⇒ 等于没裁（这是最容易写错的一点）；
+  //    ② 量取必须发生在**插入 DOM 之后**（getBBox 要渲染树）、**辅助虚线层之前**（否则会量进虚线）。
+  //    真实裁剪几何由 `scripts/verify-score-crop.mjs` 在 Chrome 里验证（Node 里没有 getBBox）。
+  check('adj724b 「谱面」视图按真实内容包围盒裁剪（排除整页白底、量在插入之后）',
+    /function measureContentBox\(svgEl: SVGSVGElement\)/.test(scorePaneSrc) &&
+      /getAttribute\('data-page-bg'\)/.test(scorePaneSrc) &&
+      /const box = measureContentBox\(svgEl\)/.test(scorePaneSrc) &&
+      /svgEl\.dataset\.contentBox = /.test(scorePaneSrc) &&
+      /const box = contentBoxOf\(svgEl\)/.test(scorePaneSrc))
+  check('adj724b 裁剪不得退回"按边距裁"作为主路径（只有量不到时才兜底）',
+    /if \(box\) \{[\s\S]{0,200}?\} else \{[\s\S]{0,400}?margin_left/.test(scorePaneSrc))
 }
 
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。
