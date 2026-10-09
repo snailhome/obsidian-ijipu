@@ -2025,17 +2025,24 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
    * 用户随后要求：「good.png 已经缩到 320 宽，请放宽 gitignore 的限制，并加入内联」
    * ⇒ 图片入库（`vendor/icons/good.png`，与应用同图、逐字节相同）并**内联显示**。
    *
+   * adj734（用户要求）：文案收成一句、并**去掉「在浏览器打开」按钮**（码就在正下方，
+   * 再给外链是多余入口，也把说明拖长）⇒ 连带去掉 `DONATE_URL` 常量。
+   *
    * ⚠ 这条断言里最关键的是**最后一条**：`.gitignore` **不得**再忽略 `good.png`。
    *   被忽略的文件进不了仓库，而 CI 从干净检出构建 main.js ⇒ 解析不到该 import ⇒ **发版直接失败**。
    *   （这正是我第一次做内联时踩的坑：本地构建通过、CI 会挂。判据必须钉在仓库状态上。）
    */
-  check('adj730 说明页恢复「支持作者 ❤」并**内联**显示赞赏码（不引远程图片）',
+  check('adj730/734 说明页「支持作者 ❤」内联显示赞赏码（一句话说明、无外链按钮）',
     settings730.includes('支持作者 ❤') &&
+      settings730.includes('如果这个插件帮到了你，欢迎扫码下方的微信赞赏码支持一下。') &&
       /import donateQrPng from '\.\.\/vendor\/icons\/good\.png'/.test(settings730) &&
       /attr: \{ src: donateQrPng/.test(settings730) &&
       !/src:\s*'https?:\/\//.test(settings730) &&
-      /openUrlExternally\(DONATE_URL\)/.test(settings730) &&
-      settings730.includes("const DONATE_URL = 'https://ijipu.pages.dev/good.png'") &&
+      // adj734：按钮与那个常量都该从**代码**里消失
+      // （负对照一律去掉注释再判：注释里会写到"在浏览器打开""DONATE_URL"这些词，
+      //   直接对全文判会自己把自己判红——我第一版就栽在这）
+      !settings730.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '').includes('在浏览器打开') &&
+      !settings730.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '').includes('DONATE_URL') &&
       css725nc.includes('.ijipu-donate-qr') &&
       // 图片真的在仓库里（内联的前提）：320×320 的 PNG
       existsSync('vendor/icons/good.png') &&

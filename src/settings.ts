@@ -29,14 +29,8 @@ import { DEFAULT_EMBED_OPEN_MODE, type EmbedOpenMode } from './types'
 import donateQrPng from '../vendor/icons/good.png'
 import type IJipuPlugin from './main'
 
-/**
- * adj730：微信赞赏码的在线地址（与应用「关于」页同一张图）。
- *
- * 图片本体也随插件走：`vendor/icons/good.png`（与应用 `public/icons/good.png` **逐字节相同**，
- * 320×320）在构建期内联成 data URI ⇒ 设置页里**不联网**就能显示、也扫得动；
- * 这个地址只给「在浏览器打开」按钮用（便于另存/转发）。
- */
-const DONATE_URL = 'https://ijipu.pages.dev/good.png'
+// adj734（用户要求）：赞赏码只**内联显示**在设置页里（扫码即可），
+// 不再给「在浏览器打开」外链 —— 所以这里也不需要 `DONATE_URL` 常量了。
 
 // frontmatter 键的唯一约定（= `ijipu_` + 引擎 PageConfig 字段名）在 frontmatter.ts 定义，此处转出供外部复用
 export { frontmatterKey }
@@ -367,22 +361,12 @@ export class IJipuSettingTab extends PluginSettingTab {
      *    ⚠ 这一点是**硬约束**：被忽略的文件进不了仓库，而 CI 从干净检出构建 main.js，
      *    解析不到 ⇒ 发版直接失败（冒烟有一条断言专门钉住 .gitignore 不得再忽略它）。
      *  · 白底由 CSS 给（`.ijipu-donate-qr`）：二维码在深色主题的深色底上扫不动。
+     *
+     * adj734（用户要求）：**文案改成一句、并去掉「在浏览器打开」按钮** ——
+     * 码就在正下方，再给一个外链既是多余入口、也把说明拖长（原文案还把 URL 摊在设置页里）。
+     * 现在的说明：「如果这个插件帮到了你，欢迎扫码下方的微信赞赏码支持一下。」
      */
-    const donate = new Setting(host)
-      .setName('支持作者 ❤')
-      .setDesc(
-        '如果这个插件帮到了你，欢迎扫码支持（微信赞赏码，与应用「关于」页同一张）。' +
-          `也可以点右侧按钮用浏览器打开：\`${DONATE_URL}\``,
-      )
-      .addButton((b) =>
-        b
-          .setButtonText('在浏览器打开')
-          .setTooltip(DONATE_URL)
-          .onClick(() => {
-            void openUrlExternally(DONATE_URL)
-          }),
-      )
-    donate.settingEl.addClass('ijipu-donate-row')
+    new Setting(host).setName('支持作者 ❤').setDesc('如果这个插件帮到了你，欢迎扫码下方的微信赞赏码支持一下。')
     const qrWrap = host.createDiv({ cls: 'ijipu-donate-qr-wrap' })
     qrWrap.createEl('img', {
       cls: 'ijipu-donate-qr',
