@@ -100,14 +100,18 @@
   padding: 2px 4px;
   border: none;
   border-radius: var(--clickable-icon-radius, 4px);
-  /* ⚠ 谱面纸张**恒为白色**（`.ijipu-svgs .ijipu-page-svg > svg { background: #ffffff }`），
-     所以这里的底色/字色**不能只跟主题走**：深色主题下 `--text-normal` 是浅灰，
-     直接压在白纸上就看不见了。照 Obsidian 自己的 `.embed-actions` 那套变量取
-     "主背景的半透明色 + 细阴影"，于是浅色主题是白底深字、深色主题是深底浅字，**两边都压得住白纸**。 */
-  background: var(--embed-actions-background, var(--background-primary, rgb(255 255 255 / 85%)));
-  box-shadow: var(--embed-actions-shadow, 0 1px 2px rgb(0 0 0 / 15%));
-  /* 与 Obsidian 自己的 `.embed-action` 同色；无该变量的环境退回正文色 */
-  color: var(--embed-action-color, var(--text-normal));
+  /**
+   * ⚠ 底色与字色**一律不跟主题走** —— 这个按钮压在**恒为白色**的谱面纸张上
+   * （`.ijipu-svgs .ijipu-page-svg > svg { background: #ffffff }`）。
+   * 深色主题下 `--text-normal` / `--embed-action-color` 是浅灰（#dadada），压在白纸上
+   * 对比度 ≈1.1:1 ⇒ **看不见**（用户报「鼠标移上去也看不见 `</>`」）。
+   * 故固定为「半透明深底 + 白字」：白底上合成后的对比度 ≈4:1（悬停更深 ≈5.7:1），
+   * 亮/暗主题下都清楚；也天然像一枚浮在纸张上的小控件。
+   * （对比度由 `verify-score-crop.mjs` 在真实浏览器里按合成后的颜色实算，不是估的。）
+   */
+  background: rgb(0 0 0 / 55%);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 30%);
+  color: #ffffff;
   cursor: var(--cursor, pointer);
   opacity: 0;
   visibility: hidden;
@@ -128,9 +132,9 @@
   visibility: visible;
 }
 @media (hover: hover) {
+  /* 悬停：底色更深一档（按钮本身已在"悬停才显形"的态里，所以这就是它的悬停反馈） */
   .ijipu-edit-source-btn.is-revealed:hover {
-    background-color: var(--background-modifier-hover);
-    color: var(--icon-color-hover, var(--text-normal));
+    background-color: rgb(0 0 0 / 68%);
   }
 }
 

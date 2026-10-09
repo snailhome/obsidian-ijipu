@@ -1920,6 +1920,20 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
   check('adj725b 补量用的观察器在重画与 destroy 时都断开（不留悬空监听）',
     /for \(const ro of cropObservers\) ro\.disconnect\(\)/.test(pane725) &&
       /cropObservers\.clear\(\)/.test(pane725))
+
+  /**
+   * ⑥ adj725c（用户报「鼠标移上去也看不见 `</>`」）：**底色与字色不得跟主题走**。
+   *
+   * 这个按钮压在**恒为白色**的谱面纸张上，而深色主题的 `--text-normal` / `--embed-action-color`
+   * 是浅灰（#dadada）⇒ 白纸上的对比度 ≈1.1:1，等于看不见。
+   * 现固定为「半透明深底 + 白字」（≈4.8:1，悬停更深）。真实对比度由
+   * `verify-score-crop.mjs` 在浏览器里按"底色合成到白纸"实算并断言 ≥3:1。
+   */
+  check('adj725c `</>` 用固定的"半透明深底 + 白字"（不再跟主题取色，否则白纸上看不见）',
+    /\.ijipu-edit-source-btn\s*\{[^}]*background:\s*rgb\(0 0 0 \/ \d+%\)/.test(css725nc) &&
+      /\.ijipu-edit-source-btn\s*\{[^}]*color:\s*#ffffff/.test(css725nc) &&
+      !/\.ijipu-edit-source-btn\s*\{[^}]*color:\s*var\(--/.test(css725nc) &&
+      /\.ijipu-edit-source-btn\.is-revealed:hover\s*\{[^}]*background-color:\s*rgb\(0 0 0 \/ \d+%\)/.test(css725nc))
 }
 
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。
