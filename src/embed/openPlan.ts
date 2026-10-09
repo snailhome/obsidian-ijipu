@@ -58,3 +58,21 @@ export function planEmbedTarget(mode: EmbedOpenModeLike, hasSourceLeaf: boolean)
   if (mode === 'right') return { kind: 'right-sidebar', detachSource: false }
   return { kind: 'new-tab', detachSource: false }
 }
+
+/**
+ * adj727（用户要求）：**点「编辑」会不会离开 Obsidian**（即"打开 .jps 的方式" = 默认应用）。
+ *
+ * ## 为什么要单独成函数：它决定嵌入区工具栏右端那枚链接要不要留
+ *
+ * 嵌入区（`![[x.jps]]`）工具栏右端原本有一枚「打开谱面文件」链接 —— 它是**站内**打开
+ * `.jps` 视图的唯一入口。而「编辑」按钮去的是设置里指定的位置：
+ *  · 右栏 / 新页签 / 当前页签 ⇒ 仍在 Obsidian 内 ⇒ 链接是**重复入口**（用户要求收掉）；
+ *  · **默认应用** ⇒ 文件交给系统里的 iJipu 桌面版、**离开 Obsidian** ⇒ 站内入口仍需保留。
+ *
+ * 与 `planEmbedTarget` 同一口径：抽成纯函数，冒烟里直接断言四种方式；
+ * `main.ts` 的 `openIjipuFile` 与 `embed.ts` 给工具栏的标志**共用这一个判据**，
+ * 避免"两处各写一遍 `mode === 'defaultApp'`，改一处漏一处"。
+ */
+export function embedEditLeavesObsidian(mode: EmbedOpenModeLike): boolean {
+  return mode === 'defaultApp'
+}

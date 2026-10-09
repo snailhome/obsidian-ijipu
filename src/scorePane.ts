@@ -92,6 +92,16 @@ export type ScorePaneHost = {
    * 只有 ` ```jps ` 代码块会传它（`.jps` 文件视图 / `![[x.jps]]` 嵌入有自己的「源码」，它们是文件、没有宿主笔记）。
    */
   onEditSource?: () => void
+  /**
+   * adj727（用户要求）：点上面那个「编辑」**会不会离开 Obsidian**
+   * （= 设置里「打开 .jps 的方式」选了「默认应用」，见 `embed/openPlan.ts` 的
+   * `embedEditLeavesObsidian`）。
+   *
+   * 它决定嵌入区工具栏右端那枚「打开谱面文件」链接留不留：
+   *  · `false/未给`（右栏 / 新页签 / 当前页签）：链接是重复入口 ⇒ 有「编辑」时收掉；
+   *  · `true`（默认应用）：站内打开 `.jps` 视图就只剩这枚链接 ⇒ 保留。
+   */
+  editLeavesObsidian?: boolean
 }
 
 export type ScorePaneHandle = {
@@ -599,12 +609,14 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     //  · 有 `onEdit` ⇒ 显示「编辑」（走嵌入版 iJipu 的应用页签）；
     //  · 否则退回旧行为「应用打开」（桌面端用系统默认应用打开；手机端/代码块不出现）。
     /**
-     * adj726（用户要求）：「**有了编辑按钮之后，就不再需要「打开谱面文件」的链接**」。
-     * 两者都是"离开预览去处理这份谱"的入口，而「编辑」直接进完整编辑器、是更强的那个：
-     * 链接那枚（打开 `.jps` 文件视图）就成了重复入口，还占着工具栏右端（窄容器里更挤）。
-     * ⇒ 有「编辑」时不建链接；没有「编辑」时照旧保留（阅读/其它宿主回退时仍需要它）。
+     * adj726/727（用户要求）：「**有了编辑按钮之后，就不再需要「打开谱面文件」的链接**」；
+     * adj727 再细化一层：**仅当「编辑」本身就留在 Obsidian 内**（右侧栏 / 新页签 / 当前页签）才收掉链接 ——
+     * 那时链接是重复入口；若「编辑」会把文件交给**系统默认应用**（离开 Obsidian），
+     * 链接仍是"在站内打开 `.jps` 视图"的唯一入口 ⇒ 保留（判据见 `embed/openPlan.ts` 的
+     * `embedEditLeavesObsidian`，由宿主经 `host.editLeavesObsidian` 告知）。
      */
     const hasEditEntry = !!(host.onEdit && host.filePath)
+    const keepEmbedLink = !hasEditEntry || host.editLeavesObsidian === true
     if (hasEditEntry) {
       const editBtn = toolbar.createEl('button', { cls: 'ijipu-play ijipu-app-open-btn' })
       editBtn.setAttr('title', '用嵌入的爱记谱编辑')
@@ -634,8 +646,8 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     }
 
     // —— 工具栏右端：打开谱面文件（仅嵌入模式；容器窄时只留链接图标）——
-    // adj726：有「编辑」时不再建（见上面 hasEditEntry 的说明）。
-    if (host.embedded && host.embedTitle && !hasEditEntry) {
+    // adj726/727：有「编辑」且「编辑」留在站内时不再建；「编辑」会离开 Obsidian（默认应用）时保留。
+    if (host.embedded && host.embedTitle && keepEmbedLink) {
       const link = toolbar.createEl('button', { cls: 'ijipu-embed-link' })
       link.setAttr('title', `打开谱面文件：${host.embedTitle}`)
       link.setAttr('aria-label', `打开谱面文件：${host.embedTitle}`)

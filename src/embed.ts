@@ -42,6 +42,8 @@ import type { App, MarkdownPostProcessorContext } from 'obsidian'
 import { mountScorePane, type ScorePaneHandle } from './scorePane'
 import { jpsLinkpath } from './sourceEdit'
 import { JPS_EXTENSION } from './fileView'
+import { embedEditLeavesObsidian } from './embed/openPlan'
+import { DEFAULT_EMBED_OPEN_MODE } from './types'
 import type IJipuPlugin from './main'
 
 /**
@@ -222,6 +224,12 @@ class JpsEmbedHost {
         onEdit: () => {
           void this.plugin.openIjipuFile(file)
         },
+        /**
+         * adj727（用户要求）：告诉工具栏「编辑」**会不会离开 Obsidian** ——
+         * 「打开 .jps 的方式 = 默认应用」时，站内打开 `.jps` 视图就只剩那枚链接了 ⇒ 保留它。
+         * 判据与应用侧同一个纯函数（`embed/openPlan.ts`），不在两处各写一遍 `mode === 'defaultApp'`。
+         */
+        editLeavesObsidian: embedEditLeavesObsidian(this.plugin.settings.embedOpenMode ?? DEFAULT_EMBED_OPEN_MODE),
       })
       el.dataset.ijipuPainted = '1'
     } catch (e) {

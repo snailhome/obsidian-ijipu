@@ -64,15 +64,35 @@ function decodeAssets(): Map<string, { mime: string; body: Buffer }> {
 const PREFERRED_PORT = 47821
 
 /**
+ * 嵌入版应用运行时要按路径取的**非白名单资产**（adj727b）。
+ *
+ * `spessasynth/spessasynth_processor.min.js`：应用侧 `WORKLET_URL =
+ * ${import.meta.env.BASE_URL}spessasynth/spessasynth_processor.min.js`
+ * （`vite.config.embed.mjs` 的 `base: './'` ⇒ 实际请求 `/<token>/spessasynth/…`），
+ * 试听与导出都靠 `audioWorklet.addModule(WORKLET_URL)` 起 SpessaSynth。
+ * 而它**不在**嵌入版资产白名单里（`ijipu/scripts/embed-assets.mjs` 只带图标与示例谱，
+ * 图上注释写着"网页版有、嵌入版不需要"的那一类只列了 PWA 图标与遗留 SVG）⇒
+ * 服务对未知路径回 **204** ⇒ `addModule` 拿到空模块必然失败 ⇒
+ * 用户看到的就是「音源加载失败，本次试听无声」/ 试听对话框里音源状态「加载失败」
+ * （导入本身只写 IndexedDB，所以**导入看着是成功的**——这就是"能看到导入、但试听加载不了"）。
+ */
+export const EMBED_WORKLET_PATH = 'spessasynth/spessasynth_processor.min.js'
+
+/**
  * 启动服务。**幂等**：同一个插件实例只起一个（调用方负责缓存返回的 Promise）。
  *
  * 端口策略：先试 `PREFERRED_PORT`（让 origin 稳定 ⇒ 浏览器侧的 `localStorage` 得以延续），
  * 被占用再退回系统分配（此时靠桥存储兜底）。
+ *
+ * @param opts.workletCode SpessaSynth worklet 的源码文本（插件已 `import … from
+ *   '../spessasynth_processor.min.js'` 内联进 main.js）——由它顶上应用要的那条路径，
+ *   **不额外增加体积**（那份代码本来就在 main.js 里）。
  */
-export async function startEmbedServer(): Promise<EmbedServer> {
+export async function startEmbedServer(opts: { workletCode?: string } = {}): Promise<EmbedServer> {
   const token = randomBytes(16).toString('hex')
   const html = Buffer.from(WEBAPP_HTML, 'utf8')
   const assets = decodeAssets()
+  const workletCode = opts.workletCode ?? ''
 
   const server: Server = createServer((req, res) => {
     const raw = String(req.url ?? '/')
@@ -106,6 +126,22 @@ export async function startEmbedServer(): Promise<EmbedServer> {
         'Cache-Control': 'no-store',
       })
       res.end(html)
+      return
+    }
+
+    // adj727b：应用要的 SpessaSynth worklet —— 用插件**已经内联**的那份顶上（见 EMBED_WORKLET_PATH 的说明）
+    if (rest === EMBED_WORKLET_PATH) {
+      if (!workletCode) {
+        // 理论上不会发生（main.ts 一定会传）；真发生也要能一眼看出原因，而不是静默 204
+        res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' })
+        res.end('worklet code missing（插件未把 SpessaSynth worklet 交给嵌入服务）')
+        return
+      }
+      res.writeHead(200, {
+        'Content-Type': 'text/javascript; charset=utf-8',
+        'Cache-Control': 'no-store',
+      })
+      res.end(workletCode)
       return
     }
 

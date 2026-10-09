@@ -21,7 +21,7 @@ import { computeGuideLines, cropRectFor, guideLimits, guidePlacement } from '../
 import { splitParseIssues } from '../src/parseIssues'
 // adj724b：「打开 .jps 的方式 → 开在哪里」是**纯函数**，冒烟直接跑它
 // （此前只能对 main.ts 做字符串匹配：脆，且注释里写同样的字都会误判）
-import { planEmbedTarget } from '../src/embed/openPlan'
+import { embedEditLeavesObsidian, planEmbedTarget } from '../src/embed/openPlan'
 // 新建 JPS 文件（文件夹右键菜单 + 点击未解析链接 + 默认模板）
 import {
   NEW_JPS_BASE,
@@ -366,7 +366,8 @@ console.log('[3g] adj631 设置面板：多页签 / 收藏音色分类列表 / �
       /DEFAULT_EMBED_OPEN_MODE: EmbedOpenMode = 'right'/.test(String(readFileSync('src/types.ts', 'utf8'))) &&
       /openIjipuFile\(file: TFile \| null, sourceLeaf: WorkspaceLeaf \| null = null\): Promise<void>/.test(mainSrc) &&
       // `defaultApp` 分支里夹着"非桌面端 ⇒ 提示并改走右侧栏"的回退，窗口给足
-      /mode === 'defaultApp'[\s\S]{0,420}?openWithDefaultApp\(/.test(mainSrc) &&
+      // adj727：判据已抽成纯函数 `embedEditLeavesObsidian`（同一口径也用于"嵌入区要不要留链接"）
+      /embedEditLeavesObsidian\(mode\)[\s\S]{0,460}?openWithDefaultApp\(/.test(mainSrc) &&
       // 三种嵌入方式各自走对应的 API（"开在哪里"的判定已抽到纯函数，见下面的组合断言）
       /workspace\.getRightLeaf\(false\)/.test(mainSrc) &&
       /workspace\.getLeaf\('tab'\)/.test(mainSrc) &&
@@ -1831,6 +1832,7 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
   const css725 = s725('styles.css')
   const pane725 = s725('src/scorePane.ts')
   const main725 = s725('src/main.ts')
+  const embed725 = s725('src/embed.ts')
   // ⚠ 老规矩：先剥注释 —— "解释为什么不能用 X"的注释里就写着 X（本项目因此误判过多次）
   const css725nc = css725.replace(/\/\*[\s\S]*?\*\//g, '')
 
@@ -1989,8 +1991,82 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
    */
   check('adj726 有「编辑」按钮时不再出现「打开谱面文件」链接（没有编辑时仍保留）',
     /const hasEditEntry = !!\(host\.onEdit && host\.filePath\)/.test(pane725) &&
-      /if \(hasEditEntry\) \{/.test(pane725) &&
-      /if \(host\.embedded && host\.embedTitle && !hasEditEntry\)/.test(pane725))
+      /const keepEmbedLink = !hasEditEntry \|\| host\.editLeavesObsidian === true/.test(pane725) &&
+      /if \(host\.embedded && host\.embedTitle && keepEmbedLink\)/.test(pane725))
+
+  /**
+   * ⑩ adj727（用户要求）：「**仅当打开方式 = 默认应用时保留链接**」。
+   *
+   * 判据抽成**纯函数** `embedEditLeavesObsidian`（`src/embed/openPlan.ts`）：
+   *  · 右栏 / 新页签 / 当前页签 ⇒ 仍在 Obsidian 内 ⇒ 有「编辑」时链接是重复入口，收掉；
+   *  · **默认应用** ⇒ 文件交给系统里的 iJipu 桌面版、**离开 Obsidian** ⇒
+   *    那枚链接是"在站内打开 `.jps` 视图"的唯一入口，必须保留。
+   * `main.ts` 的 `openIjipuFile` 与 `embed.ts` 给工具栏的标志**共用这一个判据**
+   * （不在两处各写一遍 `mode === 'defaultApp'`，改一处漏一处）。
+   */
+  check('adj727 embedEditLeavesObsidian 只在「默认应用」时返回 true（四种方式全覆盖）',
+    embedEditLeavesObsidian('defaultApp') === true &&
+      embedEditLeavesObsidian('right') === false &&
+      embedEditLeavesObsidian('tab') === false &&
+      embedEditLeavesObsidian('current') === false)
+  check('adj727 判据只写一处：main.ts 与 embed.ts 都改用纯函数',
+    /if \(embedEditLeavesObsidian\(mode\)\)/.test(main725) &&
+      /import \{ embedEditLeavesObsidian, planEmbedTarget \} from '\.\/embed\/openPlan'/.test(main725) &&
+      /editLeavesObsidian: embedEditLeavesObsidian\(this\.plugin\.settings\.embedOpenMode \?\? DEFAULT_EMBED_OPEN_MODE\)/.test(embed725) &&
+      /import \{ embedEditLeavesObsidian \} from '\.\/embed\/openPlan'/.test(embed725))
+}
+
+/**
+ * ---- adj727b：嵌入版本地服务必须能交出 **SpessaSynth worklet** ----
+ *
+ * 用户报：「插件方式导入音色库……试听对话框里无法加载」。查证的链路：
+ * 嵌入版应用按 `./spessasynth/spessasynth_processor.min.js` 取 worklet
+ * （`vite.config.embed.mjs` 的 `base: './'`），而该文件**不在**嵌入版资产白名单里
+ * （`ijipu/scripts/embed-assets.mjs` 只带图标与示例谱）⇒ 服务对未知路径回 **204**
+ * ⇒ `audioWorklet.addModule` 拿到空模块必然失败 ⇒ 试听"音源加载失败，本次试听无声"。
+ * （导入只写 IndexedDB ⇒ **导入看着是成功的**，这正对上用户那句"能看到导入、但试听加载不了"。）
+ *
+ * 这一节**真起服务、真取一次**（不是读源码判断）：起服务 → 取 worklet → 取图标作对照 →
+ * 再起一个"没传 worklet"的服务确认它是**响亮地 500**、而不是又静默 204。
+ */
+console.log('\n[adj727b] 嵌入版本地服务：SpessaSynth worklet 必须能取到')
+{
+  const sv = (p: string): string => readFileSync(p, 'utf8')
+  const serverSrc = sv('src/embed/server.ts')
+  const mainSrc = sv('src/main.ts')
+  check('adj727b 服务声明 worklet 路径常量，且 main.ts 把**已内联**的那份传给它（不额外增体积）',
+    serverSrc.includes("export const EMBED_WORKLET_PATH = 'spessasynth/spessasynth_processor.min.js'") &&
+      serverSrc.includes('if (rest === EMBED_WORKLET_PATH)') &&
+      /startEmbedServer\(\{ workletCode \}\)/.test(mainSrc) &&
+      /import workletCode from '\.\.\/spessasynth_processor\.min\.js'/.test(mainSrc))
+
+  // —— 行为验证：真起服务 ——
+  const { startEmbedServer } = await import('../src/embed/server')
+  const workletCode = sv('spessasynth_processor.min.js')
+  const server = await startEmbedServer({ workletCode })
+  try {
+    const wl = await fetch(`${server.url}${'spessasynth/spessasynth_processor.min.js'}`)
+    const body = await wl.text()
+    check('adj727b 真机取 worklet：200 + JS 类型 + 与插件内联的那份一致',
+      wl.status === 200 &&
+        /javascript/i.test(wl.headers.get('content-type') ?? '') &&
+        body.length > 1000 &&
+        body === workletCode,
+      `status=${wl.status} type=${wl.headers.get('content-type')} bytes=${body.length}`)
+    // 对照：白名单资产（图标）照旧 200，别把资产表弄坏
+    const icon = await fetch(`${server.url}icons/${encodeURIComponent('菜单')}.png`)
+    check('adj727b 白名单图标仍 200（没有把资产表改坏）', icon.status === 200, `status=${icon.status}`)
+  } finally {
+    await server.dispose()
+  }
+  const bare = await startEmbedServer()
+  try {
+    const miss = await fetch(`${bare.url}spessasynth/spessasynth_processor.min.js`)
+    check('adj727b 未传 worklet 时**响亮地** 500（不静默 204，否则又回到用户那个现象）',
+      miss.status === 500, `status=${miss.status}`)
+  } finally {
+    await bare.dispose()
+  }
 }
 
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。

@@ -8,7 +8,7 @@ import { replaceCodeBlockBody } from './sourceEdit'
 import { canOpenWithDefaultApp, openWithDefaultApp } from './openExternal'
 import { DEFAULT_EMBED_OPEN_MODE, type EmbedOpenMode, type IJipuSettings } from './types'
 import { IJipuBridge } from './embed/bridge'
-import { planEmbedTarget } from './embed/openPlan'
+import { embedEditLeavesObsidian, planEmbedTarget } from './embed/openPlan'
 import { startEmbedServer, type EmbedServer } from './embed/server'
 import { IJipuAppView, VIEW_TYPE_IJIPU_APP } from './embed/appView'
 // @ts-ignore esbuild 以 text loader 把 worklet 内联为字符串（main.js 单文件自包含，无需插件目录单独 worklet）
@@ -244,7 +244,7 @@ export default class IJipuPlugin extends Plugin {
   async getEmbedUrl(): Promise<string | null> {
     if (!this.embedEnabled && this.embedServer === null) return null
     if (!this.embedServerStarting) {
-      this.embedServerStarting = startEmbedServer().then((s) => {
+      this.embedServerStarting = startEmbedServer({ workletCode }).then((s) => {
         this.embedServer = s
         this.bridge.setToken(s.token)
         /**
@@ -354,7 +354,8 @@ export default class IJipuPlugin extends Plugin {
    */
   async openIjipuFile(file: TFile | null, sourceLeaf: WorkspaceLeaf | null = null): Promise<void> {
     const mode = this.settings.embedOpenMode ?? DEFAULT_EMBED_OPEN_MODE
-    if (mode === 'defaultApp') {
+    // adj727：判据收敛到纯函数（同一口径也用于"嵌入区工具栏要不要保留那枚链接"）
+    if (embedEditLeavesObsidian(mode)) {
       if (!file) return // 没指定文件时"默认应用"无从谈起（侧栏图标就是这种情况）
       if (!canOpenWithDefaultApp(this.app)) {
         new Notice('「默认应用」仅在桌面端可用；已改为在右侧栏打开')
