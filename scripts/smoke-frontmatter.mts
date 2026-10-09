@@ -2111,6 +2111,35 @@ console.log('\n[adj727b] 嵌入版本地服务：SpessaSynth worklet 必须能�
         donateBuf[0] === 0x89 &&
         donateBuf.subarray(1, 4).toString('latin1') === 'PNG',
       `status=${donate.status} bytes=${donateBuf.length}`)
+
+    /**
+     * ---- adj733：**嵌入版产物必须与应用同版**（生成顺序的机器闸门）----
+     *
+     * 用户实测报的坑：「插件是 0.31.0，但嵌入版 iJipu 还是 0.49.0，而应用已经是 0.50.0」
+     * —— 更严重的后果不是版本号显示，而是**嵌入版里的引擎是旧的**：
+     * 本轮"色块右界按墨迹夹紧"（引擎 `adj732`）是在**生成嵌入产物之后**才做的 ⇒
+     * 插件自己的 ` ```jps ` 预览（走 `vendor/engine`）已修，而**嵌入版（走旧 bundle）没修**，
+     * 于是用户看到"应用正常、插件还有覆盖"。
+     *
+     * 正确的顺序（写进 `ijipu/AGENTS.md` 与「版本发布」技能）：
+     *   **应用版本号/引擎定稿 → `npm run build:embed && node scripts/embed-emit.mjs` → 再构建/发布插件**。
+     * 这条断言就是那个顺序的闸门：嵌入产物里记的 `WEBAPP_META.appVersion`
+     * （由 `embed-emit.mjs` 写自应用 `package.json`）必须等于应用当前的 `APP_VERSION`。
+     * ⚠ 插件 CI 只 checkout 本仓库、拿不到应用仓库 ⇒ 跨仓核对**在本地跑**（发布前必跑 `npm run smoke`）；
+     *    CI 里退化为"记录来源版本"的弱断言。
+     */
+    const embedMetaVersion = /appVersion:\s*"([^"]+)"/.exec(readFileSync('src/gen/webappAssets.ts', 'utf8'))?.[1]
+    const appVersionFile = '../ijipu/src/brand/version.ts'
+    if (existsSync(appVersionFile)) {
+      const appVersion = /APP_VERSION = '([^']+)'/.exec(readFileSync(appVersionFile, 'utf8'))?.[1]
+      check('adj733 嵌入版产物版本 == 应用 APP_VERSION（顺序：先升版本 → 再 build:embed + emit）',
+        embedMetaVersion !== undefined && embedMetaVersion === appVersion,
+        `嵌入版=${String(embedMetaVersion)} 应用=${String(appVersion)}（不等 ⇒ 回应用仓库重跑 npm run build:embed && node scripts/embed-emit.mjs）`)
+    } else {
+      check('adj733 嵌入版产物记录了来源版本（CI 无应用仓库，跨仓核对在本地跑）',
+        typeof embedMetaVersion === 'string' && /^\d+\.\d+\.\d+/.test(embedMetaVersion),
+        `嵌入版=${String(embedMetaVersion)}`)
+    }
   } finally {
     await server.dispose()
   }
