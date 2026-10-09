@@ -18,10 +18,12 @@
  * `renderSoundbank`/`renderVoiceList` 负责音色库；这三块已随本次整合**删除**。
  * 设置项定义与控件构建仍由 `defs.ts` 统一提供（谱面设置对话框与 frontmatter 模板共用一份）。
  */
-import { App, Notice, PluginSettingTab, Setting } from 'obsidian'
+import { App, PluginSettingTab, Setting } from 'obsidian'
 import { BUILD_STAMP, GIT_COMMIT } from './gen/buildInfo'
-import { buildFrontmatterTemplate, frontmatterKey } from './frontmatter'
-import { DEFS, GROUPS, getDefault, readDef, type SettingDef } from './defs'
+// adj736：只保留 `frontmatterKey` 的**转出**（外部仍按这个约定拼键）；
+// 「复制 frontmatter 模板」那套（`buildFrontmatterTemplate` + 本地 `frontmatterTemplate` + `copyText`）已随该入口撤掉
+// —— 那三个"复制模板"入口撤掉后，连 `./defs` 的 DEFS/GROUPS/SettingDef 也不再被本文件使用。
+import { frontmatterKey } from './frontmatter'
 // adj724b：外链统一走这处（Electron 里 `window.open` 不可靠）
 import { openUrlExternally } from './openExternal'
 import { DEFAULT_EMBED_OPEN_MODE, type EmbedOpenMode } from './types'
@@ -38,59 +40,6 @@ export { frontmatterKey }
 /** 设置页签（adj631：一屏一组，减少滚动；adj724b：只剩两页） */
 export type SettingsTabId = '嵌入版' | '说明'
 export const SETTINGS_TABS: SettingsTabId[] = ['嵌入版', '说明']
-
-/** 复制文本到剪贴板（优先 Clipboard API；失败回退 execCommand，桌面/移动端均可用） */
-async function copyText(text: string, okTip: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(text)
-    new Notice(okTip)
-    return
-  } catch {
-    /* 回退到 execCommand */
-  }
-  try {
-    /**
-     * adj724b（社区审核）：`document.createElement` → Obsidian 全局 `createEl`（`prefer-create-el`）；
-     * 隐藏用的定位样式由内联 `style` 属性改为 CSS 类 `.ijipu-offscreen`（`no-static-styles-assignment`）。
-     *
-     * 关于 `document.execCommand('copy')`：它已被标准弃用，官方审核把它列为 Recommendation。
-     * ⚠ **不能**用 eslint 的禁用指令去压它 —— 审核明确**不允许**禁用 `no-deprecated` 这条规则，
-     * 写了禁用指令本身就是一条 **Error**（我在 0.29.6 恰好踩中，已改）。
-     *
-     * 因此改为**不直接出现在源码里的调用形式**：按名字从 document 上取方法再调。
-     * 语义完全不变（仍是同步复制），只是不再触发静态检查；这段本身就是回退路径
-     * （上面已先试 `navigator.clipboard.writeText`），只服务于"无剪贴板权限/旧环境"。
-     */
-    const ta = createEl('textarea', { cls: 'ijipu-offscreen' })
-    ta.value = text
-    document.body.appendChild(ta)
-    ta.select()
-    const copySync = (document as unknown as Record<string, ((cmd: string) => boolean) | undefined>)[
-      'exec' + 'Command'
-    ]
-    const ok = typeof copySync === 'function' ? copySync.call(document, 'copy') : false
-    ta.remove()
-    new Notice(ok ? okTip : '复制失败，请手动选中复制', ok ? 3000 : 5000)
-  } catch {
-    new Notice('复制失败，请手动选中复制', 5000)
-  }
-}
-
-/**
- * 生成可直接粘贴到笔记顶部的 frontmatter 模板（含当前生效值，按设置分组加注释）。
- *
- * adj629q：实现搬到 `frontmatter.ts` 的纯函数 `buildFrontmatterTemplate`（可被冒烟直接核对）。
- * 嵌套字段（`segmentRowGap`）会合成一行 YAML 流式映射，不会写成三行互相覆盖。
- *
- * adj724b：`include` 用于生成"**最小模板**"——只收录**与引擎默认不同的项**，
- * 让用户拿到一份"真正需要写的"短清单，而不是把几十个键全铺上去。
- */
-function frontmatterTemplate(
-  valueOf: (def: SettingDef) => unknown,
-  include?: (def: SettingDef) => boolean,
-): string {
-  return buildFrontmatterTemplate(DEFS, GROUPS, (d) => valueOf(d as SettingDef), include as never)
-}
 
 export class IJipuSettingTab extends PluginSettingTab {
   plugin: IJipuPlugin
@@ -252,16 +201,14 @@ export class IJipuSettingTab extends PluginSettingTab {
     )
   }
 
-  /** 「说明」页签：优先级说明 + frontmatter 键复制工具 */
+  /** 「说明」页签：设置写在哪 + 构建信息 + 运行期诊断 */
   private renderAbout(host: HTMLElement): void {
     new Setting(host)
       .setName('设置优先级（源内最高）')
       .setDesc(
-        '① 引擎默认 → ② 笔记 frontmatter（`ijipu_*`，**只对代码块生效**） → ' +
-          '③ **谱面源码内的 `# jps-config` 行**（该曲谱自带设置，优先级最高）。\n' +
-          '⚠ 内联嵌入 `![[xx.jps]]` 与编辑器里打开的 `.jps` **跳过 ②**：只读 ③。\n' +
-          'frontmatter 只对**源内没写的键**生效，因此**不随谱走**——' +
-          '要让别人看到的排版与你一致，点谱面工具条的「⚙ 排版 → 随谱固化」（把当前值写进 ③）。',
+        '① 引擎默认 → ② **谱面源码内的 `# jps-config` 行**（这份谱自带、跟谱走、**优先级最高**）。\n' +
+          '点谱面工具条的「设置」按钮改排版时，插件会把差异写回 ② —— 所以**每一份谱都是自包含的**：' +
+          '把源码复制给别人，看到的排版与你一致。',
       )
 
     new Setting(host)
@@ -291,47 +238,31 @@ export class IJipuSettingTab extends PluginSettingTab {
           (this.plugin.lastCropInfo ?? '（还没打开过谱面）打开任意一份谱，再回到本页即可看到最新一条'),
       )
 
+    /**
+     * adj736（用户判断）：**取消 frontmatter 这一块**。
+     *
+     * 用户原话：「这处的复制最小模板对于用户来说意义不大；复制 frontmatter 模板，对于用户来说太复杂，
+     * 用户根据不知道什么时候用什么，没有变量的说明。我的意见是这块 jps 文件用不上，对于多 jps 代码块的
+     * 笔记又显粗糙，考虑一下，取消 frontmatter 这块的内容，jps 代码块里也使用 `# jps-config:{}` 还携带设置更佳」。
+     *
+     * 查证（用户判断正确）：`.jps` 文件视图与内联嵌入**本来就传 `null`**（`fileView.ts` / `embed.ts` 的
+     * `getFrontmatter()` 都硬编码 null）⇒ 笔记 frontmatter 只对 ` ```jps ` 代码块生效；
+     * 而它是**笔记级**的（一个笔记里多个 ` ```jps ` 块会被同一套值一起覆盖 ⇒ 正是用户说的"显粗糙"），
+     * 且**不随谱走**（别人拿到同一份谱看不到同样排版）。
+     * 相反，**源内的 `# jps-config:{…}`** 既"跟着谱走"、又能**逐块**写 —— 它本来就是引擎与本插件的唯一口径。
+     *
+     * 所以这里只留一句指引（写在哪、怎么改、多个块怎么办），并撤掉那两个"复制模板"按钮：
+     * 它们要求用户先理解"frontmatter 是什么、什么时候用完整模板/最小模板"，对使用者没有价值。
+     */
     new Setting(host)
-      /**
-       * adj724b（用户决策 A）：**写清适用范围**。
-       *
-       * 此前这里只说"笔记级兜底"，会让人以为写在笔记顶部就能影响**嵌入的 `.jps`** ——
-       * 实际不是：`embed.ts` 与 `fileView.ts` 的 `getFrontmatter()` **都硬编码返回 null**，
-       * frontmatter 只对 ` ```jps ` **代码块**生效。这是最容易误解的一点，故在说明里点明。
-       */
-      .setName('frontmatter 键（仅对 ` ```jps ` 代码块生效）')
+      .setName('谱面设置写在哪里（跟着谱走）')
       .setDesc(
-        '笔记级设置写在笔记顶部的 `---` 之间，键名 = `ijipu_` + 引擎设置项字段名。\n' +
-          '⚠ **只对笔记里的 ` ```jps ` 代码块生效**：内联嵌入 `![[xx.jps]]` 与在编辑器里打开的 `.jps`\n' +
-          '一律读**谱面自带的 `# jps-config`**（不读笔记 frontmatter）。',
-      )
-      .addButton((b) =>
-        b
-          .setButtonText('复制 frontmatter 模板')
-          .setTooltip('带当前设置的完整 YAML（所有键），可直接粘贴到笔记顶部')
-          .onClick(() =>
-            void copyText(
-              frontmatterTemplate((d) => readDef(this.plugin.settings, d) ?? getDefault(d)),
-              '已复制 frontmatter 模板：粘贴到笔记顶部（--- 之间）即可生效',
-            ),
-          ),
-      )
-      .addButton((b) =>
-        b
-          .setButtonText('复制最小模板')
-          .setTooltip('只含**与默认不同**的项 —— 通常只有几行，粘上去即可复现当前效果')
-          .onClick(() => {
-            const valueOf = (d: SettingDef): unknown => readDef(this.plugin.settings, d) ?? getDefault(d)
-            const text = frontmatterTemplate(valueOf, (d) => {
-              const cur = readDef(this.plugin.settings, d) ?? getDefault(d)
-              return String(cur ?? '') !== String(getDefault(d) ?? '')
-            })
-            if (!text) {
-              new Notice('当前所有设置都是默认值，没有需要写进 frontmatter 的项')
-              return
-            }
-            void copyText(text, '已复制最小模板：只含与默认不同的项')
-          }),
+        '**写在谱面里**：代码块里用 `# jps-config:{…}` 一行携带这份谱的设置，' +
+          '别人打开同一份谱看到的排版就与你一致。\n' +
+          '不必手写 JSON：点谱面工具条的「**设置**」按钮，图形界面改完会**自动写回**这一行' +
+          '（只写与默认不同的项）。\n' +
+          '⚠ 一个笔记里有多个 ` ```jps ` 块时，**每块各自写自己的** `# jps-config`；' +
+          '`.jps` 文件同理（写在文件里）。',
       )
 
     new Setting(host)

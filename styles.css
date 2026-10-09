@@ -1057,14 +1057,8 @@
   font-weight: 600;
   color: var(--text-normal);
 }
-/* adj724b（社区审核）：复制到剪贴板的回退路径里，临时 textarea 的"移出视野"
-   原为内联 style 属性，改为类（no-static-styles-assignment）。 */
-.ijipu-offscreen {
-  position: fixed;
-  left: -9999px;
-  top: 0;
-  opacity: 0;
-}
+/* adj736：`.ijipu-offscreen`（复制到剪贴板的回退路径里"移出视野"的临时 textarea）
+   随"复制 frontmatter 模板"入口一起撤掉了 —— 现在没有任何地方再生成这个元素。 */
 /* adj730（用户要求：「good.png 已经缩到 320 宽，放宽 gitignore 并加入内联」）：
    说明页底部的**微信赞赏码**（`src/settings.ts` 内联显示）。
    ⚠ 白底是必须的：二维码在深色主题的深色底上扫不动（源图本身是白底 RGB，这里再兜一层，

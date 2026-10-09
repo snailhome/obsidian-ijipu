@@ -1689,10 +1689,16 @@ console.log('\n[adj724b] community review: forbidden APIs / styles must stay fix
   //    ⚠ 回退**不能用 `eslint-disable` 压** —— 审核明确「Disabling '@typescript-eslint/no-deprecated'
   //    is not allowed」，写了禁用指令本身就是一条 Error（0.29.6 恰好踩中）。
   //    故这里断言：① 优先 Clipboard API；② 源码里不得出现 no-deprecated 的禁用指令。
-  check('adj724b 剪贴板优先 Clipboard API，且用"不触发弃用规则"的写法做回退',
-    settingsSrc2.includes('navigator.clipboard.writeText') &&
-      !/eslint-disable[^\n]*no-deprecated/.test(stripLineComments(settingsSrc2)) &&
-      settingsSrc2.includes("'exec' + 'Command'"))
+  /**
+   * adj736（用户判断：取消 frontmatter 那块内容）：设置页里那两个"复制模板"入口撤掉后，
+   * 连**剪贴板回退实现**（`copyText` + `execCommand` 的绕行写法）也没有调用方了 ⇒ 一并删除。
+   * 这条断言按**新口径**改：不得再出现那套实现（而不是继续断言它存在）。
+   * 旧口径（adj724b）保的是"复制模板按钮在旧环境下也能用"；入口没了，这个目标随之消失。
+   */
+  check('adj736 设置页不再残留剪贴板回退实现（复制模板入口已撤）',
+    !settingsSrc2.includes('navigator.clipboard.writeText') &&
+      !settingsSrc2.includes("'exec' + 'Command'") &&
+      !/eslint-disable[^\n]*no-deprecated/.test(stripLineComments(settingsSrc2)))
   // ⑭ 设置页重画用 update()（1.13+ 里 display() 不刷新声明式设置）
   check('adj724b 设置页用 this.update() 重画（不是 display()）',
     settingsSrc2.includes('this.update()') && !settingsSrc2.includes('this.display()'))
@@ -1714,9 +1720,23 @@ console.log('\n[adj724b] community review: forbidden APIs / styles must stay fix
     /getFrontmatter:\s*\(\)\s*=>\s*null/.test(embedApiSrc) &&
       /getFrontmatter:\s*\(\)\s*=>\s*null/.test(fileViewApiSrc) &&
       /getFrontmatter:\s*\(\)\s*=>\s*this\.plugin\.app\.metadataCache/.test(mainApiSrc))
-  // ⑱ 说明页必须写明"仅对代码块生效"，否则用户会以为写在笔记顶部就能影响嵌入的 .jps
-  check('adj724b 说明页写明 frontmatter 的适用范围',
-    settingsSrc2.includes('仅对') && settingsSrc2.includes('代码块生效') && settingsSrc2.includes('跳过 ②'))
+  /**
+   * ⑱ adj736（用户判断：取消 frontmatter 那块）：说明页不再讲 frontmatter，
+   * 改为**一句话指路**——设置写在**谱面里的 `# jps-config`**（跟谱走、可逐个代码块写），
+   * 并告诉用户能用工具条的「设置」按钮可视化改、自动写回。
+   *
+   * 旧口径（adj724b）要求"说明页写明 frontmatter 仅对代码块生效"——
+   * 那是为了让用户别误以为它对嵌入的 `.jps` 也生效；现在整块撤掉，这个误解自然不存在了。
+   * ⚠ 引擎/插件对笔记 frontmatter 的**读取**路径仍在（老笔记里的 `ijipu_*` 继续生效，不破坏既有用户），
+   * 只是不再在界面上宣传；要不要连支持一起删，等用户定。
+   */
+  check('adj736 说明页改为指路 `# jps-config`（不再讲 frontmatter）',
+    settingsSrc2.includes('谱面设置写在哪里（跟着谱走）') &&
+      settingsSrc2.includes('# jps-config') &&
+      settingsSrc2.includes('每块各自写自己的') &&
+      // 负对照去注释再判（注释里会写到这两个按钮名——adj734 那次已经栽过一回）
+      !stripLineComments(settingsSrc2).includes('复制 frontmatter 模板') &&
+      !stripLineComments(settingsSrc2).includes('复制最小模板'))
   // ⑲ 低频的「复制全部键名」已移除（模板里已含键名，清单本身不能直接生效）
   check('adj724b 已移除「复制全部键名」按钮', !settingsSrc2.includes('复制全部键名'))
   // ⑳ 新增「复制最小模板」：只含与默认不同的项
