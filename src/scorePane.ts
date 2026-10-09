@@ -186,10 +186,23 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
    * Obsidian 的 `app.css` 里有 `.cm-embed-block:hover { overflow: hidden }`（悬停时才加），
    * 而工具条**正是悬停才显示** ⇒ 不处理的话它在实时预览里"永远看不见"（阅读模式没这层容器，没事）。
    * 做法：只给承载本面板的那个 widget 容器加一个类，由 styles.css 放开裁剪（不碰别人的块）。
+   *
+   * adj737（用户报「阅读模式才显示工具条与 `</>`，**编辑模式不显示**」）：**这个类必须能重打**。
+   * 旧实现只在挂载时打一次，而实时预览里 CM6 会**复用/重建**块容器（滚动、重新排版、光标进出块都会）
+   * ⇒ 我们的面板被挪到**新的**块元素里，旧元素上的类留在原地 ⇒ 悬停时宿主那条 `overflow: hidden`
+   * 重新把浮在块外的工具条**整条裁掉**（`</>` 同时退回主题色，在白纸上等于看不见）。
+   * 现在 `revealToolbar(true)` 每次都会再确认一遍（本函数是幂等的：同类同名直接返回）。
    */
   const markHostWidget = (): void => {
     const widget = container.closest(CM_EMBED_BLOCK)
-    if (!(widget instanceof HTMLElement) || widget === hostWidgetEl) return
+    if (!(widget instanceof HTMLElement)) return
+    if (widget === hostWidgetEl) {
+      // 同一个元素：类可能被宿主重建 DOM 时带走（`class` 属性被覆盖）⇒ 缺了就补
+      if (!widget.hasClass('ijipu-cm-host')) widget.addClass('ijipu-cm-host')
+      return
+    }
+    // 面板被挪进了**新的**块元素 ⇒ 老元素上的类要摘掉（不去动别人的块）
+    hostWidgetEl?.removeClass('ijipu-cm-host')
     widget.addClass('ijipu-cm-host')
     hostWidgetEl = widget
   }
@@ -284,6 +297,9 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
      * 两处都是"操作界面"，导出时都该消失，行为也该一致。
      */
     const revealToolbar = (on: boolean): void => {
+      // adj737：**先**确认宿主块被标了类再显示 —— 否则悬停那一下正好被宿主的
+      // `.cm-embed-block:hover { overflow: hidden }` 裁掉（实时预览里块容器会被 CM6 换掉，类会丢）
+      if (on) markHostWidget()
       toolbar.toggleClass('is-revealed', on)
       editSourceBtn?.toggleClass('is-revealed', on)
     }
@@ -589,8 +605,17 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
         act()
       })
       editSourceBtn = btn
+      /**
+       * adj737（用户报「阅读模式才显示 `</>`，编辑模式不显示」）：**只在真的找到宿主那枚按钮时才让位**。
+       *
+       * 旧实现只看 `.embed-actions`（宿主给"块操作"预留的**容器**）在不在 ⇒ 容器在、里面的按钮却可能
+       * 不在（转引用的 `![[x.jps]]`、或该主题/版本下不给代码块挂按钮）⇒ 我们把**自己那枚**撤了，
+       * 屏幕上就**什么也没有**（用户看到的正是这个）。现在要求"容器里确实有 `.edit-block-button`"才撤。
+       */
       window.setTimeout(() => {
-        if (container.closest(CM_EMBED_BLOCK)?.querySelector('.embed-actions')) {
+        const host = container.closest(CM_EMBED_BLOCK)
+        const hostBtn = host?.querySelector('.embed-actions .edit-block-button, .edit-block-button')
+        if (hostBtn instanceof HTMLElement) {
           btn.remove()
           if (editSourceBtn === btn) editSourceBtn = null
         }

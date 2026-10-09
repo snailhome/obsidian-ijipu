@@ -1899,12 +1899,30 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
       !/createEl\('button',\s*\{[^}]*ijipu-edit-source-btn/.test(pane725) &&
       /setAttr\('role', 'button'\)/.test(pane725) &&
       /e\.key !== 'Enter' && e\.key !== ' '/.test(pane725))
-  // ③b 只在宿主给了落点（代码块）时才出现；宿主自己挂过同款按钮就不重复挂
-  check('adj725 `</>` 只在代码块出现（host.onEditSource），且宿主已挂同款时不重复挂',
+  /**
+   * ③b adj725/adj737：只在宿主给了落点（代码块）时才出现；**宿主确实挂了同款按钮**才不重复挂。
+   *
+   * adj737（用户报「阅读模式才显示 `</>`，编辑模式不显示」）改的口径：
+   * 旧实现只看 `.embed-actions`（宿主给"块操作"预留的**容器**）在不在 ⇒ 容器在、里面的**按钮**却可能不在
+   * （转引用 `![[x.jps]]`、或该主题/版本下不给代码块挂按钮）⇒ 我们把自己那枚撤了，屏幕上就什么都没有。
+   * 现在要求**容器里确实有 `.edit-block-button`** 才撤（找不到就保留自己那枚）。
+   */
+  check('adj725/737 `</>` 只在代码块出现（host.onEditSource），且**宿主真挂了按钮**时才让位',
     /if \(host\.onEditSource\)/.test(pane725) &&
       pane725.includes('host.onEditSource?.()') &&
-      pane725.includes("querySelector('.embed-actions')") &&
+      pane725.includes("querySelector('.embed-actions .edit-block-button, .edit-block-button')") &&
+      /hostBtn instanceof HTMLElement/.test(pane725) &&
       /window\.setTimeout\(/.test(pane725))
+
+  /**
+   * ③c adj737：**宿主块上的 `ijipu-cm-host` 类必须能重打**（实时预览里 CM6 会换掉那个块容器）。
+   * 类一丢 ⇒ 宿主 `.cm-embed-block:hover{overflow:hidden}` 会把浮在块外的工具条整条裁掉
+   * （`</>` 同时退回主题色）—— 用户看到的就是"编辑模式下什么都没有"。
+   */
+  check('adj737 显示工具条前重新确认宿主块的 `ijipu-cm-host` 类（CM6 换容器后类会丢）',
+    /const revealToolbar = \(on: boolean\): void => \{[\s\S]{0,260}?if \(on\) markHostWidget\(\)/.test(pane725) &&
+      /if \(!widget\.hasClass\('ijipu-cm-host'\)\) widget\.addClass\('ijipu-cm-host'\)/.test(pane725) &&
+      /hostWidgetEl\?\.removeClass\('ijipu-cm-host'\)/.test(pane725))
   // ③c **不再往预览里塞 textarea**（用户明确要求）
   check('adj725 不再往预览里塞 textarea（用户口径：不要再单独的 textarea）',
     !pane725.includes('ijipu-block-source-editor') &&
