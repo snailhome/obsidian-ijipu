@@ -1085,3 +1085,32 @@
 .markdown-source-view.mod-cm6 .cm-embed-block.ijipu-cm-host:hover {
   overflow: visible;
 }
+
+/* ─────────── adj725e：宿主自己那个 `</>`，在**本插件的块**里也要看得见 ───────────
+   实时预览里 Obsidian 会给代码块挂它自己的「编辑此块」按钮（`.embed-actions > .edit-block-button`，
+   `lucide-code` 图标）。插件检测到它就把自己那枚撤掉（不重复挂，见 scorePane.ts）—— 于是
+   **用户实际看到、实际点的是宿主这一枚**，而它只跟主题取色：
+
+     .markdown-source-view.mod-cm6 .embed-action { color: var(--embed-action-color); … }   （app.css）
+
+   深色主题下那是浅灰（#dadada），压在**恒为白色**的谱面纸张上对比度约 1.1:1 ⇒ 看不见
+   （用户两轮截图：深色主题下一片白、浅色主题下能看清 —— 差别只在主题色，不在"有没有背景"）。
+
+   所以这里给**我们块里的**宿主按钮补上与本插件那枚完全相同的"半透明深底 + 白字"
+   （选择器带 `.ijipu-cm-host` ⇒ 只影响承载本面板的那个块，不碰宿主别的块；
+    6 个 class 级 > 宿主那条 3 个，无需 !important）。
+   对比度由 `verify-score-crop.mjs` 在真实浏览器里按"底色合成到白纸"实算并断言 ≥3:1；
+   **负对照**（摘掉 `.ijipu-cm-host`）会变回透明 ⇒ 证明这条修法是承重的。 */
+.markdown-source-view.mod-cm6 .cm-embed-block.ijipu-cm-host .embed-actions .edit-block-button,
+.markdown-source-view.mod-cm6 .cm-embed-block.ijipu-cm-host .embed-actions .embed-action {
+  background: rgb(0 0 0 / 55%);
+  color: #ffffff;
+  border-radius: var(--clickable-icon-radius, 4px);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 30%);
+}
+@media (hover: hover) {
+  .markdown-source-view.mod-cm6 .cm-embed-block.ijipu-cm-host .embed-actions .edit-block-button:hover,
+  .markdown-source-view.mod-cm6 .cm-embed-block.ijipu-cm-host .embed-actions .embed-action:hover {
+    background-color: rgb(0 0 0 / 68%);
+  }
+}

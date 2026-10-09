@@ -1960,6 +1960,23 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
       /new DOMParser\(\)\.parseFromString\(svg, 'image\/svg\+xml'\)/.test(pane725) &&
       !/wrap\.appendChild\(sanitizeHTMLToDom/.test(pane725) &&
       /lastSvgParse/.test(pane725))
+
+  /**
+   * ⑧ adj725e（用户第二轮截图：「深色主题下 `</>` 一片白、看不见」）：**用户实际看到的是宿主那枚**。
+   *
+   * 实时预览里 Obsidian 会给代码块挂它自己的「编辑此块」（`.embed-actions > .edit-block-button`），
+   * 插件检测到就把自己那枚撤掉（不重复挂）⇒ 屏幕上那枚是**宿主的**，而它只跟主题取色：
+   * `.markdown-source-view.mod-cm6 .embed-action { color: var(--embed-action-color) }` ——
+   * 深色主题下是浅灰，压在恒为白的谱面纸张上对比度 ≈1.4:1（用户截图正是"看不见"）。
+   *
+   * 修法：给**本插件的块里**那枚宿主按钮补上与本插件那枚相同的"半透明深底 + 白字"
+   * （选择器带 `.ijipu-cm-host`，只影响我们的块）。真实对比度与负对照由
+   * `verify-score-crop.mjs` 在真实 Chrome 里实算（保留类 4.76:1 / 摘掉类 1.4:1）。
+   */
+  check('adj725e 宿主那枚 `</>` 在本插件的块里也补上"深底 + 白字"（只影响 .ijipu-cm-host 的块）',
+    /\.cm-embed-block\.ijipu-cm-host\s+\.embed-actions\s+\.edit-block-button[\s\S]{0,200}?\{[^}]*background:\s*rgb\(0 0 0 \/ \d+%\)/.test(css725nc) &&
+      /\.cm-embed-block\.ijipu-cm-host\s+\.embed-actions\s+\.embed-action[\s\S]{0,300}?color:\s*#ffffff/.test(css725nc) &&
+      /\.cm-embed-block\.ijipu-cm-host\s+\.embed-actions\s+\.edit-block-button:hover/.test(css725nc))
 }
 
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。
