@@ -122,6 +122,11 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
    */
   let editSourceBtn: HTMLElement | null = null
   /**
+   * adj725b：**"还没量到内容盒"时挂着的 ResizeObserver**。
+   * 声明在 `paint()` 之外：重画与 `destroy()` 都要能一次性断掉它们（旧 svg 已经被丢弃）。
+   */
+  const cropObservers = new Set<ResizeObserver>()
+  /**
    * adj725：挂载时给宿主 widget 容器加的类（`.cm-embed-block`）。
    * 记下来是为了 `destroy()` 时能原样摘掉，不去动别的插件/别的块。
    */
@@ -166,6 +171,9 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
   /** 全量重画（工具条 + 谱面 + 辅助虚线）；拖拽期间按帧节流 */
   const paint = (): void => {
     stopRuntime()
+    // adj725b：上一轮挂的补量观察器盯着的是即将被丢弃的 svg ⇒ 先全部断掉
+    for (const ro of cropObservers) ro.disconnect()
+    cropObservers.clear()
     container.empty()
     container.addClass('ijipu-score')
     if (host.embedded) container.addClass('ijipu-embedded')
@@ -631,10 +639,13 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
        * 为什么要在这一刻量：`getBBox()` 要求元素已在渲染树里（刚 `sanitizeHTMLToDom` 出来的
        * 游离节点量不到）；而此刻**辅助虚线层还没加**（`addGuideLayer` 在后面），
        * 量到的就是纯谱面内容。缓存到 dataset，供 `applyViewBox('score')` 与切模式时复用。
+       *
+       * ⚠ adj725b：宿主（Obsidian）是**先建 DOM、再挂进文档**，所以我们这一刻常常仍在游离树上
+       * —— 那就**不必量**（一定全是 0），交给 `scheduleCropRetry` 下一帧补量（见那里的长注释）。
        */
-      const box = measureContentBox(svgEl)
+      const box = svgEl.isConnected ? measureContentBox(svgEl) : null
       if (box) {
-        svgEl.dataset.contentBox = `${box.x} ${box.y} ${box.w} ${box.h}`
+        writeContentBox(svgEl, box)
       }
       // 不在这里 applyViewBox：此刻还是 'page' 模式（viewBox=整页），套上去纯属多余；
       // 真正的显示模式由下面的 setMode(paneMode) 统一下发（'score' 会用刚量到的内容盒裁剪）。
@@ -688,6 +699,65 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       return { x, y, w, h }
     }
 
+    /** 把量到的内容盒写进 dataset（`applyViewBox` 与切模式都读它） */
+    function writeContentBox(svgEl: SVGSVGElement, box: { x: number; y: number; w: number; h: number }): void {
+      svgEl.dataset.contentBox = `${box.x} ${box.y} ${box.w} ${box.h}`
+    }
+
+    /**
+     * adj725b：**量不到就下一帧再量**（量到了当场补裁剪）。
+     *
+     * 为什么非补不可 —— 这是"谱面模式还留一大片空白"的**真正根因**（用户 2026-10 再次截图复现）：
+     * Obsidian 的代码块/widget 是**先把 DOM 建好、再挂进文档**（实时预览的 `initDOM` 建的是游离节点，
+     * 阅读模式同理）⇒ 我们挂载那一刻元素**不在渲染树里**，`getBBox()` 一律返回 0
+     * ⇒ `measureContentBox()` 返回 null ⇒ 只能退回"按边距裁"（= 整页去掉四边距，空白依旧）。
+     *
+     * ⚠ 本仓库的浏览器验证页此前把面板挂在**已连接**的容器里，所以怎么测都是好的 ——
+     * 现在验证页里也加了"游离容器里挂载、随后才挂进文档"那一支（`out.detached`）。
+     *
+     * 重试窗口：下一帧 / +60ms / +300ms（宿主的挂载时机无法约定，三次足够且不至于一直重算）。
+     * 元素已被重画（`isConnected === false`）就放弃 —— 那时新的 svg 有自己的重试。
+     */
+    function scheduleCropRetry(svgEl: SVGSVGElement, c: typeof cfg, attempt = 0): void {
+      const delays = [0, 60, 300]
+      const run = (): void => {
+        if (!svgEl.isConnected) return
+        const fresh = measureContentBox(svgEl)
+        if (fresh) {
+          writeContentBox(svgEl, fresh)
+          // 只在这一支还处于「谱面」模式时重下 viewBox（用户可能已经切走了）
+          if (paneMode === 'score') applyViewBox(svgEl, 'score', c)
+          return
+        }
+        if (attempt + 1 < delays.length) scheduleCropRetry(svgEl, c, attempt + 1)
+        else plugin.lastCropInfo = '页面内容包围盒：**三次重试都没量到**（元素始终不在渲染树里？）'
+      }
+      if (delays[attempt] === 0) window.requestAnimationFrame(run)
+      else window.setTimeout(run, delays[attempt])
+    }
+
+    /**
+     * adj725b：**元素"进渲染树"这一刻补量**（比定时重试更可靠）。
+     *
+     * 宿主把游离 DOM 挂进文档时，元素的尺寸从 0 变成真实尺寸 ⇒ `ResizeObserver` 一定会被叫到，
+     * 那就是"现在可以量 getBBox 了"的准确信号。定时重试（`scheduleCropRetry`）作为兜底，
+     * 覆盖没有 `ResizeObserver` 的环境、以及"挂进去但尺寸恰好没变"的场景。
+     */
+    function observeUntilMeasured(svgEl: SVGSVGElement, c: typeof cfg): void {
+      if (typeof ResizeObserver === 'undefined') return
+      const ro = new ResizeObserver(() => {
+        if (!svgEl.isConnected) return
+        const box = measureContentBox(svgEl)
+        if (!box) return
+        ro.disconnect()
+        cropObservers.delete(ro)
+        writeContentBox(svgEl, box)
+        if (paneMode === 'score') applyViewBox(svgEl, 'score', c)
+      })
+      cropObservers.add(ro)
+      ro.observe(svgEl)
+    }
+
     /** 按显示模式设置 viewBox（'score' 裁到**真实内容**，四周不留空白） */
     function applyViewBox(svgEl: SVGSVGElement, mode: ViewMode, c: typeof cfg): void {
       const orig = svgEl.dataset.origVb || svgEl.getAttribute('viewBox') || ''
@@ -717,6 +787,15 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
           plugin.lastCropInfo = box
             ? `页面 ${Math.round(w)}×${Math.round(h)} → **退回边距兜底**（量到的盒几乎等于整页，判定为量取不可靠）`
             : `页面 ${Math.round(w)}×${Math.round(h)} → **退回边距兜底**（没量到内容包围盒）`
+          /**
+           * adj725b：**"没量到"多半是元素还没进渲染树**（宿主先建后插）⇒ 两条补量路径同时挂上：
+           * ① `ResizeObserver`（尺寸 0→真实那一刻）——准；② 定时重试 —— 兜底。
+           * "量到的盒几乎等于整页"是**真的量到了**（可能是宿主的白底被算进来），重试没有意义。
+           */
+          if (!box) {
+            observeUntilMeasured(svgEl, c)
+            scheduleCropRetry(svgEl, c)
+          }
         }
         svgEl.removeAttribute('width')
         svgEl.removeAttribute('height')
@@ -850,6 +929,9 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       endDragListeners = null
       plugin.events.offref(settingsRef)
       plugin.events.offref(guidesRef)
+      // adj725b：补量用的观察器要断开，否则会一直盯着已经被丢弃的 svg
+      for (const ro of cropObservers) ro.disconnect()
+      cropObservers.clear()
       // adj725：把挂到宿主 widget 容器上的类原样摘掉（那是宿主自己的元素，不留痕）
       hostWidgetEl?.removeClass('ijipu-cm-host')
       hostWidgetEl = null

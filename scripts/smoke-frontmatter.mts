@@ -1899,6 +1899,27 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
   check('adj725 找不到笔记页签/定位不到代码块时给出可见提示（不静默）',
     /if \(!info\)[\s\S]{0,200}?new Notice\(/.test(main725) &&
       /if \(!view\)[\s\S]{0,200}?new Notice\(/.test(main725))
+
+  /**
+   * ⑤ adj725b：**量不到内容包围盒时必须补量** —— 这才是"谱面模式还留一大片空白"的**真正根因**。
+   *
+   * 用户 2026-10 二次截图复现（谱面模式的纸张仍是整页形状、墨迹缩在顶部）。查证：
+   * Obsidian 的代码块/widget **先把 DOM 建好、再挂进文档**（实时预览 `initDOM` 建的是游离节点），
+   * 于是我们挂载那一刻元素**不在渲染树里** ⇒ `getBBox()` 全 0 ⇒ 量不到内容盒 ⇒ 退回"按边距裁"。
+   * 本仓库的浏览器验证页此前把面板挂在**已连接**的容器里，所以一直没复现（现在加了那一支）。
+   *
+   * 两条补量路径都要在：`ResizeObserver`（尺寸 0→真实那一刻，准）+ 定时重试（没有 RO 时的兜底）；
+   * 且**只在"没量到"时挂** —— "量到的盒几乎等于整页"是真量到了，重试没有意义。
+   */
+  check('adj725b 量不到内容盒时补量（游离时不量 + ResizeObserver + 定时重试）',
+    /const box = svgEl\.isConnected \? measureContentBox\(svgEl\) : null/.test(pane725) &&
+      /if \(!box\) \{[\s\S]{0,240}?observeUntilMeasured\(svgEl, c\)[\s\S]{0,80}?scheduleCropRetry\(svgEl, c\)/.test(pane725) &&
+      /new ResizeObserver\(/.test(pane725) &&
+      /const delays = \[0, 60, 300\]/.test(pane725) &&
+      /if \(!svgEl\.isConnected\) return/.test(pane725))
+  check('adj725b 补量用的观察器在重画与 destroy 时都断开（不留悬空监听）',
+    /for \(const ro of cropObservers\) ro\.disconnect\(\)/.test(pane725) &&
+      /cropObservers\.clear\(\)/.test(pane725))
 }
 
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。
