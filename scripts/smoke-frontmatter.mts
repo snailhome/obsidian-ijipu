@@ -1633,8 +1633,15 @@ console.log('\n[adj724b] community review: forbidden APIs / styles must stay fix
     !/document\.createElement\(/.test(stripLineComments(iconsSrc)) &&
       !/document\.createElement\(/.test(stripLineComments(renderSrc)) &&
       !/document\.createElement\(/.test(stripLineComments(settingsSrc2)))
-  check('adj724b 不用 innerHTML，改用 sanitizeHTMLToDom',
-    !/\.innerHTML\s*=/.test(scorePaneSrc) && scorePaneSrc.includes('sanitizeHTMLToDom(svg)'))
+  // ③′ adj725d：插 SVG **优先 XML 解析**（Obsidian 的 sanitizeHTMLToDom = DOMPurify 会剥
+  //    `dominant-baseline`，见 scorePane 的 svgToDom()），并保留 sanitizeHTMLToDom 作兜底
+  check('adj725d 插 SVG 走 svgToDom()（XML 解析优先 + sanitizeHTMLToDom 兜底），仍不碰 innerHTML',
+    !/\.innerHTML\s*=/.test(scorePaneSrc) &&
+      scorePaneSrc.includes('wrap.appendChild(svgToDom(svg, plugin))') &&
+      scorePaneSrc.includes("parseFromString(svg, 'image/svg+xml')") &&
+      scorePaneSrc.includes("plugin.lastSvgParse = 'xml'") &&
+      /return sanitizeHTMLToDom\(svg\)/.test(scorePaneSrc) &&
+      /class="language-/.test(scorePaneSrc) === false)
   // ④ 命令 id 不含插件名（on obsidian 会自动加前缀）
   check('adj724b 命令 id 不含插件名', /id: 'open-app'/.test(mainSrc) && !/open-ijipu/.test(mainSrc))
   // ⑤ rAF 走 window（popout 窗口兼容）
@@ -1934,6 +1941,25 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
       /\.ijipu-edit-source-btn\s*\{[^}]*color:\s*#ffffff/.test(css725nc) &&
       !/\.ijipu-edit-source-btn\s*\{[^}]*color:\s*var\(--/.test(css725nc) &&
       /\.ijipu-edit-source-btn\.is-revealed:hover\s*\{[^}]*background-color:\s*rgb\(0 0 0 \/ \d+%\)/.test(css725nc))
+
+  /**
+   * ⑦ adj725d（用户报「小节序号数字偏上，未在方框正中」）：**不能再让宿主的 sanitizeHTMLToDom 处理 SVG**。
+   *
+   * 查实过程（写进注释，免得后人"顺手改回去"）：Obsidian 的 `sanitizeHTMLToDom` = DOMPurify
+   * （`app.js`: `function cC(e){return document.importNode(aC.sanitize(e,lC),!0)}`），
+   * 它的 **SVG 属性白名单不含 `dominant-baseline`**（白名单里有 `alignment-baseline` / `baseline-shift` /
+   * `text-anchor` / `writing-mode`…；全文只有 HTML→SVG 的**属性名映射表**里出现过它）
+   * ⇒ 属性被剥掉 ⇒ 小节序号/增时线/段层括号这些"字符中心对齐"的文本一律退回字母基线（数字整体偏上）。
+   * 应用侧不经 DOMPurify，所以**只有插件**有这个问题。
+   *
+   * 真实几何由 `verify-score-crop.mjs` 在 Chrome 里量（验证页的 sanitizeHTMLToDom 替身
+   * **故意仿照 DOMPurify 剥掉该属性**，所以"改回去"会立刻红灯）。
+   */
+  check('adj725d 不再把 SVG 交给 sanitizeHTMLToDom（DOMPurify 会剥 dominant-baseline）',
+    /function svgToDom\(svg: string, plugin: IJipuPlugin\): DocumentFragment/.test(pane725) &&
+      /new DOMParser\(\)\.parseFromString\(svg, 'image\/svg\+xml'\)/.test(pane725) &&
+      !/wrap\.appendChild\(sanitizeHTMLToDom/.test(pane725) &&
+      /lastSvgParse/.test(pane725))
 }
 
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。

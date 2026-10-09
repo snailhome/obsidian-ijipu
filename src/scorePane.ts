@@ -101,6 +101,44 @@ export type ScorePaneHandle = {
   refresh: () => void
 }
 
+/**
+ * adj725d：把引擎产出的 SVG 字符串转成 DOM —— **优先走 XML 解析，不直接交给 `sanitizeHTMLToDom`**。
+ *
+ * ## 为什么（用户报「小节序号数字偏上，未在方框正中」的根因，已在本机 `obsidian.asar` 里查实）
+ * Obsidian 的 `sanitizeHTMLToDom()` 底层是 **DOMPurify**（`app.js` 里
+ * `function cC(e){return document.importNode(aC.sanitize(e,lC),!0)}`，配置只有
+ * `FORBID_TAGS/ADD_TAGS/ADD_ATTR/FORBID_ATTR` 那几项），而 DOMPurify 的 **SVG 属性白名单**
+ * **不含 `dominant-baseline`** —— 白名单里有 `alignment-baseline`、`baseline-shift`、`text-anchor`、
+ * `writing-mode`… 但全文只有 HTML→SVG 的**属性名映射表**里出现过它（`dominantBaseline:"dominant-baseline"`），
+ * 白名单里一次都没有。⇒ 属性被**剥掉** ⇒ 所有靠它做"字符中心对齐"的文本退回字母基线：
+ *  · 小节序号（框内数字整体偏上，用户截图即此）
+ *  · 增时线 `-` 的居中
+ *  · 段层括号等
+ * 应用侧（iJipu）不经 DOMPurify，所以**只有插件**有这个问题 —— 这也是"应用看着正常、插件偏上"的原因。
+ *
+ * ## 做法与安全
+ * `DOMParser` 解析 `image/svg+xml`：属性原样保留，且内容是我们引擎自己的输出
+ * （零外部输入、零脚本；引擎文本一律经 `xmlEsc` 转义），不经过 innerHTML。
+ * **解析失败（SVG 不是合法 XML）时回退 `sanitizeHTMLToDom`** —— 宁可丢一个属性，也不能整块不渲染。
+ * `plugin.lastSvgParse` 记录走了哪条路，验证脚本据此断言"每次都是 XML"。
+ */
+function svgToDom(svg: string, plugin: IJipuPlugin): DocumentFragment {
+  try {
+    const doc = new DOMParser().parseFromString(svg, 'image/svg+xml')
+    const root = doc.documentElement
+    if (root && root.nodeName.toLowerCase() === 'svg' && !doc.querySelector('parsererror')) {
+      const frag = createFragment()
+      frag.appendChild(doc.importNode(root, true))
+      plugin.lastSvgParse = 'xml'
+      return frag
+    }
+    plugin.lastSvgParse = 'html-fallback（XML 解析失败）'
+  } catch {
+    plugin.lastSvgParse = 'html-fallback（XML 解析抛错）'
+  }
+  return sanitizeHTMLToDom(svg)
+}
+
 /** 挂载一个谱面面板（详见文件头说明） */
 export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
   const { plugin, container } = host
@@ -621,15 +659,13 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       const wrap = svgWrap.createDiv({ cls: 'ijipu-page-svg' })
       /**
        * adj724b（社区审核）：**不要直接写 `innerHTML`**。
-       *
        * 官方两条规则：`Unsafe assignment to innerHTML`（error）与
-       * `Do not write to DOM directly using innerHTML/outerHTML`（warning）。
-       * 这里改用 Obsidian 官方的 `sanitizeHTMLToDom()` 把 SVG 字符串转成
-       * `DocumentFragment` 再插入（不需要再查询根元素，也天然避开 innerHTML 赋值）。
+       * `Do not write to DOM directly using innerHTML/outerHTML`（warning）——
+       * 下面 `svgToDom()` 走 `DOMParser`，同样不碰 innerHTML。
        *
        * 内容来源：引擎自己画的 SVG（`renderScoreFull` 的输出），不是外部输入。
        */
-      wrap.appendChild(sanitizeHTMLToDom(svg))
+      wrap.appendChild(svgToDom(svg, plugin))
       const svgEl = wrap.querySelector('svg') as SVGSVGElement | null
       if (!svgEl) return
       svgEls.push(svgEl)

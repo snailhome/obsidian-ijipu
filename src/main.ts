@@ -524,6 +524,15 @@ export default class IJipuPlugin extends Plugin {
    */
   lastCropInfo: string | null = null
 
+  /**
+   * adj725d：**SVG 走的是哪条解析路径**（最近一次渲染写回）——`'xml'` / `'html-fallback（…）'`。
+   *
+   * 为什么要记：Obsidian 的 `sanitizeHTMLToDom`（DOMPurify）会剥掉 `dominant-baseline`
+   * 等 SVG 属性（详见 `scorePane.ts` 的 `svgToDom()`），所以插件改走 `DOMParser`；
+   * 但只要有一次回退到 HTML 解析，就等于那个属性又丢了 ⇒ 真机验证要断言"每次都是 XML"。
+   */
+  lastSvgParse: string | null = null
+
   /** 由内嵌 worklet 代码构造 Blob URL（不再依赖插件目录单独文件；供 audioWorklet.addModule） */
   private makeWorkletUrl(): string {
     try {
