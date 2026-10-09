@@ -648,6 +648,36 @@ console.log('[6] 键名映射与全字段命中')
   check(`字段表全部 ${PAGE_CONFIG_FIELDS.length} 个字段都能被同名 frontmatter 键命中`, miss.length === 0, miss.join(','))
   const appliedOnce = CFG({ ijipu_note_size: 15, ijipu_noteSize: 16 })
   check('同一字段两种写法重复出现时以最后写入为准（不报错）', appliedOnce.config.note_size === 16, String(appliedOnce.config.note_size))
+
+  /**
+   * adj724b（用户决策 A）：模板的 **include 过滤器**（「复制最小模板」靠它只留与默认不同的项）。
+   * 纯函数，直接喂小样本核对 —— 重点是三件事：
+   *  ① 过滤掉不该出现的项；② 嵌套字段只保留通过过滤的子项（而不是整行照抄）；
+   *  ③ 一项都不剩时返回**空串**（调用方据此提示"没有需要写的项"，而不是给出一个空的 `---/---`）。
+   */
+  const sampleDefs = [
+    { key: 'note_size', group: '字体', label: '音符字号' },
+    { key: 'segmentRowGap', sub: 'bz', group: '行距', label: '临时段间距' },
+    { key: 'segmentRowGap', sub: 'dsb', group: '行距', label: '临时段间距' },
+    { key: 'lyricShrink', group: '渲染', label: '歌词压缩' },
+  ]
+  const sampleGroups = ['字体', '行距', '渲染']
+  const sampleValues: Record<string, unknown> = {
+    note_size: 14,
+    'segmentRowGap:bz': 22,
+    'segmentRowGap:dsb': 99,
+    lyricShrink: true,
+  }
+  const valOf = (d: { key: string; sub?: string }): unknown =>
+    sampleValues[d.sub ? `${d.key}:${d.sub}` : d.key]
+  const onlyChanged = (d: { key: string; sub?: string }): boolean => valOf(d) !== 22
+  const minimal = buildFrontmatterTemplate(sampleDefs, sampleGroups, valOf, onlyChanged)
+  check('adj724b 最小模板：过滤掉与默认相同的项', !minimal.includes('ijipu_segmentRowGap: {bz'), minimal.replace(/\n/g, ' ⏎ '))
+  check('adj724b 最小模板：嵌套字段只保留通过过滤的子项（dsb 被改过 ⇒ 保留）', minimal.includes('{dsb: 99}'), minimal.replace(/\n/g, ' ⏎ '))
+  check('adj724b 最小模板：仍写出未过滤的普通项', minimal.includes('ijipu_note_size: 14') && minimal.includes('ijipu_lyricShrink: true'))
+  const minimalEmpty = buildFrontmatterTemplate(sampleDefs, sampleGroups, () => 22, () => false)
+  check('adj724b 最小模板：一项都不剩时返回空串（不给出空的 ---/---）', minimalEmpty === '', JSON.stringify(minimalEmpty))
+  check('adj724b 完整模板：不过滤时仍含全部项', buildFrontmatterTemplate(sampleDefs, sampleGroups, valOf).includes('{bz: 22, dsb: 99}'))
 }
 
 console.log('[7] 谱面自带设置 # jps-config 优先级最高（阶段 1：复制 iJipu 的 .jps 即一模一样）')
@@ -1666,6 +1696,24 @@ console.log('\n[adj724b] community review: forbidden APIs / styles must stay fix
   const cssNoComments = cssSrc2.replace(/\/\*[\s\S]*?\*\//g, '')
   const importantCount = (cssNoComments.match(/!important/g) ?? []).length
   check('adj724b styles.css 的 !important 收敛到 ≤5 条（仅反制宿主所必需）', importantCount <= 5)
+  // ⑰ frontmatter **只对 ` ```jps ` 代码块生效**（用户决策 A 的口径核心）
+  //    三个渲染路径里只有代码块把笔记 frontmatter 传进去；嵌入与完整编辑器**硬编码 null**。
+  //    这条最容易被后人"顺手统一"成三处都读 frontmatter —— 那会改变现有谱面的显示效果，故钉住。
+  const embedApiSrc = s('src/embed.ts')
+  const fileViewApiSrc = s('src/fileView.ts')
+  const mainApiSrc = s('src/main.ts')
+  check('adj724b frontmatter 只对代码块生效（嵌入与完整编辑器一律不读笔记 frontmatter）',
+    /getFrontmatter:\s*\(\)\s*=>\s*null/.test(embedApiSrc) &&
+      /getFrontmatter:\s*\(\)\s*=>\s*null/.test(fileViewApiSrc) &&
+      /getFrontmatter:\s*\(\)\s*=>\s*this\.plugin\.app\.metadataCache/.test(mainApiSrc))
+  // ⑱ 说明页必须写明"仅对代码块生效"，否则用户会以为写在笔记顶部就能影响嵌入的 .jps
+  check('adj724b 说明页写明 frontmatter 的适用范围',
+    settingsSrc2.includes('仅对') && settingsSrc2.includes('代码块生效') && settingsSrc2.includes('跳过 ②'))
+  // ⑲ 低频的「复制全部键名」已移除（模板里已含键名，清单本身不能直接生效）
+  check('adj724b 已移除「复制全部键名」按钮', !settingsSrc2.includes('复制全部键名'))
+  // ⑳ 新增「复制最小模板」：只含与默认不同的项
+  check('adj724b 提供「复制最小模板」（只含与默认不同的项）',
+    settingsSrc2.includes('复制最小模板') && settingsSrc2.includes('当前所有设置都是默认值'))
 }
 
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。

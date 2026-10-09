@@ -1,52 +1,46 @@
-# 爱记谱 iJipu 0.29.7
+# 爱记谱 iJipu 0.29.8
 
-> 修掉 0.29.6 **自己引入**的一个 Error，并继续处理 Releases / Build verification 两项建议。
-> 功能与 0.29.0 相同。0.29.6 → **0.29.7**（PATCH）。
+> **frontmatter 的适用范围说清楚了**（用户决策 A：保留能力、重做呈现）。
+> 功能与 0.29.0 相同。0.29.7 → **0.29.8**（PATCH）。
 
-## Error（0.29.6 引入的，本版修掉）
+## 背景：一个会误导人的遗漏
 
-```
-Disabling '@typescript-eslint/no-deprecated' is not allowed.   src/settings.ts:61
-```
+有用户提出："既然支持 `.jps` 文件了，` ```jps ` 代码块基本不再需要，那基于 frontmatter 的 jps 设置是否可以取消？"
 
-这是我上一轮的**自伤**：为消掉「`execCommand` is deprecated」这条 Recommendation，
-我给那行加了 `eslint-disable-next-line @typescript-eslint/no-deprecated` ——
-而官方**明确不允许禁用 `no-deprecated`**，于是"消一条建议"换来"多一条 Error"（上一版因此重新变 Failed）。
+查证后发现**关键事实**：三个渲染路径里，**只有 ` ```jps ` 代码块读笔记 frontmatter**；
+内联嵌入 `![[xx.jps]]` 与编辑器里打开的 `.jps` **都硬编码 `getFrontmatter: () => null`**。
 
-**修法**：不用禁用指令，改让代码**不触发该规则** —— 按名字从 `document` 上取方法再调（语义完全不变，
-仍是同步复制），并保留"优先 `navigator.clipboard.writeText`"的主路径。那段本来就是回退路径。
+也就是说 frontmatter **从来没有**对 `.jps` 生效过 —— 二者作用域根本不重叠，
+"支持 `.jps` 了所以可以取消 frontmatter"这个推理的前提并不成立。
+但**说明页只写了"笔记级兜底"，没说适用范围** ⇒ 用户会以为写在笔记顶部就能影响嵌入的 `.jps`，实际不行。
 
-> 教训（已写进代码注释）：**不要用禁用指令去满足审核建议** ——
-> 官方有一套"禁止禁用"的规则清单，`no-deprecated`、`no-console` 都在其中。
+## 本版改动（保留能力，重做呈现）
 
-## Releases 建议：加构建来源证明（artifact attestation）
+1. **说明页写明适用范围**：设置项标题改为「frontmatter 键（**仅对 ` ```jps ` 代码块生效**）」，
+   描述里点明"内联嵌入与编辑器里打开的 `.jps` 一律读谱面自带的 `# jps-config`（不读笔记 frontmatter）"。
+2. **「设置优先级」文案同步**：在 `①②③` 之外补一行 ——
+   「⚠ 内联嵌入 `![[xx.jps]]` 与编辑器里打开的 `.jps` **跳过 ②**：只读 ③」。
+3. **移除低频按钮「复制全部键名」**：键名清单本身不是合法 YAML 设置，不能直接粘贴生效；模板里已含键名。
+4. **新增「复制最小模板」**：只收录**与引擎默认不同**的项（通常只有几行），
+   粘上去即可复现当前效果；若所有设置都是默认值，则提示"没有需要写的项"（而不是给出空的 `---/---`）。
+5. **README 同步**：在「设置优先级」一节加醒目提示，并解释为什么 `.jps` 只有"谱面自带"这一层设置
+   （它是独立文件、没有宿主笔记）。
 
-官方建议为 Release 附件提供证明，让用户能密码学地核实"这个 `main.js` 确实由本仓库的该次 CI 构建产出、未被替换"。
+## 为什么只改呈现、不改能力
 
-- 工作流增加权限：`id-token: write`、`attestations: write`；
-- 新增步骤 **`actions/attest-build-provenance@v2`**，对 `main.js` 与 `styles.css` 签发证明
-  （审核提示也只点了这两个文件；`manifest.json` 是元数据，不纳入）；
-- 该步骤放在**创建 Release 之前**，且带 `continue-on-error`（避免签发服务异常导致整个发布失败）。
+- **存量笔记**：` ```jps ` 代码块是插件的原始用法，用户库里已有大量这种笔记。
+  直接删掉 frontmatter ⇒ 这些笔记的页面设置会**静默失效**（谱面外观突然变化，用户无从判断原因）。
+- **一个笔记里放多份谱**：目前只有代码块能"把源码复制两份、各自调排版"（嵌入能做到多谱，但那是多个文件）。
+- 因此先修**误导**，保留能力；` ```jps ` 代码块本身是否进入"维护但不再推荐"状态，作为**独立决策**另议。
 
-核验方式（任何人都可执行）：
+## 回归防线
 
-```bash
-gh attestation verify main.js --repo snailhome/obsidian-ijipu
-```
+`npm run smoke` 新增 9 条断言（共 **302 passed, 0 failed**），其中最关键的一条是
+**钉住"frontmatter 只对代码块生效"**：断言嵌入与完整编辑器两处的 `getFrontmatter` 必须返回 `null`、
+只有代码块那处读 `metadataCache` —— 防止后人"顺手统一"成三处都读 frontmatter（那会改变现有谱面的显示效果）。
 
-## Build verification 警告：把 CI 改成确定性安装
-
-上一版我把构建时间改成"提交时间"（构建可复现，同 commit ⇒ 同产物），但那条警告**仍在**。
-按官方原文 *"Releases should be built directly from source via CI/CD **with a committed lockfile**"*，
-本版把 CI 的依赖安装由 `npm install --legacy-peer-deps` 改为 **`npm ci`** ——
-前者允许解析出**与锁文件不同**的版本，后者严格按 `package-lock.json` 安装
-（锁文件本身已在 0.29.2 修好：esbuild 与 vite 的 peer 冲突已解，`npm ci` 通过）。
-
-> 说明：这条我**无法在本地复核**（审核方不提供差异细节，我拿不到它的构建环境），
-> 只能把"可确定性的部分"都做到位。本版已覆盖：构建时间可复现 + 锁文件严格安装 +
-> 产物来源有证明可查。若警告仍在，请把反馈发我，我会按新的证据继续。
+另含：`buildFrontmatterTemplate` 的 `include` 过滤器（过滤掉默认项 / 嵌套字段只保留通过的子项 / 一项不剩时返回空串）。
 
 ## 验证门
 
-`tsc -noEmit` 0 错；`npm run smoke` 全绿（含新增的"不得禁用 `no-deprecated`"断言）；
-`npm ci --dry-run` exit 0；`npm run build` 正常且连续两次哈希一致。
+`tsc -noEmit` 0 错；`npm run smoke` **302 passed, 0 failed**；`npm ci` 通过；`npm run build` 正常。

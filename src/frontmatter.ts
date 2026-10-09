@@ -283,29 +283,45 @@ export interface TemplateDef {
  * 本函数**不依赖 obsidian**，冒烟测试可直接引入核对输出。
  *
  * @param valueOf 取某项（含子项）当前值
+ * @param include 可选过滤器：只收录满足条件的项（`adj724b` 的"最小模板"用它只留**与默认不同的项**）。
+ *                过滤后若一项都不剩，返回空串（调用方据此提示"当前没有需要写的项"）。
  */
 export function buildFrontmatterTemplate(
   defs: readonly TemplateDef[],
   groups: readonly string[],
   valueOf: (def: TemplateDef) => unknown,
+  include?: (def: TemplateDef) => boolean,
 ): string {
+  const keep = (d: TemplateDef): boolean => include === undefined || include(d)
   const lines: string[] = ['---']
+  let written = 0
   for (const group of groups) {
     const items = defs.filter((d) => d.group === group)
     if (items.length === 0) continue
-    lines.push(`# ${group}`)
+    const groupLines: string[] = []
     const done = new Set<string>()
     for (const def of items) {
       if (done.has(def.key)) continue
       done.add(def.key)
       const subs = items.filter((d) => d.key === def.key && d.sub)
       if (subs.length === 0) {
-        lines.push(`${frontmatterKey(def.key)}: ${yamlScalar(valueOf(def))}`)
+        if (!keep(def)) continue
+        groupLines.push(`${frontmatterKey(def.key)}: ${yamlScalar(valueOf(def))}`)
       } else {
-        lines.push(`${frontmatterKey(def.key)}: {${subs.map((s) => `${s.sub}: ${yamlScalar(valueOf(s))}`).join(', ')}}`)
+        // 嵌套项：只保留通过过滤的子项；一个都不剩就整行不写
+        const kept = subs.filter(keep)
+        if (kept.length === 0) continue
+        groupLines.push(
+          `${frontmatterKey(def.key)}: {${kept.map((s) => `${s.sub}: ${yamlScalar(valueOf(s))}`).join(', ')}}`,
+        )
       }
     }
+    if (groupLines.length === 0) continue
+    lines.push(`# ${group}`)
+    lines.push(...groupLines)
+    written += groupLines.length
   }
+  if (written === 0) return ''
   lines.push('---')
   return lines.join('\n')
 }

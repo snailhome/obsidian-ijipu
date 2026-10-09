@@ -74,12 +74,17 @@ async function copyText(text: string, okTip: string): Promise<void> {
 /**
  * 生成可直接粘贴到笔记顶部的 frontmatter 模板（含当前生效值，按设置分组加注释）。
  *
- * adj629q：实现搬到 `frontmatter.ts` 的纯函数 `buildFrontmatterTemplate`（可被冒烟直接核对），
- * 这里只提供"取当前值"的回调（插件设置优先、否则引擎默认）。嵌套字段（`segmentRowGap`）
- * 会合成一行 YAML 流式映射，不会写成三行互相覆盖。
+ * adj629q：实现搬到 `frontmatter.ts` 的纯函数 `buildFrontmatterTemplate`（可被冒烟直接核对）。
+ * 嵌套字段（`segmentRowGap`）会合成一行 YAML 流式映射，不会写成三行互相覆盖。
+ *
+ * adj724b：`include` 用于生成"**最小模板**"——只收录**与引擎默认不同的项**，
+ * 让用户拿到一份"真正需要写的"短清单，而不是把几十个键全铺上去。
  */
-function frontmatterTemplate(valueOf: (def: SettingDef) => unknown): string {
-  return buildFrontmatterTemplate(DEFS, GROUPS, (d) => valueOf(d as SettingDef))
+function frontmatterTemplate(
+  valueOf: (def: SettingDef) => unknown,
+  include?: (def: SettingDef) => boolean,
+): string {
+  return buildFrontmatterTemplate(DEFS, GROUPS, (d) => valueOf(d as SettingDef), include as never)
 }
 
 export class IJipuSettingTab extends PluginSettingTab {
@@ -247,11 +252,11 @@ export class IJipuSettingTab extends PluginSettingTab {
     new Setting(host)
       .setName('设置优先级（源内最高）')
       .setDesc(
-        '① 引擎默认 → ② 笔记 frontmatter（ijipu_*，笔记级兜底） → ' +
-          '③ **谱面源码内的 `# jps-config` 行**（该曲谱自带设置，优先级最高）。' +
-          'iJipu 侧没有"本机默认层"（adj480：谱面自包含），保存时只把与默认不同的项写进那一行；' +
+        '① 引擎默认 → ② 笔记 frontmatter（`ijipu_*`，**只对代码块生效**） → ' +
+          '③ **谱面源码内的 `# jps-config` 行**（该曲谱自带设置，优先级最高）。\n' +
+          '⚠ 内联嵌入 `![[xx.jps]]` 与编辑器里打开的 `.jps` **跳过 ②**：只读 ③。\n' +
           'frontmatter 只对**源内没写的键**生效，因此**不随谱走**——' +
-          '要把这份谱（或只把代码块）复制给别人也显示一致，点谱面工具条的「⚙ 排版 → 随谱固化」。',
+          '要让别人看到的排版与你一致，点谱面工具条的「⚙ 排版 → 随谱固化」（把当前值写进 ③）。',
       )
 
     new Setting(host)
@@ -259,32 +264,46 @@ export class IJipuSettingTab extends PluginSettingTab {
       .setDesc(`构建 ${BUILD_STAMP} @${GIT_COMMIT}（已显示在设置页顶部）`)
 
     new Setting(host)
-      .setName('frontmatter 键（一键复制）')
+      /**
+       * adj724b（用户决策 A）：**写清适用范围**。
+       *
+       * 此前这里只说"笔记级兜底"，会让人以为写在笔记顶部就能影响**嵌入的 `.jps`** ——
+       * 实际不是：`embed.ts` 与 `fileView.ts` 的 `getFrontmatter()` **都硬编码返回 null**，
+       * frontmatter 只对 ` ```jps ` **代码块**生效。这是最容易误解的一点，故在说明里点明。
+       */
+      .setName('frontmatter 键（仅对 ` ```jps ` 代码块生效）')
       .setDesc(
-        '笔记级设置写在笔记顶部的 `---` 之间，键名 = `ijipu_` + 引擎设置项字段名。' +
-          '可一次复制全部键名，或复制一份带当前默认值的模板。',
-      )
-      .addButton((b) =>
-        b
-          .setButtonText('复制全部键名')
-          .setTooltip(`复制 ${new Set(DEFS.map((d) => d.key)).size} 个 ijipu_* 键名（每行一个）`)
-          .onClick(() =>
-            void copyText(
-              [...new Set(DEFS.map((d) => frontmatterKey(d.key)))].join('\n'),
-              `已复制 ${new Set(DEFS.map((d) => d.key)).size} 个 frontmatter 键名`,
-            ),
-          ),
+        '笔记级设置写在笔记顶部的 `---` 之间，键名 = `ijipu_` + 引擎设置项字段名。\n' +
+          '⚠ **只对笔记里的 ` ```jps ` 代码块生效**：内联嵌入 `![[xx.jps]]` 与在编辑器里打开的 `.jps`\n' +
+          '一律读**谱面自带的 `# jps-config`**（不读笔记 frontmatter）。',
       )
       .addButton((b) =>
         b
           .setButtonText('复制 frontmatter 模板')
-          .setTooltip('带当前默认值的 YAML，可直接粘贴到笔记顶部')
+          .setTooltip('带当前设置的完整 YAML（所有键），可直接粘贴到笔记顶部')
           .onClick(() =>
             void copyText(
               frontmatterTemplate((d) => readDef(this.plugin.settings, d) ?? getDefault(d)),
               '已复制 frontmatter 模板：粘贴到笔记顶部（--- 之间）即可生效',
             ),
           ),
+      )
+      .addButton((b) =>
+        b
+          .setButtonText('复制最小模板')
+          .setTooltip('只含**与默认不同**的项 —— 通常只有几行，粘上去即可复现当前效果')
+          .onClick(() => {
+            const valueOf = (d: SettingDef): unknown => readDef(this.plugin.settings, d) ?? getDefault(d)
+            const text = frontmatterTemplate(valueOf, (d) => {
+              const cur = readDef(this.plugin.settings, d) ?? getDefault(d)
+              return String(cur ?? '') !== String(getDefault(d) ?? '')
+            })
+            if (!text) {
+              new Notice('当前所有设置都是默认值，没有需要写进 frontmatter 的项')
+              return
+            }
+            void copyText(text, '已复制最小模板：只含与默认不同的项')
+          }),
       )
 
     new Setting(host)
