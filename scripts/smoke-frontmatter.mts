@@ -1635,10 +1635,12 @@ console.log('\n[adj724b] community review: forbidden APIs / styles must stay fix
   // ⑩ 引擎的"不规则空白"（全角空格 U+3000 在注释里会被判为 irregular whitespace）
   const glyphs = s('vendor/engine/render/modifierGlyphs.ts')
   check('adj724b 引擎里不再有全角空格（no-irregular-whitespace）', !glyphs.includes('\u3000'))
-  // ⑪ 引擎里不再有调试用 console.log + 无效 eslint-disable
+  // ⑪ 引擎里不再有"调试用 console.log + 禁掉 no-console"这种组合
+  // ⚠ 不要用 `/no-console/` 或 `/内容左缘/` 这种宽判据：前者会命中说明文字，
+  //   后者是该文件里正常存在的几何术语（实测误报过）。只钉"指令注释 + 具体那条日志"。
   const layoutSrc = s('vendor/engine/layout/index.ts')
-  check('adj724b 引擎里没有调试 console.log / no-console 禁用',
-    !/eslint-disable[^\n]*no-console/.test(layoutSrc) && !/\[内容左缘\]/.test(layoutSrc))
+  check('adj724b 引擎里不再禁用 no-console，也没有那条调试日志',
+    !/eslint-disable[^\n]*no-console/.test(layoutSrc) && !/console\.log\(/.test(layoutSrc))
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)
