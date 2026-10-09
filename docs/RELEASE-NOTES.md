@@ -1,26 +1,31 @@
-# 爱记谱 iJipu 0.29.1
+# 爱记谱 iJipu 0.29.2
 
-> **首发到 Obsidian 社区目录**所需的合规修正；功能与 0.29.0 相同。
-> 0.29.0 → **0.29.1**（PATCH：仅合规项）。
+> 按**社区目录自动审核反馈**逐条修正；功能与 0.29.0 相同。
+> 0.29.1 → **0.29.2**（PATCH：仅合规项）。
 
-## 本版修正（社区目录提交要求）
+## 本版修正（审核反馈）
 
-| 项 | 之前 | 现在 | 依据 |
-|---|---|---|---|
-| 插件 id | `obsidian-ijipu` | **`ijipu`** | 官方要求 id **不得包含 `obsidian`** |
-| 许可证 | 仓库根缺 `LICENSE` | 加入 **AGPL-3.0** 全文 | 政策要求仓库必须含 LICENSE |
-| 桌面端标记 | `isDesktopOnly: false` | **`true`** | 用了 `node:http` / `node:crypto` / `electron` ⇒ 政策要求置 `true`（**移动端不可用**） |
-| `minAppVersion` | `1.0.0` | **`1.13.0`** | 官方要求按**真实最低兼容版本**填（本插件面向现代 Obsidian 桌面端） |
-| 插件描述 | 中文、尾部带"官网：…" | 英文一句话、以句号结尾、≤250 字符 | 官方要求描述简短、不加 emoji / 特殊字符 |
-| 网络使用披露 | README 未提 | README 新增「**网络使用与权限（披露）**」小节 | 政策要求**明确披露网络访问**（音源下载、本地服务、文件访问范围） |
-| README | 标题与安装路径用旧 id | 统一为 **iJipu** / `plugins/ijipu/`，并标注**仅桌面端** | 与 id 变更保持一致 |
+| 审核项 | 之前 | 现在 |
+|---|---|---|
+| **Dependencies：Error**「npm lockfile is out of date」 | `esbuild@^0.21.0` 与 `vite@8.2.1` 的 peer 要求（`^0.27.0 \|\| ^0.28.0`）**冲突** ⇒ `npm install` 报 `ERESOLVE`，lockfile 无法与声明一致 | `esbuild` 提到 **`^0.28.0`**，重新生成 `package-lock.json`；`npm ci --dry-run` **exit 0 / up to date** |
+| **License：Warning**「no recognized license」 | 文件名为无扩展名的 `LICENSE`，GitHub 未识别 | 改为 **`LICENSE.md`**，并在全文前加**项目归属 + AGPL-3.0-or-later 声明 + SPDX 标识** |
+| **Manifest：Warning**「authorUrl must not point to the plugin's own repository」 | `authorUrl` 指向插件仓库 | 改为**个人主页** `https://github.com/snailhome` |
+| **README：Warning**「missing installation or usage instructions」 | 小节标题为中文（`## 安装` / `## 用法`） | 改为 **`## 安装 / Installation`**、**`## 用法 / Usage`**，并补上**从社区目录安装 / 手动安装**两条完整步骤 |
+| Releases：Recommendation「missing artifact attestations」 | — | **未做**（属可选；需给工作流加 `id-token: write` 与 attest 步骤，暂不引入发布链风险） |
+| Behavior：Recommendation「Clipboard Access」 | — | 无需动作（只是告知；本插件仅在「粘贴导入」时读剪贴板） |
 
-> **安装目录随之变化**：手动安装的目录由 `.obsidian/plugins/obsidian-ijipu/`
-> 改为 `.obsidian/plugins/ijipu/`。从社区目录安装时 Obsidian 会自行放置，无需手动处理。
+## 0.29.1 的内容摘要（同批合规修正）
+
+- 插件 `id`：`obsidian-ijipu` → **`ijipu`**（官方要求 id 不得含 `obsidian`）；
+- `isDesktopOnly`：`false` → **`true`**（用了 `node:http` / `node:crypto` / `electron`）；
+- `minAppVersion`：`1.0.0` → **`1.13.0`**（按真实最低兼容版本）；
+- 描述改英文一句话（≤250 字符、以句号结尾）；`name`/`author` 去掉 emoji 与中文；
+- README 新增「**网络使用与权限（披露）**」小节（政策要求明确披露网络访问）。
 
 ## 升级方式
 
 从 Obsidian 社区目录（设置 → 第三方插件 → 浏览 → 搜索 iJipu）安装或更新。
+手动安装的目录名为 `.obsidian/plugins/ijipu/`（与 `id` 一致）。
 
 ---
 
@@ -39,5 +44,5 @@
 - 关掉「使用嵌入版 iJipu」开关即完全回到原来的轻量渲染（**可回退**）。
 
 **同时修掉了 10 项真机实测问题**，详见 `docs/RELEASE-NOTES-ARCHIVE.md` 的 0.29.0 条目
-（其中最关键的是「点 A 显示 B」：应用启动时的"恢复上次绑定"与宿主推来的文件并发，
+（最关键的是「点 A 显示 B」：应用启动时的"恢复上次绑定"与宿主推来的文件并发，
 而它用陈旧快照判断，把刚打开的那份覆盖了）。

@@ -7,17 +7,24 @@
 
 > 码即成，谱自现。
 
-## 安装
+## 安装 / Installation
 
 > **仅支持桌面端**（Windows / macOS / Linux）。内嵌的完整编辑器需要一个本机服务，
 > 用到了只有桌面版 Obsidian 才提供的 Node.js 接口，因此本插件在移动端不可用
 > （`manifest.json` 的 `isDesktopOnly: true`）。
 
-1. 在 Obsidian 里打开 **设置 → 第三方插件 → 浏览**，搜索 **iJipu** 安装并启用。
-   （手动安装：把 `main.js`、`manifest.json`、`styles.css` 拷到 `<你的库>/.obsidian/plugins/ijipu/`。）
-2. 若列表里看不到，重开 Obsidian 或检查已加载插件列表。
+**从社区目录安装（推荐）**
 
-## 用法
+1. 打开 Obsidian → **设置 → 第三方插件 → 浏览**；
+2. 搜索 **iJipu**，点安装 → 启用。
+
+**手动安装**
+
+1. 到 [Releases](https://github.com/snailhome/obsidian-ijipu/releases) 下载 `main.js`、`manifest.json`、`styles.css`；
+2. 放到 `<你的库>/.obsidian/plugins/ijipu/`（目录名必须是 `ijipu`，与 `manifest.json` 的 `id` 一致）；
+3. 在 **设置 → 第三方插件** 里启用 **iJipu**（看不到就重开 Obsidian）。
+
+## 用法 / Usage
 
 在任意笔记里写一个 `jps` 代码块：
 
@@ -181,5 +188,5 @@ Obsidian 的开发者政策要求**明确披露网络访问**，这里一次说�
 ## 标注
 
 - 引擎：`@ijipu/engine`（.jps 解析 → 排版 → SVG 渲染 → 播放序列 → Web Audio 试听）。
-- 许可证：**AGPL-3.0**（见仓库根的 [`LICENSE`](./LICENSE)，与引擎一致）。
+- 许可证：**AGPL-3.0**（见仓库根的 [`LICENSE.md`](./LICENSE.md)，与引擎一致）。
   特别致谢「番茄简谱」原作与社区；音源 [GeneralUser GS](https://github.com/mrbumpy409/GeneralUser-GS)（其自带许可）。
