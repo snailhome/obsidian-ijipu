@@ -1725,6 +1725,23 @@ console.log('\n[adj724b] community review: forbidden APIs / styles must stay fix
       /const box = contentBoxOf\(svgEl\)/.test(scorePaneSrc))
   check('adj724b 裁剪不得退回"按边距裁"作为主路径（只有量不到时才兜底）',
     /if \(box\) \{[\s\S]{0,200}?\} else \{[\s\S]{0,400}?margin_left/.test(scorePaneSrc))
+
+  /**
+   * ㉒ ` ```jps ` 代码块是**长期特性**，不得因为"有 .jps 文件了"就把它当过渡用法删掉。
+   *
+   * 用户 2026-10 明确：「` ```jps ` 还是有存在的必要的，这在**单行/部分乐谱的展示**尤其有用，应该保留」。
+   * 它不可替代的场景：笔记里只想放一两句谱、或"一句谱 + 一段讲解"穿插 ——
+   * 十几字节的源码直接写在笔记里，不必为一句谱单独建一个 `.jps` 文件；
+   * 一个笔记里放多个片段、各自调排版试效果，也只有代码块能做到（嵌入只能用多个文件）。
+   *
+   * 本断言钉住三件事：① 代码块处理器仍注册；② 说明/文档里仍把它当推荐用法之一；
+   * ③ 文档里明确写出"两种用法取舍"，避免以后有人再提"取消代码块"。
+   */
+  const readmeSrc = s('README.md')
+  check('adj724b ` ```jps ` 代码块仍是长期特性（处理器注册 + 文档并列说明）',
+    /registerMarkdownCodeBlockProcessor\(\s*'jps'/.test(mainApiSrc) &&
+      readmeSrc.includes('代码块还是') &&
+      readmeSrc.includes('单行 / 片段乐谱'))
 }
 
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。
