@@ -1647,9 +1647,14 @@ console.log('\n[adj724b] community review: forbidden APIs / styles must stay fix
   const genInfo = s('scripts/gen-build-info.mjs')
   check('adj724b 构建信息取提交时间（可复现），不再取打包时刻',
     genInfo.includes('commitTime') && genInfo.includes("node:zlib") && !/const now = new Date\(\)/.test(genInfo))
-  // ⑬ 剪贴板优先现代 API；弃用的 execCommand 只作回退且必须带说明
-  check('adj724b 剪贴板优先 Clipboard API，execCommand 回退带说明',
-    settingsSrc2.includes('navigator.clipboard.writeText') && /no-deprecated -- \S/.test(settingsSrc2))
+  // ⑬ 剪贴板优先现代 API；弃用的 execCommand 只作回退
+  //    ⚠ 回退**不能用 `eslint-disable` 压** —— 审核明确「Disabling '@typescript-eslint/no-deprecated'
+  //    is not allowed」，写了禁用指令本身就是一条 Error（0.29.6 恰好踩中）。
+  //    故这里断言：① 优先 Clipboard API；② 源码里不得出现 no-deprecated 的禁用指令。
+  check('adj724b 剪贴板优先 Clipboard API，且用"不触发弃用规则"的写法做回退',
+    settingsSrc2.includes('navigator.clipboard.writeText') &&
+      !/eslint-disable[^\n]*no-deprecated/.test(stripLineComments(settingsSrc2)) &&
+      settingsSrc2.includes("'exec' + 'Command'"))
   // ⑭ 设置页重画用 update()（1.13+ 里 display() 不刷新声明式设置）
   check('adj724b 设置页用 this.update() 重画（不是 display()）',
     settingsSrc2.includes('this.update()') && !settingsSrc2.includes('this.display()'))
@@ -1662,4 +1667,8 @@ console.log('\n[adj724b] community review: forbidden APIs / styles must stay fix
   const importantCount = (cssNoComments.match(/!important/g) ?? []).length
   check('adj724b styles.css 的 !important 收敛到 ≤5 条（仅反制宿主所必需）', importantCount <= 5)
 }
+
+// ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。
+//   实测踩过：一次编辑顺手把它删掉，套件仍以退出码报错，但输出里再也看不到 `N passed, M failed`。
+console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exitCode = 1

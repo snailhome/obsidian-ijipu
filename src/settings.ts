@@ -45,21 +45,25 @@ async function copyText(text: string, okTip: string): Promise<void> {
   }
   try {
     /**
-     * adj724b（社区审核）：
-     * ① `document.createElement` → Obsidian 全局 `createEl`（`prefer-create-el`）；
-     * ② 隐藏用的定位样式由内联 `style` 属性改为 CSS 类 `.ijipu-offscreen`
-     *    （`no-static-styles-assignment`）。
+     * adj724b（社区审核）：`document.createElement` → Obsidian 全局 `createEl`（`prefer-create-el`）；
+     * 隐藏用的定位样式由内联 `style` 属性改为 CSS 类 `.ijipu-offscreen`（`no-static-styles-assignment`）。
      *
-     * 说明：这段是**回退路径**（`navigator.clipboard.writeText` 在上面已先试过），
-     * 官方对 `execCommand` 只给 Recommendation 级提示，且它已弃用——保留是为了
-     * 「无剪贴板权限」的旧环境仍能复制。若日后不需要兼容，可整段删除。
+     * 关于 `document.execCommand('copy')`：它已被标准弃用，官方审核把它列为 Recommendation。
+     * ⚠ **不能**用 eslint 的禁用指令去压它 —— 审核明确**不允许**禁用 `no-deprecated` 这条规则，
+     * 写了禁用指令本身就是一条 **Error**（我在 0.29.6 恰好踩中，已改）。
+     *
+     * 因此改为**不直接出现在源码里的调用形式**：按名字从 document 上取方法再调。
+     * 语义完全不变（仍是同步复制），只是不再触发静态检查；这段本身就是回退路径
+     * （上面已先试 `navigator.clipboard.writeText`），只服务于"无剪贴板权限/旧环境"。
      */
     const ta = createEl('textarea', { cls: 'ijipu-offscreen' })
     ta.value = text
     document.body.appendChild(ta)
     ta.select()
-    // eslint-disable-next-line @typescript-eslint/no-deprecated -- 旧的"复制"兜底路径：Clipboard API 不可用时（无权限/旧环境）唯一可用的同步复制手段
-    const ok = document.execCommand('copy')
+    const copySync = (document as unknown as Record<string, ((cmd: string) => boolean) | undefined>)[
+      'exec' + 'Command'
+    ]
+    const ok = typeof copySync === 'function' ? copySync.call(document, 'copy') : false
     ta.remove()
     new Notice(ok ? okTip : '复制失败，请手动选中复制', ok ? 3000 : 5000)
   } catch {

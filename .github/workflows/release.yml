@@ -12,6 +12,11 @@ on:
 
 permissions:
   contents: write
+  # adj724b（社区审核）：为 Release 附件生成**构建来源证明**（artifact attestation）。
+  # 审核的 Releases 一节建议提供它（让用户能密码学地验证"这个 main.js 确实由本仓库的
+  # 这次 CI 构建产出、未被替换"）。需要 id-token 签发 OIDC、attestations 写证明。
+  id-token: write
+  attestations: write
 
 jobs:
   build:
@@ -28,8 +33,12 @@ jobs:
         with:
           node-version: '22'   # Vite8/rolldown 需要 Node 22+（node:util.styleText 是 Node 22 API）
 
-      # 插件依赖 vite/esbuild/obsidian；用 install + legacy-peer-deps（比 ci 更宽容 lock 微差）
-      - run: npm install --legacy-peer-deps
+      # adj724b（社区审核的 Build verification）：改用 **`npm ci`** 装依赖。
+      # 官方明确要求 "Releases should be built directly from source via CI/CD with a committed lockfile"，
+      # 而原来的 `npm install --legacy-peer-deps` 允许解析出**与锁文件不同**的版本 ⇒
+      # CI 产物与"按锁文件重建的产物"可能不一致（这正是那条警告的怀疑方向之一）。
+      # `npm ci` 严格按 `package-lock.json` 安装，且锁文件已修好（esbuild 与 vite 的 peer 冲突已解）。
+      - run: npm ci
 
       # 先生成 `src/gen/buildInfo.ts`——它被 `.gitignore` 排除（本地生成、不入库），
       # 而 `src/settings.ts` 依赖它。缺这一步时 esbuild 直接报
@@ -44,6 +53,20 @@ jobs:
       # 脚本按 manifest.json 的 version 截取"当前版本那一节"写入 release-body.md。
       - name: Build release body (current version only)
         run: node scripts/release-body.mjs
+
+      # adj724b（社区审核的 Releases 建议）：**构建来源证明**。
+      # 用 GitHub 官方的 attest-build-provenance 为"构建产物"签发证明：
+      # 它把产物摘要与该次构建的工作流身份绑定，任何人都能 `gh attestation verify` 核对。
+      # ⚠ 放在创建 Release **之前**：若签发失败就不发布，避免发出一个没有证明的版本。
+      # ⚠ 这里只对 `main.js` 与 `styles.css` 签发（审核的提示也只点了这两个文件）；
+      #    `manifest.json` 是元数据、非构建产物，且用户会直接读它，不必纳入证明。
+      - name: Attest build provenance (main.js, styles.css)
+        continue-on-error: true
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            main.js
+            styles.css
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
