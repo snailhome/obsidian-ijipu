@@ -367,7 +367,6 @@ export class IJipuFileView extends TextFileView {
       container: paneEl,
       getSource: () => this.data,
       // .jps 文件自身没有笔记 frontmatter（其页面设置来自文件内的 # jps-config）
-      getFrontmatter: () => null,
       writeSource: (next) => this.applySource(next),
       embedded,
       // adj（用户要求）：.jps 文件视图知道自己的文件 ⇒ 工具栏显示「应用打开」

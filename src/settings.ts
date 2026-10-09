@@ -20,10 +20,7 @@
  */
 import { App, PluginSettingTab, Setting } from 'obsidian'
 import { BUILD_STAMP, GIT_COMMIT } from './gen/buildInfo'
-// adj736：只保留 `frontmatterKey` 的**转出**（外部仍按这个约定拼键）；
-// 「复制 frontmatter 模板」那套（`buildFrontmatterTemplate` + 本地 `frontmatterTemplate` + `copyText`）已随该入口撤掉
-// —— 那三个"复制模板"入口撤掉后，连 `./defs` 的 DEFS/GROUPS/SettingDef 也不再被本文件使用。
-import { frontmatterKey } from './frontmatter'
+// adj738：笔记 frontmatter 那一层整体删除（含 `frontmatterKey` 的转出与「复制模板」入口）。
 // adj724b：外链统一走这处（Electron 里 `window.open` 不可靠）
 import { openUrlExternally } from './openExternal'
 import { DEFAULT_EMBED_OPEN_MODE, type EmbedOpenMode } from './types'
@@ -33,9 +30,7 @@ import type IJipuPlugin from './main'
 
 // adj734（用户要求）：赞赏码只**内联显示**在设置页里（扫码即可），
 // 不再给「在浏览器打开」外链 —— 所以这里也不需要 `DONATE_URL` 常量了。
-
-// frontmatter 键的唯一约定（= `ijipu_` + 引擎 PageConfig 字段名）在 frontmatter.ts 定义，此处转出供外部复用
-export { frontmatterKey }
+// adj738：`frontmatterKey` 的转出随"笔记 frontmatter 层"一并删除。
 
 /** 设置页签（adj631：一屏一组，减少滚动；adj724b：只剩两页） */
 export type SettingsTabId = '嵌入版' | '说明'

@@ -5,11 +5,12 @@
  * 断言来源：用户反馈「在 frontmatter 里设置像 `ijipu_note_size` 好像没生效」——
  * 覆盖键名写法兼容、值类型转换、未识别键提示、优先级四类。
  */
-import { defaultPageConfig, dragDelta, layoutScore, parseJps, renderScoreToSvg, writeJpsConfig, mergeConfigEdits, configCarryover, SCORE_FONT_OPTIONS, buildPlaySequence, GUIDE_LIMITS, GUIDE_LIMITS_EX, SEGMENT_ROW_GAP_DEFAULT, OPTIONAL_CONFIG_FIELDS, defaultConfigForReset, extractJpsConfig, nonDefaultConfigKeys, GM_GROUPS } from '@ijipu/engine'
+import { defaultPageConfig, dragDelta, layoutScore, parseJps, renderScoreToSvg, writeJpsConfig, mergeConfigEdits, configCarryover, SCORE_FONT_OPTIONS, buildPlaySequence, GUIDE_LIMITS, GUIDE_LIMITS_EX, SEGMENT_ROW_GAP_DEFAULT, OPTIONAL_CONFIG_FIELDS, defaultConfigForReset, extractJpsConfig, extractLegacyEditorPrefs, nonDefaultConfigKeys, GM_GROUPS } from '@ijipu/engine'
 import type { PageConfig } from '@ijipu/engine'
 import { existsSync, readFileSync } from 'node:fs'
 import { instrumentColorMap, playheadBaseOf, playheadPosIn, trackKeysOf } from '../src/playhead'
-import { applyFrontmatter, buildFrontmatterTemplate, deprecatedKeyHint, frontmatterKey, mergePageConfig, unknownKeyHint, PAGE_CONFIG_FIELDS } from '../src/frontmatter'
+// adj738：原来这里从 `../src/frontmatter` 导入 applyFrontmatter / frontmatterKey / PAGE_CONFIG_FIELDS 等
+// ——笔记 frontmatter 那一层（连同 `src/frontmatter.ts`）已整体删除，相关断言一并删除。
 import { PAGE_NUM_RANGES, clampNum } from '../src/numRanges'
 // adj631：设置面板的纯逻辑（页签/收藏音色分类列表/「保存为插件默认」的改动判据）
 // —— `obsidian` 依赖已由 `npm run smoke` 的 `--alias:obsidian=./scripts/obsidianStub.ts` 替换掉
@@ -53,68 +54,47 @@ const check = (name: string, cond: boolean, detail = ''): void => {
   }
 }
 
-const CFG = (fm: Record<string, unknown>, defaults: Record<string, unknown> = {}) =>
-  applyFrontmatter(defaults as never, fm)
-
-console.log('[1] 键名写法兼容（snake_case / camelCase / 全小写）')
-{
-  const a = CFG({ ijipu_note_size: 15 })
-  check('ijipu_note_size（引擎字段原样）生效', a.config.note_size === 15, String(a.config.note_size))
-  const b = CFG({ ijipu_noteSize: 16 })
-  check('ijipu_noteSize（camelCase）同样生效', b.config.note_size === 16, String(b.config.note_size))
-  // README 旧示例里的写法：字段 noteSpaceLayout —— 全小写下划线写法必须也被接受
-  const c = CFG({ ijipu_note_space_layout: 'duration' })
-  check('ijipu_note_space_layout（旧示例写法）生效', c.config.noteSpaceLayout === 'duration', String(c.config.noteSpaceLayout))
-  const d = CFG({ ijipu_show_instrument: true })
-  check('ijipu_show_instrument（旧示例写法）生效', d.config.showInstrument === true, String(d.config.showInstrument))
-  const e = CFG({ IJIPU_NOTE_SIZE: 17 })
-  check('大小写不敏感（IJIPU_NOTE_SIZE）', e.config.note_size === 17, String(e.config.note_size))
-}
-
-console.log('[2] 值类型按字段类型转换（Properties 面板常存成字符串）')
-{
-  check('字符串数字 "15" → 15', CFG({ ijipu_note_size: '15' }).config.note_size === 15)
-  check('带空格 " 15 " → 15', CFG({ ijipu_note_size: ' 15 ' }).config.note_size === 15)
-  check('布尔 是 → true', CFG({ ijipu_showInstrument: '是' }).config.showInstrument === true)
-  check('布尔 否 → false（无默认值的可选字段也要按类型转换，不能留成真值字符串）', CFG({ ijipu_lyricShrink: '否' }).config.lyricShrink === false)
-  check('布尔 1 → true', CFG({ ijipu_showInstrument: 1 }).config.showInstrument === true)
-  check('布尔 false 原样', CFG({ ijipu_showInstrument: false }).config.showInstrument === false)
-  check('字符串字段原样保留（字体含单引号/逗号）', CFG({ ijipu_shuzi_font: "'SimHei', sans-serif" }).config.shuzi_font === "'SimHei', sans-serif")
-  check('枚举字段（纸张）原样保留', CFG({ ijipu_page: 'A4_horizontal' }).config.page === 'A4_horizontal')
-  check('无法转换的数字（abc）视为未设置 → 回落默认', CFG({ ijipu_note_size: 'abc' }).config.note_size === defaultPageConfig.note_size)
-  check('空字符串视为未设置 → 回落默认', CFG({ ijipu_note_size: '' }).config.note_size === defaultPageConfig.note_size)
-  check('null 视为未设置 → 回落默认', CFG({ ijipu_note_size: null }).config.note_size === defaultPageConfig.note_size)
-  check('无法转换/空值不计入"已生效"（避免徽标虚报）', CFG({ ijipu_note_size: '' }).applied.length === 0)
-  check('对象类字段（metaPos）原样透传', typeof CFG({ ijipu_metaPos: { a: { x: 1, y: 2 } } }).config.metaPos === 'object')
-}
+/**
+ * adj738（用户决定）：**笔记 frontmatter 那一层已整体删除**（`src/frontmatter.ts` 一并删除）。
+ *
+ * 原来这里有 6 个小节专门测它（[1] 键名写法兼容 / [2] 值类型转换 / [3] 可选字段识别 /
+ * [4] 未识别键的最近键名建议 / [5] 非业务键与优先级 / [6] 键名映射与全字段命中）。
+ * 现在的口径只剩两层：**插件设置（全局默认）< 谱面源码内的 `# jps-config`** ——
+ * 后者的优先级与差量写回由 [7]/[8] 两节继续守着（`resolvePageConfig` + `writeJpsConfig`）。
+ *
+ * 仍未变的口径（不要误删）：`.jps` 文件视图与内联嵌入**从来没有** frontmatter 这一层
+ * （`fileView.ts` / `embed.ts` 那时就传 null），只读文件内的 `# jps-config`。
+ */
 
 console.log('[3] 可选字段（无默认值）必须被识别——否则键会被静默忽略')
 {
-  // 引擎 defaultPageConfig 只含 28 个有默认值的字段；lyricShrink/showInstrument 等 6 个可选字段
-  // 不在其中，若按 defaultPageConfig 建映射就会把 ijipu_showInstrument 判成未识别键
-  const opt = CFG({ ijipu_showInstrument: true, ijipu_lyricShrink: true })
-  check('ijipu_showInstrument 被识别并生效', opt.config.showInstrument === true && opt.applied.some((a) => a.field === 'showInstrument'))
-  check('ijipu_lyricShrink 被识别并生效', opt.config.lyricShrink === true)
-  check('可选字段不再出现在"未识别"里', opt.unknown.length === 0, JSON.stringify(opt.unknown))
+  /**
+   * adj738：口径从"frontmatter 键"换成"**谱面源码里的 `# jps-config`**"——
+   * 要守的性质不变：没有默认值的**可选字段**（`showInstrument` / `lyricShrink` 等）
+   * 也必须被识别（否则写进源码会被静默忽略）。
+   */
+  const src = `# jps-config:{"showInstrument":true,"lyricShrink":true}\nD: C\nP: 4/4\nQ: 1 2 3 4 |\n`
+  const opt = resolvePageConfig(src, {})
+  check('# jps-config 里的可选字段 showInstrument 被识别并生效', opt.config.showInstrument === true, String(opt.config.showInstrument))
+  check('# jps-config 里的可选字段 lyricShrink 被识别并生效', opt.config.lyricShrink === true, String(opt.config.lyricShrink))
+  check('两个可选字段都记进了 sourceFields（对话框据此列"谱面自带设置"）',
+    opt.sourceFields.includes('showInstrument') && opt.sourceFields.includes('lyricShrink'),
+    JSON.stringify(opt.sourceFields))
   const fields = Object.keys(defaultPageConfig)
-  check(`字段表覆盖引擎默认字段（${fields.length} 个）`, fields.every((f) => PAGE_CONFIG_FIELDS.includes(f as never)))
-  check(`字段表字段数 = 35（引擎 37 字段去掉编辑器偏好 2 项；adj625 新增 showBarCount/barCountInterval）`, PAGE_CONFIG_FIELDS.length === 35, String(PAGE_CONFIG_FIELDS.length))
-  check('字段表无重复（规范化后不冲突）', new Set(PAGE_CONFIG_FIELDS.map((f) => f.replace(/[^a-z0-9]/gi, '').toLowerCase())).size === PAGE_CONFIG_FIELDS.length)
+  check(`源内设置能覆盖引擎默认字段（共 ${fields.length} 个）`, fields.every((f) => typeof (opt.config as Record<string, unknown>)[f] !== 'undefined'))
 }
 
 console.log('[3b] adj625 方框小节序号两项（同步主项目：谱面变量里可设）')
 {
-  const g = CFG({ ijipu_showBarCount: true, ijipu_barCountInterval: 2 })
-  check('ijipu_showBarCount 被识别并生效（布尔）',
-    g.config.showBarCount === true && g.applied.some((a) => a.field === 'showBarCount'), String(g.config.showBarCount))
-  check('ijipu_barCountInterval 被识别并生效（数字，字符串 "2" 也转成数字）',
-    g.config.barCountInterval === 2 && g.applied.some((a) => a.field === 'barCountInterval'), String(g.config.barCountInterval))
-  check('两项都不落进"未识别"', g.unknown.length === 0, JSON.stringify(g.unknown))
-  check('旧示例写法 ijipu_show_bar_count / ijipu_bar_count_interval 同样生效',
-    CFG({ ijipu_show_bar_count: true }).config.showBarCount === true &&
-      CFG({ ijipu_bar_count_interval: 8 }).config.barCountInterval === 8)
-  check('关闭时不写多余值：false 原样（等于默认，不亮"非默认"）',
-    CFG({ ijipu_showBarCount: false }).config.showBarCount === false)
+  // adj738：口径从"frontmatter 键"换成"**谱面源码里的 `# jps-config`**"（要守的性质不变：
+  // 这两项可选字段写进源码后必须真的生效、且被计数为"谱面自带设置"）。
+  const g = resolvePageConfig(`# jps-config:{"showBarCount":true,"barCountInterval":2}\nD: C\nP: 4/4\nQ: 1 2 3 4 |\n`, {})
+  check('源内 showBarCount 被识别并生效（布尔）',
+    g.config.showBarCount === true && g.sourceFields.includes('showBarCount'), String(g.config.showBarCount))
+  check('源内 barCountInterval 被识别并生效（数字）',
+    g.config.barCountInterval === 2 && g.sourceFields.includes('barCountInterval'), String(g.config.barCountInterval))
+  check('关闭时不写多余值：false 原样',
+    resolvePageConfig(`# jps-config:{"showBarCount":false}\nQ: 1 |\n`, {}).config.showBarCount === false)
   // DEFS（defs.ts）import 了 `obsidian`，纯逻辑冒烟不能引入它 ⇒ 读源码断言两项都在定义表里
   // （设置面板与「排版」对话框共用同一份 DEFS，登记即两处同时出现）
   const defsSrc = String(readFileSync('src/defs.ts', 'utf8'))
@@ -132,8 +112,11 @@ console.log('[3c] adj629q 设置口径与应用一致（字段集 / 标签 / 范
       /key: 'segmentRowGap', sub: 'dsb', label: 'dsb 段上下间距'/.test(defsSrc) &&
       /key: 'segmentRowGap', sub: 'tp', label: '替谱行与下方歌词间距'/.test(defsSrc))
   // ② 应用不暴露的字段（bar_gap）设置面板也不再给控件，但仍可随谱携带
-  check('应用不暴露的 `bar_gap` 不再出现在设置表里（但仍可随谱携带：PAGE_CONFIG_FIELDS 里有）',
-    !/key: 'bar_gap'/.test(defsSrc) && PAGE_CONFIG_FIELDS.includes('bar_gap' as never))
+  //    （adj738：原来用 `PAGE_CONFIG_FIELDS` 判——那是 frontmatter 层的字段表；现在直接看
+  //     "写进 `# jps-config` 能不能生效"这一口径更准）
+  check('应用不暴露的 `bar_gap` 不再出现在设置表里（但仍可随谱携带）',
+    !/key: 'bar_gap'/.test(defsSrc) &&
+      resolvePageConfig(`# jps-config:{"bar_gap":7}\nQ: 1 |\n`, {}).config.bar_gap === 7)
   // ③ 文案与应用逐项对齐（抽几个此前不一致的）
   check('行距 / 布局类标签与应用一致（曲部与词部间距、布局模式、序号间隔…）',
     /key: 'height_quci', label: '曲部与词部间距'/.test(defsSrc) &&
@@ -181,22 +164,23 @@ console.log('[3c] adj629q 设置口径与应用一致（字段集 / 标签 / 范
   check('临时段三项的默认值 = 引擎 `SEGMENT_ROW_GAP_DEFAULT`（bz 22 / dsb 22 / tp 14）',
     SEGMENT_ROW_GAP_DEFAULT.bz === 22 && SEGMENT_ROW_GAP_DEFAULT.dsb === 22 && SEGMENT_ROW_GAP_DEFAULT.tp === 14 &&
       /SEGMENT_ROW_GAP_DEFAULT/.test(defsSrc))
-  // ⑥ frontmatter 模板：嵌套字段只写一行 YAML（三行会互相覆盖、且会变成 [object Object]）
-  const tpl = buildFrontmatterTemplate(
-    [
-      { key: 'note_size', group: '字体', label: '音符字号' },
-      { key: 'segmentRowGap', sub: 'bz', group: '行距', label: 'bz 段上下间距' },
-      { key: 'segmentRowGap', sub: 'dsb', group: '行距', label: 'dsb 段上下间距' },
-      { key: 'segmentRowGap', sub: 'tp', group: '行距', label: '替谱行与下方歌词间距' },
-    ],
-    ['字体', '行距'],
-    (d) => (d.sub ? (SEGMENT_ROW_GAP_DEFAULT as Record<string, number>)[d.sub] : 13),
-  )
-  check('frontmatter 模板把 `segmentRowGap` 合成一行流式映射（不是三行、不出 [object Object]）',
-    tpl.includes('ijipu_segmentRowGap: {bz: 22, dsb: 22, tp: 14}') &&
-      !tpl.includes('[object Object]') &&
-      (tpl.match(/ijipu_segmentRowGap/g) ?? []).length === 1,
-    tpl)
+  // ⑥ adj738：原来这里核对"frontmatter 模板把 segmentRowGap 合成一行 YAML"——
+  //    模板入口已随 frontmatter 层删除。改守同一件事的**现口径**：嵌套字段写进
+  //    `# jps-config` 后能往返（读回来是对象、不是 `[object Object]`，且差量写入只一行）。
+  const nestedSrc = `D: C\nP: 4/4\nQ: 1 2 3 4 |\n`
+  const nestedSaved = writeJpsConfig(nestedSrc, {
+    ...defaultConfigForReset(),
+    segmentRowGap: { bz: 22, dsb: 22, tp: 14 },
+  } as never)
+  const nestedLine = nestedSaved.split('\n').filter((l) => l.startsWith('# jps-config'))
+  const nestedBack = resolvePageConfig(nestedSaved, {}).config.segmentRowGap
+  check('嵌套字段（segmentRowGap）写进 `# jps-config` 后往返保真、且只占一行',
+    nestedLine.length === 1 &&
+      !nestedLine[0].includes('[object Object]') &&
+      nestedBack?.bz === 22 &&
+      nestedBack?.dsb === 22 &&
+      nestedBack?.tp === 14,
+    `${nestedLine.join('|')} → ${JSON.stringify(nestedBack)}`)
 }
 
 console.log('[3f] adj629z 插件默认值/字段集/文档 与 iJipu 应用逐项同步')
@@ -231,12 +215,13 @@ console.log('[3f] adj629z 插件默认值/字段集/文档 与 iJipu 应用逐�
     if (!e || e[0] !== r[0] || e[1] !== r[1]) rangeMismatch.push(`${k}: [${r}] ≠ [${e}]`)
   }
   check(`③ 范围表 ${Object.keys(PAGE_NUM_RANGES).length} 项与引擎逐项相等`, rangeMismatch.length === 0, rangeMismatch.join(' | '))
-  // ④ README「Frontmatter 键对照表」逐行核对：每个设置项都有一行，且行里写的默认值 = 引擎默认值
+  // ④ README「设置键对照表」逐行核对（adj738：键名从 `ijipu_xxx` 改为**引擎字段名** `xxx`）：
+  //    每个设置项都有一行，且行里写的默认值 = 引擎默认值
   //    （字体行文档只写"系统栈"，不做数值核对；可选布尔项要求写明默认 false）
   const readme = String(readFileSync('README.md', 'utf8'))
-  const docRows = readme.split('\n').filter((l) => l.trim().startsWith('|') && l.includes('`ijipu_'))
+  const docRows = readme.split('\n').filter((l) => l.trim().startsWith('|') && /\|\s*`[A-Za-z_][A-Za-z0-9_]*`\s*\|/.test(l))
   const cellOf = (key: string) => {
-    const row = docRows.find((r) => r.includes(`\`ijipu_${key}\``))
+    const row = docRows.find((r) => r.includes(`\`${key}\``))
     if (!row) return null
     const cells = row.split('|')
     return cells[cells.length - 2] ?? ''
@@ -514,16 +499,18 @@ console.log('[3g] adj631 设置面板：多页签 / 收藏音色分类列表 / �
       /ijipu-config-tabs/.test(dlgSrc) && /ijipu-settings-tab/.test(dlgSrc) &&
       /toggleClass\('is-active'/.test(dlgSrc) && /\.ijipu-config-tabs \{/.test(cssSrc),
     `tabs=${/readonly tabs = \[\.\.\.GROUPS, '说明'\]/.test(dlgSrc)} cls=${/ijipu-config-tabs/.test(dlgSrc)}`)
-  check('⑦b 「未随谱携带 N 项」已从工具条移进对话框（工具条只剩可点按钮；且按 adj639 口径传 baseline）',
-    !/未随谱携带/.test(paneCode) && /未随谱携带/.test(dlgSrc) &&
-      /carryover: carry\.ok \? \[\] : carry\.missing/.test(paneSrc) &&
-      /configCarryover\(host\.getSource\(\), resolved\.config, resolved\.baseline\)/.test(paneSrc) &&
-      /opts\.carryover\.length > 0/.test(dlgSrc) && /ijipu-config-src--carry/.test(cssSrc),
-    `pane 残留=${/未随谱携带/.test(paneCode)} 对话框有=${/未随谱携带/.test(dlgSrc)}`)
-  check('⑦c 两块提示的顺序 = 「谱面自带设置」在上、「未随谱携带」紧跟其下（用户要求）',
-    dlgSrc.indexOf('谱面自带设置 ${this.opts.sourceFields.length} 项') <
-      dlgSrc.indexOf('未随谱携带 ${this.opts.carryover.length} 项') &&
-      dlgSrc.indexOf('未随谱携带 ${this.opts.carryover.length} 项') < dlgSrc.indexOf('ijipu-config-tabs'))
+  /**
+   * ⑦b adj738：原来这里守的是「未随谱携带 N 项」从工具条搬进对话框、以及它与
+   * 「谱面自带设置 N 项」的上下顺序。**笔记 frontmatter 层整体删除后，"未随谱携带"的来源恒为空**
+   * （插件设置那一层被当作本库默认、不算未携带）⇒ 该块连同 `carryover` 选项一起删除。
+   * 现在要守的口径相反：**它不该再出现在任何地方**（防止有人把死代码/死提示又加回来）。
+   */
+  check('⑦b 「未随谱携带」提示与 carryover 传参已彻底移除（来源随 frontmatter 层一起消失）',
+    !/未随谱携带/.test(paneCode) &&
+      !/未随谱携带/.test(stripComments(dlgSrc)) &&
+      !/carryover/.test(paneCode) &&
+      !/carryover/.test(stripComments(dlgSrc)),
+    `pane 残留=${/未随谱携带/.test(paneCode)} 对话框有=${/未随谱携带/.test(stripComments(dlgSrc))}`)
   // 页签化后不能有字段"点不到"：DEFS 里每个 group 都必须是 GROUPS 的一员，且四组都有项
   {
     const defsSrc7 = String(readFileSync('src/defs.ts', 'utf8'))
@@ -610,76 +597,14 @@ console.log('[3e] adj629s 「恢复默认」用引擎的 defaultConfigForReset�
     /defaultConfigForReset\(\)/.test(dlgFlat) && !/\{ \.\.\.defaultPageConfig \}/.test(dlgFlat))
 }
 
-console.log('[4] 未识别键不再静默忽略（给出最近键名建议）')
-{
-  const a = CFG({ ijipu_paper: 'A4' })
-  check('ijipu_paper 判为未识别', a.unknown.length === 1 && a.unknown[0].key === 'ijipu_paper')
-  check('ijipu_paper 建议 ijipu_page', a.unknown[0]?.suggest === 'ijipu_page', String(a.unknown[0]?.suggest))
-  check('未识别键不污染配置（纸张仍是默认 A4）', a.config.page === defaultPageConfig.page)
-  const b = CFG({ ijipu_margin_leftt: 40 })
-  check('拼错的 ijipu_margin_leftt 建议 ijipu_margin_left', b.unknown[0]?.suggest === 'ijipu_margin_left', String(b.unknown[0]?.suggest))
-  const c = CFG({ ijipu_zzzzzzzzzz: 1 })
-  check('毫无相近项的键建议为 null（不误导）', c.unknown[0]?.suggest === null, String(c.unknown[0]?.suggest))
-  check('提示文案含"是否想写"', unknownKeyHint([{ key: 'ijipu_paper', suggest: 'ijipu_page' }]).includes('是否想写 ijipu_page'))
-  check('提示文案对无建议键只回显键名', unknownKeyHint([{ key: 'ijipu_zzz', suggest: null }]) === 'ijipu_zzz')
-}
-
-console.log('[5] 非业务键与优先级')
-{
-  const a = CFG({ position: {}, aliases: ['x'], tags: ['y'], title: '笔记标题' })
-  check('元数据自带的 position/aliases/tags 与普通键不误判', a.unknown.length === 0 && a.applied.length === 0)
-  const b = applyFrontmatter({ note_size: 20 }, { ijipu_note_size: 15 })
-  check('优先级：frontmatter > 插件设置', b.config.note_size === 15, String(b.config.note_size))
-  const c = applyFrontmatter({ note_size: 20 }, {})
-  check('优先级：插件设置 > 默认', c.config.note_size === 20, String(c.config.note_size))
-  const d = applyFrontmatter({}, {})
-  check('无 frontmatter 时全部走默认', d.config.note_size === defaultPageConfig.note_size && d.applied.length === 0)
-  const e = mergePageConfig({}, { ijipu_note_size: 18 })
-  check('mergePageConfig 兼容旧调用（返回配置）', e.note_size === 18)
-}
-
-console.log('[6] 键名映射与全字段命中')
-{
-  check('frontmatterKey(note_size) = ijipu_note_size', frontmatterKey('note_size') === 'ijipu_note_size')
-  const miss = PAGE_CONFIG_FIELDS.filter((f) => {
-    const probe = defaultPageConfig[f as keyof typeof defaultPageConfig] ?? (typeof f === 'string' && f.endsWith('Font') ? 'x' : 1)
-    const r = applyFrontmatter({}, { [frontmatterKey(f)]: probe })
-    return r.applied.length !== 1
-  })
-  check(`字段表全部 ${PAGE_CONFIG_FIELDS.length} 个字段都能被同名 frontmatter 键命中`, miss.length === 0, miss.join(','))
-  const appliedOnce = CFG({ ijipu_note_size: 15, ijipu_noteSize: 16 })
-  check('同一字段两种写法重复出现时以最后写入为准（不报错）', appliedOnce.config.note_size === 16, String(appliedOnce.config.note_size))
-
-  /**
-   * adj724b（用户决策 A）：模板的 **include 过滤器**（「复制最小模板」靠它只留与默认不同的项）。
-   * 纯函数，直接喂小样本核对 —— 重点是三件事：
-   *  ① 过滤掉不该出现的项；② 嵌套字段只保留通过过滤的子项（而不是整行照抄）；
-   *  ③ 一项都不剩时返回**空串**（调用方据此提示"没有需要写的项"，而不是给出一个空的 `---/---`）。
-   */
-  const sampleDefs = [
-    { key: 'note_size', group: '字体', label: '音符字号' },
-    { key: 'segmentRowGap', sub: 'bz', group: '行距', label: '临时段间距' },
-    { key: 'segmentRowGap', sub: 'dsb', group: '行距', label: '临时段间距' },
-    { key: 'lyricShrink', group: '渲染', label: '歌词压缩' },
-  ]
-  const sampleGroups = ['字体', '行距', '渲染']
-  const sampleValues: Record<string, unknown> = {
-    note_size: 14,
-    'segmentRowGap:bz': 22,
-    'segmentRowGap:dsb': 99,
-    lyricShrink: true,
-  }
-  const valOf = (d: { key: string; sub?: string }): unknown =>
-    sampleValues[d.sub ? `${d.key}:${d.sub}` : d.key]
-  const onlyChanged = (d: { key: string; sub?: string }): boolean => valOf(d) !== 22
-  const minimal = buildFrontmatterTemplate(sampleDefs, sampleGroups, valOf, onlyChanged)
-  check('adj724b 最小模板：过滤掉与默认相同的项', !minimal.includes('ijipu_segmentRowGap: {bz'), minimal.replace(/\n/g, ' ⏎ '))
-  check('adj724b 最小模板：嵌套字段只保留通过过滤的子项（dsb 被改过 ⇒ 保留）', minimal.includes('{dsb: 99}'), minimal.replace(/\n/g, ' ⏎ '))
-  check('adj724b 最小模板：仍写出未过滤的普通项', minimal.includes('ijipu_note_size: 14') && minimal.includes('ijipu_lyricShrink: true'))
-  const minimalEmpty = buildFrontmatterTemplate(sampleDefs, sampleGroups, () => 22, () => false)
-  check('adj724b 最小模板：一项都不剩时返回空串（不给出空的 ---/---）', minimalEmpty === '', JSON.stringify(minimalEmpty))
-  check('adj724b 完整模板：不过滤时仍含全部项', buildFrontmatterTemplate(sampleDefs, sampleGroups, valOf).includes('{bz: 22, dsb: 99}'))
-}
+/**
+ * adj738：原来这里还有三节 ——
+ *  [4] 未识别的 frontmatter 键给出"最近键名建议"（`unknownKeyHint`）
+ *  [5] 非业务键（`position`/`aliases`/`tags`）不误判 + frontmatter > 插件设置 的优先级
+ *  [6] 键名映射与全字段命中 + 「复制最小/完整模板」的 include 过滤器（`buildFrontmatterTemplate`）
+ * 全随"笔记 frontmatter 层"删除而删除。现在写错键只可能发生在**谱面源码的 `# jps-config`** 里，
+ * 那由引擎的解析告警照常提示（见本套件的 [11] 解析问题分级）。
+ */
 
 console.log('[7] 谱面自带设置 # jps-config 优先级最高（阶段 1：复制 iJipu 的 .jps 即一模一样）')
 {
@@ -694,26 +619,27 @@ console.log('[7] 谱面自带设置 # jps-config 优先级最高（阶段 1：�
     showInstrument: true,
     lyricShrink: true,
   })
-  const r = resolvePageConfig(withCfg, { note_size: 99, margin_left: 99 }, { ijipu_note_size: 88, ijipu_margin_right: 12 })
-  check('源内设置 > frontmatter > 插件设置（note_size=15）', r.config.note_size === 15, String(r.config.note_size))
+  const r = resolvePageConfig(withCfg, { note_size: 99, margin_left: 99 })
+  check('源内设置 > 插件设置（note_size=15）', r.config.note_size === 15, String(r.config.note_size))
   check('源内设置生效（margin_left=32 / noteSpaceLayout=duration / lianyinxian_type=2）', r.config.margin_left === 32 && r.config.noteSpaceLayout === 'duration' && r.config.lianyinxian_type === 2)
   check('源内可选字段往返保真（showInstrument/lyricShrink=true）', r.config.showInstrument === true && r.config.lyricShrink === true, `${r.config.showInstrument}/${r.config.lyricShrink}`)
-  check('源内未写的键可由 frontmatter 提供（差量写入下 margin_right 不在源内 → 用 frontmatter 12）', r.config.margin_right === 12, String(r.config.margin_right))
+  // adj738：源内没写的键 ⇒ 由**插件设置**兜底（笔记 frontmatter 那一层已删除）
+  check('源内没写的键由插件设置兜底（margin_right=40）', resolvePageConfig(withCfg, { margin_right: 40 }).config.margin_right === 40)
   // 源内写了的键优先级最高（差量写入：源内只含与默认不同的项）
-  const srcWins = resolvePageConfig(writeJpsConfig(SRC, { ...defaultPageConfig, margin_left: 32 }), {}, { ijipu_margin_left: 99 })
-  check('源内写了的键 > frontmatter（margin_left 用源内 32，而非 99）', srcWins.config.margin_left === 32, String(srcWins.config.margin_left))
-  // 源内只写部分键（手写的最小设置行）→ 其余键交给 frontmatter / 插件设置
+  const srcWins = resolvePageConfig(writeJpsConfig(SRC, { ...defaultPageConfig, margin_left: 32 }), { margin_left: 99 })
+  check('源内写了的键 > 插件设置（margin_left 用源内 32，而非 99）', srcWins.config.margin_left === 32, String(srcWins.config.margin_left))
+  // 源内只写部分键（手写的最小设置行）→ 其余键交给插件设置
   const partial = `${SRC}\n# jps-config:{"note_size":15}\n`
-  const rp = resolvePageConfig(partial, { margin_right: 40 }, { ijipu_margin_right: 12 })
-  check('源内只写部分键时，其他键由 frontmatter 生效（margin_right=12）', rp.config.margin_right === 12, String(rp.config.margin_right))
+  const rp = resolvePageConfig(partial, { margin_right: 40 })
+  check('源内只写部分键时，其他键由插件设置生效（margin_right=40）', rp.config.margin_right === 40, String(rp.config.margin_right))
   check('源内部分设置里的键仍最高优先（note_size=15）', rp.config.note_size === 15, String(rp.config.note_size))
-  check('源内/frontmatter 都没写 → 插件设置生效（bar_gap）', resolvePageConfig(SRC, { bar_gap: 7 }, {}).config.bar_gap === 7)
+  check('源内没写 → 插件设置生效（bar_gap）', resolvePageConfig(SRC, { bar_gap: 7 }).config.bar_gap === 7)
   check('sourceFields 报告源内生效字段数（差量写入⇒只含非默认项）且含 showInstrument', r.sourceFields.length >= 5 && r.sourceFields.includes('showInstrument'), `${r.sourceFields.length}:${r.sourceFields.join(',')}`)
-  check('无源内设置时 sourceFields 为空', resolvePageConfig(SRC, {}, {}).sourceFields.length === 0)
-  check('无源内设置时行为与此前一致（插件设置 > 默认）', resolvePageConfig(SRC, { note_size: 20 }, {}).config.note_size === 20)
-  check('源内设置行不影响解析（仍是 1 个曲行、无错误）', resolvePageConfig(withCfg, {}, {}).config.note_size === 15)
+  check('无源内设置时 sourceFields 为空', resolvePageConfig(SRC, {}).sourceFields.length === 0)
+  check('无源内设置时行为与此前一致（插件设置 > 默认）', resolvePageConfig(SRC, { note_size: 20 }).config.note_size === 20)
+  check('源内设置行不影响解析（仍是 1 个曲行、无错误）', resolvePageConfig(withCfg, {}).config.note_size === 15)
   // 端到端等价性：同一份 .jps（含设置行）在两端解析出的配置应完全一致
-  const dst = resolvePageConfig(withCfg, {}, null).config
+  const dst = resolvePageConfig(withCfg, {}).config
   const appSide = { ...defaultPageConfig, ...(JSON.parse(withCfg.split('\n').find((l) => l.startsWith('# jps-config:'))!.slice('# jps-config:'.length)) as object) }
   const diff = Object.keys(appSide).filter((k) => JSON.stringify((dst as unknown as Record<string, unknown>)[k]) !== JSON.stringify((appSide as unknown as Record<string, unknown>)[k]))
   check('端到端：插件解析结果与 iJipu 源内配置逐字段一致（无一差异）', diff.length === 0, diff.join(','))
@@ -804,16 +730,19 @@ console.log('[9] 排版辅助虚线的几何（纯逻辑：线集合/位置/范�
 
 console.log('[10] 设置分层：编辑器偏好不再随谱 / 差量写入 / 字体 fallback（adj-font）')
 {
-  // ① 已降级的旧键：写法合法但不再随谱保存——给"为什么不生效"的提示，而不是当成拼写错误
-  const dep = applyFrontmatter({}, { ijipu_editorFont: 'SimHei', ijipu_editor_font_size: 22 })
-  check('ijipu_editorFont 归入「已不再随谱保存」而非未识别', dep.deprecated.length === 2 && dep.unknown.length === 0, JSON.stringify({ dep: dep.deprecated, unk: dep.unknown }))
-  check('已降级键不影响配置（不写入 config）', !('editorFont' in (dep.config as unknown as Record<string, unknown>)) && !('editorFontSize' in (dep.config as unknown as Record<string, unknown>)))
-  check('提示文案说明原因（本机偏好）', deprecatedKeyHint(dep.deprecated).includes('本机偏好'), deprecatedKeyHint(dep.deprecated))
-  check('字段表不再包含编辑器偏好键', !PAGE_CONFIG_FIELDS.includes('editorFont' as never) && !PAGE_CONFIG_FIELDS.includes('editorFontSize' as never))
+  // ① adj738：原来这里核对"frontmatter 里的编辑器偏好旧键归入已降级"——
+  //    笔记 frontmatter 层删除后，同类判断落在**引擎**侧：`extractLegacyEditorPrefs` 负责
+  //    从**源码**里认出"写法合法但已不再随谱保存"的旧编辑器偏好键（引擎单测/冒烟已覆盖）。
+  const legacy = extractLegacyEditorPrefs('V: 1.0\nQ: 1 |\n# jps-config:{"editorFont":"SimHei","editorFontSize":22}\n')
+  check('引擎能从源码设置行里认出旧的编辑器偏好键（不再随谱保存）',
+    legacy?.font === 'SimHei' && legacy?.fontSize === 22, JSON.stringify(legacy))
+  check('编辑器偏好键不会再写进配置对象（本机偏好，不属于谱面）',
+    !('editorFont' in (resolvePageConfig('Q: 1 |\n', {}).config as unknown as Record<string, unknown>)) &&
+      !('editorFontSize' in (resolvePageConfig('Q: 1 |\n', {}).config as unknown as Record<string, unknown>)))
 
   // ② 差量写入：源内只记录与默认不同的项；全部默认则删除设置行
   const src = 'V: 1.0\nB: t\nD: G\nP: 4/4\nQ: 1 2 3 4 |\n'
-  const changed = resolvePageConfig(src, { margin_left: 32 }, {}).config
+  const changed = resolvePageConfig(src, { margin_left: 32 }).config
   const line = writeJpsConfig(src, changed).split('\n').find((l) => l.startsWith('# jps-config:')) ?? ''
   const written = JSON.parse(line.slice('# jps-config:'.length)) as Record<string, unknown>
   check('插件路径同样差量写入（只含 margin_left）', Object.keys(written).join(',') === 'margin_left', Object.keys(written).join(','))
@@ -823,57 +752,56 @@ console.log('[10] 设置分层：编辑器偏好不再随谱 / 差量写入 / �
   //   （插件 defs.ts 的 FONTS 直接引用引擎 SCORE_FONT_OPTIONS，此处断言引擎目录即可）
   check(`插件字体候选（${SCORE_FONT_OPTIONS.length} 项）都以通用族兜底`, SCORE_FONT_OPTIONS.every((o) => /sans-serif|serif|monospace|system-ui/.test(o.value)), SCORE_FONT_OPTIONS.map((o) => o.label).join(','))
   const legacyFont = `V: 1.0\nB: t\nD: G\nP: 4/4\nQ: 1 2 3 4 |\n\n# jps-config:{"geci_font":"SimSun"}\n`
-  check('旧谱面裸字体名（SimSun）读取时自动补 serif', resolvePageConfig(legacyFont, {}, {}).config.geci_font === 'SimSun, serif', String(resolvePageConfig(legacyFont, {}, {}).config.geci_font))
+  check('旧谱面裸字体名（SimSun）读取时自动补 serif', resolvePageConfig(legacyFont, {}).config.geci_font === 'SimSun, serif', String(resolvePageConfig(legacyFont, {}).config.geci_font))
 }
 
-// ---- 10b. 分享保真：只写本次改动 vs 随谱固化（adj480）----
-console.log('[10b] 分享保真：本地层（插件设置 / frontmatter）不随谱走（adj480）')
+// ---- 10b. 分享保真：只写本次改动 vs 随谱固化（adj480；adj738 起只剩"插件设置"这一个本地层）----
+console.log('[10b] 分享保真：本库默认层（插件设置）不随谱走（adj480）')
 {
   const src = 'V: 1.0\nB: t\nD: G\nP: 4/4\nQ: 1 2 3 4 |\n'
-  // 本库默认层：插件设置 note_size=15 + 笔记 frontmatter margin_left=66（都不在源码里）
-  const effective = resolvePageConfig(src, { note_size: 15 }, { ijipu_margin_left: 66 }).config
+  // 本库默认层：插件设置 note_size=15（源码里没写）
+  const effective = resolvePageConfig(src, { note_size: 15 }).config
   // ① 用户只改了 height_quci 一项 → 「保存到谱面」只应写入这一项
   const next = { ...effective, height_quci: 21 }
   const edits = mergeConfigEdits(src, effective, next)
-  check('adj480 保存到谱面：只含本次改动（不含插件设置/frontmatter 的项）', Object.keys(edits).join(',') === 'height_quci', Object.keys(edits).join(','))
+  check('adj480 保存到谱面：只含本次改动（不含插件设置带来的项）', Object.keys(edits).join(',') === 'height_quci', Object.keys(edits).join(','))
   const savedLine = writeJpsConfig(src, edits)
-  check('adj480 保存到谱面后：本库层仍然生效（源码没写就还会兜底）', resolvePageConfig(savedLine, { note_size: 15 }, { ijipu_margin_left: 66 }).config.note_size === 15)
-  // ② 分享保真检查：引擎口径（不传 baseline）仍列出 2 项非默认值没随谱携带
-  const gap = configCarryover(savedLine, resolvePageConfig(savedLine, { note_size: 15 }, { ijipu_margin_left: 66 }).config)
-  check('adj480 configCarryover 列出未随谱携带项（note_size / margin_left）',
-    !gap.ok && gap.missing.length === 2 && gap.missing.some((m) => m.key === 'note_size') && gap.missing.some((m) => m.key === 'margin_left'),
+  check('adj480 保存到谱面后：本库层仍然生效（源码没写就还会兜底）', resolvePageConfig(savedLine, { note_size: 15 }).config.note_size === 15)
+  // ② 分享保真检查：引擎口径（不传 baseline）会列出"非默认值但没随谱携带"的项
+  const gap = configCarryover(savedLine, resolvePageConfig(savedLine, { note_size: 15 }).config)
+  check('adj480 configCarryover 列出未随谱携带项（note_size）',
+    !gap.ok && gap.missing.length === 1 && gap.missing.some((m) => m.key === 'note_size'),
     JSON.stringify(gap.missing))
-  // ②b adj639（用户要求"插件的默认值体系与应用保持一致、应用正常的谱面在插件里不要提示"）：
-  //     传 `baseline`（代码默认 ← 插件设置，不含 frontmatter）后，**插件设置那一层不再算未随谱携带**，
-  //     只剩"这篇笔记特有"的 frontmatter 差异。
+  /**
+   * ②b adj639/adj738：传 `baseline`（代码默认 ← **插件设置**）之后，**插件设置那一层不再算未随谱携带** ——
+   * 它在用户眼里就是"本库默认值"，等价于应用里的代码默认值。
+   * （adj738 之前这里还剩"笔记 frontmatter"那类差异；该层删除后，传 baseline 时结论就是**零提示**。）
+   */
   {
-    const res = resolvePageConfig(savedLine, { note_size: 15 }, { ijipu_margin_left: 66 })
+    const res = resolvePageConfig(savedLine, { note_size: 15 })
     const withBase = configCarryover(savedLine, res.config, res.baseline)
-    check('adj639 传 baseline 后：插件设置的项不再提示（只剩 frontmatter 的 margin_left）',
-      !withBase.ok && withBase.missing.length === 1 && withBase.missing[0].key === 'margin_left',
-      JSON.stringify(withBase.missing))
-    check('adj639 baseline = 代码默认 ← 插件设置（不含 frontmatter）：note_size=15 在基线里、margin_left 不在',
-      res.baseline.note_size === 15 && res.baseline.margin_left === defaultPageConfig.margin_left,
-      `note_size=${res.baseline.note_size} margin_left=${res.baseline.margin_left}`)
+    check('adj639 传 baseline 后：插件设置的项不再提示（已随本库默认携带）', withBase.ok, JSON.stringify(withBase.missing))
+    check('adj639 baseline = 代码默认 ← 插件设置：note_size=15 在基线里',
+      res.baseline.note_size === 15, `note_size=${res.baseline.note_size}`)
     // 用户的原始诉求：插件设置里有非默认值（含可选字段）而源码没写 ⇒ **零提示**
-    const res2 = resolvePageConfig(src, { note_size: 15, align_min_bars: 3, showInstrument: true }, {})
+    const res2 = resolvePageConfig(src, { note_size: 15, align_min_bars: 3, showInstrument: true })
     const carry2 = configCarryover(src, res2.config, res2.baseline)
     check('adj639 插件设置（note_size / align_min_bars / showInstrument）≠ 引擎默认时也不提示（应用里正常的谱零提示）',
       carry2.ok, JSON.stringify(carry2.missing))
   }
   // ③ 「随谱固化」= 差量模式写**生效配置** → 非默认项全部落盘，且不再写成全量（不出现与默认相同的项）
-  const solidified = writeJpsConfig(src, resolvePageConfig(savedLine, { note_size: 15 }, { ijipu_margin_left: 66 }).config)
+  const solidified = writeJpsConfig(src, resolvePageConfig(savedLine, { note_size: 15 }).config)
   const solidLine = solidified.split('\n').find((l) => l.startsWith('# jps-config:')) ?? ''
   const solid = JSON.parse(solidLine.slice('# jps-config:'.length)) as Record<string, unknown>
   check('adj480 随谱固化：非默认项全部写入（含本库层带来的）',
-    solid.note_size === 15 && solid.margin_left === 66 && solid.height_quci === 21,
+    solid.note_size === 15 && solid.height_quci === 21,
     JSON.stringify(solid))
   check('adj480 随谱固化：与默认相同的项不写（仍是差量口径，不是全量 ~900 字符）',
     !('page' in solid) && !('margin_top' in solid) && !('align_min_bars' in solid),
     Object.keys(solid).join(','))
   check('adj480 固化后该谱自包含（换到 iJipu 应用也无缺口）',
-    configCarryover(solidified, resolvePageConfig(solidified, {}, {})).ok,
-    JSON.stringify(configCarryover(solidified, resolvePageConfig(solidified, {}, {})).missing))
+    configCarryover(solidified, resolvePageConfig(solidified, {})).ok,
+    JSON.stringify(configCarryover(solidified, resolvePageConfig(solidified, {})).missing))
 }
 
 // ---- 11. 解析问题分级：warning 不阻断渲染（adj394）----
@@ -1710,16 +1638,18 @@ console.log('\n[adj724b] community review: forbidden APIs / styles must stay fix
   const cssNoComments = cssSrc2.replace(/\/\*[\s\S]*?\*\//g, '')
   const importantCount = (cssNoComments.match(/!important/g) ?? []).length
   check('adj724b styles.css 的 !important 收敛到 ≤5 条（仅反制宿主所必需）', importantCount <= 5)
-  // ⑰ frontmatter **只对 ` ```jps ` 代码块生效**（用户决策 A 的口径核心）
-  //    三个渲染路径里只有代码块把笔记 frontmatter 传进去；嵌入与完整编辑器**硬编码 null**。
-  //    这条最容易被后人"顺手统一"成三处都读 frontmatter —— 那会改变现有谱面的显示效果，故钉住。
+  // ⑰ adj738：原来这条守的是"frontmatter **只对 ` ```jps ` 代码块生效**"（嵌入与完整编辑器硬编码 null）。
+  //    整层删除后口径变成：**三条渲染路径都不再读笔记 frontmatter**，`getFrontmatter` 这个约定也没了。
   const embedApiSrc = s('src/embed.ts')
   const fileViewApiSrc = s('src/fileView.ts')
   const mainApiSrc = s('src/main.ts')
-  check('adj724b frontmatter 只对代码块生效（嵌入与完整编辑器一律不读笔记 frontmatter）',
-    /getFrontmatter:\s*\(\)\s*=>\s*null/.test(embedApiSrc) &&
-      /getFrontmatter:\s*\(\)\s*=>\s*null/.test(fileViewApiSrc) &&
-      /getFrontmatter:\s*\(\)\s*=>\s*this\.plugin\.app\.metadataCache/.test(mainApiSrc))
+  check('adj738 三条渲染路径都不再读笔记 frontmatter（`getFrontmatter` 约定随该层删除）',
+    !/getFrontmatter/.test(embedApiSrc) &&
+      !/getFrontmatter/.test(fileViewApiSrc) &&
+      !/getFrontmatter/.test(mainApiSrc) &&
+      // 只禁"读笔记的 frontmatter 字段"；`metadataCache` 本身还用于正常的链接解析，不能一并禁掉
+      !/metadataCache[\s\S]{0,80}?\.frontmatter/.test(mainApiSrc) &&
+      !existsSync('src/frontmatter.ts'))
   /**
    * ⑱ adj736（用户判断：取消 frontmatter 那块）：说明页不再讲 frontmatter，
    * 改为**一句话指路**——设置写在**谱面里的 `# jps-config`**（跟谱走、可逐个代码块写），

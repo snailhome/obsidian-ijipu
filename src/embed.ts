@@ -201,7 +201,6 @@ class JpsEmbedHost {
         plugin: this.plugin,
         container: el,
         getSource: () => this.source,
-        getFrontmatter: () => null,
         embedded: true,
         // 嵌入区顶部显示谱面名（点击打开该 .jps）——接管后宿主不再提供这个入口
         embedTitle: file.basename,

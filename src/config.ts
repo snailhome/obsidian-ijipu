@@ -4,57 +4,45 @@
  * 优先级（**源内最高**，与 iJipu 应用的「每首谱用自己的设置」一致）：
  *   引擎默认 `defaultPageConfig`
  *     < 插件设置（设置面板里的全局默认）
- *       < 笔记 frontmatter（`ijipu_*`，笔记级兜底）
- *         < **谱面源码内的 `# jps-config:{...}`**（该曲谱自带设置）
+ *       < **谱面源码内的 `# jps-config:{...}`**（该曲谱自带设置）
  *
  * 最后一级是「把 iJipu 的 .jps 直接复制进 Obsidian 即可一模一样」的关键：
  * iJipu 在点「保存设置」时用 `writeJpsConfig` 把**与默认不同的项**（差量）写进源码那一行，
  * 而 adj480 起 iJipu 应用侧**不再有"本机页面设置"层**（谱面自包含）⇒ 源内配置就是它的全部面子。
- * 插件这一侧插件设置与 frontmatter 只对**源内没写的键**生效（保留"改一处、全库统一变"的能力）；
- * 要把这份谱复制给别人也一致，用设置对话框的「随谱固化」（= 把与引擎默认不同的全部生效项写进源码）。
+ * 插件设置只对**源内没写的键**生效（保留"改一处、全库统一变"的能力）；
+ * 要把这份谱复制给别人也一致，用设置对话框的「保存到谱面」（= 把生效项写进源码那一行）。
+ *
+ * adj738（用户决定）：**删掉笔记 frontmatter 那一层**（`ijipu_*` 键）。
+ * 理由（用户原话）：它对 `.jps` 文件用不上、对"一个笔记里多个 ` ```jps ` 块"又太粗（笔记级），
+ * 且**不随谱走**；而源内的 `# jps-config` 既跟谱走、又能**逐块**写。**这是破坏性变更**：
+ * 老笔记里写在 Properties/YAML 里的 `ijipu_*` 键从此不再生效（RELEASE-NOTES 有醒目提示）。
  */
 import { extractJpsConfig, mergeJpsConfig, type PageConfig } from '@ijipu/engine'
-import { applyFrontmatter, type AppliedOverride, type DeprecatedKey, type UnknownKey } from './frontmatter'
 
 export type ResolvedConfig = {
   /** 最终生效的页面配置 */
   config: PageConfig
   /**
-   * adj639（用户要求"插件的默认值体系与应用保持一致，在应用正常的谱面在插件里不要提示"）：
-   * **本库默认层** = 代码默认 ← 插件设置（**不含**笔记 frontmatter）。
-   * 「未随谱携带」提示以它为基线 ⇒ 插件设置里的值（用户眼里的"本库默认"）不再被当成"该随谱携带"，
-   * 提示只剩**这篇笔记特有**的差异（典型来源 = frontmatter）。
+   * **本库默认层** = 代码默认 ← 插件设置。
+   * 设置对话框用它当基线，区分"这份谱自己写了的项"与"只是跟随本库默认"的项。
    */
   baseline: PageConfig
-  /** frontmatter 里生效的项（原键名 + 值，供徽标/提示显示） */
-  applied: AppliedOverride[]
-  /** 未识别的 frontmatter 键（含最近键名建议） */
-  unknown: UnknownKey[]
-  /** 写法合法但已降级为「用户个性」的键（编辑器偏好等，不再随谱） */
-  deprecated: DeprecatedKey[]
-  /** 源内 `# jps-config` 生效的字段名（供徽标显示） */
+  /** 源内 `# jps-config` 生效的字段名（供徽标/对话框显示） */
   sourceFields: string[]
 }
 
 /**
- * 解析最终配置：默认 < 插件设置 < frontmatter < 源内 `# jps-config`。
+ * 解析最终配置：默认 < 插件设置 < 源内 `# jps-config`。
  * @param source 代码块里的 .jps 源码（与 iJipu 打开的文件内容一致）
  * @param settings 插件设置（全局默认）
- * @param frontmatter 笔记 frontmatter（可为 null）
  */
-export function resolvePageConfig(
-  source: string,
-  settings: Partial<PageConfig>,
-  frontmatter: Record<string, unknown> | null | undefined,
-): ResolvedConfig {
-  const fm = applyFrontmatter(settings, frontmatter)
+export function resolvePageConfig(source: string, settings: Partial<PageConfig>): ResolvedConfig {
   // 源内配置字段（也用于徽标告知用户"这份谱自带设置"）
   const sourceFields = Object.keys(extractJpsConfig(source) ?? {})
-  // adj639：本库默认层（只到"插件设置"这一层，不含 frontmatter）——供"未随谱携带"提示当基线。
   // `mergeJpsConfig` 会先把 `defaultPageConfig` 铺底再盖 fallback，所以传 Partial 是安全的
   //（类型上它要完整 PageConfig，这里显式收窄即可）。
   const baseline = mergeJpsConfig('', settings as PageConfig)
   // mergeJpsConfig 的语义即「默认 < fallback < 源内」，恰好是本插件需要的优先级
-  const config = mergeJpsConfig(source, fm.config)
-  return { config, baseline, applied: fm.applied, unknown: fm.unknown, deprecated: fm.deprecated, sourceFields }
+  const config = mergeJpsConfig(source, settings as PageConfig)
+  return { config, baseline, sourceFields }
 }

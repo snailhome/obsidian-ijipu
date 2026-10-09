@@ -25,21 +25,14 @@ import { DEFS, GROUPS, addConfigControl, readDef, writeDef } from './defs'
 export type ConfigTarget = 'score' | 'score-full' | 'plugin'
 
 export interface ConfigDialogOptions {
-  /** 当前生效配置（默认 < 插件设置 < frontmatter < 源内）——对话框的初值 */
+  /** 当前生效配置（默认 < 插件设置 < 源内）——对话框的初值 */
   current: PageConfig
   /** 谱面源码 `# jps-config` 行里显式写了的字段（优先级最高） */
   sourceFields: string[]
   /** 与 `sourceFields` 对应的取值（用于列表展示） */
   sourceValues: Record<string, unknown>
-  /**
-   * 用户要求：**未随谱携带**的项（源码里没写、值只来自**笔记 frontmatter**）——
-   * 引擎 `configCarryover(code, effective, baseline).missing` 的原样透传；空数组 = 已随谱携带。
-   *
-   * adj639（用户要求"插件的默认值体系与应用保持一致，在应用正常的谱面在插件里不要提示"）：
-   * 传了 `baseline`（代码默认 ← 插件设置）之后，**插件设置里的值不再算"未随谱携带"**——
-   * 那些值在用户眼里就是"本库默认值"，等价于应用里的代码默认值；提示只剩这篇笔记特有的差异。
-   */
-  carryover: { key: string; value: unknown }[]
+  // adj738：原来还有一个 `carryover`（"未随谱携带的项"，来源只有笔记 frontmatter）。
+  // 那一层删掉后它的来源恒为空 ⇒ 连同下面那块提示一起删除。
   /** 关闭后回调（点「取消」不触发） */
   onApply: (target: ConfigTarget, config: PageConfig) => void
 }
@@ -65,12 +58,11 @@ export class ConfigDialog extends Modal {
     titleEl.setText('排版设置（这一份谱）')
 
     const hint = contentEl.createDiv({ cls: 'ijipu-config-hint' })
-    hint.createDiv({ text: '优先级：引擎默认 < 插件设置 < 笔记 frontmatter < 谱面自带 # jps-config' })
-    // adj631（用户报"预览页面的设置与 设置-iJipu 里的设置项不同步"）：这里显示的是**这一份谱的生效值**，
-    // 与「设置 → iJipu」的**本库全局默认**口径不同 ⇒ 值可以不一样（本谱有 frontmatter / 源内设置时尤其明显）。
+    // adj738：优先级只剩两层（笔记 frontmatter 那一层已删除）
+    hint.createDiv({ text: '优先级：引擎默认 < 插件设置 < 谱面自带 `# jps-config`' })
     hint.createDiv({
       cls: 'ijipu-config-hint-sub',
-      text: '下面显示的是**这一份谱的生效值**（含笔记 frontmatter 与源内 `# jps-config`），与「设置 → iJipu」里的**本库全局默认**不是同一层——两者值不同是正常的。',
+      text: '下面显示的是**这一份谱的生效值**（含源内 `# jps-config`），与「设置 → iJipu」里的**本库全局默认**不是同一层——两者值不同是正常的。',
     })
 
     // 「谱面自带设置 N 项」——原先挂在谱面工具栏上（挤占按钮位置、详情只能悬停看），
@@ -90,25 +82,8 @@ export class ConfigDialog extends Modal {
     }
 
     // adj480（用户要求：从预览工具条挪到这里、紧跟上面那块）：**分享保真提示**——
-    // 本谱有"非默认值来自**笔记 frontmatter**、但没随谱携带"的项：
-    // 在 Obsidian 里分享整篇笔记时这些值会跟着走，但只复制代码块给他人（或在 iJipu 应用里打开）就不一致。
-    // adj639：**插件设置**（本库默认）不再算在内——它在用户眼里等价于应用里的代码默认值，不该提示。
-    if (this.opts.carryover.length > 0) {
-      const box = contentEl.createDiv({ cls: 'ijipu-config-src ijipu-config-src--carry' })
-      box.createDiv({
-        cls: 'ijipu-config-src-head',
-        text: `未随谱携带 ${this.opts.carryover.length} 项（来自**笔记 frontmatter**，源码里没有写）`,
-      })
-      const list = box.createEl('ul', { cls: 'ijipu-config-src-list' })
-      for (const m of this.opts.carryover) {
-        const def = DEFS.find((d) => (d.key as string) === m.key)
-        list.createEl('li', { text: `${def ? def.label : m.key}：${m.value === undefined ? '—' : String(m.value)}` })
-      }
-      box.createDiv({
-        cls: 'ijipu-config-hint-sub',
-        text: '要把这份谱（或只把代码块）复制给别人也显示一致，用下面的「随谱固化（分享用）」。',
-      })
-    }
+    // adj738：这里原来有一块「未随谱携带 N 项（来自笔记 frontmatter）」提示；
+    // 笔记 frontmatter 那一层删除后它恒为空 ⇒ 整块删除（连带 `ConfigDialogOptions.carryover`）。
 
     // —— 字段组页签（用户要求：与「设置 → iJipu」的多页签同款，一屏只看一组）——
     //   外加一页「说明」：把三个保存去向的差别讲清楚（原先挤在对话框顶部，现在各归其位）
@@ -174,10 +149,10 @@ export class ConfigDialog extends Modal {
     note(
       this.opts.sourceFields.length > 0
         ? '**保存到谱面**：本谱已自带 `# jps-config` 行 ⇒ 只更新**本次改动**（原位更新，优先级最高）。'
-        : '**保存到谱面**：只写入**本次改动**——不会把插件设置 / frontmatter 的值顺手烧进谱面。',
+        : '**保存到谱面**：只写入**本次改动**——不会把插件设置的默认值顺手烧进谱面。',
     )
     note('**随谱固化（分享用）**：把当前生效的**全部非默认项**写进谱面（差量）⇒ 把这份谱或只把代码块复制给别人（或在 iJipu 应用里打开）都显示一致。')
-    note('**保存为插件默认**：只把**你在本对话框里改动过的项**写进本库全局默认（不会把这份谱 frontmatter / 源内的值顺手变成全库默认）。')
+    note('**保存为插件默认**：只把**你在本对话框里改动过的项**写进本库全局默认（不会把这份谱源内的值顺手变成全库默认）。')
   }
 
   /** 渲染**当前页签**那一组字段（草稿是对话框级状态，切页签不丢改动） */
@@ -191,7 +166,9 @@ export class ConfigDialog extends Modal {
       // adj629q：嵌套字段（`segmentRowGap.bz` 等）按子项取值/写值，同一字段的其它子项保留
       const row = new Setting(host)
         .setName(def.label)
-        .setDesc(def.sub ? `frontmatter 键：${def.key}（子项 ${def.sub}）` : `frontmatter 键：${def.key}`)
+        // adj738：原来这里显示 `ijipu_` 前缀的 frontmatter 键；该层删除后，字段名本身就是
+        // 写进谱面 `# jps-config:{…}` 的键名 —— 照样把键名告诉用户（便于手写源码时对照）。
+        .setDesc(def.sub ? `设置项：${def.key}（子项 ${def.sub}）` : `设置项：${def.key}`)
       addConfigControl(row, def, readDef(this.draft, def), (_k, v) => {
         writeDef(this.draft, def, v)
       })

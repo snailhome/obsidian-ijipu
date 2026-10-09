@@ -16,12 +16,11 @@ import type { BankFileStore } from './bankFile'
 import { splitParseIssues, type ParseIssue } from './parseIssues'
 
 /**
- * 合并设置（优先级：默认 < 插件默认设置 < 笔记 frontmatter）。
- * 实现移到 `frontmatter.ts`（零 Obsidian 依赖、可单测）：键名兼容 snake_case / camelCase、
- * 值按默认值类型转换、未识别键返回建议。此处仅做转出，保持既有 `from './render'` 引用可用。
+ * 谱面设置解析（优先级：默认 < 插件默认设置 < 源内 `# jps-config`）。
+ *
+ * adj738：原来这里还转出 `applyFrontmatter` / `frontmatterKey` / `unknownKeyHint` 等
+ * （笔记 frontmatter 那一层）—— 该层已整体删除，只剩 `resolvePageConfig`。
  */
-export { applyFrontmatter, mergePageConfig, frontmatterKey, unknownKeyHint, deprecatedKeyHint, FRONTMATTER_PREFIX } from './frontmatter'
-export type { AppliedOverride, UnknownKey, DeprecatedKey, FrontmatterResult } from './frontmatter'
 export { resolvePageConfig } from './config'
 export type { ResolvedConfig } from './config'
 

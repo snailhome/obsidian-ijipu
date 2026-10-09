@@ -13,8 +13,8 @@
  * → `renderScoreToSvg`；试听走 `@ijipu/engine` 的 `buildPlaySequence` + SpessaSynth。
  */
 import { Menu, Notice, sanitizeHTMLToDom } from 'obsidian'
-import { writeJpsConfig, mergeConfigEdits, configCarryover, dragDelta, clamp, type PageConfig } from '@ijipu/engine'
-import { renderScoreFull, playScore, unknownKeyHint, deprecatedKeyHint, type PlayheadSeg } from './render'
+import { writeJpsConfig, mergeConfigEdits, dragDelta, clamp, type PageConfig } from '@ijipu/engine'
+import { renderScoreFull, playScore, type PlayheadSeg } from './render'
 import { instrumentColorMap, playheadBaseOf, playheadPosIn, trackKeysOf, type PlayheadPos } from './playhead'
 import { resolvePageConfig } from './config'
 import { ConfigDialog } from './configDialog'
@@ -47,8 +47,6 @@ export type ScorePaneHost = {
   container: HTMLElement
   /** 当前源码（.jps 全文 / 代码块正文） */
   getSource: () => string
-  /** 笔记 frontmatter（.jps 文件视图与嵌入传 null） */
-  getFrontmatter?: () => Record<string, unknown> | null
   /** 把新源码写回（「排版」拖拽结束 / 「页面设置」保存到谱面时调用）；不提供则无写回入口 */
   writeSource?: (next: string) => void | Promise<void>
   /** 嵌入模式：更紧凑（隐藏页数标签等） */
@@ -107,7 +105,7 @@ export type ScorePaneHost = {
 export type ScorePaneHandle = {
   /** 卸下（停止试听/结束拖拽 + 清空容器 + 注销监听） */
   destroy: () => void
-  /** 重新解析并重画（frontmatter/源码变化时由宿主调用） */
+  /** 重新解析并重画（源码/插件设置变化时由宿主调用） */
   refresh: () => void
 }
 
@@ -241,9 +239,8 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     markHostWidget()
 
     const source = host.getSource()
-    const fm = host.getFrontmatter?.() ?? null
-    // 优先级：默认 < 插件设置 < frontmatter < 源内 # jps-config（源内最高）
-    const resolved = resolvePageConfig(source, plugin.settings, fm)
+    // adj738：优先级 = 默认 < 插件设置 < 源内 `# jps-config`（笔记 frontmatter 那一层已删除）
+    const resolved = resolvePageConfig(source, plugin.settings)
     const cfg = draft ?? resolved.config
     const { svgs, layout: layoutMaybe, error, warnings, errorIssues } = renderScoreFull(source, cfg)
 
@@ -334,19 +331,8 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       container.removeEventListener('keydown', onKeyDown)
     })
     if (!host.embedded) toolbar.createSpan({ cls: 'ijipu-page-label', text: `${svgs.length} 页` })
-    if (resolved.applied.length > 0) {
-      const badge = toolbar.createSpan({ cls: 'ijipu-fm-badge', text: `frontmatter 覆盖 ${resolved.applied.length} 项` })
-      badge.setAttr(
-        'title',
-        `来自笔记 frontmatter（只对谱面未自带设置的键生效）：\n${resolved.applied
-          .map((a) => `${a.key} = ${String(a.value)}`)
-          .join('\n')}`,
-      )
-    }
-    // 用户要求（本轮）：**工具条只留按钮**——「谱面自带设置 N 项」与「未随谱携带 N 项」两块提示
-    // 都搬进「⚙ 设置」对话框（前者原有、后者本轮从工具条挪过去，放在它下面）；
-    // 未随谱携带的明细在点开对话框时用 `configCarryover(...)` 现算（见下面 cfgBtn 的点击回调）。
-    // 工具条这里保留的只有 frontmatter 徽标（它解释的是"值从哪来"，与谱面自带设置并列还看得见）。
+    // adj738：工具条这里原来还有一枚「frontmatter 覆盖 N 项」徽标 —— 笔记 frontmatter 层已删除，
+    // 值只可能来自「插件设置」或「源内 # jps-config」两种来源（后者在「⚙ 设置」对话框里列出自带项）。
 
     // —— 试听（播放/停止 + RAF 驱动色块跟随，与 iJipu 一致）——
     let playing: { cancel: () => void; totalMs: number; track: PlayheadSeg[] } | null = null
@@ -504,18 +490,11 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       cfgBtn.appendChild(settingsIcon(15))
       cfgBtn.createSpan({ cls: 'ijipu-btn-label', text: '设置' })
       cfgBtn.addEventListener('click', () => {
-        // 用户要求：**未随谱携带 N 项**从工具条挪进本对话框（紧跟「谱面自带设置 N 项」展示），
-        // 明细在这里现算：非默认、源码里又没写的项。
-        // adj639（用户要求"插件的默认值体系与应用保持一致，在应用正常的谱面在插件里不要提示"）：
-        // 以 `resolved.baseline`（代码默认 ← **插件设置**，不含 frontmatter）为基线 ⇒ 插件设置里的值
-        // 不再被当成"该随谱携带"，提示只剩**这篇笔记特有**的差异（典型来源 = frontmatter）。
-        const carry = configCarryover(host.getSource(), resolved.config, resolved.baseline)
         new ConfigDialog(plugin.app, {
           current: resolved.config,
           // 「谱面自带设置 N 项」不再挂工具栏，改写进对话框（含具体是哪几项、值是什么）
           sourceFields: resolved.sourceFields,
           sourceValues: resolved.config as unknown as Record<string, unknown>,
-          carryover: carry.ok ? [] : carry.missing,
           onApply: (target, next) => {
             if (target === 'plugin') {
               /**
@@ -700,13 +679,10 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       link.addEventListener('click', () => host.onOpenFile?.())
     }
 
-    if (resolved.unknown.length > 0) {
-      container.createDiv({ cls: 'ijipu-fm-warn', text: `⚠ 未识别的 frontmatter 键：${unknownKeyHint(resolved.unknown)}` })
-    }
-    // 已降级为「用户个性」的旧键（编辑器偏好等）：明确说明"为什么不生效"（不再随谱保存）
-    if (resolved.deprecated.length > 0) {
-      container.createDiv({ cls: 'ijipu-fm-warn', text: `ℹ 已不再随谱保存的设置：${deprecatedKeyHint(resolved.deprecated)}` })
-    }
+    // adj738：这里原来两条提示都属"笔记 frontmatter 那一层"——
+    // ①「未识别的 frontmatter 键」（含最近键名建议）；②「已不再随谱保存的设置」（编辑器偏好等旧键）。
+    // 该层整体删除后，写错键的地方只剩**谱面源码里的 `# jps-config`**，而它的未知键由引擎侧
+    // 的解析告警照常提示（见上面的 `warnings`），所以这里不再需要。
     if (plugin.showGuides) {
       container.createDiv({
         cls: 'ijipu-guide-hint',

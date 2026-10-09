@@ -662,12 +662,8 @@ class IJipuBlock extends MarkdownRenderChild {
 
   onload(): void {
     this.paint()
-    // 笔记 frontmatter 变化（Properties 面板编辑 / 直接改 YAML）→ 即时重渲染
-    this.registerEvent(
-      this.plugin.app.metadataCache.on('changed', (file) => {
-        if (file.path === this.sourcePath) this.paint()
-      }),
-    )
+    // adj738：这里原来还监听 `metadataCache.on('changed')`（为了"改笔记 frontmatter 即时重渲染"）。
+    // 笔记 frontmatter 那一层已删除 ⇒ 该监听没有用途（代码块内容变化时 Obsidian 自己会重跑处理器）。
   }
 
   onunload(): void {
@@ -684,7 +680,6 @@ class IJipuBlock extends MarkdownRenderChild {
       plugin: this.plugin,
       container: this.containerEl,
       getSource: () => this.source,
-      getFrontmatter: () => this.plugin.app.metadataCache.getCache(this.sourcePath)?.frontmatter ?? null,
       writeSource: (next) => this.writeSource(next),
       onEditSource: () => void this.revealSource(),
     })

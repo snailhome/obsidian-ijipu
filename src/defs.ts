@@ -3,19 +3,19 @@
  *
  * 拆出来的目的：设置面板（全局默认）与「⚙ 排版」对话框（改这一份谱）必须是同一套字段、
  * 同一套控件，否则两处会漂移（字段名/取值范围/中英文标签不一致）。
- * frontmatter 键的唯一约定仍来自 `frontmatter.ts`（`ijipu_` + 引擎字段名）。
+ * 字段名就是**引擎 `PageConfig` 的字段名** —— 它同时是写进谱面 `# jps-config:{…}` 的键名
+ * （adj738 起不再有 `ijipu_` 前缀的 frontmatter 键：笔记 frontmatter 那一层已删除）。
  *
  * adj629q（用户要求「插件的默认设置与随谱携带项设置应与应用的设置一致」）：
  *  · **字段集与标签**对齐 iJipu 应用「布局 / 字体」两个页签（`PageConfigDialog.tsx` 的 `TAB_CONFIG_KEYS`
  *    与各 `Row label=`）：应用不暴露的字段（如 `bar_gap`）插件设置面板也不再给控件
- *    （它仍在 `PAGE_CONFIG_FIELDS` 里，frontmatter / 谱面 `# jps-config` 照旧可携带）；
+ *    （它仍在 `PAGE_CONFIG_FIELDS` 里，谱面 `# jps-config` 照旧可携带）；
  *  · **取值范围**取自引擎 `GUIDE_LIMITS` / `GUIDE_LIMITS_EX`（见 `numRanges.ts`，与应用同一份表），
  *    输入越界即钳制——此前插件不钳制，同一字段两处能填出不同范围；
  *  · **默认值**一律来自引擎（`defaultPageConfig` / `SEGMENT_ROW_GAP_DEFAULT`），插件不另立默认。
  */
 import { Setting } from 'obsidian'
 import { defaultPageConfig, SCORE_FONT_OPTIONS, SEGMENT_ROW_GAP_DEFAULT, type PageConfig } from '@ijipu/engine'
-import { frontmatterKey } from './frontmatter'
 import { clampNum, rangeOf } from './numRanges'
 
 export type FieldKey = keyof PageConfig
@@ -193,6 +193,6 @@ export function isDefaultValue(def: SettingDef, value: unknown): boolean {
   return sameConfigValue(d, value)
 }
 
-/** 供界面显示的 frontmatter 键（= ijipu_<字段名>） */
-export { frontmatterKey }
+// adj738：原来这里转出 `frontmatterKey`（`ijipu_<字段名>`）供界面显示；
+// 笔记 frontmatter 那一层已删除 ⇒ 字段名本身就是谱面 `# jps-config` 的键名，不需要再拼前缀。
 
