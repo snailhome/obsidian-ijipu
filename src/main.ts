@@ -553,6 +553,7 @@ function safeSectionInfo(
  *  - **随 frontmatter 与插件设置变化即时重渲染**（Obsidian 不会因 frontmatter 变化重跑代码块处理器）
  *  - **「⚙ 排版」保存时把新源码写回该代码块**：优先走编辑器 `replaceRange`（保留撤销栈、光标），
  *    否则用 `vault.process` 做整文件事务写（阅读模式可用）
+ *  - **adj725：块右上角的 `</>` 把光标送回这段源码**（见 `revealSource`）——编辑交给 Obsidian 自己
  */
 class IJipuBlock extends MarkdownRenderChild {
   private pane: ScorePaneHandle | null = null
@@ -593,7 +594,62 @@ class IJipuBlock extends MarkdownRenderChild {
       getSource: () => this.source,
       getFrontmatter: () => this.plugin.app.metadataCache.getCache(this.sourcePath)?.frontmatter ?? null,
       writeSource: (next) => this.writeSource(next),
+      onEditSource: () => void this.revealSource(),
     })
+  }
+
+  /**
+   * adj725（用户要求）：**切到笔记源码**，把光标放进本代码块。
+   *
+   * 用户口径：「切源码方式是在预览的笔记源码间切换，源码如图，不要再单独的 textarea」
+   * ⇒ 不在预览里编辑（那是插件自己造的一套编辑器：样式、撤销栈、"打字跳回开头"都得自己兜），
+   * 而是**切回笔记**，用 Obsidian 自带编辑器改。
+   *
+   * 实现等价于 Obsidian 自己那个「编辑此块」按钮（`EmbedWidget.addEditButton` → `selectElement`）：
+   *  ① 阅读视图下先切到**实时预览**（`mode:'source', source:false`）——这是"预览 ↔ 笔记源码"的切换；
+   *  ② 光标落到**首行源码**（`lineStart + 1`：`lineStart` 是 ```jps 那一行）；
+   *  ③ 把整块滚进视野并聚焦 —— 光标在块内时，实时预览**原生**就会显示源码（含语法高亮、
+   *     与其它代码块完全一致的编辑体验），光标移出块又自动回到谱面。
+   *
+   * ⚠ 顺序与"落两次"：切模式会让 CM6 重建 DOM，光标偶发不生效 ⇒ 同步落一次、
+   * 下一帧再落一次（第二次是幂等的）。
+   */
+  private async revealSource(): Promise<void> {
+    const info = this.sectionInfo()
+    if (!info) {
+      new Notice('无法定位这段源码的位置（请回到笔记的编辑视图重试）', 5000)
+      return
+    }
+    const view = this.markdownViewOfNote()
+    if (!view) {
+      new Notice('这份笔记没有打开在任何可编辑的页签里', 5000)
+      return
+    }
+    if (view.getMode() === 'preview') {
+      // 阅读视图 → 实时预览（正是用户在界面上点「编辑」时 Obsidian 做的事）
+      await view.setState({ mode: 'source', source: false }, { history: false })
+    }
+    const place = (): void => {
+      const ed = view.editor
+      const line = Math.min(info.lineStart + 1, ed.lastLine())
+      ed.setCursor({ line, ch: 0 })
+      ed.scrollIntoView({ from: { line: info.lineStart, ch: 0 }, to: { line: info.lineEnd, ch: 0 } }, true)
+      ed.focus()
+    }
+    place()
+    window.setTimeout(place, 0)
+  }
+
+  /** 找**这份笔记**的 MarkdownView（优先当前活动的那个；其次在页签里按路径找） */
+  private markdownViewOfNote(): MarkdownView | null {
+    const app = this.plugin.app
+    const active = app.workspace.getActiveViewOfType(MarkdownView)
+    if (active?.file?.path === this.sourcePath) return active
+    for (const leaf of app.workspace.getLeavesOfType('markdown')) {
+      const view = leaf.view
+      if (view instanceof MarkdownView && view.file?.path === this.sourcePath) return view
+    }
+    return null
   }
 
   /** 把新的代码块正文写回笔记 */

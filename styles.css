@@ -1,10 +1,13 @@
 /* 爱记谱（iJipu）简谱渲染容器 */
 .ijipu-score {
   margin: 0.6em 0;
-  padding: 0.4em;
+  /* adj725（用户要求）：**默认以"无空白"方式显示，只显示有墨迹的部分**，
+     谱面四周只留 **2px** 留白（原来是 `0.4em` ≈ 6.4px 的灰底内边距 —— 谱面已经裁到墨迹了，
+     再套一圈厚边距就成了"白占地方"）。这 2px 同时是"墨迹不被容器边缘压到"的安全量。 */
+  padding: 2px;
   border-radius: 6px;
   background: var(--background-secondary);
-  /* adj724b：工具条改为**绝对定位浮在左上角**（用户要求：不再让谱面因它显隐而位移），
+  /* adj724b：工具条改为**绝对定位浮在谱面块外侧**（用户要求：不再让谱面因它显隐而位移），
      故这里必须成为它的定位上下文。 */
   position: relative;
   /* adj724b：容器查询（原本挂在工具条自身上）改挂到这里 —— 见 .ijipu-score-toolbar 里的说明。
@@ -33,22 +36,29 @@
 .ijipu-svgs a.jp-link:hover {
   fill: var(--text-accent);
 }
-/* adj724b（用户要求）：**工具条绝对定位浮在谱面左上角，悬停淡入**。
+/* adj724b（用户要求）：**工具条绝对定位浮在谱面块外侧左上角，悬停淡入**。
+   adj725（用户要求）：从"块**内**左上角"改到"块**外**正上方、左缘对齐"——
+   即工具条整体落在 `.ijipu-score` 之外，**绝不压住谱面**（谱面因此可以贴到 2px 留白）。
    起因：Obsidian「导出为 PDF」会把 DOM 一起导出，工具栏属于操作界面、不该进成果。
 
-   方案取舍（三条都验证过）：
-   ① **绝对定位** ⇒ 不参与布局。所以工具条显隐**不会让谱面位移**（此前用普通流会跳一下）。
-   ② **不能用 `display:none`**：`display` 不可动画、没有淡入；且导出安全已由 ③ 保证。
-   ③ **用 `visibility: hidden`（不是只降 `opacity`）**：
-      · `visibility` 参与过渡但**不可动画**，可在隐藏方向加 `transition-delay` 做到"淡出后再隐藏"；
-      · `visibility: hidden` 的元素**不绘制**，导出 PDF 时不会出现，也**不进入 Tab 焦点顺序**
-        （只降 opacity 的话，它仍会被绘制成透明层、并且键盘还能聚焦到看不见的按钮）。
-   ④ 触屏没有 hover ⇒ 移动端**常显**。
-   ⑤ 键盘可达：隐藏时不可聚焦 ⇒ 由 JS 在容器层监听 keydown 唤醒（见 scorePane.ts）。 */
+   方案取舍（都验证过）：
+   ① **`bottom: calc(100% + 2px)`（而不是 `top: -Npx`）**：贴的是"块的顶边"，
+      块高/工具条高怎么变都恒贴（用 `top` 负值就得写死工具条高度，换行时立刻错位）。
+   ② **绝对定位 ⇒ 不参与布局**：工具条显隐**不会让谱面位移**。
+   ③ **不能用 `display:none`**：`display` 不可动画、没有淡入；且导出安全已由 ④ 保证。
+   ④ **用 `visibility: hidden`（不是只降 `opacity`）**：
+      · `visibility` 不绘制 ⇒ 导出 PDF 时不会出现，也**不进入 Tab 焦点顺序**；
+      · 它参与过渡（可加 `transition-delay`）⇒ 能"淡出完再隐藏"。
+   ⑤ 触屏没有 hover ⇒ 移动端**常显**。
+   ⑥ 键盘可达：隐藏时不可聚焦 ⇒ 由 JS 在容器层监听 keydown 唤醒（见 scorePane.ts）。
+   ⑦ ⚠ 实时预览的 widget 容器悬停时带 `overflow: hidden`（Obsidian 的 app.css）——
+      浮到块外的工具条会被整条裁掉，故由 JS 给容器加 `.ijipu-cm-host` 类放开裁剪
+      （见本文件末尾那条规则）。 */
 .ijipu-score-toolbar {
   position: absolute;
-  top: 4px;
-  left: 6px;
+  /* 块的外侧正上方：下边缘贴块的顶边，再留 2px 缝（与块内的 2px 留白同一口径） */
+  bottom: calc(100% + 2px);
+  left: 0;
   z-index: 5; /* 高于谱面 SVG 层（1）与虚线层 */
   opacity: 0;
   visibility: hidden;
@@ -69,6 +79,59 @@
 .is-mobile .ijipu-score-toolbar {
   opacity: 1;
   visibility: visible;
+}
+
+/* ─────────── adj725：「编辑源码」按钮（块右上角的 `</>`）───────────
+   用户要求：「编辑切换如图的右上角方式」——照抄 Obsidian 给块自己挂的「编辑此块」
+   （见 app.css 的 `.embed-actions` / `.embed-action`：绝对定位在右上角、`--size-2-2` 内缩、
+   悬停才显、悬停给一层 `--background-modifier-hover`）。
+
+   与工具条**共用同一套显隐**（JS 同时加 `is-revealed`）：同属操作界面，导出笔记时都该消失。
+   点击后不做任何"就地编辑"——由 `host.onEditSource` 把焦点送回笔记里的这段源码。 */
+.ijipu-edit-source-btn {
+  position: absolute;
+  /* 与 Obsidian 的 `.embed-actions` 同一内缩量（`--size-2-2`，缺省 4px） */
+  top: var(--size-2-2, 4px);
+  right: var(--size-2-2, 4px);
+  z-index: 6; /* 高于工具条（5）与谱面：它压在块右上角 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 4px;
+  border: none;
+  border-radius: var(--clickable-icon-radius, 4px);
+  /* ⚠ 谱面纸张**恒为白色**（`.ijipu-svgs .ijipu-page-svg > svg { background: #ffffff }`），
+     所以这里的底色/字色**不能只跟主题走**：深色主题下 `--text-normal` 是浅灰，
+     直接压在白纸上就看不见了。照 Obsidian 自己的 `.embed-actions` 那套变量取
+     "主背景的半透明色 + 细阴影"，于是浅色主题是白底深字、深色主题是深底浅字，**两边都压得住白纸**。 */
+  background: var(--embed-actions-background, var(--background-primary, rgb(255 255 255 / 85%)));
+  box-shadow: var(--embed-actions-shadow, 0 1px 2px rgb(0 0 0 / 15%));
+  /* 与 Obsidian 自己的 `.embed-action` 同色；无该变量的环境退回正文色 */
+  color: var(--embed-action-color, var(--text-normal));
+  cursor: var(--cursor, pointer);
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 120ms ease,
+    visibility 0s linear 120ms;
+}
+.ijipu-edit-source-btn.is-revealed {
+  opacity: 1;
+  visibility: visible;
+  transition:
+    opacity 120ms ease,
+    visibility 0s linear 0s;
+}
+/* 移动端常显（与工具条同一口径：触屏没有 hover，藏了就点不到） */
+.is-mobile .ijipu-edit-source-btn {
+  opacity: 1;
+  visibility: visible;
+}
+@media (hover: hover) {
+  .ijipu-edit-source-btn.is-revealed:hover {
+    background-color: var(--background-modifier-hover);
+    color: var(--icon-color-hover, var(--text-normal));
+  }
 }
 
 /* 尺寸变量/换行/容器查询。`display: flex` 在这里（不影响显隐 —— 显隐由上面的
@@ -998,26 +1061,23 @@
   top: 0;
   opacity: 0;
 }
-/* ─────────────── adj724b：「源码」模式（在 ```jps 块里直接编辑脚本）───────────────
-   与 `.jps` 文件视图的「✎ 源码」同一套口径：切换按钮 + textarea + 自动保存。
-   这里的编辑区**在文档流内**（不像文件视图那样铺满页签），所以只给一个舒服的最小高度。 */
-.ijipu-source-stack {
-  display: block;
-  margin-top: 4px;
-}
+/* ─────────── adj725：实时预览里放开 widget 容器的裁剪 ───────────
+   Obsidian 的 app.css 里有（原样摘录）：
 
-.ijipu-block-source-editor {
-  display: block;
-  width: 100%;
-  box-sizing: border-box;
-  /* 下限给到能看十来行；上限用 vh 兜住，免得长谱把整篇笔记撑很长 */
-  min-height: 180px;
-  max-height: 60vh;
-  resize: vertical;
-  font-family: var(--font-monospace);
-  font-size: var(--font-ui-small, 13px);
-  line-height: 1.5;
-  tab-size: 2;
-  white-space: pre;
-  overflow: auto;
+     @media (hover: hover) {
+       .markdown-source-view.mod-cm6 .cm-embed-block:not(.cm-table-widget,.cm-lang-base):hover {
+         box-shadow: …; border-radius: …; overflow: hidden; cursor: text;
+       }
+     }
+
+   而本插件的工具条**正是悬停才显示、且浮在块外正上方** ⇒ 会被那句 `overflow: hidden`
+   整条裁掉（实时预览里表现为"工具条根本出不来"；阅读模式没有这层容器、不受影响）。
+
+   做法：只给**承载本面板的那个** widget 容器加类（`scorePane.ts` 的 `markHostWidget`，
+   挂载时 `closest('.cm-embed-block')` 命中才加），不影响宿主别的块、也不改它的其它规则。
+   本选择器与那条宿主规则**同特异性**，靠"插件样式在 core 样式之后"生效 —— 这一点由
+   `ijipu/scripts/verify-score-crop.mjs` 在真实 Chrome 里**同时加载 app.css 与 styles.css**、
+   用 CDP 强制 `:hover` 后实测（`overflow` 值 + 命中测试），不是靠推断。 */
+.markdown-source-view.mod-cm6 .cm-embed-block.ijipu-cm-host:hover {
+  overflow: visible;
 }

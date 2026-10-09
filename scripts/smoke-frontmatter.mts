@@ -1750,14 +1750,16 @@ console.log('\n[adj724b] community review: forbidden APIs / styles must stay fix
    * ㉓ 工具条**默认隐藏、悬停才显示**（用户要求：避免 Obsidian「导出为 PDF」把操作界面一起导出）。
    *
    * 三条实现要点都在断言里（真实浏览器行为另由 `ijipu/scripts/verify-score-crop.mjs` 验证）：
-   *  ① CSS 必须用 `display:none`（不是只降透明度 —— 透明元素仍占位、导出会留空白条）；
+   *  ① CSS 用 `visibility: hidden`（不是只降 `opacity`：透明元素仍会被绘制、仍能 Tab 聚焦）；
    *  ② 移动端 / 触屏常显（没有 hover，隐藏后按钮点不到）；
    *  ③ JS 侧有 pointermove 显示 + pointerleave 收起，且**键盘有入口**
-   *     （隐藏时 `display:none` 不可聚焦 ⇒ 必须有容器级 keydown 唤醒，否则键盘用户看不到工具条）。
+   *     （隐藏时不可聚焦 ⇒ 必须有容器级 keydown 唤醒，否则键盘用户看不到工具条）。
+   * ⚠ adj725 起工具条落在**块外**正上方 —— 由此产生的"宿主 widget 容器悬停裁剪"由
+   *   `.ijipu-cm-host` 处理（见下面 adj725 那一节）。
    */
   const cssToolbar = s('styles.css')
   /**
-   * 工具条：**绝对定位浮在左上角、悬停淡入、谱面不位移**（用户要求）。
+   * 工具条：**绝对定位浮在谱面块外侧正上方、悬停淡入、谱面不位移**（用户要求）。
    *
    * ⚠ 刻意不写"尺寸块里不得有 display:flex"那种负向正则，也不数"规则条数"：
    * 实测两者都会自伤 —— `.ijipu-score-toolbar\s*\{` 允许零个空白 ⇒ 会误命中
@@ -1803,6 +1805,100 @@ console.log('\n[adj724b] community review: forbidden APIs / styles must stay fix
       /addEventListener\('pointerleave', onPointerLeave\)/.test(scorePaneSrc) &&
       /addEventListener\('keydown', onKeyDown\)/.test(scorePaneSrc) &&
       /toggleClass\('is-revealed', on\)/.test(scorePaneSrc))
+}
+
+/**
+ * ---- adj725：` ```jps ` 预览的三条用户口径 ----
+ *
+ * 用户 2026-10 原话：
+ *  ① 「默认 ```jps 以无空白方式显示，即只显示有墨迹的部分，建议谱面周围保留 2px 的留白」
+ *  ② 「切源码方式是在预览的笔记源码间切换，源码如图，不要再单独的 textarea」
+ *  ③ 「浮动工具条显示在预览区外侧左上角，不要显示在预览区内部」+「编辑切换如图的右上角方式」
+ *
+ * 三条都直接对着"用户看到的界面"，所以断言钉的是**界面契约**（位置/留白/显隐/去哪儿编辑），
+ * 真实几何与裁剪由 `ijipu/scripts/verify-score-crop.mjs` 在 Chrome 里量（含 Obsidian 的 app.css）。
+ */
+console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源码切回笔记')
+{
+  const s725 = (p: string): string => readFileSync(p, 'utf8')
+  const css725 = s725('styles.css')
+  const pane725 = s725('src/scorePane.ts')
+  const main725 = s725('src/main.ts')
+  // ⚠ 老规矩：先剥注释 —— "解释为什么不能用 X"的注释里就写着 X（本项目因此误判过多次）
+  const css725nc = css725.replace(/\/\*[\s\S]*?\*\//g, '')
+
+  // ① 默认"无空白"：谱面块四周只剩 2px（原来是 0.4em ≈ 6.4px 的灰底内边距）
+  check('adj725 谱面块四周只留 2px 留白（默认"只显示有墨迹的部分"）',
+    /\.ijipu-score\s*\{[^}]*padding:\s*2px/.test(css725nc) && !/\.ijipu-score\s*\{[^}]*padding:\s*0\.4em/.test(css725nc))
+  check('adj725 默认显示模式仍是「谱面」（裁到墨迹）', /let paneMode: ViewMode = 'score'/.test(pane725))
+
+  // ② 工具条浮到**块外侧**正上方、左缘对齐（不再压在谱面上）
+  check('adj725 工具条浮在块外侧正上方（bottom: calc(100% + 2px) / left: 0）',
+    /\.ijipu-score-toolbar\s*\{[^}]*position:\s*absolute/.test(css725nc) &&
+      /\.ijipu-score-toolbar\s*\{[^}]*bottom:\s*calc\(100%\s*\+\s*2px\)/.test(css725nc) &&
+      /\.ijipu-score-toolbar\s*\{[^}]*left:\s*0/.test(css725nc) &&
+      // 旧写法（块内左上角）必须消失，否则会退回"压住谱面"
+      !/\.ijipu-score-toolbar\s*\{[^}]*top:\s*4px/.test(css725nc))
+  /**
+   * ②b **实时预览的裁剪必须放开**（这条不做的话，②在真实宿主里等于没做）：
+   * Obsidian 的 app.css 有 `.cm-embed-block:hover { overflow: hidden }`，
+   * 而工具条**正是悬停才显示、且落在块外** ⇒ 会被整条裁掉。
+   */
+  check('adj725 实时预览 widget 容器悬停时的裁剪被放开（.ijipu-cm-host）',
+    /\.cm-embed-block\.ijipu-cm-host:hover\s*\{[^}]*overflow:\s*visible/.test(css725nc) &&
+      pane725.includes('closest(CM_EMBED_BLOCK)') &&
+      pane725.includes("addClass('ijipu-cm-host')") &&
+      pane725.includes("removeClass('ijipu-cm-host')"))
+
+  // ③ 编辑入口 = 块右上角的 `</>`（照抄 Obsidian 的「编辑此块」），与工具条共用一套显隐
+  check('adj725 「编辑源码」= 块右上角的 `</>`（位置 / 悬停显隐 / 与工具条同套）',
+    /\.ijipu-edit-source-btn\s*\{[^}]*position:\s*absolute/.test(css725nc) &&
+      /\.ijipu-edit-source-btn\s*\{[^}]*top:\s*var\(--size-2-2/.test(css725nc) &&
+      /\.ijipu-edit-source-btn\s*\{[^}]*right:\s*var\(--size-2-2/.test(css725nc) &&
+      /\.ijipu-edit-source-btn\.is-revealed\s*\{[^}]*visibility:\s*visible/.test(css725nc) &&
+      pane725.includes("createDiv({ cls: 'ijipu-edit-source-btn' })") &&
+      /editSourceBtn\?\.toggleClass\('is-revealed', on\)/.test(pane725))
+  /**
+   * ③a′ **必须用 div 而不是 `<button>`**：宿主的 app.css 给 `button` 统一套了
+   * `background-color: var(--interactive-normal)` 与输入框高度 —— 实测按钮被撑成 30px、带深色底，
+   * 与 Obsidian 自己那个 `</>`（`.embed-action`，本身就是 div）外观不一致。
+   * 键盘可达性用 `role="button"` + Enter/Space 自己补（不能只图省事丢掉）。
+   */
+  check('adj725 `</>` 用 div + role=button（避开宿主 button 样式），键盘 Enter/Space 也能触发',
+    pane725.includes("createDiv({ cls: 'ijipu-edit-source-btn' })") &&
+      !/createEl\('button',\s*\{[^}]*ijipu-edit-source-btn/.test(pane725) &&
+      /setAttr\('role', 'button'\)/.test(pane725) &&
+      /e\.key !== 'Enter' && e\.key !== ' '/.test(pane725))
+  // ③b 只在宿主给了落点（代码块）时才出现；宿主自己挂过同款按钮就不重复挂
+  check('adj725 `</>` 只在代码块出现（host.onEditSource），且宿主已挂同款时不重复挂',
+    /if \(host\.onEditSource\)/.test(pane725) &&
+      pane725.includes('host.onEditSource?.()') &&
+      pane725.includes("querySelector('.embed-actions')") &&
+      /window\.setTimeout\(/.test(pane725))
+  // ③c **不再往预览里塞 textarea**（用户明确要求）
+  check('adj725 不再往预览里塞 textarea（用户口径：不要再单独的 textarea）',
+    !pane725.includes('ijipu-block-source-editor') &&
+      !/createEl\('textarea'/.test(pane725) &&
+      !css725nc.includes('.ijipu-block-source-editor') &&
+      !css725nc.includes('.ijipu-source-stack'))
+
+  /**
+   * ④ 点 `</>` 之后的动作：**切回笔记源码**（不是就地编辑）——
+   *   · 阅读视图 → 实时预览（`mode:'source', source:false`）；
+   *   · 光标落到块内首行（`lineStart + 1`）并滚进视野、聚焦；
+   *   ⇒ 实时预览**原生**就会把该块显示成源码（语法高亮、撤销栈、与别的代码块一致）。
+   */
+  check('adj725 点 `</>` 切回笔记源码（阅读视图先切实时预览 + 光标落到块内首行）',
+    main725.includes('onEditSource: () => void this.revealSource()') &&
+      main725.includes("getMode() === 'preview'") &&
+      main725.includes("setState({ mode: 'source', source: false }, { history: false })") &&
+      main725.includes('ed.setCursor({ line, ch: 0 })') &&
+      main725.includes('ed.scrollIntoView(') &&
+      main725.includes('ed.focus()'))
+  // ④b 找不到承载这份笔记的页签时要**说清楚**，不能静默什么都不发生
+  check('adj725 找不到笔记页签/定位不到代码块时给出可见提示（不静默）',
+    /if \(!info\)[\s\S]{0,200}?new Notice\(/.test(main725) &&
+      /if \(!view\)[\s\S]{0,200}?new Notice\(/.test(main725))
 }
 
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。
