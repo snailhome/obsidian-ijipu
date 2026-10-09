@@ -2084,3 +2084,26 @@ C: 两只老虎 两只老虎 跑得快 跑得快
 ## 升级方式
 
 从 Obsidian 社区目录（设置 → 第三方插件 → 浏览 → 搜索 iJipu）安装或更新。
+
+---
+
+# 爱记谱 iJipu 0.29.2
+
+> 按**社区目录自动审核反馈**逐条修正；功能与 0.29.0 相同。
+> 0.29.1 → **0.29.2**（PATCH：仅合规项）。
+
+## 本版修正（审核反馈）
+
+| 审核项 | 之前 | 现在 |
+|---|---|---|
+| **Dependencies：Error**「npm lockfile is out of date」 | `esbuild@^0.21.0` 与 `vite@8.2.1` 的 peer 要求（`^0.27.0 \|\| ^0.28.0`）**冲突** ⇒ `npm install` 报 `ERESOLVE`，lockfile 无法与声明一致 | `esbuild` 提到 **`^0.28.0`**，重新生成 `package-lock.json`；`npm ci --dry-run` **exit 0 / up to date** |
+| **License：Warning**「no recognized license」 | 文件名为无扩展名的 `LICENSE` | 改为 **`LICENSE.md`**（本版仍在全文前加了自定义头部，0.29.3 才修正为纯全文） |
+| **Manifest：Warning**「authorUrl must not point to the plugin's own repository」 | `authorUrl` 指向插件仓库 | 改为**个人主页** `https://github.com/snailhome` |
+| **README：Warning**「missing installation or usage instructions」 | 小节标题为纯中文 | 改为 `## 安装 / Installation`、`## 用法 / Usage`，补全两条安装步骤 |
+| Releases：Recommendation「artifact attestations」 | — | 未做（可选建议，需给工作流加 `id-token: write` 与 attest 步骤） |
+| Behavior：Recommendation「Clipboard Access」 | — | 无需动作（仅在「粘贴导入」时读剪贴板） |
+
+## 升级方式
+
+从 Obsidian 社区目录（设置 → 第三方插件 → 浏览 → 搜索 iJipu）安装或更新。
+手动安装的目录名为 `.obsidian/plugins/ijipu/`（与 `id` 一致）。

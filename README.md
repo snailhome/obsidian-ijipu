@@ -188,5 +188,5 @@ Obsidian 的开发者政策要求**明确披露网络访问**，这里一次说�
 ## 标注
 
 - 引擎：`@ijipu/engine`（.jps 解析 → 排版 → SVG 渲染 → 播放序列 → Web Audio 试听）。
-- 许可证：**AGPL-3.0**（见仓库根的 [`LICENSE.md`](./LICENSE.md)，与引擎一致）。
+- 许可证：**AGPL-3.0-or-later**（全文见 [`LICENSE.md`](./LICENSE.md)，版权与 SPDX 标识见 [`NOTICE.md`](./NOTICE.md)，与引擎一致）。
   特别致谢「番茄简谱」原作与社区；音源 [GeneralUser GS](https://github.com/mrbumpy409/GeneralUser-GS)（其自带许可）。

@@ -1,7 +1,7 @@
 {
   "id": "ijipu",
   "name": "iJipu",
-  "version": "0.29.2",
+  "version": "0.29.3",
   "minAppVersion": "1.13.0",
   "description": "Render .jps jianpu scripts into sheet music inside your notes, with playback, and edit scores in a full built-in iJipu editor.",
   "author": "SnailHome",
