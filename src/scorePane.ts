@@ -598,7 +598,14 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     // 用户原话：「工具栏里的『应用打开』按钮，现在文本应改为『编辑』，并使用嵌入版的 ijipu 来打开」。
     //  · 有 `onEdit` ⇒ 显示「编辑」（走嵌入版 iJipu 的应用页签）；
     //  · 否则退回旧行为「应用打开」（桌面端用系统默认应用打开；手机端/代码块不出现）。
-    if (host.onEdit && host.filePath) {
+    /**
+     * adj726（用户要求）：「**有了编辑按钮之后，就不再需要「打开谱面文件」的链接**」。
+     * 两者都是"离开预览去处理这份谱"的入口，而「编辑」直接进完整编辑器、是更强的那个：
+     * 链接那枚（打开 `.jps` 文件视图）就成了重复入口，还占着工具栏右端（窄容器里更挤）。
+     * ⇒ 有「编辑」时不建链接；没有「编辑」时照旧保留（阅读/其它宿主回退时仍需要它）。
+     */
+    const hasEditEntry = !!(host.onEdit && host.filePath)
+    if (hasEditEntry) {
       const editBtn = toolbar.createEl('button', { cls: 'ijipu-play ijipu-app-open-btn' })
       editBtn.setAttr('title', '用嵌入的爱记谱编辑')
       editBtn.setAttr('aria-label', '用嵌入的爱记谱编辑')
@@ -627,7 +634,8 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     }
 
     // —— 工具栏右端：打开谱面文件（仅嵌入模式；容器窄时只留链接图标）——
-    if (host.embedded && host.embedTitle) {
+    // adj726：有「编辑」时不再建（见上面 hasEditEntry 的说明）。
+    if (host.embedded && host.embedTitle && !hasEditEntry) {
       const link = toolbar.createEl('button', { cls: 'ijipu-embed-link' })
       link.setAttr('title', `打开谱面文件：${host.embedTitle}`)
       link.setAttr('aria-label', `打开谱面文件：${host.embedTitle}`)

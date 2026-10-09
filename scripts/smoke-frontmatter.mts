@@ -1977,6 +1977,20 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
     /\.cm-embed-block\.ijipu-cm-host\s+\.embed-actions\s+\.edit-block-button[\s\S]{0,200}?\{[^}]*background:\s*rgb\(0 0 0 \/ \d+%\)/.test(css725nc) &&
       /\.cm-embed-block\.ijipu-cm-host\s+\.embed-actions\s+\.embed-action[\s\S]{0,300}?color:\s*#ffffff/.test(css725nc) &&
       /\.cm-embed-block\.ijipu-cm-host\s+\.embed-actions\s+\.edit-block-button:hover/.test(css725nc))
+
+  /**
+   * ⑨ adj726（用户要求）：「插件预览区的工具栏当有了编辑按钮后，就不再需要"打开谱面文件"的链接」。
+   *
+   * 两者都是"离开预览去处理这份谱"的入口，而「编辑」直接进完整编辑器、是更强的那个；
+   * 链接那枚（打开 `.jps` 文件视图）就成了重复入口，还占着工具栏右端（窄容器里更挤）。
+   * 三条一起断言：① 有「编辑」时不建链接；② 没有「编辑」时链接**照旧**（别顺手把链接彻底删掉）；
+   * ③ 两处共用同一个判据 `hasEditEntry`（避免以后只改一处）。真实按钮组合由
+   * `verify-score-crop.mjs` 在浏览器里按"给/不给 onEdit"两支对照实测。
+   */
+  check('adj726 有「编辑」按钮时不再出现「打开谱面文件」链接（没有编辑时仍保留）',
+    /const hasEditEntry = !!\(host\.onEdit && host\.filePath\)/.test(pane725) &&
+      /if \(hasEditEntry\) \{/.test(pane725) &&
+      /if \(host\.embedded && host\.embedTitle && !hasEditEntry\)/.test(pane725))
 }
 
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。
