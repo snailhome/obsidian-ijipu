@@ -55,11 +55,18 @@ function commitTime(sha) {
 
 const sha = readCommitSha()
 const when = commitTime(sha) ?? new Date()
-const stamp = `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())} ${pad(when.getHours())}:${pad(when.getMinutes())}`
+const date = `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}`
+const stamp = `${date} ${pad(when.getHours())}:${pad(when.getMinutes())}`
 const commit = sha ? sha.slice(0, 8) : 'dev'
 
 const out = `// 由 scripts/gen-build-info.mjs 自动生成（勿手改）
 export const BUILD_STAMP = '${stamp}'
+/**
+ * 只有日期（adj739）：设置页头部按应用的格式显示 \`vX.Y.Z (日期 @commit)\` ——
+ * 与 ijipu 的 \`APP_VERSION_FULL\`（\`v\${APP_VERSION} (\${BUILD_DATE} @\${GIT_COMMIT})\`）逐字对齐，
+ * 这样"插件版本"和"应用版本"两条信息看起来是同一套东西。
+ */
+export const BUILD_DATE = '${date}'
 export const GIT_COMMIT = '${commit}'
 `
 mkdirSync(join(root, 'src', 'gen'), { recursive: true })

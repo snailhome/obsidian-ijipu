@@ -2028,6 +2028,49 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
       .split('\n')
       .map((l) => l.trim())
       .includes('good.png'))
+
+  /**
+   * ⑫ adj739（用户要求）：「设置-说明 的前面标题和构建，应该显示如图2 和版本信息如
+   * `v0.31.1 (2026-10-09 @6ac8b3eb)` 的内容才对呀」——照抄应用「关于」页的品牌头 +
+   * 应用的 `APP_VERSION_FULL` 格式（`v{版本} ({日期} @{提交})`）。
+   *
+   * 三件事必须成对：① 图标是**与应用同一枚** `Jianpu.png`（内联、不联网）；
+   * ② 版本串格式与 `BUILD_DATE` 的引入；③ 再并排显示**嵌入版应用的版本**
+   * （`WEBAPP_META.appVersion` —— 正是 0.31.1 那次"插件版本 / 嵌入版版本"看错的地方）。
+   *
+   * ⚠ 与 good.png 同一个坑：`.gitignore` **不得**再忽略 `Jianpu.png`（被忽略 ⇒ CI 构建失败）。
+   */
+  check('adj739 设置页头部 = 品牌头（应用同款图标 + 名称 + 标语）+ 应用格式的版本串',
+    settings730.includes('ijipu-settings-brand') &&
+      settings730.includes('爱记谱（iJipu）') &&
+      settings730.includes('码即成，谱自现') &&
+      /import jianpuLogoPng from '\.\.\/vendor\/icons\/Jianpu\.png'/.test(settings730) &&
+      /attr: \{ src: jianpuLogoPng/.test(settings730) &&
+      // 与应用 APP_VERSION_FULL 逐字对齐：`v${版本} (${日期} @${提交})`
+      /text: `v\$\{this\.plugin\.manifest\.version\} \(\$\{BUILD_DATE\} @\$\{GIT_COMMIT\}\)`/.test(settings730) &&
+      /BUILD_DATE/.test(settings730) &&
+      // 嵌入版应用的版本并排显示
+      /嵌入版 iJipu：v\$\{WEBAPP_META\.appVersion\}/.test(settings730) &&
+      // 图标真的在仓库里（内联的前提），且是 PNG
+      existsSync('vendor/icons/Jianpu.png') &&
+      readFileSync('vendor/icons/Jianpu.png').subarray(1, 4).toString('latin1') === 'PNG' &&
+      // 生成脚本要真的产出 BUILD_DATE（否则上面的版本串类型就编译不过）
+      /export const BUILD_DATE = '/.test(readFileSync('scripts/gen-build-info.mjs', 'utf8')) &&
+      // CSS 有对应样式（否则品牌头会挤成一行裸文字）
+      css725nc.includes('.ijipu-settings-brand') &&
+      css725nc.includes('.ijipu-settings-logo') &&
+      css725nc.includes('.ijipu-settings-brand-tagline'),
+    `brand=${settings730.includes('ijipu-settings-brand')} logo=${existsSync('vendor/icons/Jianpu.png')}`)
+  check('adj739 ⚠ .gitignore 不得再忽略 Jianpu.png（与应用图标同坑：被忽略 ⇒ CI 构建失败）',
+    !readFileSync('.gitignore', 'utf8')
+      .split('\n')
+      .map((l) => l.trim())
+      .includes('Jianpu.png'))
+  // 图标与应用**逐字节相同**（能拿到应用仓库时核对；插件 CI 只有本仓库 ⇒ 跳过）
+  if (existsSync('../ijipu/public/icons/Jianpu.png')) {
+    check('adj739 品牌图标与应用 `public/icons/Jianpu.png` 逐字节相同',
+      readFileSync('../ijipu/public/icons/Jianpu.png').equals(readFileSync('vendor/icons/Jianpu.png')))
+  }
 }
 
 /**

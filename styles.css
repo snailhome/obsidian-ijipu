@@ -1049,13 +1049,46 @@
   border: 0;
   display: block;
 }
-/* adj724b（社区审核）：设置页顶部标题（不再用 Setting().setHeading()，
-   以免标题里出现插件名——规则要求设置标题不得重复插件名）。 */
-.ijipu-settings-title {
-  margin: 0 0 2px;
+/* adj739（用户要求）：设置页顶部的**品牌头** —— 照抄应用「关于」页那一组
+   （图标 + 「爱记谱（iJipu）」 + 标语「码即成，谱自现」），下面两行是版本信息。
+   图标与应用同一枚 `Jianpu.png`（内联 data URI，不联网）；圆角+细边框与应用的 `.about-logo` 同款观感。 */
+.ijipu-settings-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 2px 0 6px;
+}
+.ijipu-settings-logo {
+  display: block;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  border-radius: 10px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+}
+.ijipu-settings-brand-text {
+  min-width: 0;
+}
+.ijipu-settings-brand-title {
   font-size: var(--font-ui-medium);
-  font-weight: 600;
+  font-weight: 700;
+  line-height: 1.3;
   color: var(--text-normal);
+}
+.ijipu-settings-brand-tagline {
+  font-size: var(--font-ui-smaller);
+  line-height: 1.3;
+  color: var(--text-accent);
+}
+/* adj724b（社区审核）：设置页顶部标题（不再用 Setting().setHeading()，
+   以免标题里出现插件名——规则要求设置标题不得重复插件名）。
+   adj739：这一条改为「版本行」的样式（标题位由上面的品牌头取代）。 */
+.ijipu-settings-build {
+  margin: 0 0 2px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }
 /* adj736：`.ijipu-offscreen`（复制到剪贴板的回退路径里"移出视野"的临时 textarea）
    随"复制 frontmatter 模板"入口一起撤掉了 —— 现在没有任何地方再生成这个元素。 */

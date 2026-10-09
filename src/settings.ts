@@ -19,7 +19,12 @@
  * 设置项定义与控件构建仍由 `defs.ts` 统一提供（谱面设置对话框与 frontmatter 模板共用一份）。
  */
 import { App, PluginSettingTab, Setting } from 'obsidian'
-import { BUILD_STAMP, GIT_COMMIT } from './gen/buildInfo'
+import { BUILD_DATE, BUILD_STAMP, GIT_COMMIT } from './gen/buildInfo'
+// adj739：嵌入版应用的版本（设置页头部与插件版本并排显示，见 renderHeader）
+import { WEBAPP_META } from './gen/webappAssets'
+// adj739：品牌图标与应用同一枚（`ijipu/public/icons/Jianpu.png` → 本仓库 `vendor/icons/Jianpu.png`，
+// 逐字节相同，7,183 字节），构建期内联成 data URI ⇒ 设置页不联网、也不依赖嵌入版服务。
+import jianpuLogoPng from '../vendor/icons/Jianpu.png'
 // adj738：笔记 frontmatter 那一层整体删除（含 `frontmatterKey` 的转出与「复制模板」入口）。
 // adj724b：外链统一走这处（Electron 里 `window.open` 不可靠）
 import { openUrlExternally } from './openExternal'
@@ -94,19 +99,39 @@ export class IJipuSettingTab extends PluginSettingTab {
     this.plugin.registerSettingsRefresh(null)
   }
 
-  /** 顶部标题与构建信息（问题反馈时能一眼看到版本/提交） */
+  /**
+   * 顶部品牌头 + 版本与构建信息（问题反馈时能一眼看到"插件是哪一版、里面的嵌入版是哪一版"）。
+   *
+   * adj724b（社区审核）：**不要用 `Setting().setName().setHeading()` 当标题** ——
+   * 那条 lint 规则要求设置标题不得重复插件名。这里用纯元素自绘（也便于做品牌排布）。
+   *
+   * adj739（用户要求）：「设置-说明 的前面标题和构建，应该显示如图2 和版本信息如
+   * `v0.31.1 (2026-10-09 @6ac8b3eb)` 的内容才对呀」——即**照抄应用「关于」页的品牌头**：
+   * 图标（与应用同一枚 `Jianpu.png`）+「爱记谱（iJipu）」+ 标语「码即成，谱自现」，
+   * 版本串也**逐字对齐**应用的 `APP_VERSION_FULL` 格式：`v{版本} ({日期} @{提交})`。
+   *
+   * 另加一行**嵌入版应用的版本**（`WEBAPP_META.appVersion`）：这正是 0.31.1 那次
+   * 「插件是 0.31.0、嵌入版还是 0.49.0」最容易看错的地方 —— 现在两条版本并排显示。
+   */
   private renderHeader(containerEl: HTMLElement): void {
-    /**
-     * adj724b（社区审核）：**设置页标题里不要写插件名**。
-     *
-     * 官方 lint 规则要求设置标题不得重复插件名（设置页本就挂在插件条目下）。
-     * 这里不再用 `Setting().setName().setHeading()`（它的 setName 就是"标题文本"），
-     * 改为一个纯标题元素 —— 于是既满足规则，也保留了这一行说明。
-     */
-    containerEl.createDiv({ cls: 'ijipu-settings-title', text: '嵌入版与说明' })
+    const brand = containerEl.createDiv({ cls: 'ijipu-settings-brand' })
+    brand.createEl('img', {
+      cls: 'ijipu-settings-logo',
+      attr: { src: jianpuLogoPng, alt: '爱记谱 iJipu Logo' },
+    })
+    const text = brand.createDiv({ cls: 'ijipu-settings-brand-text' })
+    text.createDiv({ cls: 'ijipu-settings-brand-title', text: '爱记谱（iJipu）' })
+    text.createDiv({ cls: 'ijipu-settings-brand-tagline', text: '码即成，谱自现' })
+
+    // 与应用 `APP_VERSION_FULL` 同格式：插件自己的版本（`manifest.version` 即市场里那一版）
     containerEl.createDiv({
       cls: 'ijipu-settings-build',
-      text: `构建 ${BUILD_STAMP} @${GIT_COMMIT}`,
+      text: `v${this.plugin.manifest.version} (${BUILD_DATE} @${GIT_COMMIT})`,
+    })
+    // 嵌入版应用的版本：与上面那条并排，避免"插件版本 / 嵌入版版本"混看（E-2026-374 的由来）
+    containerEl.createDiv({
+      cls: 'ijipu-settings-build',
+      text: `嵌入版 iJipu：v${WEBAPP_META.appVersion}（打包于 ${WEBAPP_META.generatedAt.slice(0, 10)}）`,
     })
   }
 

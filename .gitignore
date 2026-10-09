@@ -7,7 +7,10 @@ release/
 
 # ijipu 应用资源/构建残留误拷防护（此仓库不应含）
 Jianpu.ico
-Jianpu.png
+# adj739：`Jianpu.png` **不在**此列 —— 设置页头部要显示应用那枚品牌图标（用户要求与「关于」页同款），
+# 它是**有意入库的插件资产**：`ijipu/public/icons/Jianpu.png` → 本仓库 `vendor/icons/Jianpu.png`（逐字节相同）。
+#   ⚠ 与 good.png 同一个坑：被忽略的文件进不了仓库，而 CI 从干净检出构建 main.js ⇒
+#     解析不到该 import ⇒ **发版直接失败**（冒烟有断言钉住这条）。
 pwa-*.png
 manifest.webmanifest
 sw.js
