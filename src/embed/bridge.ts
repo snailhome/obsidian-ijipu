@@ -60,6 +60,20 @@ export interface BridgeHost {
     set: (key: string, value: string) => void
     remove: (key: string) => void
   }
+  /**
+   * adj729（用户要求）：**音色库落在插件目录**，应用按 URL 取用。
+   *
+   * 返回 `{ <库 id>: 'http://127.0.0.1:<port>/<token>/soundbanks/<id>.sf2' }`；
+   * 应用在 `welcome` 里拿到它，就不必自己下载/缓存 32 MB ——
+   * 插件目录里那份是**唯一权威副本**（随文库一起同步）。
+   * 返回空对象表示"还没有这份音源"，应用照旧走自己的缓存/下载路径。
+   */
+  bankUrls?: () => Record<string, string>
+  /**
+   * adj729：**由插件弹文件选择器导入音源**（应用「导入音色文件」在嵌入环境里走这里）。
+   * 32 MB 不跨窗口搬，插件直接写进自己的目录。
+   */
+  importSoundbank?: (id: string) => Promise<{ ok: boolean; canceled?: boolean; error?: string }>
 }
 /**
  * 归一化一个 vault 相对路径；越界/非法返回 `null`。
@@ -224,6 +238,8 @@ export class IJipuBridge {
         followTheme: this.host.followTheme(),
         root: this.host.root,
         capabilities: { write: true, rename: true, remove: true, trash: true },
+        // adj729：音色库的取用地址（插件目录里的那份；应用优先用它，见 HostWelcome 的说明）
+        bankUrls: this.host.bankUrls?.() ?? {},
       })
       return true
     }
@@ -279,6 +295,14 @@ export class IJipuBridge {
     if (op === 'kvRemove') {
       this.host.kv.remove(String(args.key ?? ''))
       return { ok: true, result: {} }
+    }
+    /**
+     * adj729（用户要求）：**由插件导入音源文件**并写进插件目录（随文库一起走）。
+     * 应用在嵌入环境里点「导入音色文件」走这里 —— 32 MB 不跨窗口搬，插件自己挑、自己写盘。
+     */
+    if (op === 'importSoundbank') {
+      if (!this.host.importSoundbank) return { ok: false, error: '宿主未提供音源导入' }
+      return { ok: true, result: await this.host.importSoundbank(String(args.id ?? '')) }
     }
 
     const adapter = this.host.app.vault.adapter

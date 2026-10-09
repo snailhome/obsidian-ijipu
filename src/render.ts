@@ -12,6 +12,7 @@ import {
   type ScoreLayout,
 } from '@ijipu/engine'
 import { SpessaSynthBackend, HqCache, getHqLibrary, loadHqBank } from './soundbank'
+import type { BankFileStore } from './bankFile'
 import { splitParseIssues, type ParseIssue } from './parseIssues'
 
 /**
@@ -172,7 +173,7 @@ export type PlayheadSeg = {
 export async function playScore(
   source: string,
   pageConfig: PageConfig = defaultPageConfig,
-  opts?: { hqVoice?: number | null; workletUrl?: string },
+  opts?: { hqVoice?: number | null; workletUrl?: string; bankFiles?: BankFileStore | null },
 ): Promise<{ cancel: () => void; totalMs: number; track: PlayheadSeg[] } | null> {
   const parsed = parseJps(source)
   // adj394：只有 error 级才阻断试听；warning（如渐强/渐弱写得不够完整）照常播放
@@ -188,7 +189,10 @@ export async function playScore(
     // adj353：失败原因直接抛出，供 Obsidian 界面/控制台可见（不再静默无声）
     await backend.ready()
     if (!opts?.workletUrl) throw new Error('未找到内置 SpessaSynth worklet（main.js 内联 worklet 失败，请重新构建并更新插件）')
-    const bank = await loadHqBank(getHqLibrary(), new HqCache())
+    // adj352：SpessaSynth 高保真试听——音源远端下载 + IndexedDB 缓存，worklet 由插件提供
+    // adj729：音源取用顺序改为 **插件目录文件 → IndexedDB → 下载**（见 soundbank.ts），
+    //         这样"下载/导入过的音源"会以文件形式留在插件目录里、随文库一起同步。
+    const bank = await loadHqBank(getHqLibrary(), new HqCache(), opts?.bankFiles ?? null)
     await backend.load(bank, opts.workletUrl)
   } catch (e) {
     backend.dispose()

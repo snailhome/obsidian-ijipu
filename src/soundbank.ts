@@ -12,6 +12,7 @@
 import { WorkletSynthesizer } from 'spessasynth_lib'
 import { instrumentToProgram, pitchToMidiNote, GmChannelAllocator, GM_VOICES } from '@ijipu/engine'
 import type { GmVoice } from '@ijipu/engine'
+import type { BankFileStore } from './bankFile'
 
 /** 高保真音源库（SF2/SF3/DLS）元数据 */
 export interface HqSampleLibrary {
@@ -105,28 +106,89 @@ export class HqCache {
   }
 }
 
-/** 预下载音源库并写缓存（SF2 远端下载 → IndexedDB；已缓存 getKey 极快判断；带进度回调 0~1） */
+/**
+ * 预下载音源库并写缓存（SF2 远端下载 → 插件目录 + IndexedDB；带进度回调 0~1）
+ *
+ * adj729：顺序按用户口径调整为 **插件目录文件 → IndexedDB → 下载**；
+ * 下载成功后**写进插件目录**（这样音源会随文库一起同步），IndexedDB 仍留一份作降级读取。
+ */
 export async function prefetchHqLibraryProgress(
   lib: HqSampleLibrary,
   cache: HqCache,
   onProgress?: (p: number) => void,
+  files?: BankFileStore | null,
 ): Promise<void> {
-  if (await cache.has(lib.id)) { onProgress?.(1); return }
+  // ① 插件目录里已有（多半是上次下载/导入留下的，且随文库同步了过来）
+  if (files && (await files.exists(lib.id))) { onProgress?.(1); return }
+  // ② 存量：老的 IndexedDB 缓存 ⇒ 顺手**补写**成插件目录文件（迁移，之后随文库走）
+  if (await cache.has(lib.id)) {
+    if (files) {
+      const ab = await cache.load(lib.id)
+      if (ab) {
+        try {
+          await files.write(lib.id, ab)
+        } catch {
+          /* 写不进去也不影响试听（只是这次没落盘） */
+        }
+      }
+    }
+    onProgress?.(1)
+    return
+  }
+  // ③ 下载（再把结果同时写进插件目录与 IndexedDB）
   const res = await fetch(lib.source)
   if (!res.ok) throw new Error(`音源「${lib.name}」下载失败: HTTP ${res.status}`)
   const bank = await res.arrayBuffer() // 浏览器内部线程下载，主线程不逐块处理
   await cache.save(lib.id, bank)
+  if (files) {
+    try {
+      await files.write(lib.id, bank)
+    } catch (e) {
+      // 落盘失败要说出来：用户以为"已经随文库走了"，实际没有
+      console.warn('[iJipu] 音源写入插件目录失败：', e)
+    }
+  }
   onProgress?.(1)
 }
 
-/** 下载音源库为 ArrayBuffer（优先缓存；未缓存则远端下载并写缓存） */
-export async function loadHqBank(lib: HqSampleLibrary, cache: HqCache): Promise<ArrayBuffer> {
+/**
+ * 下载音源库为 ArrayBuffer。
+ *
+ * adj729 顺序：**插件目录文件 → IndexedDB 缓存 → 远端下载**（下载后写插件目录 + 缓存）。
+ * 用户口径：「音色库下载或导入后，建议放在插件目录中，以便能随文库一起走」。
+ */
+export async function loadHqBank(
+  lib: HqSampleLibrary,
+  cache: HqCache,
+  files?: BankFileStore | null,
+): Promise<ArrayBuffer> {
+  if (files) {
+    const fromFile = await files.read(lib.id)
+    if (fromFile && fromFile.byteLength > 0) return fromFile
+  }
   const hit = await cache.load(lib.id)
-  if (hit) return hit
+  if (hit) {
+    // 存量缓存：补写一份到插件目录（迁移；失败不影响本次试听）
+    if (files) {
+      try {
+        await files.write(lib.id, hit)
+      } catch {
+        /* 忽略 */
+      }
+    }
+    return hit
+  }
   const res = await fetch(lib.source)
   if (!res.ok) throw new Error(`音源「${lib.name}」加载失败: HTTP ${res.status}`)
   const bank = await res.arrayBuffer()
   await cache.save(lib.id, bank)
+  if (files) {
+    try {
+      await files.write(lib.id, bank)
+    } catch (e) {
+      console.warn('[iJipu] 音源写入插件目录失败：', e)
+    }
+  }
   return bank
 }
 

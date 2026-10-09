@@ -1065,6 +1065,12 @@
   top: 0;
   opacity: 0;
 }
+/* adj729：导入音色库用的隐藏文件选择框（`bankFile.ts`）——
+   社区审核规则 `no-static-styles-assignment` 不允许直接写 `style.*`，故走类。 */
+.ijipu-file-input-hidden {
+  display: none;
+}
+
 /* adj728（用户要求）：试听失败提示上的**动作按钮**（「打开音色库设置」）。
    那条提示**不自动消失**（`new Notice(msg, 0)`），所以按钮要显眼、可点；
    观感跟随 Obsidian 主题（`--interactive-accent` 系）。 */

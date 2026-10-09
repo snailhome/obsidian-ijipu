@@ -79,6 +79,15 @@ const PREFERRED_PORT = 47821
 export const EMBED_WORKLET_PATH = 'spessasynth/spessasynth_processor.min.js'
 
 /**
+ * adj729：**音色库文件**在嵌入版服务上的路径前缀。
+ *
+ * 用户口径：「音色库下载或导入后，建议放在插件目录中，以便能随文库一起走」——
+ * 于是音源文件的**唯一权威副本**是插件目录里的 `<id>.sf2`；
+ * 嵌入版应用不再自己下载/缓存 32 MB，而是**从这里取**（同一个文件，随文库同步）。
+ */
+export const SOUNDFONT_URL_PREFIX = 'soundbanks/'
+
+/**
  * 启动服务。**幂等**：同一个插件实例只起一个（调用方负责缓存返回的 Promise）。
  *
  * 端口策略：先试 `PREFERRED_PORT`（让 origin 稳定 ⇒ 浏览器侧的 `localStorage` 得以延续），
@@ -87,12 +96,17 @@ export const EMBED_WORKLET_PATH = 'spessasynth/spessasynth_processor.min.js'
  * @param opts.workletCode SpessaSynth worklet 的源码文本（插件已 `import … from
  *   '../spessasynth_processor.min.js'` 内联进 main.js）——由它顶上应用要的那条路径，
  *   **不额外增加体积**（那份代码本来就在 main.js 里）。
+ * @param opts.readSoundfont adj729：按库 id 读**插件目录**里的音源文件（`soundbanks/<id>.sf2`）。
+ *   读不到返回 null（服务回 404，应用会退回它自己的缓存/下载路径）。
  */
-export async function startEmbedServer(opts: { workletCode?: string } = {}): Promise<EmbedServer> {
+export async function startEmbedServer(
+  opts: { workletCode?: string; readSoundfont?: (id: string) => Promise<Buffer | null> } = {},
+): Promise<EmbedServer> {
   const token = randomBytes(16).toString('hex')
   const html = Buffer.from(WEBAPP_HTML, 'utf8')
   const assets = decodeAssets()
   const workletCode = opts.workletCode ?? ''
+  const readSoundfont = opts.readSoundfont
 
   const server: Server = createServer((req, res) => {
     const raw = String(req.url ?? '/')
@@ -142,6 +156,33 @@ export async function startEmbedServer(opts: { workletCode?: string } = {}): Pro
         'Cache-Control': 'no-store',
       })
       res.end(workletCode)
+      return
+    }
+
+    // adj729：音色库文件（插件目录里的那份，随文库同步）——按 id 读盘后原样回给应用
+    if (readSoundfont && rest.startsWith(SOUNDFONT_URL_PREFIX) && rest.endsWith('.sf2')) {
+      const id = rest.slice(SOUNDFONT_URL_PREFIX.length, -'.sf2'.length)
+      if (!/^[\w.-]+$/.test(id)) {
+        res.writeHead(400).end()
+        return
+      }
+      void readSoundfont(id)
+        .then((buf) => {
+          if (!buf) {
+            // 插件目录里还没有这份音源：404（应用据此退回自己的缓存/下载）
+            res.writeHead(404, { 'Cache-Control': 'no-store' }).end()
+            return
+          }
+          res.writeHead(200, {
+            'Content-Type': 'application/octet-stream',
+            'Content-Length': String(buf.byteLength),
+            'Cache-Control': 'no-store',
+          })
+          res.end(buf)
+        })
+        .catch(() => {
+          res.writeHead(500).end()
+        })
       return
     }
 

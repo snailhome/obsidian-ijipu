@@ -2037,7 +2037,8 @@ console.log('\n[adj727b] 嵌入版本地服务：SpessaSynth worklet 必须能�
   check('adj727b 服务声明 worklet 路径常量，且 main.ts 把**已内联**的那份传给它（不额外增体积）',
     serverSrc.includes("export const EMBED_WORKLET_PATH = 'spessasynth/spessasynth_processor.min.js'") &&
       serverSrc.includes('if (rest === EMBED_WORKLET_PATH)') &&
-      /startEmbedServer\(\{ workletCode \}\)/.test(mainSrc) &&
+      // adj729 之后这里还多传了 readSoundfont ⇒ 用宽松窗口匹配"确实传了 workletCode"
+      /startEmbedServer\(\{[\s\S]{0,160}?workletCode[\s\S]{0,160}?\}/.test(mainSrc) &&
       /import workletCode from '\.\.\/spessasynth_processor\.min\.js'/.test(mainSrc))
 
   // —— 行为验证：真起服务 ——
@@ -2066,6 +2067,86 @@ console.log('\n[adj727b] 嵌入版本地服务：SpessaSynth worklet 必须能�
       miss.status === 500, `status=${miss.status}`)
   } finally {
     await bare.dispose()
+  }
+}
+
+/**
+ * ---- adj729：音色库**落到插件目录**（随文库一起走）+ 嵌入版按 URL 取用 + 由插件导入 ----
+ *
+ * 用户口径：「音色库下载或导入后，建议放在插件目录中，以便能随文库一起走」。
+ * 此前音源只存在 IndexedDB（插件预览一个 origin、嵌入版应用另一个 origin），
+ * 换机器/换库/清站点数据就没了，也**不随文库同步**。
+ *
+ * 这一节覆盖四件事（真实取字节那条起真服务）：
+ *  ① 落点：`<配置目录>/plugins/<插件 id>/soundfonts/<库 id>.sf2`（走 `vault.adapter`，不是 `vault.*`）；
+ *  ② 取用顺序：插件目录文件 → IndexedDB → 内置 → 下载；**下载/导入后写回插件目录**；
+ *  ③ 嵌入版服务把它按 `soundbanks/<id>.sf2` 交给应用（`welcome.bankUrls`）；
+ *  ④ 嵌入版「导入音色文件」由**插件**弹选择器并写盘（32 MB 不跨窗口搬）。
+ */
+console.log('\n[adj729] 音色库落插件目录（随文库一起走）')
+{
+  const s9 = (p: string): string => readFileSync(p, 'utf8')
+  const bankFileSrc = s9('src/bankFile.ts')
+  const soundbankSrc = s9('src/soundbank.ts')
+  const serverSrc729 = s9('src/embed/server.ts')
+  const bridgeSrc729 = s9('src/embed/bridge.ts')
+  const mainSrc729 = s9('src/main.ts')
+  const renderSrc729 = s9('src/render.ts')
+  const cssSrc729 = s9('styles.css')
+
+  check('adj729 音色库文件落在插件目录（soundfonts/<id>.sf2，走 vault.adapter）',
+    bankFileSrc.includes("const SOUNDFONT_DIR = 'soundfonts'") &&
+      bankFileSrc.includes('createBankFileStore(app: App, manifestDir: string)') &&
+      bankFileSrc.includes('app.vault.adapter.writeBinary(') &&
+      bankFileSrc.includes('app.vault.adapter.readBinary(') &&
+      !/app\.vault\.(createBinary|readBinary)\b/.test(bankFileSrc) &&
+      /this\.bankFiles = createBankFileStore\(this\.app, this\.manifest\.dir/.test(mainSrc729))
+  check('adj729 取用顺序 = 插件目录文件 → IndexedDB → 下载；且下载后写回插件目录',
+    /if \(files\) \{[\s\S]{0,200}?files\.read\(lib\.id\)/.test(soundbankSrc) &&
+      /const hit = await cache\.load\(lib\.id\)/.test(soundbankSrc) &&
+      /const bank = await res\.arrayBuffer\(\)[\s\S]{0,200}?cache\.save\(lib\.id, bank\)[\s\S]{0,200}?files\.write\(lib\.id, bank\)/.test(soundbankSrc) &&
+      // 存量 IndexedDB 缓存也要**补写**成插件目录文件（迁移：老用户第一次试听就落盘）
+      /await cache\.load\(lib\.id\)[\s\S]{0,300}?files\.write\(lib\.id, hit\)/.test(soundbankSrc))
+  check('adj729 插件预览把存储层交给 playScore（否则等于没接）',
+    /bankFiles: plugin\.getBankFiles\(\)/.test(s9('src/scorePane.ts')) &&
+      /bankFiles\?: BankFileStore \| null/.test(renderSrc729) &&
+      /loadHqBank\(getHqLibrary\(\), new HqCache\(\), opts\?\.bankFiles \?\? null\)/.test(renderSrc729))
+  check('adj729 嵌入版服务按 soundbanks/<id>.sf2 交音源，且 welcome 里给出地址',
+    serverSrc729.includes("export const SOUNDFONT_URL_PREFIX = 'soundbanks/'") &&
+      /rest\.startsWith\(SOUNDFONT_URL_PREFIX\)/.test(serverSrc729) &&
+      /readSoundfont: \(id\) => this\.readSoundfont\(id\)/.test(mainSrc729) &&
+      /bankUrls: \(\) => this\.bankUrls\(\)/.test(mainSrc729) &&
+      /bankUrls: this\.host\.bankUrls\?\.\(\) \?\? \{\}/.test(bridgeSrc729))
+  check('adj729 嵌入版「导入音色文件」由插件弹选择器并写盘（32 MB 不跨窗口搬）',
+    /op === 'importSoundbank'/.test(bridgeSrc729) &&
+      /importSoundbank: \(id\) => this\.importSoundfont\(id\)/.test(mainSrc729) &&
+      bankFileSrc.includes('importFromPicker') &&
+      // 隐藏文件框走 CSS 类（社区审核：不得直接写 style.*）
+      bankFileSrc.includes("cls: 'ijipu-file-input-hidden'") &&
+      !/\.setCssStyles?\(/.test(bankFileSrc) &&
+      cssSrc729.includes('.ijipu-file-input-hidden'))
+
+  // —— 行为验证：真起服务，按路径取音源 ——
+  const { startEmbedServer, SOUNDFONT_URL_PREFIX: PREFIX } = await import('../src/embed/server')
+  const fake = Buffer.from('SF2-FAKE-BYTES-0123456789')
+  const server = await startEmbedServer({
+    workletCode: '/* w */',
+    readSoundfont: async (id) => (id === 'generaluser_gs' ? fake : null),
+  })
+  try {
+    const okRes = await fetch(`${server.url}${PREFIX}generaluser_gs.sf2`)
+    const okBody = Buffer.from(await okRes.arrayBuffer())
+    check('adj729 真机：插件目录里有音源 ⇒ 200 + 字节一致',
+      okRes.status === 200 && okBody.equals(fake),
+      `status=${okRes.status} bytes=${okBody.length}`)
+    const missRes = await fetch(`${server.url}${PREFIX}nope.sf2`)
+    check('adj729 真机：插件目录里没有 ⇒ 404（应用据此退回自己的缓存/下载）',
+      missRes.status === 404, `status=${missRes.status}`)
+    const badRes = await fetch(`${server.url}${PREFIX}..%2F..%2Fsecret.sf2`)
+    check('adj729 真机：非法库 id ⇒ 400（不接受路径穿越）',
+      badRes.status === 400, `status=${badRes.status}`)
+  } finally {
+    await server.dispose()
   }
 }
 

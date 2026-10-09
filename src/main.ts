@@ -9,8 +9,10 @@ import { canOpenWithDefaultApp, openWithDefaultApp } from './openExternal'
 import { DEFAULT_EMBED_OPEN_MODE, type EmbedOpenMode, type IJipuSettings } from './types'
 import { IJipuBridge } from './embed/bridge'
 import { embedEditLeavesObsidian, planEmbedTarget } from './embed/openPlan'
-import { startEmbedServer, type EmbedServer } from './embed/server'
+import { startEmbedServer, type EmbedServer, SOUNDFONT_URL_PREFIX } from './embed/server'
 import { IJipuAppView, VIEW_TYPE_IJIPU_APP } from './embed/appView'
+import { HQ_LIBRARIES } from './soundbank'
+import { createBankFileStore, type BankFileStore } from './bankFile'
 // @ts-ignore esbuild 以 text loader 把 worklet 内联为字符串（main.js 单文件自包含，无需插件目录单独 worklet）
 import workletCode from '../spessasynth_processor.min.js'
 
@@ -39,6 +41,14 @@ export default class IJipuPlugin extends Plugin {
   private playStops: (() => void)[] = []
   /** 内置 SpessaSynth worklet URL（worklet 代码内联进 main.js → Blob URL，随插件单文件分发） */
   private workletUrl = ''
+  /**
+   * adj729（用户要求）：**音色库落在插件目录**里的存储层
+   * （`<配置目录>/plugins/<插件 id>/soundfonts/<库 id>.sf2`）。
+   *
+   * 用户原话：「音色库下载或导入后，建议放在插件目录中，以便能随文库一起走」——
+   * 此前只存 IndexedDB（还分两个 origin），换机器/换库就没了、也**不随文库同步**。
+   */
+  private bankFiles: BankFileStore | null = null
   /** adj631：「设置 → iJipu」页签的"就地重画"回调（别处改了插件设置时保持两边显示一致） */
   private settingsRefresh: (() => void) | null = null
   /**
@@ -68,6 +78,8 @@ export default class IJipuPlugin extends Plugin {
   async onload(): Promise<void> {
     await this.loadSettings()
     this.workletUrl = this.makeWorkletUrl()
+    // adj729：音色库文件的落点 = 插件自己的目录（`manifest.dir` 由 Obsidian 给出）
+    this.bankFiles = createBankFileStore(this.app, this.manifest.dir ?? '.obsidian/plugins/ijipu')
     this.addSettingTab(new IJipuSettingTab(this.app, this))
 
     // ① .jps 文件识别：注册专用视图 → 打开 .jps（含 [[xxx.jps]] 链接）即渲染为简谱
@@ -153,6 +165,14 @@ export default class IJipuPlugin extends Plugin {
         set: (k, v) => this.embedKvSet(k, v),
         remove: (k) => this.embedKvRemove(k),
       },
+      /**
+       * adj729（用户要求）：**音色库落在插件目录**——把"按 id 取的音源 URL"与"由插件导入"交给应用：
+       *  · `bankUrls()`：应用不再自己下 32 MB，直接取插件目录里那份（随文库同步）；
+       *  · `importSoundbank(id)`：应用里点「导入音色文件」时，由**插件**弹文件选择器并写进插件目录
+       *    （32 MB 走 postMessage 要 base64 ≈43 MB，慢且吃内存 —— 让插件自己挑、自己写盘最省）。
+       */
+      bankUrls: () => this.bankUrls(),
+      importSoundbank: (id) => this.importSoundfont(id),
     })
     this.registerView(VIEW_TYPE_IJIPU_APP, (leaf) => new IJipuAppView(leaf, this))
     this.registerDomEvent(window, 'message', (ev) => {
@@ -244,7 +264,11 @@ export default class IJipuPlugin extends Plugin {
   async getEmbedUrl(): Promise<string | null> {
     if (!this.embedEnabled && this.embedServer === null) return null
     if (!this.embedServerStarting) {
-      this.embedServerStarting = startEmbedServer({ workletCode }).then((s) => {
+      this.embedServerStarting = startEmbedServer({
+        workletCode,
+        // adj729：把插件目录里的音源文件按路径交给嵌入版应用（同一个文件，随文库同步）
+        readSoundfont: (id) => this.readSoundfont(id),
+      }).then((s) => {
         this.embedServer = s
         this.bridge.setToken(s.token)
         /**
@@ -498,6 +522,43 @@ export default class IJipuPlugin extends Plugin {
   /** 内置 worklet 的 Blob URL（供试听时 addModule） */
   getWorkletUrl(): string {
     return this.workletUrl
+  }
+
+  /** adj729：音色库文件的存储层（插件目录；见 `bankFile.ts` 的说明） */
+  getBankFiles(): BankFileStore | null {
+    return this.bankFiles
+  }
+
+  /** adj729：音色库文件的路径（诊断/设置页显示用；未初始化时给空串） */
+  soundfontPath(id: string): string {
+    return this.bankFiles?.pathOf(id) ?? ''
+  }
+
+  /** adj729：把服务端的音源 URL 交给嵌入版应用（见 `BridgeHost.bankUrls`） */
+  bankUrls(): Record<string, string> {
+    const base = this.embedServer?.url
+    if (!base) return {}
+    const out: Record<string, string> = {}
+    for (const lib of HQ_LIBRARIES) out[lib.id] = `${base}${SOUNDFONT_URL_PREFIX}${lib.id}.sf2`
+    return out
+  }
+
+  /** adj729：嵌入版应用要的音源字节（服务端按路径读插件目录里的文件；读不到给 null） */
+  async readSoundfont(id: string): Promise<Buffer | null> {
+    const ab = await this.bankFiles?.read(id)
+    return ab ? Buffer.from(ab) : null
+  }
+
+  /**
+   * adj729（用户要求）：**由插件导入音源文件**（嵌入版应用里点「导入音色文件」时走这里）。
+   *
+   * 为什么不让应用把字节发过来：SF2 有 32 MB，`postMessage` 传 ArrayBuffer 要 base64，
+   * 慢且吃内存。插件在 Obsidian 主窗口里弹一次文件选择器、直接写进插件目录最省。
+   * 导入后写进插件目录 ⇒ **随文库一起走**（用户口径），应用随后从这个 URL 取用。
+   */
+  async importSoundfont(id: string): Promise<{ ok: boolean; canceled?: boolean; error?: string }> {
+    if (!this.bankFiles) return { ok: false, error: '插件未就绪' }
+    return this.bankFiles.importFromPicker(id)
   }
 
   async loadSettings(): Promise<void> {

@@ -420,7 +420,12 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
         stopPlayFn()
         return
       }
-      void playScore(source, cfg, { hqVoice: plugin.settings.hqVoice, workletUrl: plugin.getWorkletUrl() })
+      void playScore(source, cfg, {
+        hqVoice: plugin.settings.hqVoice,
+        workletUrl: plugin.getWorkletUrl(),
+        // adj729：音源优先从**插件目录**里的文件取（下载/导入过就随文库一起走）
+        bankFiles: plugin.getBankFiles(),
+      })
         .then((r) => {
           if (!r) {
             setPlayState(false)
