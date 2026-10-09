@@ -1,10 +1,10 @@
 {
-  "id": "obsidian-ijipu",
+  "id": "ijipu",
   "name": "iJipu",
-  "version": "0.29.0",
-  "minAppVersion": "1.0.0",
-  "description": "在 Obsidian 笔记中用 .jps 脚本渲染可视化简谱（爱记谱 iJipu），支持试听与整页/满宽/谱面显示。官网：https://ijipu.pages.dev",
-  "author": "蜗牛🐌",
+  "version": "0.29.1",
+  "minAppVersion": "1.13.0",
+  "description": "Render .jps jianpu scripts into sheet music inside your notes, with playback, and edit scores in a full built-in iJipu editor.",
+  "author": "SnailHome",
   "authorUrl": "https://github.com/snailhome/obsidian-ijipu",
-  "isDesktopOnly": false
+  "isDesktopOnly": true
 }

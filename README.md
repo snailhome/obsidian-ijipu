@@ -1,14 +1,21 @@
-# obsidian-ijipu（爱记谱 iJipu）
+# iJipu（爱记谱）—— Obsidian 插件
 
-在 Obsidian 笔记中用 ` ```jps ` 代码块把 **.jps 简谱脚本渲染为可视化简谱（SVG）**，并可**试听**。渲染引擎复用 `@ijipu/engine`（与 iJipu 应用一致），设置项与 iJipu 一脉传承。
+在 Obsidian 笔记中用 ` ```jps ` 代码块把 **.jps 简谱脚本渲染为可视化简谱（SVG）**，并可**试听**；
+也可以点左侧栏图标（或在库里打开 `.jps`）用插件内嵌的**完整 iJipu 编辑器**编辑谱面。
+渲染引擎复用 `@ijipu/engine`（与 iJipu 应用一致），设置项与 iJipu 一脉传承。
+官网：<https://ijipu.pages.dev>
 
 > 码即成，谱自现。
 
 ## 安装
 
-1. 把插件文件夹（含 `main.js`、`manifest.json`、`styles.css`）拷贝到你的库：`<你的库>/.obsidian/plugins/obsidian-ijipu/`。
-2. 打开 Obsidian 设置 → **第三方插件** → 关闭安全模式，在列表中找到 **iJipu** 并启用。
-3. 若未显示，重开 Obsidian 或检查已加载插件列表。
+> **仅支持桌面端**（Windows / macOS / Linux）。内嵌的完整编辑器需要一个本机服务，
+> 用到了只有桌面版 Obsidian 才提供的 Node.js 接口，因此本插件在移动端不可用
+> （`manifest.json` 的 `isDesktopOnly: true`）。
+
+1. 在 Obsidian 里打开 **设置 → 第三方插件 → 浏览**，搜索 **iJipu** 安装并启用。
+   （手动安装：把 `main.js`、`manifest.json`、`styles.css` 拷到 `<你的库>/.obsidian/plugins/ijipu/`。）
+2. 若列表里看不到，重开 Obsidian 或检查已加载插件列表。
 
 ## 用法
 
@@ -148,6 +155,25 @@ ijipu_showInstrument: true
 | 显示乐器名 | `ijipu_showInstrument` | boolean | true / false（默认 false） |
 | 连音线样式 | `ijipu_lianyinxian_type` | 数字 | 0 自动 / 1 圆弧 / 2 平顶（默认 0） |
 
+## 网络使用与权限（披露）
+
+Obsidian 的开发者政策要求**明确披露网络访问**，这里一次说清：
+
+- **下载音源（唯一的外部网络请求）**：高保真试听需要一个 SoundFont 音源文件
+  （GeneralUser GS，约 32 MB，**不随插件分发**）。首次试听时，插件会从这个直链下载：
+  `https://raw.githubusercontent.com/mrbumpy409/GeneralUser-GS/main/GeneralUser-GS.sf2`
+  （该地址由上游项目 [GeneralUser-GS](https://github.com/mrbumpy409/GeneralUser-GS) 提供）。
+  下载后**缓存在本机**（IndexedDB），之后试听**不再联网**。
+  该地址在部分网络下可能不可达（例如 `raw.githubusercontent.com` 被拦截）——此时会提示，
+  你可以在「设置 → iJipu」里**手动导入**本地 `.sf2` 文件，导入后同样只走本地缓存。
+- **没有任何遥测 / 统计 / 账号**：插件不收集、不上传任何数据，也不需要登录。
+- **内嵌编辑器用一个"仅本机"的本地服务**：`127.0.0.1` 上的临时 HTTP 服务
+  （端口固定优先 `47821`，被占用则回退随机端口；URL 带一次性随机令牌）。
+  它**只监听本机回环地址、不对外**，仅用于把打包进 `main.js` 的网页交给内部 iframe 显示。
+  该服务只提供两样东西：那份单文件页面、以及页面用到的图标资源（白名单查表，不接受任意路径）。
+- **文件访问范围**：只读写你的 Obsidian **文库内**的文件（通过 Obsidian 的文库接口），
+  不访问文库之外的任何路径；「默认应用」打开方式会把该 `.jps` 交给系统关联程序（仅在你主动点击时）。
+
 ## 支持作者
 
 喜欢这个插件？可在插件的**设置页**点「**支持作者 ❤**」扫码支持（与 iJipu 应用一致的微信赞赏码，`https://ijipu.pages.dev/good.png`）。也可访问 [iJipu 官网](https://ijipu.pages.dev)。
@@ -155,4 +181,5 @@ ijipu_showInstrument: true
 ## 标注
 
 - 引擎：`@ijipu/engine`（.jps 解析 → 排版 → SVG 渲染 → 播放序列 → Web Audio 试听）。
-- 许可证：AGPL-3.0（与引擎一致）。特别致谢「番茄简谱」原作与社区。
+- 许可证：**AGPL-3.0**（见仓库根的 [`LICENSE`](./LICENSE)，与引擎一致）。
+  特别致谢「番茄简谱」原作与社区；音源 [GeneralUser GS](https://github.com/mrbumpy409/GeneralUser-GS)（其自带许可）。
