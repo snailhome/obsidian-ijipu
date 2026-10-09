@@ -25,6 +25,9 @@ copy2ob.bat
 build *.bat
 dist-*.js
 dist-smoke/
+# 一次性排错/验证脚本（AGENTS 六：`scripts/_tmp_*` 用后必删、**禁提交**）——
+# 写进这里当闸门：真忘了删也不会被 `git add -A` 顺手带进仓库。
+scripts/_tmp_*
 # adj407 + adj724b：`src/gen/` 里有两类文件，待遇**相反**——
 #   · `buildInfo.ts`：`scripts/gen-build-info.mjs` 每次构建重新生成（含时间戳/commit）⇒ **不入库**
 #   · `webappAssets.ts`：嵌入版网页产物，由 ijipu 仓库生成但**必须入库**

@@ -2096,6 +2096,21 @@ console.log('\n[adj727b] 嵌入版本地服务：SpessaSynth worklet 必须能�
     // 对照：白名单资产（图标）照旧 200，别把资产表弄坏
     const icon = await fetch(`${server.url}icons/${encodeURIComponent('菜单')}.png`)
     check('adj727b 白名单图标仍 200（没有把资产表改坏）', icon.status === 200, `status=${icon.status}`)
+    /**
+     * adj731（用户报「插件里『支持』里的微信赞赏码不见了」+ 破图截图）：**嵌入版必须能取到赞赏码**。
+     *
+     * 根因在应用侧（`DonateDialog` 用根绝对路径 `/icons/good.png`，少了 token 段 ⇒ 这里 404），
+     * 已在应用侧修（改走 `BASE_URL`）。插件这一侧要钉的是**另一半**：
+     *  `icons/good.png` 确实在嵌入版资产白名单里、且真能按路径取到（PNG 魔数校验）。
+     */
+    const donate = await fetch(`${server.url}icons/good.png`)
+    const donateBuf = Buffer.from(await donate.arrayBuffer())
+    check('adj731 嵌入版能按路径取到赞赏码 icons/good.png（200 + PNG 魔数）',
+      donate.status === 200 &&
+        donateBuf.length > 1000 &&
+        donateBuf[0] === 0x89 &&
+        donateBuf.subarray(1, 4).toString('latin1') === 'PNG',
+      `status=${donate.status} bytes=${donateBuf.length}`)
   } finally {
     await server.dispose()
   }
