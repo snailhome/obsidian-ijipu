@@ -7,7 +7,7 @@
  */
 import { defaultPageConfig, dragDelta, layoutScore, parseJps, renderScoreToSvg, writeJpsConfig, mergeConfigEdits, configCarryover, SCORE_FONT_OPTIONS, buildPlaySequence, GUIDE_LIMITS, GUIDE_LIMITS_EX, SEGMENT_ROW_GAP_DEFAULT, OPTIONAL_CONFIG_FIELDS, defaultConfigForReset, extractJpsConfig, nonDefaultConfigKeys, GM_GROUPS } from '@ijipu/engine'
 import type { PageConfig } from '@ijipu/engine'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { instrumentColorMap, playheadBaseOf, playheadPosIn, trackKeysOf } from '../src/playhead'
 import { applyFrontmatter, buildFrontmatterTemplate, deprecatedKeyHint, frontmatterKey, mergePageConfig, unknownKeyHint, PAGE_CONFIG_FIELDS } from '../src/frontmatter'
 import { PAGE_NUM_RANGES, clampNum } from '../src/numRanges'
@@ -1833,6 +1833,7 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
   const pane725 = s725('src/scorePane.ts')
   const main725 = s725('src/main.ts')
   const embed725 = s725('src/embed.ts')
+  const settings730 = s725('src/settings.ts')
   // ⚠ 老规矩：先剥注释 —— "解释为什么不能用 X"的注释里就写着 X（本项目因此误判过多次）
   const css725nc = css725.replace(/\/\*[\s\S]*?\*\//g, '')
 
@@ -2014,6 +2015,44 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
       /import \{ embedEditLeavesObsidian, planEmbedTarget \} from '\.\/embed\/openPlan'/.test(main725) &&
       /editLeavesObsidian: embedEditLeavesObsidian\(this\.plugin\.settings\.embedOpenMode \?\? DEFAULT_EMBED_OPEN_MODE\)/.test(embed725) &&
       /import \{ embedEditLeavesObsidian \} from '\.\/embed\/openPlan'/.test(embed725))
+
+  /**
+   * ⑪ adj730（用户报「插件里『支持』里的微信赞赏码不见了」）：**赞赏入口必须在，且码要看得见**。
+   *
+   * 查证：这条入口在 `6934155` 加过（设置页一个 `支持作者 ❤` 外链），
+   * `ebb0e5c`（adj724b"设置整并"）把它删了 —— 本轮补回。
+   *
+   * 用户随后要求：「good.png 已经缩到 320 宽，请放宽 gitignore 的限制，并加入内联」
+   * ⇒ 图片入库（`vendor/icons/good.png`，与应用同图、逐字节相同）并**内联显示**。
+   *
+   * ⚠ 这条断言里最关键的是**最后一条**：`.gitignore` **不得**再忽略 `good.png`。
+   *   被忽略的文件进不了仓库，而 CI 从干净检出构建 main.js ⇒ 解析不到该 import ⇒ **发版直接失败**。
+   *   （这正是我第一次做内联时踩的坑：本地构建通过、CI 会挂。判据必须钉在仓库状态上。）
+   */
+  check('adj730 说明页恢复「支持作者 ❤」并**内联**显示赞赏码（不引远程图片）',
+    settings730.includes('支持作者 ❤') &&
+      /import donateQrPng from '\.\.\/vendor\/icons\/good\.png'/.test(settings730) &&
+      /attr: \{ src: donateQrPng/.test(settings730) &&
+      !/src:\s*'https?:\/\//.test(settings730) &&
+      /openUrlExternally\(DONATE_URL\)/.test(settings730) &&
+      settings730.includes("const DONATE_URL = 'https://ijipu.pages.dev/good.png'") &&
+      css725nc.includes('.ijipu-donate-qr') &&
+      // 图片真的在仓库里（内联的前提）：320×320 的 PNG
+      existsSync('vendor/icons/good.png') &&
+      readFileSync('vendor/icons/good.png').byteLength > 10_000)
+  {
+    const png = readFileSync('vendor/icons/good.png')
+    const isPng = png[0] === 0x89 && png.subarray(1, 4).toString('latin1') === 'PNG'
+    const width = png.readUInt32BE(16)
+    const height = png.readUInt32BE(20)
+    check('adj730 赞赏码是 320×320 的 PNG（用户已缩过；再放大就别内联了）',
+      isPng && width === 320 && height === 320, `${width}×${height}`)
+  }
+  check('adj730 ⚠ .gitignore 不得再忽略 good.png（被忽略 ⇒ CI 从干净检出构建直接失败）',
+    !readFileSync('.gitignore', 'utf8')
+      .split('\n')
+      .map((l) => l.trim())
+      .includes('good.png'))
 }
 
 /**

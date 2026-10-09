@@ -25,7 +25,18 @@ import { DEFS, GROUPS, getDefault, readDef, type SettingDef } from './defs'
 // adj724b：外链统一走这处（Electron 里 `window.open` 不可靠）
 import { openUrlExternally } from './openExternal'
 import { DEFAULT_EMBED_OPEN_MODE, type EmbedOpenMode } from './types'
+// adj730：微信赞赏码（与应用「关于」页同一张图；构建期内联成 data URI，不联网）
+import donateQrPng from '../vendor/icons/good.png'
 import type IJipuPlugin from './main'
+
+/**
+ * adj730：微信赞赏码的在线地址（与应用「关于」页同一张图）。
+ *
+ * 图片本体也随插件走：`vendor/icons/good.png`（与应用 `public/icons/good.png` **逐字节相同**，
+ * 320×320）在构建期内联成 data URI ⇒ 设置页里**不联网**就能显示、也扫得动；
+ * 这个地址只给「在浏览器打开」按钮用（便于另存/转发）。
+ */
+const DONATE_URL = 'https://ijipu.pages.dev/good.png'
 
 // frontmatter 键的唯一约定（= `ijipu_` + 引擎 PageConfig 字段名）在 frontmatter.ts 定义，此处转出供外部复用
 export { frontmatterKey }
@@ -341,5 +352,42 @@ export class IJipuSettingTab extends PluginSettingTab {
         '点左侧栏「爱记谱」图标（或库里的 `.jps`）打开**嵌入版 iJipu**，' +
           '在它的「设置 → 谱面」改这份谱的排版、在「设置 → 全局」改本机偏好与音色库。',
       )
+
+    /**
+     * adj730（用户报「插件里『支持』里的微信赞赏码不见了」）：**恢复赞赏入口**。
+     *
+     * 查证：这条入口在 `6934155` 加过（设置页顶部一个 `支持作者 ❤` 外链），
+     * 后来 `ebb0e5c`（adj724b"设置整并"）把它一起删掉了 —— 本轮补回。
+     *
+     * 用户随后要求：「good.png 已经缩到 320 宽，请放宽 gitignore 的限制，并加入内联」——
+     * 于是这里**把赞赏码直接显示出来**（设置页里就能扫，不必点开浏览器）：
+     *  · 图片与应用**同一张**（`ijipu/public/icons/good.png` → 本仓库 `vendor/icons/good.png`，
+     *    320×320 / 约 39 KB，逐字节相同），构建期内联成 data URI ⇒ **不联网、不加载远程资源**；
+     *  · `.gitignore` 里原来把 `good.png` 当"应用资源误拷"排除掉了，现已放宽（该段注释写明了原因）——
+     *    ⚠ 这一点是**硬约束**：被忽略的文件进不了仓库，而 CI 从干净检出构建 main.js，
+     *    解析不到 ⇒ 发版直接失败（冒烟有一条断言专门钉住 .gitignore 不得再忽略它）。
+     *  · 白底由 CSS 给（`.ijipu-donate-qr`）：二维码在深色主题的深色底上扫不动。
+     */
+    const donate = new Setting(host)
+      .setName('支持作者 ❤')
+      .setDesc(
+        '如果这个插件帮到了你，欢迎扫码支持（微信赞赏码，与应用「关于」页同一张）。' +
+          `也可以点右侧按钮用浏览器打开：\`${DONATE_URL}\``,
+      )
+      .addButton((b) =>
+        b
+          .setButtonText('在浏览器打开')
+          .setTooltip(DONATE_URL)
+          .onClick(() => {
+            void openUrlExternally(DONATE_URL)
+          }),
+      )
+    donate.settingEl.addClass('ijipu-donate-row')
+    const qrWrap = host.createDiv({ cls: 'ijipu-donate-qr-wrap' })
+    qrWrap.createEl('img', {
+      cls: 'ijipu-donate-qr',
+      attr: { src: donateQrPng, alt: '微信赞赏码', title: '微信扫码赞赏' },
+    })
+    qrWrap.createDiv({ cls: 'ijipu-donate-hint', text: '微信扫码赞赏 · 谢谢支持' })
   }
 }

@@ -8,11 +8,15 @@ release/
 # ijipu 应用资源/构建残留误拷防护（此仓库不应含）
 Jianpu.ico
 Jianpu.png
-good.png
 pwa-*.png
 manifest.webmanifest
 sw.js
 doc/
+# adj730：「支持作者」的**微信赞赏码**是有意入库的插件资源（说明页里内联显示，见 src/settings.ts），
+# 故**不在此列**。它必须真的进仓库 —— 本仓库 CI 从干净检出构建 main.js，
+# 被忽略的文件在 CI 上解析不到 ⇒ 发版直接失败。
+#   ⚠ 改这条之前先想清楚：这份图是"插件自己的资产"（320×320，约 39 KB），不是应用资源的误拷。
+#   ⚠ 与应用保持同一张：`ijipu/public/icons/good.png` → 本仓库 `vendor/icons/good.png`（逐字节相同）。
 
 # 引擎源码 vendor 内置（自包含，提交入库）
 
