@@ -780,6 +780,25 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     }
 
     /**
+     * adj735（用户问「设置-说明 里的这处是做什么用？没看明白」）：把裁剪诊断**写成一句人话 + 时间戳**。
+     *
+     * 这一行是给"谱面还是有 A4 那么大空白"这类问题定位用的运行期诊断（不需要用户操作），
+     * 但旧文案是"页面内容包围盒：三次重试都没量到（元素始终不在渲染树里？）"——技术味太重、
+     * 又没有任何时间信息 ⇒ 用户打开设置页看到它，既不知道这是什么、也不知道是不是"现在坏了"
+     * （其实常常只是当时那一瞬没量到，随后补量已成功）。
+     *
+     * 现在统一经这里记录：`HH:MM:SS · 人话`，并且**成功/失败都说清后果**（失败也只是"这一瞬间"，
+     * 会走补量；显示效果仍可用）。
+     */
+    function noteCrop(msg: string): void {
+      const d = new Date()
+      const hh = String(d.getHours()).padStart(2, '0')
+      const mm = String(d.getMinutes()).padStart(2, '0')
+      const ss = String(d.getSeconds()).padStart(2, '0')
+      plugin.lastCropInfo = `${hh}:${mm}:${ss} · ${msg}`
+    }
+
+    /**
      * adj725b：**量不到就下一帧再量**（量到了当场补裁剪）。
      *
      * 为什么非补不可 —— 这是"谱面模式还留一大片空白"的**真正根因**（用户 2026-10 再次截图复现）：
@@ -805,7 +824,7 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
           return
         }
         if (attempt + 1 < delays.length) scheduleCropRetry(svgEl, c, attempt + 1)
-        else plugin.lastCropInfo = '页面内容包围盒：**三次重试都没量到**（元素始终不在渲染树里？）'
+        else noteCrop('未量到内容盒（那一刻谱面还没进渲染树；已自动重试 3 次、并挂了 ResizeObserver 等它进树）')
       }
       if (delays[attempt] === 0) window.requestAnimationFrame(run)
       else window.setTimeout(run, delays[attempt])
@@ -852,16 +871,20 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
         if (box && shrunk) {
           svgEl.setAttribute('viewBox', `${box.x} ${box.y} ${box.w} ${box.h}`)
           // 回传给插件，供设置页显示（运行期诊断；见 IJipuPlugin.lastCropInfo 的说明）
-          plugin.lastCropInfo = `页面 ${Math.round(w)}×${Math.round(h)} → 裁剪 ${box.w.toFixed(0)}×${box.h.toFixed(0)}（高度剩 ${((box.h / h) * 100).toFixed(0)}%）`
+          noteCrop(
+            `按墨迹裁剪 ${box.w.toFixed(0)}×${box.h.toFixed(0)}（整页 ${Math.round(w)}×${Math.round(h)}，高度只剩 ${((box.h / h) * 100).toFixed(0)}%）`,
+          )
         } else {
           const ml = c.margin_left ?? 0
           const mt = c.margin_top ?? 0
           const mr = c.margin_right ?? 0
           const mb = c.margin_bottom ?? 0
           svgEl.setAttribute('viewBox', `${ml} ${mt} ${Math.max(1, w - ml - mr)} ${Math.max(1, h - mt - mb)}`)
-          plugin.lastCropInfo = box
-            ? `页面 ${Math.round(w)}×${Math.round(h)} → **退回边距兜底**（量到的盒几乎等于整页，判定为量取不可靠）`
-            : `页面 ${Math.round(w)}×${Math.round(h)} → **退回边距兜底**（没量到内容包围盒）`
+          noteCrop(
+            box
+              ? `退回按边距裁剪（量到的盒几乎等于整页 ${Math.round(w)}×${Math.round(h)}，判定为量取不可靠）`
+              : `退回按边距裁剪（没量到内容盒；正在等谱面进入渲染树后补量）`,
+          )
           /**
            * adj725b：**"没量到"多半是元素还没进渲染树**（宿主先建后插）⇒ 两条补量路径同时挂上：
            * ① `ResizeObserver`（尺寸 0→真实那一刻）——准；② 定时重试 —— 兜底。
