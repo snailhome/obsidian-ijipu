@@ -435,7 +435,21 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
         })
         .catch((e) => {
           setPlayState(false)
-          new Notice(`试听失败：${e instanceof Error ? e.message : String(e)}`, 6000)
+          /**
+           * adj728（用户要求）：「无法下载音色库的提示显示时间不长，应有个按钮链接用户打开全局的音色库」
+           * ⇒ 试听失败不再只弹一条 6 秒的 `Notice`，而是**带一个按钮**：
+           * 点它打开嵌入版 iJipu 的「设置 → 音色库」（音源自动下载在部分网络不可达，
+           * 那里能**手动下载 + 导入**：面板上有「打开下载页」与三步引导）。
+           * `timeout = 0` 表示**不自动消失**——几秒读完再点按钮，本来就做不到。
+           */
+          const msg = e instanceof Error ? e.message : String(e)
+          const notice = new Notice(`试听失败：${msg}`, 0)
+          const btn = notice.noticeEl.createEl('button', { cls: 'ijipu-notice-action', text: '打开音色库设置' })
+          btn.setAttr('type', 'button')
+          btn.addEventListener('click', () => {
+            notice.hide()
+            void plugin.openEmbedSoundbank()
+          })
         })
     })
 

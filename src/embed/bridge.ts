@@ -178,6 +178,23 @@ export class IJipuBridge {
   }
 
   /**
+   * adj728（用户要求）：**让嵌入版应用打开「设置 → 音色库」**。
+   *
+   * 用途：插件那条"试听失败"的提示上的按钮 —— 音源自动下载在部分网络不可达时，
+   * 用户需要被送到能**手动导入**的地方（应用「设置 → 音色库 → 导入音色文件」，旁边还有「打开下载页」）。
+   * 只推给**已 ready** 的 iframe（还没装好监听就推会丢，与 `openFile` 同一条时序约束）。
+   */
+  openSoundbankSettings(): boolean {
+    let sent = false
+    for (const [frame, info] of this.iterFrames()) {
+      if (!info.ready) continue
+      this.emitTo(frame, 'openSoundbankSettings')
+      sent = true
+    }
+    return sent
+  }
+
+  /**
    * 处理一条来自 iframe 的消息。
    *
    * 返回 `true` 表示"这条消息属于本桥"（调用方据此决定是否阻止其它监听者）。

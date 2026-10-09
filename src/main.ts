@@ -369,6 +369,27 @@ export default class IJipuPlugin extends Plugin {
   }
 
   /**
+   * adj728（用户要求）：**打开嵌入版 iJipu 的「设置 → 音色库」**。
+   *
+   * 用途：插件那条"试听失败"提示上的按钮。音源（GeneralUser GS，32MB）自动下载在部分网络
+   * 不可达，唯一出路是**手动下载 + 导入**，而导入入口在嵌入版应用的「设置 → 音色库」里
+   * （面板上还有「打开下载页」按钮与三步引导）。
+   *
+   * 时序：与 `openFile` 同一条约束 —— **iframe 装好监听（`ready`）才推事件**，否则会丢。
+   * 所以这里先把应用开起来（必要时等它 ready），再推 `openSoundbankSettings`。
+   */
+  async openEmbedSoundbank(): Promise<void> {
+    await this.openIjipuFile(null)
+    // 只推给**已 ready**的帧；这一轮一个都没推出去（应用还在启动）就过 400ms 再试，最多三次
+    const push = (attempt = 0): void => {
+      if (!this.bridge) return
+      const sent = this.bridge.openSoundbankSettings()
+      if (!sent && attempt < 3) window.setTimeout(() => push(attempt + 1), 400)
+    }
+    window.setTimeout(() => push(), 200)
+  }
+
+  /**
    * adj724b：按设置把嵌入版开在**右侧边栏 / 新页签 / 当前页签**；给了 `file` 就打开那份 `.jps`。
    *
    * ## `sourceLeaf`：从文件视图路由过来时，把**它自己那个 leaf** 交进来

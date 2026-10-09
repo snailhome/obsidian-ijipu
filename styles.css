@@ -1065,6 +1065,25 @@
   top: 0;
   opacity: 0;
 }
+/* adj728（用户要求）：试听失败提示上的**动作按钮**（「打开音色库设置」）。
+   那条提示**不自动消失**（`new Notice(msg, 0)`），所以按钮要显眼、可点；
+   观感跟随 Obsidian 主题（`--interactive-accent` 系）。 */
+.ijipu-notice-action {
+  display: block;
+  margin-top: 6px;
+  padding: 2px 10px;
+  border-radius: 5px;
+  border: 1px solid var(--interactive-accent, #6b8afd);
+  background: transparent;
+  color: var(--text-on-accent, var(--text-normal));
+  font-size: 0.92em;
+  cursor: pointer;
+}
+.ijipu-notice-action:hover {
+  background: var(--interactive-accent, #6b8afd);
+  color: var(--text-on-accent, #fff);
+}
+
 /* ─────────── adj725：实时预览里放开 widget 容器的裁剪 ───────────
    Obsidian 的 app.css 里有（原样摘录）：
 
