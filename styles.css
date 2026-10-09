@@ -26,8 +26,25 @@
 .ijipu-svgs a.jp-link:hover {
   fill: var(--text-accent);
 }
+/* adj724b（用户要求）：**工具条默认隐藏，鼠标移到谱面上才显示**。
+   原因：Obsidian「导出为 PDF」会把 DOM 一起导出，工具栏属于操作界面、不该进成果。
+
+   ⚠ 必须用 display:none（而不是只降透明度）：透明元素仍占位，导出时会在谱面顶部留一条空白。
+   ⚠ 移动端 / 触屏**常显**：触屏没有 hover，隐藏后就再也点不到按钮。
+   ⚠ 键盘可达：工具条内控件获得焦点时由 JS 加 is-revealed 保持显示（见 scorePane.ts）。 */
 .ijipu-score-toolbar {
+  display: none;
+}
+.ijipu-score-toolbar.is-revealed {
   display: flex;
+}
+/* 移动端常显（覆盖默认隐藏）——带 .is-mobile 前缀，特异性足够 */
+.is-mobile .ijipu-score-toolbar {
+  display: flex;
+}
+
+/* 尺寸变量/换行/容器查询（**不含 display** —— 显隐由上面的规则与 is-revealed 类决定） */
+.ijipu-score-toolbar {
   align-items: center;
   gap: 8px;
   margin-bottom: 6px;
@@ -43,8 +60,11 @@
   --ijipu-ctl-w: 36px;
 }
 /* 移动端 Obsidian 会给 button 套触控尺寸（--touch-size-*），而「视图」是 div 外壳、
-   不吃那套尺寸 → 两者不等高。移动端统一跟到 Obsidian 的小号触控尺寸。 */
+   不吃那套尺寸 → 两者不等高。移动端统一跟到 Obsidian 的小号触控尺寸。
+   ⚠ adj724b：这里**必须同时写 `display: flex`** —— 触屏没有 hover，工具条隐藏后就点不到了
+   （此前删掉基础块里的 display 时漏了这条，靠 smoke 断言抓出来）。 */
 .is-mobile .ijipu-score-toolbar {
+  display: flex;
   --ijipu-ctl-h: var(--touch-size-xs, 30px);
 }
 /* 嵌入形态更紧凑；移动端仍用触控尺寸，免得手指点不到 */

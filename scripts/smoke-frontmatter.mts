@@ -1745,6 +1745,32 @@ console.log('\n[adj724b] community review: forbidden APIs / styles must stay fix
     /registerMarkdownCodeBlockProcessor\(\s*'jps'/.test(mainApiSrc) &&
       readmeSrc.includes('代码块还是') &&
       readmeSrc.includes('单行 / 片段乐谱'))
+
+  /**
+   * ㉓ 工具条**默认隐藏、悬停才显示**（用户要求：避免 Obsidian「导出为 PDF」把操作界面一起导出）。
+   *
+   * 三条实现要点都在断言里（真实浏览器行为另由 `ijipu/scripts/verify-score-crop.mjs` 验证）：
+   *  ① CSS 必须用 `display:none`（不是只降透明度 —— 透明元素仍占位、导出会留空白条）；
+   *  ② 移动端 / 触屏常显（没有 hover，隐藏后按钮点不到）；
+   *  ③ JS 侧有 pointermove 显示 + pointerleave 收起，且**键盘有入口**
+   *     （隐藏时 `display:none` 不可聚焦 ⇒ 必须有容器级 keydown 唤醒，否则键盘用户看不到工具条）。
+   */
+  const cssToolbar = s('styles.css')
+  /**
+   * ⚠ 刻意**不**写"尺寸块里不得有 display:flex"那种负向正则，也不数"规则条数"：
+   * 实测两者都会自伤 —— `.ijipu-score-toolbar\s*\{` 允许零个空白 ⇒ 会误命中
+   * `.is-mobile .ijipu-score-toolbar {…}`；而条数会随 `@container`/媒体查询变化。
+   * 只盯**真正的不变量**：基类隐藏、`is-revealed` 显示、移动端常显。
+   */
+  check('adj724b 工具条默认隐藏（display:none）、悬停显示、移动端常显',
+    /\.ijipu-score-toolbar\s*\{\s*display:\s*none/.test(cssToolbar) &&
+      /\.ijipu-score-toolbar\.is-revealed\s*\{\s*display:\s*flex/.test(cssToolbar) &&
+      /\.is-mobile\s+\.ijipu-score-toolbar\s*\{\s*display:\s*flex/.test(cssToolbar))
+  check('adj724b 工具条悬停显示/离开收起 + 键盘可唤醒',
+    /addEventListener\('pointermove', onPointerMove\)/.test(scorePaneSrc) &&
+      /addEventListener\('pointerleave', onPointerLeave\)/.test(scorePaneSrc) &&
+      /addEventListener\('keydown', onKeyDown\)/.test(scorePaneSrc) &&
+      /toggleClass\('is-revealed', on\)/.test(scorePaneSrc))
 }
 
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。

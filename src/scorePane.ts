@@ -170,6 +170,50 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     // —— 工具条 ——
     // 注：「谱面自带设置 N 项」不再占工具栏位置 —— 移到「设置」对话框里（见 ConfigDialog）
     const toolbar = container.createDiv({ cls: 'ijipu-score-toolbar' })
+    /**
+     * adj724b（用户要求）：**工具条默认隐藏，鼠标移到谱面上才显示**。
+     *
+     * 为什么：Obsidian「导出为 PDF」会把渲染出来的 DOM 一起导出 ⇒ 工具栏（试听/排版/设置/谱面）
+     * 会出现在导出的文件里，而它属于**操作界面**、不该进成果。
+     *
+     * 实现要点（三条都不能少）：
+     * ① **必须用 `display:none`（CSS 类），不能只调透明度**：透明元素仍占位，
+     *    导出时会在谱面顶部留一条空白；`display:none` 才是真正"不在导出结果里"。
+     * ② **移动端常显**：触屏没有 hover，隐藏后就再也点不到按钮了（CSS 里排除 `.is-mobile`）。
+     * ③ **键盘可达**：工具条内任一控件获得焦点（Tab 进入）就保持显示，
+     *    否则"键盘用户永远看不到工具条"。
+     */
+    const revealToolbar = (on: boolean): void => toolbar.toggleClass('is-revealed', on)
+    const onPointerMove = (e: PointerEvent): void => {
+      // 说明：`.ijipu-score` 区在窄栏里可能几乎占满，故不做区域判定，只认"指针在谱面容器内移动"；
+      // 移动端由 CSS 常显兜底，这里不重复判断。
+      if (e.pointerType === 'touch') return
+      revealToolbar(true)
+    }
+    const onPointerLeave = (): void => {
+      // 焦点仍在工具条内（键盘操作中）→ 不收起，避免"正在用却被藏掉"
+      if (toolbar.contains(document.activeElement)) return
+      revealToolbar(false)
+    }
+    container.addEventListener('pointermove', onPointerMove)
+    container.addEventListener('pointerleave', onPointerLeave)
+    /**
+     * 键盘可达性的**真正入口**：工具条隐藏时 `display:none` ⇒ **不可聚焦**，`focusin` 等不到 Tab。
+     * 故在容器层面监听 `keydown`：只要焦点在谱面容器内、用户敲了键，就把工具条显示出来
+     * （此后 Tab 便能进入其中的按钮）。这是纯键盘用户的唯一入口。
+     */
+    const onKeyDown = (): void => revealToolbar(true)
+    container.addEventListener('keydown', onKeyDown)
+    // 焦点进出工具条时同步（指针用户用鼠标移入/移出时的兜底）
+    toolbar.addEventListener('focusin', () => revealToolbar(true))
+    toolbar.addEventListener('focusout', () => {
+      if (!toolbar.contains(document.activeElement)) revealToolbar(false)
+    })
+    plugin.register(() => {
+      container.removeEventListener('pointermove', onPointerMove)
+      container.removeEventListener('pointerleave', onPointerLeave)
+      container.removeEventListener('keydown', onKeyDown)
+    })
     if (!host.embedded) toolbar.createSpan({ cls: 'ijipu-page-label', text: `${svgs.length} 页` })
     if (resolved.applied.length > 0) {
       const badge = toolbar.createSpan({ cls: 'ijipu-fm-badge', text: `frontmatter 覆盖 ${resolved.applied.length} 项` })
