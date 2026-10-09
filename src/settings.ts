@@ -263,6 +263,19 @@ export class IJipuSettingTab extends PluginSettingTab {
       .setName('截图/反馈时请附上构建信息')
       .setDesc(`构建 ${BUILD_STAMP} @${GIT_COMMIT}（已显示在设置页顶部）`)
 
+    /**
+     * adj724b：**「谱面」视图的裁剪实况**（运行期诊断）。
+     * 用户实测"谱面还是有 A4 那么大空白"时，这一行能立刻区分：
+     *  · 显示"页面 W×H → 裁剪 w×h（高度剩 N%）" ⇒ 裁剪**已生效**（N 很小说明收得很紧）；
+     *  · 显示"退回边距兜底" ⇒ 内容包围盒没量到（渲染时机问题）；
+     *  · **整行不出现** ⇒ 说明打开过的谱面还没渲染过，或代码没生效（多为插件未重新构建）。
+     */
+    new Setting(host).setName('「谱面」视图裁剪实况').setDesc(
+      this.plugin.lastCropInfo
+        ? `${this.plugin.lastCropInfo}（打开一份谱后回到这里可看到最新值）`
+        : '（还没渲染过谱面）打开任意一份谱，再回本页即可看到"页面尺寸 → 裁剪后尺寸"',
+    )
+
     new Setting(host)
       /**
        * adj724b（用户决策 A）：**写清适用范围**。

@@ -1723,8 +1723,11 @@ console.log('\n[adj724b] community review: forbidden APIs / styles must stay fix
       /const box = measureContentBox\(svgEl\)/.test(scorePaneSrc) &&
       /svgEl\.dataset\.contentBox = /.test(scorePaneSrc) &&
       /const box = contentBoxOf\(svgEl\)/.test(scorePaneSrc))
-  check('adj724b 裁剪不得退回"按边距裁"作为主路径（只有量不到时才兜底）',
-    /if \(box\) \{[\s\S]{0,200}?\} else \{[\s\S]{0,400}?margin_left/.test(scorePaneSrc))
+  //    ③ 量到的盒**必须真的比整页小**（容差 2%）才用它 —— 防止 `getBBox()` 把整页白底算进来
+  //       导致"裁剪等于没裁"（现象正是"谱面还是 A4 那么大空白"）；不满足则退回边距兜底。
+  check('adj724b 裁剪以"实测内容盒"为主路径，且要求它真的比整页小（否则退回边距兜底）',
+    /if \(box && shrunk\) \{[\s\S]{0,900}?\} else \{[\s\S]{0,900}?margin_left/.test(scorePaneSrc) &&
+      /const shrunk = .*box\.h < h \* 0\.98/.test(scorePaneSrc))
 
   /**
    * ㉒ ` ```jps ` 代码块是**长期特性**，不得因为"有 .jps 文件了"就把它当过渡用法删掉。

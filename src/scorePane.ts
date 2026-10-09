@@ -559,22 +559,29 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       svgEl.dataset.origVb = orig
       if (mode === 'score') {
         const [, , w, h] = orig.split(/[\s,]+/).map(Number)
-        /**
-         * adj724b（用户要求）：优先按**实测内容包围盒**裁 —— "只显示有内容的部分"。
-         *
-         * 此前这里只削掉四边距（`ml/mt/w-ml-mr/h-mt-mb`），所以"边距以内的空白"仍在：
-         * 页面上方的大片空白、末尾下方的留白都会显示出来。用户要的是**紧贴内容**。
-         * 拿不到实测盒时退回原口径（削边距），保证不会因为测量失败而显示异常。
-         */
         const box = contentBoxOf(svgEl)
-        if (box) {
+        /**
+         * adj724b：**量到的盒必须真的比整页小**，否则视为"量取不可靠"退回边距兜底。
+         *
+         * 为什么要这道闸：`getBBox()` 在某些宿主/时机下可能把**整页白底**也算进来
+         * （引擎第一层就是 `<rect data-page-bg width/height=100%>`），
+         * 那时裁剪等于没裁 —— 现象正是"谱面还是有 A4 那么大空白"。
+         * 容差取 2%：真实谱面不可能占满整页（上下各有边距），占满即说明量错了。
+         */
+        const shrunk = !!box && box.h < h * 0.98 && box.w < w * 0.98
+        if (box && shrunk) {
           svgEl.setAttribute('viewBox', `${box.x} ${box.y} ${box.w} ${box.h}`)
+          // 回传给插件，供设置页显示（运行期诊断；见 IJipuPlugin.lastCropInfo 的说明）
+          plugin.lastCropInfo = `页面 ${Math.round(w)}×${Math.round(h)} → 裁剪 ${box.w.toFixed(0)}×${box.h.toFixed(0)}（高度剩 ${((box.h / h) * 100).toFixed(0)}%）`
         } else {
           const ml = c.margin_left ?? 0
           const mt = c.margin_top ?? 0
           const mr = c.margin_right ?? 0
           const mb = c.margin_bottom ?? 0
           svgEl.setAttribute('viewBox', `${ml} ${mt} ${Math.max(1, w - ml - mr)} ${Math.max(1, h - mt - mb)}`)
+          plugin.lastCropInfo = box
+            ? `页面 ${Math.round(w)}×${Math.round(h)} → **退回边距兜底**（量到的盒几乎等于整页，判定为量取不可靠）`
+            : `页面 ${Math.round(w)}×${Math.round(h)} → **退回边距兜底**（没量到内容包围盒）`
         }
         svgEl.removeAttribute('width')
         svgEl.removeAttribute('height')

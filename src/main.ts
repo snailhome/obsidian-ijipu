@@ -514,6 +514,16 @@ export default class IJipuPlugin extends Plugin {
     this.settingsRefresh = fn
   }
 
+  /**
+   * adj724b：「谱面」视图的**裁剪实况**（最近一次渲染写回，供设置页显示）。
+   *
+   * 为什么要有：裁剪依赖运行时的 `getBBox()` 量取，而我无法在本地复现 Obsidian 宿主环境。
+   * 把「页面尺寸 → 裁剪后尺寸 / 是否退回边距兜底」显示在设置页，用户一句话就能区分
+   * 「代码没生效（多为未重新构建）」与「裁剪生效但仍有空白」。
+   * 内存字段即可——它是运行期诊断，不需要持久化。
+   */
+  lastCropInfo: string | null = null
+
   /** 由内嵌 worklet 代码构造 Blob URL（不再依赖插件目录单独文件；供 audioWorklet.addModule） */
   private makeWorkletUrl(): string {
     try {
