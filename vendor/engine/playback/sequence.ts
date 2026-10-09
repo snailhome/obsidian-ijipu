@@ -14,6 +14,7 @@ import type {
   MusicToken,
   ParseResult,
   PlacedBarline,
+  PlacedBracket,
   PlacedSegmentBracket,
   PlacedToken,
   ScoreLayout,
@@ -532,6 +533,11 @@ export function buildPlaySequence(
   {
     const byGroupNotes = new Map<number, PlacedToken[]>()
     const byGroupBars = new Map<number, PlacedBarline[]>()
+    /**
+     * adj732（用户口径）：色块右界**不超**独立修饰符 `&zkh`/`&ykh`/`&hx` 等的左界（`page.brackets`）。
+     * 段层括号（`{bz}`/`{dsb}` 的大括号）在 `segmentBrackets` 里，另有口径（adj440/adj442），**不混进来**。
+     */
+    const byGroupBrackets = new Map<string, PlacedBracket[]>()
     for (const page of layout.pages) {
       for (const n of page.notes) {
         if (n.segment) continue
@@ -541,19 +547,24 @@ export function buildPlaySequence(
         if (b.segment) continue
         ;(byGroupBars.get(b.id.group) ?? byGroupBars.set(b.id.group, []).get(b.id.group)!).push(b)
       }
+      for (const br of page.brackets ?? []) {
+        // ⚠ 括号的 x 是**绘制中心**（`PlacedBracket.x`），且**没有 page 字段** ⇒ 键里必须带页号，
+        //   否则别的页上同组的括号会拿它的 x 来夹本页的色块（坐标系不同）
+        const k = `${page.index}|${br.group}`
+        ;(byGroupBrackets.get(k) ?? byGroupBrackets.set(k, []).get(k)!).push(br)
+      }
     }
     for (const [, notes] of byGroupNotes) {
       const sorted = [...notes].sort((a, b) => a.x - b.x)
       sorted.forEach((n) => {
-        // adj722：`edge`（下一个音符的块左缘 / 下一根小节线）**不再参与色块右界**——
-        // 它含槽尾留白与布置网格的间隙，会把色块撑到后面那个音符上（见下方 `base` 的说明）。
+        // adj732：右界一律按**墨迹**算（adj722 的方向是对的，但它多带了一项"步进右端"，见下）
         const segs = n.segments ?? []
         const lastSeg = segs[segs.length - 1]
         const inkRight = lastSeg ? lastSeg.x + lastSeg.perBeat * lastSeg.beats : (n.rightX ?? n.x + n.width)
         /**
          * adj722（用户报「下面声部色块不正确 / 色块跑到后面的音符上」；AGENTS 五·9「区间一律用**墨迹**算」）：
          *
-         * 色块右界 = **本音符自己的墨迹右缘**（`x + width`，即数字槽右缘；含增时线/附点时取更右者），
+         * 色块右界 = **本音符自己的墨迹右缘**（`rightX`，即 `x + min(占宽, digitSlotW)`；含增时线/附点时取更右者），
          * **不再**把 `edge`（下一个音符的**块左缘**）算进来——它多含两样东西：
          *  ① **槽尾留白**（每个音会**右出约 1.0px**）；
          *  ② **布置网格的间隙**（下层音符的 x 由上层网格决定：`5/` 墨迹到 `140.7`、
@@ -563,9 +574,58 @@ export function buildPlaySequence(
          * 曾经写成 `Math.max(edge, own)`（"至少占满到下一个音符"）⇒ 就是上面这个缺陷；
          * 现改为**以本音符墨迹为准**（`edge` 只在它更小、且确实需要收窄时不起作用——
          * 即块永远是"一个音一块"）。
+         *
+         * ---
+         *
+         * ⚠ **adj732（用户再次报「试听色块右边界经常覆盖到下一音符的位置」，应用与插件都有）**：
+         * 上面这条 adj722 的实现里 `own` 多带了一项 **`n.x + n.width`**，而它是**步进/占宽右端**
+         * （本音符到**下一个音符**的推进量），**不是墨迹右端**：
+         *   · `n.width` 实测（4/4，defaultPageConfig）：普通数字 `2` 是 **58.2**（= 到下一个音的 x），
+         *     而它的墨迹右缘 `n.rightX` 只有 **108.2 − 75.1 = 33.1**（= `digitSlotW`）；
+         *   · 于是 `own = max(rightX, x + width, inkRight)` = **x + width** ⇒
+         *     · 等距音符时右界正好落在下一个音的 `x` 上（看着"还算准"，所以一直没被发现）；
+         *     · 一旦下一个音排得更近（如**附点音**：`Q: ( 2 3 | 5. 2 3 …` 里第 2 音 `x=133.2 w=58.2`
+         *       ⇒ `x+width=191.4`，而附点音 `x=177.2`）就**压过去 14.2px** —— 正是用户截图那一段。
+         * 所以这里**去掉 `n.x + n.width`**，并对"下一个同声部音符的墨迹左缘"再夹一次
+         * （布局保证**墨迹不重叠**，见 AGENTS 五·9 ⇒ 夹完既覆盖得到自己的墨迹，又绝不压下一个音）。
          */
-        const own = Math.max(n.rightX ?? 0, n.x + n.width, inkRight)
-        const base = own
+        const own = Math.max(n.rightX ?? 0, inkRight)
+        /**
+         * adj732（用户口径，应用与插件都遵守）：
+         * **色块右界不超**（取最左者）——① 小节线**左界**；② **下一个同声部音符的最左墨迹**
+         * （`inkLeftX ?? x`：倚音组 `[5/]`、变音角标、滑音记号都画在数字**左侧**，故不能只看 `x`）；
+         * ③ 独立的 `&zkh`/`&ykh`/`&hx` 等修饰符（`page.brackets`，按同声部取）。
+         *
+         * ①③ 都取"本音右侧最近的那个"；三者与"本音自己的墨迹右缘"取 `min`：
+         * 墨迹右缘本来就在下一个元素左边（布局保证墨迹不重叠），所以这条规则**基本不改观感**，
+         * 只在"下一个元素比本音墨迹更靠左"（槽宽重叠、倚音/角标左伸）时才真正收住色块。
+         */
+        /**
+         * "下一个音符"必须按**时间**取，不能按 x 取：和弦音（同一拍上的多个音）的 x 只差零点几像素、
+         * 纵向并排，按 x 取会把"和弦里的兄弟音"当成"下一个音"（实测茉莉花首拍就有 5 个音的 x 相差 0.5px）。
+         * 判据用 `(barIndex, beatPos)`（行内小节序 + 小节内拍位）——同拍即同时。
+         */
+        const laterThan = (m: PlacedToken): boolean =>
+          m.barIndex > n.barIndex || (m.barIndex === n.barIndex && m.beatPos > n.beatPos + 1e-6)
+        let nextSameVoiceX: number | undefined
+        for (const m of sorted) {
+          if (m === n || m.id.voice !== n.id.voice || !laterThan(m)) continue
+          const left = m.inkLeftX ?? m.x
+          if (nextSameVoiceX === undefined || left < nextSameVoiceX) nextSameVoiceX = left
+        }
+        let limit = Number.POSITIVE_INFINITY
+        for (const br of byGroupBrackets.get(`${n.id.page}|${n.id.group}`) ?? []) {
+          // 括号 `x` 是**绘制中心** ⇒ 左缘 = x − width/2（用户口径："不超…独立修饰符"= 不盖住它）
+          const left = br.x - br.width / 2
+          if (br.voice === n.id.voice && left > n.x + 1e-3 && left < limit) limit = left
+        }
+        for (const bar of byGroupBars.get(n.id.group) ?? []) {
+          // 小节线同理：`x` 是线心 ⇒ 左界 = x − width/2（用户口径："不超小节线左界"）
+          const left = bar.x - (bar.width ?? 0) / 2
+          if (left > n.x + 1e-3 && left < limit) limit = left
+        }
+        if (nextSameVoiceX !== undefined && nextSameVoiceX < limit) limit = nextSameVoiceX
+        const bounded = Math.min(own, limit)
         /**
          * adj439：**重叠区的色块以段层右界（大括号 `}`）为界限**（用户要求）。
          *
@@ -596,7 +656,7 @@ export function buildPlaySequence(
           n.parentY !== undefined
             ? (ownSeg?.blockRight ?? segRightByGroupVoice.get(`${n.id.page}|${n.id.group}|${n.id.voice}`))
             : undefined
-        rightEdgeByNoteIdx.set(n.id.index, segRight !== undefined ? Math.min(base, segRight) : base)
+        rightEdgeByNoteIdx.set(n.id.index, segRight !== undefined ? Math.min(bounded, segRight) : bounded)
       })
     }
   }
@@ -1360,17 +1420,37 @@ export function buildPlaySequence(
       const next = i >= 0 && i < segNotes.length - 1 ? segNotes[i + 1].x : Number.POSITIVE_INFINITY
       const own = n.rightX ?? n.x + n.width
       const barX = nextSegBarX(n.x)
+      /**
+       * adj732（用户报「试听色块右边界**经常覆盖到下一音符的位置**」，应用与插件都有）：
+       * **有下一个音时，右界一律取"下一个音的墨迹左缘"`next`；不再取 `max(next, own)`。**
+       *
+       * 根因：`own = n.rightX ?? n.x + n.width`。对**普通音符** `rightX` 是缺省的 ⇒
+       * `own` 退化成**占宽右端**（`x + width`）；而布局的硬规则是"**只看墨迹、占宽块可以重叠**"
+       * （AGENTS 第 9 条），所以 `x + width` 经常**越过下一个音的 `x`**。实测（4/4，defaultPageConfig）：
+       *   `Q: ( 2 3 | 5. 2 3 5. 6 6 5 | 3 0 3 5 )`
+       *   第 2 个音 `x=133.2 w=58.2` ⇒ `own=191.4`，而附点音 `x=177.2`
+       *   ⇒ 旧实现给色块右缘 **191.4**，压过下一个音 **14.2px**（正是用户截图里那一段）。
+       *
+       * 为什么"取 `next`"既安全又够用：布局保证**墨迹不重叠**（同一条硬规则）⇒
+       * 本音的墨迹右缘 ≤ 下一个音的墨迹左缘 = `next.x`，于是 `next` 既覆盖得到本音自己的墨迹
+       * （含附点/增时线），也绝不压上下一个音。
+       * `own` 只保留在**段内最后一个音**那一支（那里没有"下一个音"可比，右界由段层右界/本音占宽决定）。
+       */
+      /**
+       * adj440：段内**最后一个音**——`&ykh` / 右括号是**无时值占宽元素**（只占宽、不占拍），
+       * 所以它后面那段"图形空白"在**时间上仍属于本段末尾**，色块应当延伸到
+       * **段层右界（大括号的界限）**，而不是止于内容区右缘 `xContent1`
+       * （用户要求：「`&ykh` 不占时值，因此 `1'` 的占宽应该也要到大括号的界限为宜」）。
+       */
+      const lastNoteRight = Math.max(segRightBound ?? own, own)
+      const contentRight = Number.isFinite(next) ? next : lastNoteRight
       // 小节线是**硬上限**：段层音符的"占位右端"可能越过段内小节线（槽宽含留空），
       // 此时不能再 `max(own)`——否则钳制被盖回去、色块照样跨线。
-      if (barX !== Number.POSITIVE_INFINITY) return Math.min(barX, Math.max(next, own))
-      if (next === Number.POSITIVE_INFINITY) {
-        // adj440：段内**最后一个音**——`&ykh` / 右括号是**无时值占宽元素**（只占宽、不占拍），
-        // 所以它后面那段"图形空白"在**时间上仍属于本段末尾**，色块应当延伸到
-        // **段层右界（大括号的界限）**，而不是止于内容区右缘 `xContent1`
-        // （用户要求：「`&ykh` 不占时值，因此 `1'` 的占宽应该也要到大括号的界限为宜」）。
-        return segRightBound !== undefined ? Math.max(segRightBound, own) : own
+      if (barX !== Number.POSITIVE_INFINITY) {
+        // 末音那一支保持原语义：既然有下一根小节线，就把色块铺到小节线（不再受"本音占宽"限制）
+        return Number.isFinite(next) ? Math.min(barX, contentRight) : barX
       }
-      return Math.max(next, own)
+      return contentRight
     }
     /**
      * adj629p（用户报「`(6// 6/)` 是连音，但实际演奏了两个音符」）：

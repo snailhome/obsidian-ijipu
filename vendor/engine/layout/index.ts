@@ -1017,6 +1017,13 @@ export function layoutScore(
     let nx: number
     let noteW: number
     let noteRightX: number
+    /**
+     * adj732：本音符**最左墨迹**（= 数字左缘 − 左伸量）。两条布局路径各自算：
+     *  · 空间优先：`ownLead`（`space.accW + space.leftExt + 滑音宽`）；
+     *  · 时值优先：`leftInkTime`（变音角标 + 前倚音组 + 滑音）。
+     * 播放色块右界要用它夹住"前一个音的色块"，见 `types.ts` 的 `inkLeftX`。
+     */
+    let noteInkLeftX: number | undefined
     if (space) {
       /**
        * adj640/adj643（用户报"多声部 + 空间优先：升降符没占宽，压到相邻音符"，截图 `2 3# 4`）：
@@ -1034,6 +1041,8 @@ export function layoutScore(
       const ownLead = space.accW + space.leftExt + slideWOf(t, m.noteSize)
       const leadInk = space.leadInk ?? ownLead
       nx = first.x + leadInk
+      // adj732：本音最左墨迹 = 数字左缘 − **自己的**左伸量（借来的让位量不算，那些位置是空的）
+      if (ownLead > 0) noteInkLeftX = nx - ownLead
       // ★ adj319：noteRightX 累加附点+增时线+hx 显示占宽（照搬单声部 actualW/rightX 计算，
       // 此前多声部 rightX 只含本体宽 → 色块按段滑动时末段 width 用本体宽，且 dot段 x1
       // 小于 dot.x 时附点色块消失）。附点右缘 = 附点圆心 + 圆半径（确保 endX ≥ 附点圆右缘）。
@@ -1081,6 +1090,8 @@ export function layoutScore(
           (centerOnFirst ? first.x + first.beats * (first.perBeat / 2) : first.x + w / 2) - 6,
           first.x + leftInkTime,
         ) || 0
+      // adj732：本音最左墨迹（时值优先路径同一口径）
+      if (leftInkTime > 0) noteInkLeftX = nx - leftInkTime
       noteW = w
       noteRightX = nx + w
     }
@@ -1092,6 +1103,8 @@ export function layoutScore(
       y: r1(yTop + m.noteSize * 1.1),
       width: r1(noteW),
       rightX: r1(noteRightX),
+      // adj732：有左伸墨迹（变音角标/前倚音/滑音）才记最左墨迹（无左伸时与 x 相同，不写）
+      ...(noteInkLeftX !== undefined ? { inkLeftX: r1(noteInkLeftX) } : {}),
       duration: dur,
       beatPos,
       barIndex,
@@ -2295,6 +2308,8 @@ export function layoutScore(
       barIndex: number,
       /** adj627：本音当下生效的调号（临时转调之后会变；缺省 = 描述头调号） */
       keyAt: number = keySemitone,
+      /** adj732：本音最左墨迹（= 数字左缘 − 左伸量；段内块的 `blockX`）——见 `PlacedToken.inkLeftX` */
+      inkLeftX?: number,
     ) => {
       const dur = tokenDuration(t)
       const id: LayoutId = { page: pageIndex, voice, group: groupIndex, index: noteCounter }
@@ -2305,6 +2320,7 @@ export function layoutScore(
         y: r1(yTop + m.noteSize * 1.1),
         width: r1(noteW),
         rightX: r1(rightX),
+        ...(inkLeftX !== undefined ? { inkLeftX: r1(inkLeftX) } : {}),
         duration: dur,
         beatPos,
         barIndex,
@@ -2384,7 +2400,7 @@ export function layoutScore(
             if (n.hasHx) xCursor += hxBodyW(m.noteSize)
             // 段左缘 blockX；数字左缘右移 变音角标(accW)+前倚音(leftExt)，给角标/倚音腾位
             const digitLeft = blockX + n.accW + n.leftExt
-            placeNoteSpace(n.t, segments, digitLeft, actualW, rightX, n.slotPos, n.beatPos, b, keysAt[b] ?? keySemitone)
+            placeNoteSpace(n.t, segments, digitLeft, actualW, rightX, n.slotPos, n.beatPos, b, keysAt[b] ?? keySemitone, blockX)
             // adj394：记录该音符的停靠点（数字槽中心 / 末时值元素右缘；rightX 已含增时线与附点占宽）
             dynAnchors.push({ center: r1(digitLeft) + halfDigitW(m.noteSize), end: r1(rightX) })
             curX = xCursor
