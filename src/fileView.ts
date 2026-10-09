@@ -36,7 +36,6 @@ function fitEditorToVisibleArea(contentEl: HTMLElement, ta: HTMLTextAreaElement)
   const appContainer = contentEl.closest('.app-container') as HTMLElement | null
   /** 无键盘时的布局视口高（观测到过的最大值；WebView 里除键盘/旋转外不会变） */
   let baseH = window.innerHeight
-  let prevMaxHeight: string | null = null
   let lifted = false
 
   /** Obsidian 原生侧给的键盘高（无键盘时为 0） */
@@ -65,8 +64,34 @@ function fitEditorToVisibleArea(contentEl: HTMLElement, ta: HTMLTextAreaElement)
   }
 
   const restoreCap = () => {
-    if (lifted && appContainer) appContainer.style.maxHeight = prevMaxHeight ?? ''
+    if (lifted && appContainer) {
+      // adj724b（社区审核）：用 style.removeProperty 还原（而不是写 `= ''`）
+      appContainer.style.removeProperty('max-height')
+    }
     lifted = false
+  }
+  /**
+   * adj724b（社区审核）：**不再逐条写 `style.setProperty`**。
+   *
+   * 官方 lint 规则 `obsidianmd/no-static-styles-assignment` 要求样式走 CSS 类，
+   * 因此把这一整组样式搬进 `styles.css` 的 `.ijipu-file-editing-fit`
+   * （含原来必要的 `!important` —— 它要反制 Obsidian 本体对 `textarea` 的
+   * `height/min-height/max-height` 规则，见下方注释）。这里只加类名。
+   *
+   * 唯一"逐次计算"的是高度：用 `setCssStyles()`（Obsidian 提供的 API，
+   * 也是该规则建议的做法之一），不再直接碰 `style` 属性。
+   */
+  const applyFitStyles = (want: number, bottom: number): void => {
+    contentEl.addClass('ijipu-file-editing-fit')
+    contentEl.setCssStyles({ height: `${want}px` })
+    if (ta) {
+      ta.addClass('ijipu-source-editor-fit')
+      // 高度按"可视区底 − 源码框顶 − 容器下内边距"实测（下一步测量前先复位，见 CSS 的 height:auto!important）
+      const taTop = ta.getBoundingClientRect().top
+      const padBottom = parseFloat(getComputedStyle(contentEl).paddingBottom) || 0
+      const taH = Math.max(120, Math.round(bottom - taTop - padBottom))
+      ta.setCssStyles({ height: `${taH}px` })
+    }
   }
   const fit = () => {
     const bottom = visibleBottomY()
@@ -74,8 +99,7 @@ function fitEditorToVisibleArea(contentEl: HTMLElement, ta: HTMLTextAreaElement)
     const want = Math.max(200, Math.round(bottom - top))
     // 宿主把容器裁得比可视区还矮（双重扣减）→ 临时解除上限，否则我们的高度会被祖先裁掉
     if (appContainer && !lifted && want > appContainer.clientHeight + 8) {
-      prevMaxHeight = appContainer.style.maxHeight
-      appContainer.style.maxHeight = 'none'
+      appContainer.setCssStyles({ maxHeight: 'none' })
       lifted = true
     } else if (lifted && appContainer && want <= appContainer.clientHeight + 8) {
       restoreCap()
@@ -85,30 +109,12 @@ function fitEditorToVisibleArea(contentEl: HTMLElement, ta: HTMLTextAreaElement)
     // 原因在 Obsidian 本体的 textarea 规则（已在 obsidian.asar 中确认存在）：
     //   `textarea { height: 100%; min-height: 50vh; max-height: 80vh }` / `textarea { height: 300px; max-height: 20vh }`
     // —— 这些 height/max-height 会盖掉 flex 撑高与我们的高度赋值（实测 118px 正是"设的下限 120 减边框"）。
-    // 故对容器与源码框逐条用 inline + !important 反制（inline important 优先于任何样式表规则），
-    // 高度也不再估算，而是**实测**：源码框顶（getBoundingClientRect）→ 可视区底。
-    // adj409：**真凶是宿主的 padding-bottom**（诊断阶段已确认并修复，见脚本 `adj409` 提交）。
-    // 容器高度已按可视区钉好，不需要宿主那段"键盘内边距" → 用 inline important 改回我们自己的 8px。
-    contentEl.style.setProperty('padding-bottom', '8px', 'important')
-    contentEl.style.setProperty('height', `${want}px`, 'important')
-    contentEl.style.setProperty('display', 'flex', 'important')
-    contentEl.style.setProperty('flex-direction', 'column', 'important')
-    contentEl.style.setProperty('overflow', 'hidden', 'important')
-    contentEl.style.setProperty('max-height', 'none', 'important')
-    contentEl.style.setProperty('position', 'relative', 'important')
-    if (ta) {
-      // adj408：宿主有 `textarea { height:100%; min-height:50vh; max-height:20vh|80vh }`，会盖掉撑高与赋值
-      ta.style.setProperty('flex', '0 0 auto', 'important')
-      ta.style.setProperty('min-height', '0', 'important')
-      ta.style.setProperty('max-height', 'none', 'important')
-      ta.style.setProperty('height', 'auto', 'important') // 先复位，量出源码框真实顶部
-      const taTop = ta.getBoundingClientRect().top
-      const padBottom = parseFloat(getComputedStyle(contentEl).paddingBottom) || 0
-      const taH = Math.max(120, Math.round(bottom - taTop - padBottom))
-      ta.style.setProperty('height', `${taH}px`, 'important')
-    }
+    // 故对容器与源码框用**带 !important 的 CSS 类**反制，并在量高度前先让源码框 height:auto 复位。
+    // adj409：**真凶是宿主的 padding-bottom**（诊断阶段已确认并修复）——容器高度已按可视区钉好，
+    // 不需要宿主那段"键盘内边距"，CSS 类里把下内边距定回 8px。
+    applyFitStyles(want, bottom)
   }
-  const onVv = () => requestAnimationFrame(fit)
+  const onVv = () => window.requestAnimationFrame(fit)
   const vv = window.visualViewport
   if (vv) {
     vv.addEventListener('resize', onVv)
@@ -126,11 +132,11 @@ function fitEditorToVisibleArea(contentEl: HTMLElement, ta: HTMLTextAreaElement)
       vv.removeEventListener('scroll', onVv)
     }
     restoreCap()
-    for (const prop of ['height', 'display', 'flex-direction', 'overflow', 'max-height', 'position', 'padding-bottom']) contentEl.style.removeProperty(prop)
-    if (ta) {
-      ta.style.removeProperty('height')
-      ta.style.removeProperty('flex')
-    }
+    // adj724b（社区审核）：样式集中在 CSS 类里 ⇒ 拆除时**移除类**即可（不再逐条 removeProperty）
+    contentEl.removeClass('ijipu-file-editing-fit')
+    ta?.removeClass('ijipu-source-editor-fit')
+    contentEl.setCssStyles({ height: '' })
+    ta?.setCssStyles({ height: '' })
   }
 }
 

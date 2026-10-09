@@ -49,7 +49,8 @@ function measureMeta(
 ): { w1eq?: number; w1sp?: number; wTempo?: number; wAcc?: number; accInkRight?: number } {
   try {
     if (typeof document === 'undefined') return {}
-    const ctx = document.createElement('canvas').getContext('2d')
+    // adj724b（社区审核）：用 Obsidian 全局 createEl 取代 document.createElement（prefer-create-el）
+    const ctx = createEl('canvas').getContext('2d')
     if (!ctx) return {}
     const size = cfg.miaoshu_size
     const font = cfg.miaoshu_font
@@ -83,7 +84,8 @@ function measureMeta(
 function measureAccidentalInk(cfg: PageConfig): AccidentalInkMetrics | undefined {
   try {
     if (typeof document === 'undefined') return undefined
-    const ctx = document.createElement('canvas').getContext('2d')
+    // adj724b（社区审核）：同 measureText 处——改用 createEl（prefer-create-el）
+    const ctx = createEl('canvas').getContext('2d')
     if (!ctx) return undefined
     // ⚠ 必须用**大基准字号**量：角标实际只有 ~8.67px，这个尺寸上浏览器会把墨迹包围盒量化到整像素
     // （实测 `#` 的 inkW 比值 0.605 → 0.808、偏大 ~33%）⇒ 只取比值，让引擎按真实角标字号换算

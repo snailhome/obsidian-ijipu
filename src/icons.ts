@@ -35,12 +35,14 @@ type Mode = 'page' | 'full' | 'score'
  * @param size 像素边长（默认 15——与改动前的 SVG 图标同尺寸，工具条高度不变）
  */
 function pngIcon(dataUri: string, size = 15): HTMLElement {
-  const el = document.createElement('span')
-  el.className = 'ijipu-tool-icon'
-  el.setAttribute('aria-hidden', 'true')
-  el.style.width = `${size}px`
-  el.style.height = `${size}px`
-  el.style.setProperty('--ijipu-icon', `url("${dataUri}")`)
+  /**
+   * adj724b（社区审核）：用 Obsidian 的 `createSpan()` 代替 `document.createElement('span')`
+   * （规则 `obsidianmd/prefer-create-el`），尺寸与 CSS 变量走 `setCssProps()` /
+   * `setCssStyles()`（而不是直接写 `style.*`，规则 `obsidianmd/no-static-styles-assignment`）。
+   */
+  const el = createSpan({ cls: 'ijipu-tool-icon', attr: { 'aria-hidden': 'true' } })
+  el.setCssStyles({ width: `${size}px`, height: `${size}px` })
+  el.setCssProps({ '--ijipu-icon': `url("${dataUri}")` })
   return el
 }
 

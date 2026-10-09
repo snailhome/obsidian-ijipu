@@ -924,19 +924,34 @@ console.log('[12] .jps 文件视图：源码态填满窗口（adj402）')
   // 源码框会比可视区矮一个键盘高 → 按 visualViewport 实测定高，必要时临时解除 .app-container 上限。
   // 断言这两件事都在（并都有还原），防止后人"简化"掉导致真机回归。
   check('adj404 源码框按可视区域实测定高（visualViewport + 键盘高补偿）', view.includes('visualViewport') && view.includes('vv.offsetTop + vv.height') && view.includes('keyboardVar'))
-  check('adj404 必要时解除 .app-container 上限并还原（不留副作用）', view.includes("style.maxHeight = 'none'") && view.includes('teardownHeightFit') && view.includes('Platform.isMobile'))
+  check('adj404 必要时解除 .app-container 上限并还原（不留副作用）', view.includes("setCssStyles({ maxHeight: 'none' })") && view.includes("removeProperty('max-height')") && view.includes('teardownHeightFit') && view.includes('Platform.isMobile'))
   // adj407：设置页显示「构建 日期 时间 @commit」——同一版本号会有多个本地构建，没有指纹就无法判断
   // 手机上装的到底是哪一份（复测时反复踩过）。这条断言防的是"以后有人把指纹去掉"。
   const settingsSrc = readFileSync('src/settings.ts', 'utf8')
   const pkgJson = JSON.parse(readFileSync('package.json', 'utf8')) as { scripts?: Record<string, string> }
   check('adj407 设置页显示构建指纹（日期 时间 + commit）', settingsSrc.includes('BUILD_STAMP') && settingsSrc.includes('GIT_COMMIT') && settingsSrc.includes('构建 '))
   check('adj407 build/smoke 前置生成构建信息（gen:info → src/gen/buildInfo.ts，已 gitignore）', (pkgJson.scripts?.build ?? '').includes('gen:info') && (pkgJson.scripts?.smoke ?? '').includes('gen:info') && readFileSync('.gitignore', 'utf8').includes('src/gen/'))
-  // adj408/adj409：真机上"源码框少一个键盘高"的两条真凶（都在宿主的样式里，且都用 inline+important 反制）——
+  // adj408/adj409：真机上"源码框少一个键盘高"的两条真凶（都在宿主的样式里，需要 `!important` 反制）——
   // ① 宿主 textarea 的 height/min-height/max-height；② `.view-content` 的 padding-bottom = 键盘高。
   // 这两条最容易被人"顺手简化"掉，而回归只在真机上暴露，故用断言钉住。
-  check('adj408 反制宿主 textarea 的 height/min/max-height', view.includes("setProperty('max-height', 'none', 'important')") && view.includes("setProperty('min-height', '0', 'important')") && readFileSync('styles.css', 'utf8').includes('max-height: none'))
-  check('adj409 反制宿主的键盘 padding-bottom（真凶）', view.includes("setProperty('padding-bottom', '8px', 'important')"))
-  check('adj409 源码框高度按实测位置算（不再用 offsetHeight 估算）', view.includes("ta.getBoundingClientRect().top") && view.includes("setProperty('height', 'auto', 'important')"))
+  //
+  // adj724b（社区审核）：反制手段由"逐条 inline + !important"改为 **CSS 类 + !important**
+  // （官方 lint 规则 `obsidianmd/no-static-styles-assignment` 不允许直接写 style），
+  // 断言同步改为钉"类名 + styles.css 里的对应规则"——**防的仍是同一件事**（这两条反制被删掉）。
+  const cssSrc = readFileSync('styles.css', 'utf8')
+  check('adj408 反制宿主 textarea 的 height/min/max-height（改为 CSS 类 + !important）',
+    view.includes("addClass('ijipu-source-editor-fit')") &&
+      cssSrc.includes('.ijipu-source-editor-fit') &&
+      /max-height:\s*none\s*!important/.test(cssSrc) &&
+      /min-height:\s*0\s*!important/.test(cssSrc))
+  check('adj409 反制宿主的键盘 padding-bottom（真凶，改为 CSS 类 + !important）',
+    view.includes("addClass('ijipu-file-editing-fit')") &&
+      /\.ijipu-file-editing-fit[\s\S]{0,240}?padding-bottom:\s*8px\s*!important/.test(cssSrc))
+  check('adj409 源码框高度按实测位置算（不再用 offsetHeight 估算）',
+    view.includes('ta.getBoundingClientRect().top') && /height:\s*auto\s*!important/.test(cssSrc))
+  // adj724b（社区审核）：样式必须走 CSS 类，不得再出现"直接写 style"的写法
+  check('adj724b 不再直接写 style（社区审核 no-static-styles-assignment）',
+    !/\.style\.(setProperty|width|height|display|border|maxHeight|flex)\b/.test(view))
 }
 
 // ---- adj450：与 iJipu 应用同步的音色口径（默认「自动」+ 通道独占 + 名称全量解析）----
@@ -1555,6 +1570,75 @@ console.log('[adj452] playhead blocks follow playVoice / instrument / engine bou
       /\.ijipu-svgs a\.jp-link\s*\{[^}]*text-decoration:\s*underline/.test(css652),
     '',
   )
+}
+
+// ---- adj724b：Obsidian 社区目录**自动审核**的静态检查（Source code 一节）----
+// 官方会对仓库跑一套 ESLint 规则（`eslint-plugin-obsidianmd`），其中任何 **Error** 都会让提交显示 Failed。
+// 这些断言钉住"已经改对的写法"，防止后人改回被禁的 API/写法而再次被驳回。
+console.log('\n[adj724b] community review: forbidden APIs / styles must stay fixed')
+{
+  const s = (p: string): string => readFileSync(p, 'utf8')
+  const frameSrc = s('src/embed/frame.ts')
+  const viewSrc = s('src/fileView.ts')
+  const settingsSrc2 = s('src/settings.ts')
+  const scorePaneSrc = s('src/scorePane.ts')
+  const iconsSrc = s('src/icons.ts')
+  const renderSrc = s('src/render.ts')
+  const bridgeSrc = s('src/embed/bridge.ts')
+  const mainSrc = s('src/main.ts')
+  const openExtSrc = s('src/openExternal.ts')
+  const cssSrc2 = s('styles.css')
+
+  // ① 不再直接写 style（no-static-styles-assignment）
+  const styleWriters = [frameSrc, viewSrc, settingsSrc2, iconsSrc].filter((src) =>
+    /\.style\.(setProperty|width|height|display|border|maxHeight|flex|className)\b/.test(src),
+  )
+  check('adj724b 不再直接写 style（no-static-styles-assignment）', styleWriters.length === 0)
+  // ② iframe 尺寸改由 CSS 类负责
+  check('adj724b iframe 尺寸走 CSS 类', frameSrc.includes("addClass('ijipu-web-frame-fit')") && cssSrc2.includes('.ijipu-web-frame-fit'))
+  // ③ 不再用 document.createElement / innerHTML（prefer-create-el / no-innerHTML）
+  //    注意：注释里仍会**提到**这两个名字（说明为什么不用），故先剥掉行注释再判断
+  const stripLineComments = (src: string): string => src.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '')
+  check('adj724b 不再用 document.createElement（prefer-create-el）',
+    !/document\.createElement\(/.test(stripLineComments(iconsSrc)) &&
+      !/document\.createElement\(/.test(stripLineComments(renderSrc)) &&
+      !/document\.createElement\(/.test(stripLineComments(settingsSrc2)))
+  check('adj724b 不用 innerHTML，改用 sanitizeHTMLToDom',
+    !/\.innerHTML\s*=/.test(scorePaneSrc) && scorePaneSrc.includes('sanitizeHTMLToDom(svg)'))
+  // ④ 命令 id 不含插件名（on obsidian 会自动加前缀）
+  check('adj724b 命令 id 不含插件名', /id: 'open-app'/.test(mainSrc) && !/open-ijipu/.test(mainSrc))
+  // ⑤ rAF 走 window（popout 窗口兼容）
+  check('adj724b requestAnimationFrame 走 window.*',
+    !/(?<!window\.)(?<!\.)\brequestAnimationFrame\(/.test(scorePaneSrc) && !/(?<!window\.)(?<!\.)\brequestAnimationFrame\(/.test(viewSrc))
+  // ⑥ 删除走 FileManager.trashFile（尊重用户的删除偏好）
+  check('adj724b 删除走 fileManager.trashFile（不再 vault.trash）',
+    bridgeSrc.includes('fileManager.trashFile(file)') && !bridgeSrc.includes('vault.trash('))
+  // ⑦ eslint 指令注释必须带描述（未描述的指令注释本身就是一个 Error）
+  const directives = [openExtSrc, frameSrc, viewSrc, settingsSrc2, scorePaneSrc, iconsSrc, renderSrc, bridgeSrc, mainSrc]
+    .flatMap((src) => src.split('\n').filter((line) => /eslint-disable(-next-line|-line)?\s/.test(line)))
+  // ⚠ 注意：`eslint-disable` 后面紧跟的是 `-next-line`（连字符），所以**不能**写成
+  // `/eslint-disable\s+\S+/`（实测永远不匹配）。这里按"是否有 `-- 说明`"判断。
+  if (!directives.every((line) => /eslint-disable.*?--\s*\S/.test(line))) {
+    for (const line of directives) {
+      if (!/eslint-disable.*?--\s*\S/.test(line)) console.log('  未通过的行 =', JSON.stringify(line))
+    }
+  }
+  check('adj724b eslint 指令注释都带说明（`-- 原因`）',
+    directives.every((line) => /eslint-disable.*?--\s*\S/.test(line)))
+  // ⑧ 设置页标题不得含插件名
+  check('adj724b 设置页标题不含插件名', !/setName\('iJipu/.test(settingsSrc2) && !/setHeading\(\)[\s\S]{0,60}iJipu/.test(settingsSrc2))
+  // ⑨ 不再依赖 builtin-modules 包（审核建议替换）
+  const pkg = JSON.parse(s('package.json')) as { devDependencies?: Record<string, string> }
+  check('adj724b 不再依赖 builtin-modules', !(pkg.devDependencies && 'builtin-modules' in pkg.devDependencies))
+  check('adj724b esbuild 用 Node 内置 builtinModules',
+    s('esbuild.config.mjs').includes('builtinModules') && s('esbuild.config.mjs').includes('node:module'))
+  // ⑩ 引擎的"不规则空白"（全角空格 U+3000 在注释里会被判为 irregular whitespace）
+  const glyphs = s('vendor/engine/render/modifierGlyphs.ts')
+  check('adj724b 引擎里不再有全角空格（no-irregular-whitespace）', !glyphs.includes('\u3000'))
+  // ⑪ 引擎里不再有调试用 console.log + 无效 eslint-disable
+  const layoutSrc = s('vendor/engine/layout/index.ts')
+  check('adj724b 引擎里没有调试 console.log / no-console 禁用',
+    !/eslint-disable[^\n]*no-console/.test(layoutSrc) && !/\[内容左缘\]/.test(layoutSrc))
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

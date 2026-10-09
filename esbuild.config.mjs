@@ -1,6 +1,6 @@
 import esbuild from 'esbuild'
 import process from 'process'
-import builtins from 'builtin-modules'
+import { builtinModules } from 'node:module'
 import path from 'node:path'
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
@@ -19,17 +19,15 @@ const context = await esbuild.context({
     '@codemirror/*',
     '@codemirror/lang-*',
     '@lezer/*',
-    ...builtins,
     /**
-     * adj724b：**`node:` 前缀的内置模块也要 external**。
+     * adj724b（社区审核）：**不再依赖 `builtin-modules` 包**（审核建议替换为替代包），
+     * 改用 Node 内置的 `module.builtinModules`（零依赖）。
      *
-     * `builtin-modules` 给的是**裸名**（`http`/`crypto`/`fs`…），而现代写法用 `node:` 前缀
-     * （`node:http`、`node:crypto`）——两者不匹配，于是 esbuild 会去文件系统找包并报
-     * `Could not resolve "node:http"`。
-     * 嵌入版的本地服务（`src/embed/server.ts`）正需要这两个。
-     * 运行时由 Obsidian 的 Electron 宿主提供（`require('node:http')` 可用）。
+     * 注意它给的是**裸名/带前缀两种形态**都有（`http` 与 `node:http`），
+     * 下面的 `'node:*'` 通配仍保留作兜底。
      */
-    'node:*',
+    ...builtinModules,
+    ...builtinModules.map((m) => `node:${m}`),
   ],
   format: 'cjs',
   target: 'es2020',

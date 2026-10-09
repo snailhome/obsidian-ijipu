@@ -4913,10 +4913,6 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
         const contentL =
           Math.min(segLowerInk.length > 0 ? Math.min(...segLowerInk.map(([l]) => l)) : xContent0, xContent0) -
           (leadW > 0 ? leadW + bgap : 0)
-        // eslint-disable-next-line no-console
-        console.log(
-          `[内容左缘] seg=${seg.openIndex} xContent0=${xContent0.toFixed(1)} segLowerInk=${JSON.stringify(segLowerInk.map(([l]) => +l.toFixed(1)))} ⇒ contentL=${contentL.toFixed(1)}`,
-        )
         const contentR =
           (segLowerInk.length > 0
             ? Math.max(...segLowerInk.map(([, r]) => r))

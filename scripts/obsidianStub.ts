@@ -50,3 +50,37 @@ export function createFragment<T>(fn?: (frag: T) => void): T {
   void fn
   return frag
 }
+
+/**
+ * adj724b（社区审核）：源码里改用 Obsidian 的 `createSpan()` / `createEl()`
+ * 取代 `document.createElement`（规则 `obsidianmd/prefer-create-el`），
+ * 冒烟运行在 Node 下没有 DOM，故这里给最小替身（只要求"能构造、能设样式"）。
+ */
+function stubEl(tag: string): HTMLElement {
+  const el = {
+    tagName: tag.toUpperCase(),
+    className: '',
+    style: {},
+    setAttribute: () => undefined,
+    setCssStyles: () => undefined,
+    setCssProps: () => undefined,
+    addClass: () => undefined,
+  }
+  return el as unknown as HTMLElement
+}
+
+export function createSpan(_o?: unknown): HTMLSpanElement {
+  return stubEl('span') as unknown as HTMLSpanElement
+}
+
+export function createEl(tag: string, _o?: unknown): HTMLElement {
+  return stubEl(tag)
+}
+
+export function createDiv(_o?: unknown): HTMLDivElement {
+  return stubEl('div') as unknown as HTMLDivElement
+}
+
+export function sanitizeHTMLToDom(_html: string): DocumentFragment {
+  return {} as DocumentFragment
+}

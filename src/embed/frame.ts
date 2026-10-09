@@ -24,12 +24,16 @@ export function createEmbedFrame(app: App, parent: HTMLElement, url: string): HT
   })
 }
 
-/** iframe 尺寸自适应（Obsidian 页签会随侧栏宽度变化） */
+/**
+ * iframe 尺寸自适应（Obsidian 页签会随侧栏宽度变化）。
+ *
+ * adj724b（社区审核）：**不在这里逐条写 `style.*`** —— 官方 lint 规则
+ * `obsidianmd/no-static-styles-assignment` 要求样式走 CSS 类。
+ * 现在只挂一个类名，尺寸由 `styles.css` 的 `.ijipu-web-frame-fit` 负责
+ * （与 `.ijipu-web-frame` 的规则合一，去掉重复来源）。
+ */
 export function fitEmbedFrame(frame: HTMLIFrameElement): void {
-  frame.style.width = '100%'
-  frame.style.height = '100%'
-  frame.style.border = '0'
-  frame.style.display = 'block'
+  frame.addClass('ijipu-web-frame-fit')
 }
 
 /**

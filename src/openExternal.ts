@@ -40,7 +40,7 @@ export async function openUrlExternally(url: string): Promise<void> {
   if (Platform.isDesktopApp) {
     try {
       // electron 由宿主提供（esbuild 里已标 external），且只在桌面端走到这里
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      // eslint-disable-next-line @typescript-eslint/no-var-requires -- electron 由 Obsidian 桌面版在运行时提供（esbuild 已标 external），不能改成静态 import；此处由 Platform.isDesktopApp 保证只在桌面端执行
       const electron = require('electron') as { shell: { openExternal: (u: string) => Promise<void> } }
       await electron.shell.openExternal(target)
       return
@@ -78,7 +78,7 @@ export async function openWithDefaultApp(app: App, filePath: string): Promise<vo
   const abs = adapter.getFullPath(filePath)
   try {
     // electron 由宿主提供（esbuild 里已标 external），且只在桌面端走到这里
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    // eslint-disable-next-line @typescript-eslint/no-var-requires -- 与 openUrlExternally 同理：electron 只在桌面端由宿主注入，不能静态 import
     const electron = require('electron') as { shell: { openPath: (p: string) => Promise<string> } }
     const err = await electron.shell.openPath(abs)
     // openPath 约定：成功返回空串，失败返回错误描述

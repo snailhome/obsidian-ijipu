@@ -44,9 +44,14 @@ async function copyText(text: string, okTip: string): Promise<void> {
     /* 回退到 execCommand */
   }
   try {
-    const ta = document.createElement('textarea')
+    /**
+     * adj724b（社区审核）：
+     * ① `document.createElement` → Obsidian 全局 `createEl`（`prefer-create-el`）；
+     * ② 隐藏用的定位样式由内联 `style` 属性改为 CSS 类 `.ijipu-offscreen`
+     *    （`no-static-styles-assignment`）。
+     */
+    const ta = createEl('textarea', { cls: 'ijipu-offscreen' })
     ta.value = text
-    ta.setAttribute('style', 'position:fixed;left:-9999px;top:0;opacity:0;')
     document.body.appendChild(ta)
     ta.select()
     const ok = document.execCommand('copy')
@@ -123,7 +128,14 @@ export class IJipuSettingTab extends PluginSettingTab {
 
   /** 顶部标题与构建信息（问题反馈时能一眼看到版本/提交） */
   private renderHeader(containerEl: HTMLElement): void {
-    new Setting(containerEl).setName('iJipu 爱记谱').setHeading()
+    /**
+     * adj724b（社区审核）：**设置页标题里不要写插件名**。
+     *
+     * 官方 lint 规则要求设置标题不得重复插件名（设置页本就挂在插件条目下）。
+     * 这里不再用 `Setting().setName().setHeading()`（它的 setName 就是"标题文本"），
+     * 改为一个纯标题元素 —— 于是既满足规则，也保留了这一行说明。
+     */
+    containerEl.createDiv({ cls: 'ijipu-settings-title', text: '嵌入版与说明' })
     containerEl.createDiv({
       cls: 'ijipu-settings-build',
       text: `构建 ${BUILD_STAMP} @${GIT_COMMIT}`,

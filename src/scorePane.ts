@@ -12,7 +12,7 @@
  * 渲染管线与 iJipu 应用一致：`resolvePageConfig`（含源内 # jps-config）→ `layoutScore`
  * → `renderScoreToSvg`；试听走 `@ijipu/engine` 的 `buildPlaySequence` + SpessaSynth。
  */
-import { Menu, Notice } from 'obsidian'
+import { Menu, Notice, sanitizeHTMLToDom } from 'obsidian'
 import { writeJpsConfig, mergeConfigEdits, configCarryover, dragDelta, clamp, type PageConfig } from '@ijipu/engine'
 import { renderScoreFull, playScore, unknownKeyHint, deprecatedKeyHint, type PlayheadSeg } from './render'
 import { instrumentColorMap, playheadBaseOf, playheadPosIn, trackKeysOf, type PlayheadPos } from './playhead'
@@ -262,7 +262,7 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
         plugin.unregisterPlay(stopPlayFn)
         return
       }
-      rafId = requestAnimationFrame(tick)
+      rafId = window.requestAnimationFrame(tick)
     }
 
     stopPlay = stopPlayFn
@@ -282,7 +282,7 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
           playStart = performance.now()
           setPlayState(true)
           cancelAnimationFrame(rafId)
-          rafId = requestAnimationFrame(tick)
+          rafId = window.requestAnimationFrame(tick)
           plugin.registerPlay(stopPlayFn)
         })
         .catch((e) => {
@@ -475,7 +475,17 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
         container.createDiv({ cls: 'ijipu-page-label', text: `第 ${i + 1} / ${svgs.length} 页` })
       }
       const wrap = svgWrap.createDiv({ cls: 'ijipu-page-svg' })
-      wrap.innerHTML = svg
+      /**
+       * adj724b（社区审核）：**不要直接写 `innerHTML`**。
+       *
+       * 官方两条规则：`Unsafe assignment to innerHTML`（error）与
+       * `Do not write to DOM directly using innerHTML/outerHTML`（warning）。
+       * 这里改用 Obsidian 官方的 `sanitizeHTMLToDom()` 把 SVG 字符串转成
+       * `DocumentFragment` 再插入（不需要再查询根元素，也天然避开 innerHTML 赋值）。
+       *
+       * 内容来源：引擎自己画的 SVG（`renderScoreFull` 的输出），不是外部输入。
+       */
+      wrap.appendChild(sanitizeHTMLToDom(svg))
       const svgEl = wrap.querySelector('svg') as SVGSVGElement | null
       if (!svgEl) return
       svgEls.push(svgEl)
@@ -597,7 +607,7 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     function schedulePaint(): void {
       if (rafPending) return
       rafPending = true
-      requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
         rafPending = false
         paint()
       })

@@ -341,9 +341,11 @@ export class IJipuBridge {
       case 'remove': {
         const target = abs(rel)
         if (target === null || target === '') return { ok: false, error: '非法路径' }
-        // 用 Obsidian 的 trash（进系统回收站/库内 .trash）而不是硬删
+        // adj724b（社区审核）：改用 FileManager.trashFile —— 它尊重用户在
+        // 「文件与链接」里的删除偏好（系统回收站 / 库内 .trash / 直接删），
+        // 而 Vault.trash() 已不推荐（规则提示直接用 trashFile）。
         const file = this.host.app.vault.getAbstractFileByPath(target)
-        if (file) await this.host.app.vault.trash(file, true)
+        if (file) await this.host.app.fileManager.trashFile(file)
         else await adapter.remove(target)
         return { ok: true, result: {} }
       }

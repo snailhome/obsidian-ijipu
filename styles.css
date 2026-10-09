@@ -881,3 +881,50 @@
   color: var(--text-faint);
   font-size: var(--font-ui-smaller);
 }
+/* ─────────────── adj724b（社区审核）：源码态"键盘适配"样式集中到 CSS 类 ───────────────
+   原先这些规则是用 `style.setProperty(..., 'important')` 逐条内联写死的；
+   官方 lint 规则 `obsidianmd/no-static-styles-assignment` 要求走 CSS，故搬到类里。
+   `!important` 是**必要**的：要反制 Obsidian 本体对 textarea 的
+   `height/min-height/max-height` 规则（见 fileView.ts 的 adj408 注释），
+   以及宿主给页签加的"键盘内边距"。动态高度由 JS 用 setCssStyles 写内联值。 */
+.ijipu-file-editing-fit {
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+  max-height: none !important;
+  position: relative !important;
+  padding-bottom: 8px !important;
+}
+
+.ijipu-file-editing-fit .ijipu-source-editor-fit,
+.ijipu-source-editor-fit {
+  flex: 0 0 auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  /* 默认 auto：量高度前先复位，这样 getBoundingClientRect 拿到的是真实顶部 */
+  height: auto !important;
+}
+
+/* iframe 尺寸自适应（原先在 frame.ts 里逐条内联）——与 .ijipu-web-frame 同一套规则 */
+.ijipu-web-frame-fit {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+}
+/* adj724b（社区审核）：设置页顶部标题（不再用 Setting().setHeading()，
+   以免标题里出现插件名——规则要求设置标题不得重复插件名）。 */
+.ijipu-settings-title {
+  margin: 0 0 2px;
+  font-size: var(--font-ui-medium);
+  font-weight: 600;
+  color: var(--text-normal);
+}
+/* adj724b（社区审核）：复制到剪贴板的回退路径里，临时 textarea 的"移出视野"
+   原为内联 style 属性，改为类（no-static-styles-assignment）。 */
+.ijipu-offscreen {
+  position: fixed;
+  left: -9999px;
+  top: 0;
+  opacity: 0;
+}

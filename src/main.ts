@@ -159,7 +159,7 @@ export default class IJipuPlugin extends Plugin {
       void this.bridge.handle(ev)
     })
     this.addCommand({
-      id: 'open-ijipu-app',
+      id: 'open-app',
       name: '打开爱记谱',
       callback: () => void this.openIjipuApp(),
     })
