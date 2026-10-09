@@ -1641,7 +1641,25 @@ console.log('\n[adj724b] community review: forbidden APIs / styles must stay fix
   const layoutSrc = s('vendor/engine/layout/index.ts')
   check('adj724b 引擎里不再禁用 no-console，也没有那条调试日志',
     !/eslint-disable[^\n]*no-console/.test(layoutSrc) && !/console\.log\(/.test(layoutSrc))
+  // ⑫ 构建信息必须**可复现**（adj724b：社区审核的 Build verification 警告）
+  //    指纹里的时间必须取自**提交自身**，不能是"打包那一刻"，否则同一份源码每次构建字节都不同，
+  //    "审核方重建 vs Release 附件"永远对不上。
+  const genInfo = s('scripts/gen-build-info.mjs')
+  check('adj724b 构建信息取提交时间（可复现），不再取打包时刻',
+    genInfo.includes('commitTime') && genInfo.includes("node:zlib") && !/const now = new Date\(\)/.test(genInfo))
+  // ⑬ 剪贴板优先现代 API；弃用的 execCommand 只作回退且必须带说明
+  check('adj724b 剪贴板优先 Clipboard API，execCommand 回退带说明',
+    settingsSrc2.includes('navigator.clipboard.writeText') && /no-deprecated -- \S/.test(settingsSrc2))
+  // ⑭ 设置页重画用 update()（1.13+ 里 display() 不刷新声明式设置）
+  check('adj724b 设置页用 this.update() 重画（不是 display()）',
+    settingsSrc2.includes('this.update()') && !settingsSrc2.includes('this.display()'))
+  // ⑮ SVG 元素用全局 createSvg，不用 document.createElementNS
+  check('adj724b SVG 用 createSvg（不用 createElementNS）',
+    scorePaneSrc.includes("createSvg('rect')") && !/document\.createElementNS\(/.test(scorePaneSrc))
+  // ⑯ !important 只保留"必须反制宿主"的那几条（其余我们自己布局属性一律不加）
+  // ⚠ 必须**先剥掉 CSS 注释**再计数：注释里会解释为什么保留 !important，否则把说明文字也算进去（实测踩过）
+  const cssNoComments = cssSrc2.replace(/\/\*[\s\S]*?\*\//g, '')
+  const importantCount = (cssNoComments.match(/!important/g) ?? []).length
+  check('adj724b styles.css 的 !important 收敛到 ≤5 条（仅反制宿主所必需）', importantCount <= 5)
 }
-
-console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exitCode = 1

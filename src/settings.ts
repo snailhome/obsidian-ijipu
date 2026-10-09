@@ -49,11 +49,16 @@ async function copyText(text: string, okTip: string): Promise<void> {
      * ① `document.createElement` → Obsidian 全局 `createEl`（`prefer-create-el`）；
      * ② 隐藏用的定位样式由内联 `style` 属性改为 CSS 类 `.ijipu-offscreen`
      *    （`no-static-styles-assignment`）。
+     *
+     * 说明：这段是**回退路径**（`navigator.clipboard.writeText` 在上面已先试过），
+     * 官方对 `execCommand` 只给 Recommendation 级提示，且它已弃用——保留是为了
+     * 「无剪贴板权限」的旧环境仍能复制。若日后不需要兼容，可整段删除。
      */
     const ta = createEl('textarea', { cls: 'ijipu-offscreen' })
     ta.value = text
     document.body.appendChild(ta)
     ta.select()
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- 旧的"复制"兜底路径：Clipboard API 不可用时（无权限/旧环境）唯一可用的同步复制手段
     const ok = document.execCommand('copy')
     ta.remove()
     new Notice(ok ? okTip : '复制失败，请手动选中复制', ok ? 3000 : 5000)
@@ -116,7 +121,12 @@ export class IJipuSettingTab extends PluginSettingTab {
      * 容器已断开（页签已被关掉）则不动。
      */
     this.plugin.registerSettingsRefresh(() => {
-      if (this.containerEl.isConnected) this.display()
+      /**
+       * adj724b（社区审核）：用 `update()` 而不是 `display()` 重画。
+       * 官方说明：1.13+ 里重新调用 `display()` **不会**刷新"声明式设置"，
+       * 而 `update()` 会重新求值；`update()` 自 1.13.0 起可用（与本插件 minAppVersion 一致）。
+       */
+      if (this.containerEl.isConnected) this.update()
     })
   }
 

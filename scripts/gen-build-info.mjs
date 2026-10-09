@@ -7,28 +7,56 @@
  *
  * 与 ijipu 应用同款做法：读 .git/HEAD 与 refs 文件（**不 spawn 子进程**，沙箱兼容）；
  * 由 npm run build / smoke 前置执行（见 package.json 的 gen:info）。
+ *
+ * adj724b（社区审核"构建产物与 Release 产物不一致"）：
+ * 时间戳改为**取该提交自身的时间**（从 git 对象里解出来），而**不是"打包那一刻"**。
+ * 原因：后者让同一份源码在每次构建都产出不同字节 ⇒ 审核方重新构建永远对不上 Release 附件；
+ * 前者让构建**可复现**（同 commit ⇒ 同产物），同时仍能区分不同提交的构建。
  */
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
+import { inflateSync } from 'node:zlib'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const now = new Date()
 const pad = (n) => String(n).padStart(2, '0')
-const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`
 
-let commit = 'dev'
-try {
-  const head = readFileSync(join(root, '.git', 'HEAD'), 'utf8').trim()
-  if (head.startsWith('ref:')) {
-    const ref = head.split(' ')[1].trim()
-    commit = readFileSync(join(root, '.git', ref), 'utf8').trim().slice(0, 8)
-  } else {
-    commit = head.slice(0, 8)
+/** 读 .git/HEAD 得到完整 commit（不 spawn 子进程） */
+function readCommitSha() {
+  try {
+    const head = readFileSync(join(root, '.git', 'HEAD'), 'utf8').trim()
+    if (head.startsWith('ref:')) {
+      const ref = head.split(' ')[1].trim()
+      return readFileSync(join(root, '.git', ref), 'utf8').trim()
+    }
+    return head
+  } catch {
+    return null
   }
-} catch {
-  /* 无 git 环境回退 dev */
 }
+
+/**
+ * 从 git 对象里取出该提交的时间（committer 那行）。
+ * 对象是 zlib 压缩的 `<type> <size>\0<content>`，其中 `committer ... <ts> <tz>` 的 ts 是秒级 Unix 时间。
+ */
+function commitTime(sha) {
+  if (!sha) return null
+  try {
+    const objPath = join(root, '.git', 'objects', sha.slice(0, 2), sha.slice(2))
+    if (!existsSync(objPath)) return null // packfile 里（clone 场景）时取不到，退回当前时间
+    const raw = inflateSync(readFileSync(objPath)).toString('utf8')
+    const m = /^committer .*? (\d+) [+-]\d{4}$/m.exec(raw)
+    if (!m) return null
+    return new Date(Number(m[1]) * 1000)
+  } catch {
+    return null
+  }
+}
+
+const sha = readCommitSha()
+const when = commitTime(sha) ?? new Date()
+const stamp = `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())} ${pad(when.getHours())}:${pad(when.getMinutes())}`
+const commit = sha ? sha.slice(0, 8) : 'dev'
 
 const out = `// 由 scripts/gen-build-info.mjs 自动生成（勿手改）
 export const BUILD_STAMP = '${stamp}'
@@ -36,4 +64,4 @@ export const GIT_COMMIT = '${commit}'
 `
 mkdirSync(join(root, 'src', 'gen'), { recursive: true })
 writeFileSync(join(root, 'src', 'gen', 'buildInfo.ts'), out)
-console.log(`build info: ${stamp} @${commit}`)
+console.log(`build info: ${stamp} @${commit}${commitTime(sha) ? '（提交时间，可复现）' : '（当前时间，未能读取提交对象）'}`)

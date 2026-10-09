@@ -216,7 +216,8 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       const svgEl = svgEls[pageIndex]
       if (!svgEl) return
       const color = playheadBaseOf(pos, colorMap)
-      const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+      // adj724b（社区审核）：用 Obsidian 全局 createSvg 取代 document.createElementNS（prefer-create-el）
+      const rect = createSvg('rect')
       rect.setAttribute('class', 'ijipu-play-block')
       rect.setAttribute('x', String(pos.x))
       rect.setAttribute('width', String(Math.max(1, pos.width)))
