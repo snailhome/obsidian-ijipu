@@ -1881,7 +1881,8 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
       宿主骨架不动: pane725.includes('是宿主骨架'),
       加类: /el\.addClass\('ijipu-cm-noclip'\)/.test(pane725),
       记类: /noClipEls\.add\(el\)/.test(pane725),
-      摘类: /for \(const el of noClipEls\) el\.removeClass\('ijipu-cm-noclip'\)/.test(pane725),
+      // adj745：销毁时两类都摘（裁剪类 + contain 类），一个都不留
+      摘类: /el\.removeClass\('ijipu-cm-noclip'\)/.test(pane725) && /el\.removeClass\('ijipu-cm-nocontain'\)/.test(pane725),
       css规则: css725nc.includes('.ijipu-cm-noclip {'),
     }
     check('adj740/742/743 逐层放开"会裁剪的祖先"，且**绝不放开滚动容器 / 宿主骨架**',
@@ -1915,7 +1916,29 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
         /\.is-mobile \.ijipu-file-view\.ijipu-file-editing \.ijipu-source-editor \{/.test(css725nc) &&
         /min-height: 50vh/.test(css725nc),
       `useNative=${fv744.includes('useNativeEditor')} fallback=${/btn\.isConnected/.test(fv744)}`)
+    check('adj744b 借宿主编辑器时把该页签标记为"纯文本源码"（中和 Markdown 着色），返回时摘掉',
+      /leafEl\?\.addClass\('ijipu-plain-source'\)/.test(fv744) &&
+        /closest\('\.workspace-leaf'\)\?\.removeClass\('ijipu-plain-source'\)/.test(fv744) &&
+        /\.workspace-leaf\.ijipu-plain-source \.cm-content \.cm-line span/.test(css725nc) &&
+        /\.workspace-leaf\.ijipu-plain-source \.cm-content \.cm-line a/.test(css725nc) &&
+        /color: var\(--text-normal\)/.test(css725nc) &&
+        // 不许用 !important 压（本项目有 ≤5 条硬上限）
+        !/ijipu-plain-source[\s\S]{0,400}?!important/.test(css725nc))
   }
+
+  /**
+   * adj745（用户诊断的决定性一击）：`![[xxx.jps]]` 的 `.internal-embed` 带 **`contain: paint`**
+   * ⇒ 浮在嵌入框**外侧**的工具条每次都被它裁掉，而 `contain` **不体现在 `overflow` 上**
+   * （前几轮改 `overflow` 全打偏）。修法：对我们**自己的**元素把 `contain` 降级为 `layout style`。
+   */
+  check('adj745 把我们自己元素上的 `contain: paint/strict/content` 降级为 `layout style`（宿主骨架不动）',
+    /const isOurs = el\.hasClass\('ijipu-embed'\) \|\| el\.hasClass\('ijipu-score'\) \|\| el\.hasClass\('block-language-jps'\)/.test(pane725) &&
+      /const canTouch = isCmLayer \|\| isOurs/.test(pane725) &&
+      /if \(canTouch && \/paint\|strict\|content\/\.test\(cs\.contain\)\)/.test(pane725) &&
+      /el\.addClass\('ijipu-cm-nocontain'\)/.test(pane725) &&
+      /contain=\$\{cs\.contain\}→改为 layout style/.test(pane725) &&
+      /\.ijipu-cm-nocontain\.ijipu-cm-nocontain \{/.test(css725nc) &&
+      /contain: layout style/.test(css725nc))
 
   check('adj740 工具条诊断行记录"宿主/显示类/最终样式/坐标/祖先链"（设置页可读）',
     /lastToolbarInfo/.test(String(readFileSync('src/main.ts', 'utf8'))) &&

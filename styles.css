@@ -706,6 +706,27 @@
   min-height: 50vh;
 }
 
+/**
+ * adj744b（用户反馈：「源码可以用 ob 的源码编辑方式打开了，但就是也会被以 Markdown 的语法高亮」）：
+ * 借宿主的 markdown 编辑器打开 `.jps` 时，宿主按 **markdown** 给整个文件上色（标题变大、
+ * `#`/`-`/链接变色…），对简谱源码是**误导性**的。这里把我们切过去的那个页签标记出来
+ * （`fileView.ts` 给 `.workspace-leaf` 加 `ijipu-plain-source`），把着色中和成**纯文本**：
+ * 只还原颜色/字重/字形/下划线，**不动**字号与排版（行高、缩进仍是编辑器的）。
+ * ⚠ 不用 `!important`（本项目对它有硬上限）：靠**更高的特异性**（4 个类 + 元素）压过
+ * 宿主的 `.cm-s-obsidian .cm-header` 这类规则（2 个类）。
+ */
+.workspace-leaf.ijipu-plain-source .cm-content .cm-line span,
+.workspace-leaf.ijipu-plain-source .cm-content .cm-line a {
+  color: var(--text-normal);
+  font-weight: inherit;
+  font-style: normal;
+  text-decoration: none;
+}
+.workspace-leaf.ijipu-plain-source .cm-content,
+.workspace-leaf.ijipu-plain-source .cm-content .cm-line {
+  font-family: var(--font-monospace);
+}
+
 /* ---------- ![[xxx.jps]] 嵌入 ---------- */
 /* 插件接管 .internal-embed 后自己渲染谱面（详见 src/embed.ts 头部说明）。
    `is-loaded` 由插件在 post-processor 里打上，宿主据此跳过这个嵌入，
@@ -1207,6 +1228,15 @@
    这里靠"插件样式后加载 + 类选择器"即可；万一宿主的规则比它更强，诊断行会把那一层报出来。 */
 .ijipu-cm-noclip {
   overflow: visible;
+}
+
+/* adj745：`contain: paint/strict/content` 同样会**裁剪**（且不体现在 `overflow` 上）——
+   用户诊断里 `![[xxx.jps]]` 的 `.internal-embed.ijipu-embed:contain=paint` 正是元凶：
+   工具条浮在嵌入框**外侧**，被它整条裁掉。这里把**我们自己元素**上的 contain 降级为
+   `layout style`：不裁剪，但保留布局/样式包含带来的性能收益。
+   重复类名把特异性抬到 (0,2,0)，稳压宿主 `.internal-embed` 那条（不依赖加载顺序）。 */
+.ijipu-cm-nocontain.ijipu-cm-nocontain {
+  contain: layout style;
 }
 
 /* adj742：宿主类的放开规则**不再挑容器类名**（`.cm-embed-block` / `.cm-preview-code-block` 都可能是宿主），

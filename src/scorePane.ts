@@ -256,9 +256,19 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
        * 风险远大于收益（而且诊断显示工具条本来就落在它的可视区内，并不需要放开）。
        */
       const isCmLayer = el.hasClass('cm-editor') || el.className.includes('cm-')
+      /**
+       * adj745（用户诊断决定性一击）：`![[xxx.jps]]` 嵌入那条路上，宿主的 `.internal-embed`
+       * 带 **`contain: paint`** —— 它把**框外的一切裁掉**，而工具条按用户要求正浮在框外上方
+       * ⇒ 每次都被裁。`contain: paint` **不体现在 `overflow` 上**，所以前几轮一直在改 `overflow`
+       * 都没打中。归属：`ijipu-embed` / `ijipu-score` / `block-language-jps` 都是**我们自己加**的类
+       * ⇒ 可以安全地把它们的 `contain` 降级为 `layout style`（保住性能收益，去掉裁剪）。
+       * ⚠ 宿主的骨架（`.view-content` / `.workspace-leaf` / 别人的 `.internal-embed`）一律不动。
+       */
+      const isOurs = el.hasClass('ijipu-embed') || el.hasClass('ijipu-score') || el.hasClass('block-language-jps')
+      const canTouch = isCmLayer || isOurs
       if (clips) {
         // 不动它的理由（为空 = 该放开）——写成变量而不是嵌套三元，免得模板字符串里套引号
-        const whyNot = scrollByDesign ? '是滚动容器' : isCmLayer ? '' : '是宿主骨架'
+        const whyNot = scrollByDesign ? '是滚动容器' : canTouch ? '' : '是宿主骨架'
         if (whyNot !== '') {
           facts.push(`${name}:裁剪但（${whyNot}）不动它`)
         } else {
@@ -266,6 +276,15 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
           noClipEls.add(el)
           facts.push(`${name}:裁剪→已放开`)
         }
+      }
+      /**
+       * adj745：`contain` 里的 `paint` / `strict` / `content` 都会**裁剪**（`strict` 与 `content`
+       * 还包含尺寸包含）⇒ 对我们自己的元素降级成 `layout style`（不裁、仍隔离布局与样式计算）。
+       */
+      if (canTouch && /paint|strict|content/.test(cs.contain)) {
+        if (!el.hasClass('ijipu-cm-nocontain')) el.addClass('ijipu-cm-nocontain')
+        noClipEls.add(el)
+        facts.push(`${name}:contain=${cs.contain}→改为 layout style`)
       }
       /**
        * adj742：`overflow` 之外还有几种"照样裁/照样盖"的机制，它们**不体现在 overflow 上** ——
@@ -1181,8 +1200,11 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       // adj725：把挂到宿主 widget 容器上的类原样摘掉（那是宿主自己的元素，不留痕）
       hostWidgetEl?.removeClass('ijipu-cm-host')
       hostWidgetEl = null
-      // adj740：逐层放开的裁剪类同样要摘掉（可能有多层，且都不是我们的元素）
-      for (const el of noClipEls) el.removeClass('ijipu-cm-noclip')
+      // adj740/745：逐层摘掉两类类（都不是我们的元素，必须不留痕）
+      for (const el of noClipEls) {
+        el.removeClass('ijipu-cm-noclip')
+        el.removeClass('ijipu-cm-nocontain')
+      }
       noClipEls.clear()
       container.empty()
     },

@@ -237,6 +237,13 @@ export class IJipuFileView extends TextFileView {
   private openInObsidianEditor(btn: HTMLElement): void {
     const file = this.file
     if (!file) return
+    /**
+     * adj744b（用户反馈「会被以 Markdown 的语法高亮」）：给**这个页签**打个标记 ——
+     * `styles.css` 据此把 markdown 着色中和成纯文本（`.workspace-leaf.ijipu-plain-source`）。
+     * 标记打在 **leaf 元素**上而不是本视图容器上：视图会被换掉，leaf 才是稳定的那个。
+     */
+    const leafEl = this.containerEl.closest('.workspace-leaf')
+    leafEl?.addClass('ijipu-plain-source')
     const mutate = this.leaf as unknown as {
       setViewState?: (state: { type: string; state?: unknown; active?: boolean }) => Promise<void>
     }
@@ -327,6 +334,11 @@ export class IJipuFileView extends TextFileView {
   private render(): void {
     const { contentEl } = this
     const embedded = this.embedded
+    /**
+     * adj744b：本视图重新渲染 ⇒ 那个页签**不再**是"纯文本源码态"（视图已切回谱面）
+     * ⇒ 把中和 Markdown 着色的标记摘掉，免得影响以后在这个页签里打开的 markdown 笔记。
+     */
+    this.containerEl.closest('.workspace-leaf')?.removeClass('ijipu-plain-source')
     this.teardownHeightFit() // adj404：重画前先还原上一次源码态的键盘感知
     this.pane?.destroy()
     this.pane = null
