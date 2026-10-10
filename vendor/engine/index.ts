@@ -42,6 +42,9 @@ export type { ProblemSeverity, ProblemLabels, ProblemRow, ProblemSummary } from 
 // adj760（清单 B3）：音源库**清单**与**取用顺序策略**（列表/顺序/失败文案共用；IO 留宿主）
 export { HQ_LIBRARIES, getHqLibrary, planHqBankLoad, hqBankFailureText } from './playback/soundbanks'
 export type { HqSampleLibrary, HqBankSource } from './playback/soundbanks'
+// adj762（清单 B4）：整篇/逐行**高亮模型**（token + 行头 + 错误块 + 行级级别）——两端只做渲染映射
+export { highlightModel, highlightLineModel, groupBlocksByLine, lineLevelOf } from './highlight/model'
+export type { JpsLineModel, JpsHighlightModel, ProblemLevel } from './highlight/model'
 // adj629h：歌词行里 `{tp … }` 替谱段的识别（格式化 / 编辑器着色都要在 `C…:` 行里找它）
 export { matchSegmentHead, findSegmentEnd } from './parser/tokenizer'
 export { tokenDuration, durationMs } from './duration'

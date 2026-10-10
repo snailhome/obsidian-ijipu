@@ -2072,8 +2072,12 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
    */
   {
     const hlSrc = String(readFileSync('src/jpsHighlight.ts', 'utf8'))
-    check('adj752 插件用 CM6 扩展给 `.jps` 源码上应用那套高亮（规则来自引擎，只碰带标记的页签）',
-      /import \{[^}]*tokenizeJpsLine[^}]*\} from '@ijipu\/engine'/.test(hlSrc) &&
+    check('adj752/762 插件用 CM6 扩展给 `.jps` 源码上应用那套高亮（规则与**模型**都来自引擎，只碰带标记的页签）',
+      /import \{[^}]*highlightLineModel[^}]*\} from '@ijipu\/engine'/.test(hlSrc) &&
+        // 插件**不再自带**分词规则（规则在引擎；插件只做"模型 → decoration"映射）
+        // ⚠ 负对照要**去注释**再判（插件文件头会写到 `tokenizeJpsLine` 这个来源名）
+        !/tokenizeJps(Line|Music|Lyric)/.test(hlSrc.replace(/\/\*[\s\S]*?\*\//g, '')) &&
+        /const model = highlightLineModel\(line\.text, line\.number/.test(hlSrc) &&
         /ViewPlugin\.fromClass/.test(hlSrc) &&
         /Decoration\.mark\(\{ class: name \}\)/.test(hlSrc) &&
         /closest\('\.workspace-leaf\.ijipu-plain-source'\)/.test(hlSrc) &&
@@ -2134,11 +2138,13 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
       /\.workspace-leaf\.ijipu-plain-source \.cm-content \.cm-line \.cm-highlight/.test(css725nc) &&
         /\.cm-content \.cm-line mark,/.test(css725nc) &&
         /background-color: transparent/.test(css725nc))
-    check('adj754 `.jps` 源码有错误/告警显示：行级底色 + 悬停提示（接引擎 parseJps）',
+    check('adj754/762 `.jps` 源码有错误/告警显示：行级底色（模型给级别）+ 悬停提示（接引擎 parseJps）',
       /import \{[^}]*parseJps[^}]*\} from '@ijipu\/engine'/.test(hl754) &&
         /Decoration\.line\(\{ class: 'ijipu-jps-error-line' \}\)/.test(hl754) &&
         /Decoration\.line\(\{ class: 'ijipu-jps-warn-line' \}\)/.test(hl754) &&
-        /e\.severity === 'warning' \? 'warning' : 'error'/.test(hl754) &&
+        // 行级级别来自引擎模型（不再由插件自己判 severity）
+        /if \(model\.level === 'error'\)/.test(hl754) &&
+        /else if \(model\.level === 'warning'\)/.test(hl754) &&
         /hoverTooltip\(/.test(hl754) &&
         /正确写法：\$\{e\.hint\}/.test(hl754) &&
         /\}, 250\)/.test(hl754) &&
@@ -2179,12 +2185,13 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
     const importHasBuilder = hl756
       .split('\n')
       .some((l) => l.trimStart().startsWith('import ') && l.includes('RangeSetBuilder'))
-    check('adj756/757 错误/告警按**音符块**加外框，且"col → 块"换算**在引擎里**（插件只消费）',
+    check('adj756/757/762 错误/告警按**音符块**加外框，且"col → 块"换算与"逐行模型"**都在引擎里**（插件只消费）',
       /Decoration\.mark\(\{ class: 'ijipu-jps-err-block' \}\)/.test(hl756) &&
         /Decoration\.mark\(\{ class: 'ijipu-jps-warn-block' \}\)/.test(hl756) &&
-        // 插件侧：用引擎给出的块区间，不再自己实现
-        /import \{[^}]*jpsBlockMarks[^}]*\} from '@ijipu\/engine'/.test(hl756) &&
-        /for \(const mark of problems\.blockMarks\)/.test(hl756) &&
+        // 插件侧：块区间来自引擎（模型），不再自己实现
+        /import \{[^}]*groupBlocksByLine[^}]*\} from '@ijipu\/engine'/.test(hl756) &&
+        /for \(const b of model\.blocks\)/.test(hl756) &&
+        /groupBlocksByLine\(jpsBlockMarks\(doc, errors\)\)/.test(hl756) &&
         !/function blockSpanAt/.test(hl756) &&
         // 重叠安全：外框与音符着色会重叠，必须用 `Decoration.set(ranges, true)`
         /return Decoration\.set\(ranges, true\)/.test(hl756) &&
