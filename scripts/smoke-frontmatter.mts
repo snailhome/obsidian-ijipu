@@ -3208,6 +3208,40 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       !/\.ijipu-has-jps-block \.cm-content \.cm-line \{/.test(css774c))
 }
 
+/**
+ * ---- adj774d：**类名 ↔ CSS 覆盖闸门**（adj774c 那个教训的推广）----
+ *
+ * adj774c 暴露的盲区是："代码里把类挂上了、CSS 里那条规则却**不适用于这个场景**" ⇒ 断言全绿、样式是死的。
+ * 光校验 CSS 结构不够，还要校验**语义覆盖**：代码里发出的每个 jps 类，CSS 里都得有规则；
+ * 而需要"两套作用域"的那批（token 颜色 / 行级底色 / 错误块外框），**页签作用域与含 jps 块的笔记**两边都要有。
+ * 这样下次再写出"只在 .jps 页签生效"的样式，套件会直接红，而不是等用户报"代码块没颜色"。
+ */
+{
+  const hl774d = String(readFileSync('src/jpsHighlight.ts', 'utf8'))
+  const css774d = String(readFileSync('styles.css', 'utf8'))
+  const classes = new Set<string>()
+  for (const m of hl774d.matchAll(/'(ijipu-jps-[a-z-]+)'/g)) classes.add(m[1])
+  const all = [...classes].sort()
+  const missing = all.filter((c) => !css774d.includes(`.${c}`))
+  check('adj774d 代码里发出的每个 jps 类，CSS 里都有对应规则',
+    all.length >= 8 && missing.length === 0,
+    `类=${all.length} 缺=${missing.join(',') || '（无）'}`)
+  // 悬停提示那批渲染在 CM 的 tooltip 容器里（不在 .cm-line 下）⇒ 本就该是"无作用域"规则
+  const needBoth = all.filter((c) => !c.includes('problem'))
+  const lacks = needBoth.filter(
+    (c) => !new RegExp(`ijipu-plain-source[^\\n]*${c}`).test(css774d) || !new RegExp(`ijipu-has-jps-block[^\\n]*${c}`).test(css774d),
+  )
+  check('adj774d 需要两套作用域的类（token 颜色/行级底色/错误块外框）在"页签"与"含 jps 块的笔记"下都有规则',
+    needBoth.length >= 8 && lacks.length === 0,
+    `需两套=${needBoth.length} 缺=${lacks.join(',') || '（无）'}`)
+  /** 负对照：把"容器作用域"那批规则整段删掉，第二条判据必须能判出缺失（证明它真的在判覆盖） */
+  const stripped = css774d.replace(/[^\n]*ijipu-has-jps-block[^\n]*\{/g, '')
+  const lacksAfter = needBoth.filter((c) => !new RegExp(`ijipu-has-jps-block[^\\n]*${c}`).test(stripped))
+  check('adj774d 负对照：删掉容器作用域规则后，覆盖判据能判出缺失',
+    lacksAfter.length === needBoth.length && needBoth.length > 0,
+    `判出 ${lacksAfter.length}/${needBoth.length}`)
+}
+
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。
 //   实测踩过：一次编辑顺手把它删掉，套件仍以退出码报错，但输出里再也看不到 `N passed, M failed`。
 console.log(`\n${pass} passed, ${fail} failed`)
