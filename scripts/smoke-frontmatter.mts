@@ -2281,6 +2281,60 @@ console.log('\n[adj729] 音色库落插件目录（随文库一起走）')
   }
 }
 
+/**
+ * ---- adj741：手机端 P0「一版多端」----
+ *
+ * 用户决定：不做两个插件，改为**一个插件 + 平台能力分级**（`isDesktopOnly: false`）。
+ * 关键事实：真正的桌面专属**只有一处** —— `src/embed/server.ts` 的 `node:http` / `node:crypto`
+ * （给"嵌入版 iJipu" iframe 用的本地服务）。它原来是**静态导入**的 ⇒ 手机端光加载插件就会解析失败
+ * ⇒ 连"手机端最需要的"普通预览都没了。所以改法是"按需加载 + 平台门控"，本节的断言就是这条底线。
+ *
+ * 另一件用户明确交代的事：**音源默认走插件目录里的文件**（不要默认联网下载）——见最后一条。
+ */
+console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台门控')
+{
+  const mainSrc741 = String(readFileSync('src/main.ts', 'utf8'))
+  const fvSrc741 = String(readFileSync('src/fileView.ts', 'utf8'))
+  const bankSrc741 = String(readFileSync('src/soundbank.ts', 'utf8'))
+  const manifest741 = JSON.parse(String(readFileSync('manifest.json', 'utf8'))) as { isDesktopOnly?: boolean }
+
+  check('adj741 manifest 允许手机端（`isDesktopOnly: false`）',
+    manifest741.isDesktopOnly === false, String(manifest741.isDesktopOnly))
+
+  // ⚠ 这条是本节的核心：`node:http` 所在模块只能"类型导入 + 动态导入"，绝不能静态导入
+  check('adj741 `./embed/server` 不得被**静态导入**（否则手机端加载插件即失败）',
+    /import type \{[^}]*\} from '\.\/embed\/server'/.test(mainSrc741) &&
+      !/^import \{[^}]*\} from '\.\/embed\/server'/m.test(mainSrc741) &&
+      /this\.embedServerModule = await import\('\.\/embed\/server'\)/.test(mainSrc741))
+
+  // 动态导入必须受平台门控，且调用点先 await 到模块再启动服务
+  check('adj741 按需加载受平台门控（仅桌面端），调用点也先取模块',
+    /loadEmbedServer\(\): Promise<typeof import\('\.\/embed\/server'\) \| null> \{[\s\S]{0,140}?if \(!Platform\.isDesktopApp\) return null/.test(mainSrc741) &&
+      /const mod = await this\.loadEmbedServer\(\)[\s\S]{0,80}?if \(!mod\) return null/.test(mainSrc741) &&
+      /mod\s*\.\s*startEmbedServer\(/.test(mainSrc741))
+
+  check('adj741 手机端不注册嵌入版编辑器视图，打开时给明确提示；`</>` 仅桌面端下发',
+    /if \(Platform\.isDesktopApp\) this\.registerView\(VIEW_TYPE_IJIPU_APP/.test(mainSrc741) &&
+      /仅桌面端可用；手机端请直接看谱面预览与试听/.test(mainSrc741) &&
+      /\.\.\.\(Platform\.isDesktopApp \? \{ onEditSource/.test(mainSrc741))
+
+  check('adj741 `.jps` 文件视图在手机端走原生预览（不交给嵌入版 iframe）',
+    /if \(!Platform\.isMobile && !embedded && !this\.editing && this\.plugin\.embedEnabled/.test(fvSrc741))
+
+  /**
+   * 用户明确交代：「注意音源默认走的是插件目录里的文件」。
+   * `loadHqBank` 的顺序必须是 **插件目录文件 → IndexedDB 缓存 → 联网下载**，
+   * 这样手机端（以及桌面端）默认都不联网；只有两处都没有时才去 fetch。
+   */
+  const bankFn = bankSrc741.slice(bankSrc741.indexOf('export async function loadHqBank'))
+  const iFile = bankFn.indexOf('files.read(')
+  const iCache = bankFn.indexOf('cache.load(')
+  const iFetch = bankFn.indexOf('await fetch(')
+  check('adj741 音源默认先读**插件目录里的文件**（顺序：文件 → 缓存 → 下载；手机端同样不联网）',
+    iFile >= 0 && iCache > iFile && iFetch > iCache,
+    `文件=${iFile} 缓存=${iCache} 下载=${iFetch}`)
+}
+
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。
 //   实测踩过：一次编辑顺手把它删掉，套件仍以退出码报错，但输出里再也看不到 `N passed, M failed`。
 console.log(`\n${pass} passed, ${fail} failed`)

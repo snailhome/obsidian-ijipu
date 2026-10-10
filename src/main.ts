@@ -1,4 +1,4 @@
-import { Events, Keymap, MarkdownRenderChild, MarkdownView, Notice, Plugin, TFolder, TFile, type MarkdownSectionInformation, type WorkspaceLeaf } from 'obsidian'
+import { Events, Keymap, MarkdownRenderChild, MarkdownView, Notice, Platform, Plugin, TFolder, TFile, type MarkdownSectionInformation, type WorkspaceLeaf } from 'obsidian'
 import { IJipuSettingTab } from './settings'
 import { mountScorePane, type ScorePaneHandle } from './scorePane'
 import { registerJpsEmbeds } from './embed'
@@ -9,7 +9,17 @@ import { canOpenWithDefaultApp, openWithDefaultApp } from './openExternal'
 import { DEFAULT_EMBED_OPEN_MODE, type EmbedOpenMode, type IJipuSettings } from './types'
 import { IJipuBridge } from './embed/bridge'
 import { embedEditLeavesObsidian, planEmbedTarget } from './embed/openPlan'
-import { startEmbedServer, type EmbedServer, SOUNDFONT_URL_PREFIX } from './embed/server'
+/**
+ * adj741（用户决定：按 P0"一版多端"做，见任务 1）—— **嵌入版 iJipu 的本地服务必须按需加载**。
+ *
+ * `./embed/server` 里是 `node:http` + `node:crypto`（把嵌入版单文件网页提供给 iframe）。
+ * 这两样在 Obsidian **手机端不存在**：静态 `import` 会在**加载插件**时就解析失败 ⇒
+ * 整个插件起不来（连"手机端最需要的"普通预览都一起没了）。所以：
+ *  · 这里只保留**类型**导入（`import type` 编译期擦除，不产生运行时 require）；
+ *  · 真正的 `import('./embed/server')` 放进 `loadEmbedServer()`，且**仅桌面端**调用。
+ * 这条由冒烟断言钉住（"手机端路径不得静态引用 node:*"）。
+ */
+import type { EmbedServer } from './embed/server'
 import { IJipuAppView, VIEW_TYPE_IJIPU_APP } from './embed/appView'
 import { HQ_LIBRARIES } from './soundbank'
 import { createBankFileStore, type BankFileStore } from './bankFile'
@@ -80,7 +90,9 @@ export default class IJipuPlugin extends Plugin {
     this.workletUrl = this.makeWorkletUrl()
     // adj729：音色库文件的落点 = 插件自己的目录（`manifest.dir` 由 Obsidian 给出）
     this.bankFiles = createBankFileStore(this.app, this.manifest.dir ?? '.obsidian/plugins/ijipu')
-    this.addSettingTab(new IJipuSettingTab(this.app, this))
+    // adj741：留一份设置页实例的引用，供"打开音色库"（手机端）把设置面板切到「说明」页签
+    this.settingsTab = new IJipuSettingTab(this.app, this)
+    this.addSettingTab(this.settingsTab)
 
     // ① .jps 文件识别：注册专用视图 → 打开 .jps（含 [[xxx.jps]] 链接）即渲染为简谱
     this.registerView(VIEW_TYPE_IJIPU, (leaf) => new IJipuFileView(leaf, this))
@@ -174,7 +186,8 @@ export default class IJipuPlugin extends Plugin {
       bankUrls: () => this.bankUrls(),
       importSoundbank: (id) => this.importSoundfont(id),
     })
-    this.registerView(VIEW_TYPE_IJIPU_APP, (leaf) => new IJipuAppView(leaf, this))
+    // adj741：嵌入版 iJipu 的**完整编辑器视图**只注册在桌面端（它依赖本地 HTTP 服务）
+    if (Platform.isDesktopApp) this.registerView(VIEW_TYPE_IJIPU_APP, (leaf) => new IJipuAppView(leaf, this))
     this.registerDomEvent(window, 'message', (ev) => {
       void this.bridge.handle(ev)
     })
@@ -256,30 +269,72 @@ export default class IJipuPlugin extends Plugin {
   }
 
   /**
+   * adj741：**按需加载**嵌入版本地服务模块（`node:http`/`node:crypto` 只存在于桌面端）。
+   *
+   * 手机端直接返回 `null`（调用方据此回退到原生渲染）；桌面端只加载一次并记住模块，
+   * 同时把 `SOUNDFONT_URL_PREFIX` 记下来供同步函数 `bankUrls()` 用（它不能 await）。
+   */
+  private embedServerModule: typeof import('./embed/server') | null = null
+  /** adj741：设置页实例（手机端"打开音色库"要把它切到「说明」页签） */
+  private settingsTab: IJipuSettingTab | null = null
+
+  /**
+   * adj741：打开本插件的设置面板并切到指定页签（手机端点"打开音色库"时用）。
+   * 走 Obsidian 的 `app.setting.open()` + `openTabById`（这是官方入口；拿不到就静默跳过）。
+   */
+  openSettingsTab(tab: '嵌入版' | '说明'): void {
+    const setting = (this.app as unknown as {
+      setting?: { open(): void; openTabById(id: string): void }
+    }).setting
+    setting?.open()
+    setting?.openTabById(this.manifest.id)
+    this.settingsTab?.activate(tab)
+  }
+  /** adj741：从按需加载的模块里取到的音源路径前缀（`bankUrls()` 同步用） */
+  private soundfontPrefix = 'soundbanks/'
+
+  private async loadEmbedServer(): Promise<typeof import('./embed/server') | null> {
+    if (!Platform.isDesktopApp) return null
+    if (!this.embedServerModule) {
+      this.embedServerModule = await import('./embed/server')
+      this.soundfontPrefix = this.embedServerModule.SOUNDFONT_URL_PREFIX
+    }
+    return this.embedServerModule
+  }
+
+  /**
    * 取 iframe 要加载的 URL；**懒启动**本地服务。
    *
    * 并发调用共享同一次启动（`embedServerStarting`），避免两个页签同时打开时起两个服务。
    * 服务启动后把 token 与工作区根告知桥。
+   *
+   * adj741：手机端**没有** `node:http` ⇒ 这里直接返回 `null`（调用方回退原生预览），
+   * 而不是让静态导入把整个插件拖垮。
    */
   async getEmbedUrl(): Promise<string | null> {
     if (!this.embedEnabled && this.embedServer === null) return null
+    if (!Platform.isDesktopApp) return null
     if (!this.embedServerStarting) {
-      this.embedServerStarting = startEmbedServer({
-        workletCode,
-        // adj729：把插件目录里的音源文件按路径交给嵌入版应用（同一个文件，随文库同步）
-        readSoundfont: (id) => this.readSoundfont(id),
-      }).then((s) => {
-        this.embedServer = s
-        this.bridge.setToken(s.token)
-        /**
-         * 工作区根一律是 **`''`（文库根）**：宿主按"文库相对路径"读写，
-         * 应用侧记录的 `path` 也存文库相对路径 ⇒ 两者同口径。
-         * 设置里的「子目录」是**进入工作区后的初始目录**，由应用侧 `makeVaultWorkspaceRecord`
-         * 的 `path` 表达（这样"换目录"仍是应用内的正常导航，不会把用户锁死在子目录里）。
-         */
-        this.bridge.setRoot('')
-        return s
-      })
+      const mod = await this.loadEmbedServer()
+      if (!mod) return null
+      this.embedServerStarting = mod
+        .startEmbedServer({
+          workletCode,
+          // adj729：把插件目录里的音源文件按路径交给嵌入版应用（同一个文件，随文库同步）
+          readSoundfont: (id) => this.readSoundfont(id),
+        })
+        .then((s) => {
+          this.embedServer = s
+          this.bridge.setToken(s.token)
+          /**
+           * 工作区根一律是 **`''`（文库根）**：宿主按"文库相对路径"读写，
+           * 应用侧记录的 `path` 也存文库相对路径 ⇒ 两者同口径。
+           * 设置里的「子目录」是**进入工作区后的初始目录**，由应用侧 `makeVaultWorkspaceRecord`
+           * 的 `path` 表达（这样"换目录"仍是应用内的正常导航，不会把用户锁死在子目录里）。
+           */
+          this.bridge.setRoot('')
+          return s
+        })
     }
     const s = await this.embedServerStarting
     return s.url
@@ -403,6 +458,15 @@ export default class IJipuPlugin extends Plugin {
    * 所以这里先把应用开起来（必要时等它 ready），再推 `openSoundbankSettings`。
    */
   async openEmbedSoundbank(): Promise<void> {
+    /**
+     * adj741（手机端 P0）：手机端没有嵌入版 ⇒ 这里改为**打开插件设置** ——
+     * 「说明」页签里新加了「音色库（高保真试听的音源）」入口（导入 `.sf2` + 显示就位状态），
+     * 否则手机用户点了"打开音色库"会什么都没发生。
+     */
+    if (!Platform.isDesktopApp) {
+      this.openSettingsTab('说明')
+      return
+    }
     await this.openIjipuFile(null)
     // 只推给**已 ready**的帧；这一轮一个都没推出去（应用还在启动）就过 400ms 再试，最多三次
     const push = (attempt = 0): void => {
@@ -434,6 +498,14 @@ export default class IJipuPlugin extends Plugin {
     mode: EmbedOpenMode = DEFAULT_EMBED_OPEN_MODE,
     sourceLeaf: WorkspaceLeaf | null = null,
   ): Promise<void> {
+    /**
+     * adj741（手机端 P0）：嵌入版完整编辑器依赖本地 HTTP 服务 ⇒ **只在桌面端可用**。
+     * 手机端给一句明确提示后返回（而不是让 `setViewState` 指向一个没注册的视图类型）。
+     */
+    if (!Platform.isDesktopApp) {
+      new Notice('完整编辑器（嵌入版 iJipu）仅桌面端可用；手机端请直接看谱面预览与试听。')
+      return
+    }
     const { workspace } = this.app
     /**
      * "开在哪里"由**纯函数**决定（`embed/openPlan.ts`）——这样它可被直接断言，
@@ -539,7 +611,8 @@ export default class IJipuPlugin extends Plugin {
     const base = this.embedServer?.url
     if (!base) return {}
     const out: Record<string, string> = {}
-    for (const lib of HQ_LIBRARIES) out[lib.id] = `${base}${SOUNDFONT_URL_PREFIX}${lib.id}.sf2`
+    // adj741：前缀来自按需加载的服务模块（桌面端已加载时才有真值；手机端恒走不到这里）
+    for (const lib of HQ_LIBRARIES) out[lib.id] = `${base}${this.soundfontPrefix}${lib.id}.sf2`
     return out
   }
 
@@ -685,7 +758,7 @@ class IJipuBlock extends MarkdownRenderChild {
     this.pane = null
   }
 
-  /** 重画本代码块的谱面（设置变更由面板自行处理，这里只负责 frontmatter / 结构变化） */
+  /** 重画本代码块的谱面（设置变更由面板自行处理，这里只负责结构/源码变化） */
   private paint(): void {
     this.pane?.destroy()
     this.pane = null
@@ -695,7 +768,11 @@ class IJipuBlock extends MarkdownRenderChild {
       container: this.containerEl,
       getSource: () => this.source,
       writeSource: (next) => this.writeSource(next),
-      onEditSource: () => void this.revealSource(),
+      /**
+       * adj741：`</>`（切回笔记源码）只在桌面端给 —— 它走 `revealSource()`（CM6 编辑器操作）。
+       * 手机端不传 ⇒ 面板不会挂这个按钮（触屏上"编辑此块"由 Obsidian 自己的机制负责）。
+       */
+      ...(Platform.isDesktopApp ? { onEditSource: () => void this.revealSource() } : {}),
     })
   }
 

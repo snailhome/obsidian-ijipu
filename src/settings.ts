@@ -18,8 +18,10 @@
  * `renderSoundbank`/`renderVoiceList` 负责音色库；这三块已随本次整合**删除**。
  * 设置项定义与控件构建仍由 `defs.ts` 统一提供（谱面设置对话框与 frontmatter 模板共用一份）。
  */
-import { App, PluginSettingTab, Setting } from 'obsidian'
+import { App, Notice, PluginSettingTab, Setting } from 'obsidian'
 import { BUILD_DATE, BUILD_STAMP, GIT_COMMIT } from './gen/buildInfo'
+// adj741：音色库入口要列出内置音源库（与应用「音色库」同一份清单）
+import { HQ_LIBRARIES } from './soundbank'
 // adj739：嵌入版应用的版本（设置页头部与插件版本并排显示，见 renderHeader）
 import { WEBAPP_META } from './gen/webappAssets'
 // adj739：品牌图标与应用同一枚（`ijipu/public/icons/Jianpu.png` → 本仓库 `vendor/icons/Jianpu.png`，
@@ -49,6 +51,18 @@ export class IJipuSettingTab extends PluginSettingTab {
   constructor(app: App, plugin: IJipuPlugin) {
     super(app, plugin)
     this.plugin = plugin
+  }
+
+  /**
+   * adj741（手机端 P0）：**从别处把设置页切到指定页签**（手机端点"打开音色库"时用）。
+   *
+   * 为什么需要：手机端没有嵌入版应用，`openEmbedSoundbank()` 改为打开本页的「说明」页签
+   * （那里面有新加的「音色库（高保真试听的音源）」导入入口）。`activateSettingsTab` 负责
+   * 打开设置面板本身，这里只负责落到正确页签并重画。
+   */
+  activate(tab: SettingsTabId): void {
+    this.activeTab = tab
+    if (this.containerEl.isConnected) this.update()
   }
 
   display(): void {
@@ -302,6 +316,59 @@ export class IJipuSettingTab extends PluginSettingTab {
           '⚠ 一个笔记里有多个 ` ```jps ` 块时，**每块各自写自己的** `# jps-config`；' +
           '`.jps` 文件同理（写在文件里）。',
       )
+
+    /**
+     * adj741（手机端 P0）：**音源（音色库）入口**。
+     *
+     * 桌面端这套 UI 原本只在"嵌入版 iJipu"里（`设置 → 全局 → 音色库`），而手机端没有嵌入版
+     * ⇒ 手机用户**够不着**任何导入入口，只能走 32 MB 联网下载（流量 + 内存都不友好）。
+     * 而用户明确交代过：**音源默认走插件目录里的文件**。所以这里补一个最小入口：
+     *  · 说明默认顺序（插件目录文件 → 本机缓存 → 联网下载）；
+     *  · 一个「导入 .sf2…」按钮（复用 `plugin.importSoundfont`，写入插件目录，
+     *    该文件在 `.obsidian/plugins/ijipu/soundfonts/` 下，可随文库一起同步）；
+     *  · 异步补一行"当前插件目录里已有哪些文件"。
+     */
+    const bank = new Setting(host)
+      .setName('音色库（高保真试听的音源）')
+      .setDesc(
+        '试听优先用**插件目录里的文件**：`.obsidian/plugins/ijipu/soundfonts/<id>.sf2`\n' +
+          '（顺序：插件目录文件 → 本机缓存 → 联网下载；想完全离线就先把文件导入进来）。\n\n' +
+          '当前：正在读取…',
+      )
+      .addButton((b) =>
+        b.setButtonText('导入 .sf2…').onClick(() => {
+          void (async () => {
+            const r = await this.plugin.importSoundfont(HQ_LIBRARIES[0]?.id ?? 'generaluser_gs')
+            new Notice(
+              r.ok
+                ? '已导入音色库文件（试听将直接用它，不再联网）'
+                : r.canceled
+                  ? '已取消导入'
+                  : `导入失败：${r.error ?? '未知原因'}`,
+              4000,
+            )
+            // adj724b（社区审核 1.13+）：重画设置页用 `update()`，它是声明式设置的正规刷新入口
+            this.update()
+          })()
+        }),
+      )
+    void (async () => {
+      const lines: string[] = []
+      for (const lib of HQ_LIBRARIES) {
+        const p = this.plugin.soundfontPath(lib.id)
+        const ab = await this.plugin.readSoundfont(lib.id)
+        if (ab) {
+          lines.push(`${lib.name}：已就位（${(ab.byteLength / 1024 / 1024).toFixed(1)} MB，${p}）`)
+        } else {
+          lines.push(`${lib.name}：未导入（首次试听会联网下载约 32 MB）`)
+        }
+      }
+      bank.setDesc(
+        '试听优先用**插件目录里的文件**：`.obsidian/plugins/ijipu/soundfonts/<id>.sf2`\n' +
+          '（顺序：插件目录文件 → 本机缓存 → 联网下载；想完全离线就先把文件导入进来）。\n\n' +
+          `当前：\n${lines.join('\n')}`,
+      )
+    })()
 
     new Setting(host)
       .setName('项目主页与仓库')

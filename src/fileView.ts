@@ -314,7 +314,14 @@ export class IJipuFileView extends TextFileView {
      * 只显示一句说明（否则会出现"两个地方同时显示同一份谱"）。
      * 关掉「使用嵌入版 iJipu」设置即整体回到旧的轻量渲染（可回退）。
      */
-    if (!embedded && !this.editing && this.plugin.embedEnabled && this.file) {
+    /**
+     * adj741（手机端 P0）：**手机端一律走原生渲染**。
+     *
+     * 上面这条路会把整页 `.jps` 交给"嵌入版 iJipu"（iframe + 本地 HTTP 服务），
+     * 而手机端没有 `node:http` ⇒ 这里显式跳过（原生预览 + 试听在手机端完全可用，
+     * 这也正是用户要的"手机端最需要的功能"）。
+     */
+    if (!Platform.isMobile && !embedded && !this.editing && this.plugin.embedEnabled && this.file) {
       return this.renderEmbedPlaceholder()
     }
 

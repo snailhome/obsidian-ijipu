@@ -6,5 +6,5 @@
   "description": "Render .jps jianpu scripts into sheet music inside your notes, with playback, and edit scores in a full built-in iJipu editor.",
   "author": "SnailHome",
   "authorUrl": "https://github.com/snailhome",
-  "isDesktopOnly": true
+  "isDesktopOnly": false
 }
