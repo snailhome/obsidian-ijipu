@@ -21,6 +21,18 @@ import { createHash } from 'node:crypto'
  * **外网**一律返回一个**可预测的假响应**（200 + 4 字节），于是"下载路径"照旧跑通、套件在任何网络环境下结果一致。
  * 想验真实下载行为的，请在该用例里自行替换 `globalThis.fetch` 打桩（而不是依赖外网）。
  */
+/**
+ * adj775：**负向判据的默认姿势 —— 先剥注释**。
+ *
+ * 由来：本仓库的负向断言（"源码里不得再出现 X"）已经**三次**被自己的注释绊倒 ——
+ * 我们习惯在删掉某段能力后留一句"原本是 X，已删除"的说明，那句话本身就包含 X
+ * ⇒ 断言误判成"X 还在"，红灯。凡是要断言"不存在"的地方，一律用这个帮手取源码。
+ * （只剥 `/* … *​/` 与行尾 `// …`；字符串字面量里的 // 极少见，且这些断言都只看代码骨架。）
+ */
+export function codeOf(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1')
+}
+
 const realFetch = globalThis.fetch
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   const url = typeof input === 'string' ? input : input instanceof URL ? input.href : String((input as Request).url)
@@ -3120,6 +3132,20 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       !/this\.embedServerStarting = null/.test(main775.replace(/this\.embedServerStarting = null/g, '')))
   check('adj775 失败原因可在「设置 → iJipu → 说明」里看到（用户能直接贴回来定位）',
     /lastEmbedError/.test(settings775) && /嵌入版本地服务（诊断信息，无需操作）/.test(settings775))
+
+  /**
+   * adj773/adj775 **文案与行为一致**：改了"点 `.jps` 先给预览、编辑才进嵌入版"之后，
+   * 设置里那句"在库里打开 `.jps` 会用这个完整编辑器打开"就**不再成立** ⇒ 必须一起改掉。
+   * （改行为不改文案是"用户按文案操作却得不到那个结果"的经典来源。）
+   */
+  const readme775 = String(readFileSync('README.md', 'utf8'))
+  check('adj775 文案跟行为一致：设置与 README 都写"先给预览、点「编辑」进完整编辑器"',
+    /点库里打开 `\.jps` \*\*一律先给谱面预览\*\*/.test(settings775) &&
+      /点预览工具条最右的「编辑」即可/.test(settings775) &&
+      /点开先看\*\*谱面预览\*\*，点工具条最右的「编辑」用完整编辑器/.test(readme775) &&
+      // 负对照：那句过时文案不得再出现（它会让人以为"点文件就直接进编辑器"）。
+      // ⚠ 必须先剥注释：我在这段设置文案旁边留了"原来写的是…"的说明，那句话里就有旧文案（第三次踩到）
+      !/在库里打开 `\.jps` 会用这个完整编辑器打开/.test(codeOf(settings775)))
 }
 
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。
