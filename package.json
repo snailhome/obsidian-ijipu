@@ -21,6 +21,8 @@
     "spessasynth_lib": "^4.3.14"
   },
   "devDependencies": {
+    "@codemirror/state": "^6.5.0",
+    "@codemirror/view": "^6.38.6",
     "@types/node": "^20.11.0",
     "esbuild": "^0.28.0",
     "obsidian": "^1.5.12",

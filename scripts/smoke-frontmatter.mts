@@ -5,7 +5,7 @@
  * 断言来源：用户反馈「在 frontmatter 里设置像 `ijipu_note_size` 好像没生效」——
  * 覆盖键名写法兼容、值类型转换、未识别键提示、优先级四类。
  */
-import { defaultPageConfig, dragDelta, formatJps, layoutScore, parseJps, renderScoreToSvg, writeJpsConfig, mergeConfigEdits, configCarryover, SCORE_FONT_OPTIONS, buildPlaySequence, GUIDE_LIMITS, GUIDE_LIMITS_EX, SEGMENT_ROW_GAP_DEFAULT, OPTIONAL_CONFIG_FIELDS, defaultConfigForReset, extractJpsConfig, extractLegacyEditorPrefs, nonDefaultConfigKeys, GM_GROUPS } from '@ijipu/engine'
+import { defaultPageConfig, dragDelta, formatJps, layoutScore, parseJps, renderScoreToSvg, tokenizeJpsLine, writeJpsConfig, mergeConfigEdits, configCarryover, SCORE_FONT_OPTIONS, buildPlaySequence, GUIDE_LIMITS, GUIDE_LIMITS_EX, SEGMENT_ROW_GAP_DEFAULT, OPTIONAL_CONFIG_FIELDS, defaultConfigForReset, extractJpsConfig, extractLegacyEditorPrefs, nonDefaultConfigKeys, GM_GROUPS } from '@ijipu/engine'
 import type { PageConfig } from '@ijipu/engine'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { instrumentColorMap, playheadBaseOf, playheadPosIn, trackKeysOf } from '../src/playhead'
@@ -2063,6 +2063,48 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
         /hasClass\('ijipu-plain-source'\)/.test(main751) &&
         /import \{ formatLine \} from '@ijipu\/engine'/.test(main751),
       `auto=${/autoFormatLeavingLine/.test(main751)} setLine=${/setLine\(/.test(main751)}`)
+  }
+
+  /**
+   * adj752（用户要求）：「给手机端的源码使用**应用里的源码高亮方案**，而不是 Markdown 的高亮方案」。
+   *
+   * 做法：着色**规则**抽到引擎（`tokenizeJpsLine` 等），应用渲染 HTML、插件渲染 CM6 decoration；
+   * 插件的颜色用应用 `--jp-hl-*` 的两套原值。
+   * 断言分两层：① 插件确实只"接线"（不自己实现规则）且只对 `.jps` 页签生效；
+   * ② **分词器行为**（在插件侧跑一遍证据：各类别命中 + token 覆盖整行、偏移不错位）。
+   */
+  {
+    const hlSrc = String(readFileSync('src/jpsHighlight.ts', 'utf8'))
+    check('adj752 插件用 CM6 扩展给 `.jps` 源码上应用那套高亮（规则来自引擎，只碰带标记的页签）',
+      /import \{ tokenizeJpsLine \} from '@ijipu\/engine'/.test(hlSrc) &&
+        /ViewPlugin\.fromClass/.test(hlSrc) &&
+        /Decoration\.mark\(\{ class: name \}\)/.test(hlSrc) &&
+        /closest\('\.workspace-leaf\.ijipu-plain-source'\)/.test(hlSrc) &&
+        /registerEditorExtension\(jpsHighlightExtension\)/.test(String(readFileSync('src/main.ts', 'utf8'))) &&
+        // 依赖显式声明（运行期仍由 Obsidian 提供，构建时 external ⇒ 不增产物）
+        /"@codemirror\/state"/.test(String(readFileSync('package.json', 'utf8'))) &&
+        /"@codemirror\/view"/.test(String(readFileSync('package.json', 'utf8'))))
+    check('adj752 高亮配色取自应用 `--jp-hl-*` 的两套值（深/浅主题各一套）',
+      css725nc.includes('.ijipu-jps-note') &&
+        css725nc.includes('color: #ffb86c') && // 深色：应用 --jp-hl-note
+        css725nc.includes('color: #b35900') && // 浅色：应用 .theme-light 的 --jp-hl-note
+        css725nc.includes('.theme-light .workspace-leaf.ijipu-plain-source') &&
+        /\.ijipu-jps-pagebreak/.test(css725nc))
+
+    // ② 分词器行为：类别命中 + **覆盖整行**（CM6 的偏移靠它，漏一个字符就会错位）
+    const line = 'Q: 1 2 3 | 4 - 5 C: 词 {tp 1 | 2} &hx <'
+    const toks = tokenizeJpsLine(line)
+    check('adj752 分词覆盖整行（拼接结果 === 原行 ⇒ decoration 偏移不会错位）',
+      toks.map((t) => t.text).join('') === line, toks.map((t) => `${t.cls}:${t.text}`).join('|').slice(0, 120))
+    const clsOf = (s: string): string[] => tokenizeJpsLine(s).map((t) => t.cls)
+    check('adj752 行头 / 音符 / 小节线 / 歌词 / 装饰 / 注释 / 分页 都能认出（与应用同口径）',
+      clsOf('Q: 1 2 3 |')[0] === 'line-header' &&
+        clsOf('Q: 1 2 3 |').includes('note') &&
+        clsOf('Q: 1 2 3 |').includes('barline') &&
+        clsOf('C: 词 {tp 1 | 2}').includes('lyric') &&
+        clsOf('Q: 1&hx 2').includes('decoration') &&
+        clsOf('# 注释')[0] === 'comment' &&
+        clsOf('[fenye]')[0] === 'pagebreak')
   }
 
   check('adj740 工具条诊断行记录"宿主/显示类/最终样式/坐标/祖先链"（设置页可读）',

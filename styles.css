@@ -737,6 +737,60 @@
   font-family: var(--font-monospace);
 }
 
+/**
+ * adj752（用户要求：「给手机端的源码使用**应用里的源码高亮方案**，而不是 Markdown 的高亮方案」）：
+ * `.jps` 源码在宿主编辑器里的着色 —— **规则**来自引擎 `tokenizeJpsLine`（与应用编辑器同一份），
+ * **颜色**取自应用 `src/styles/theme.css` 的 `--jp-hl-*`（深/浅两套原值）。
+ *
+ * ⚠ 选择器必须比上面那条"中和 Markdown 着色"的规则更具体（那条是 4 个类 + 元素），
+ * 所以这里写成"页签类 + .cm-content + .cm-line + 我们的类"（5 个类）；且**不用 `!important`**
+ * （本项目对它有 ≤5 条硬上限）。
+ */
+.workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-line-header {
+  color: #00f0ff;
+  text-shadow: 0.4px 0 0 currentColor, -0.4px 0 0 currentColor;
+}
+.workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-note {
+  color: #ffb86c;
+}
+.workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-barline {
+  color: #6272a4;
+  text-shadow: 0.4px 0 0 currentColor, -0.4px 0 0 currentColor;
+}
+.workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-lyric {
+  color: #7dd6a8;
+}
+.workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-comment {
+  color: #6a7bb8;
+}
+.workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-pagebreak {
+  color: #ff79c6;
+  text-shadow: 0.4px 0 0 currentColor, -0.4px 0 0 currentColor;
+}
+.workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-decoration {
+  color: var(--text-accent);
+  opacity: 0.85;
+}
+/* 浅色主题用应用浅色那套（`theme.css` 的 `.theme-light` 段）——深色下上面那套已经很亮 */
+.theme-light .workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-line-header {
+  color: #0891a6;
+}
+.theme-light .workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-note {
+  color: #b35900;
+}
+.theme-light .workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-barline {
+  color: #5a6a9e;
+}
+.theme-light .workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-lyric {
+  color: #2f8f5f;
+}
+.theme-light .workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-comment {
+  color: #6a7bb8;
+}
+.theme-light .workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-pagebreak {
+  color: #c73d8f;
+}
+
 /* ---------- ![[xxx.jps]] 嵌入 ---------- */
 /* 插件接管 .internal-embed 后自己渲染谱面（详见 src/embed.ts 头部说明）。
    `is-loaded` 由插件在 post-processor 里打上，宿主据此跳过这个嵌入，

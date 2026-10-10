@@ -4,6 +4,8 @@ import { formatLine } from '@ijipu/engine'
 import { IJipuSettingTab } from './settings'
 import { mountScorePane, type ScorePaneHandle } from './scorePane'
 import { registerJpsEmbeds } from './embed'
+// adj752：`.jps` 源码高亮（CM6 扩展，规则来自引擎、配色来自应用）
+import { jpsHighlightExtension } from './jpsHighlight'
 import { IJipuFileView, JPS_EXTENSION, VIEW_TYPE_IJIPU } from './fileView'
 import { createJpsFile, consumeJpsLinkCreate, materializeJpsFile, planJpsLinkCreate, registerJpsFileCreator, unregisterJpsFileCreator, NEW_JPS_TEMPLATE } from './newFile'
 import { replaceCodeBlockBody } from './sourceEdit'
@@ -251,6 +253,12 @@ export default class IJipuPlugin extends Plugin {
      *  · 用引擎的 `formatLine`（与应用编辑器逐行格式化**同一份实现**），行没变就不动（不产生无谓撤销项）。
      */
     this.registerDomEvent(document, 'selectionchange', () => this.autoFormatLeavingLine())
+    /**
+     * adj752（用户要求）：「给手机端的源码使用**应用里的源码高亮方案**，而不是 Markdown 的高亮」。
+     * 注册 CM6 扩展：只对"借宿主编辑器打开的 `.jps` 页签"（带 `ijipu-plain-source` 标记）着色，
+     * 规则来自引擎 `tokenizeJpsLine`（与应用编辑器同一份口径），配色用应用的 `--jp-hl-*` 两套值。
+     */
+    this.registerEditorExtension(jpsHighlightExtension)
     this.syncEmbedRibbon()
 
     /**
