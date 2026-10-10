@@ -230,7 +230,11 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
    */
   const exemptClippingAncestors = (): string[] => {
     const facts: string[] = []
-    let el: HTMLElement | null = container.parentElement
+    /**
+     * adj743：**从 `container` 自己开始量**（用户诊断里工具条"命中自身却看不见" ⇒ 必须检查
+     * 它的直接父元素 `.ijipu-score` 有没有把它裁掉/压掉）。
+     */
+    let el: HTMLElement | null = container
     let depth = 0
     while (el && depth < 8) {
       depth += 1
@@ -245,9 +249,18 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
        */
       const scrollByDesign = /auto|scroll/.test(cs.overflowY) || /auto|scroll/.test(cs.overflowX)
       const name = el.className.split(/\s+/).filter(Boolean).slice(0, 2).join('.') || el.tagName.toLowerCase()
+      /**
+       * adj743（安全收紧）：**只放开 `.cm-*` 那一族宿主层**（本插件的宿主 widget 与 CM6 的容器），
+       * **绝不动** `.view-content` / `.workspace-leaf` 这类**宿主的骨架** ——
+       * 上一轮把 `.view-content` 的 `overflow` 改成 `visible`，等于替宿主改滚动/裁剪骨架，
+       * 风险远大于收益（而且诊断显示工具条本来就落在它的可视区内，并不需要放开）。
+       */
+      const isCmLayer = el.hasClass('cm-editor') || el.className.includes('cm-')
       if (clips) {
-        if (scrollByDesign) {
-          facts.push(`${name}:裁剪但**是滚动容器**（不动它）`)
+        // 不动它的理由（为空 = 该放开）——写成变量而不是嵌套三元，免得模板字符串里套引号
+        const whyNot = scrollByDesign ? '是滚动容器' : isCmLayer ? '' : '是宿主骨架'
+        if (whyNot !== '') {
+          facts.push(`${name}:裁剪但（${whyNot}）不动它`)
         } else {
           if (!el.hasClass('ijipu-cm-noclip')) el.addClass('ijipu-cm-noclip')
           noClipEls.add(el)
@@ -303,15 +316,34 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
         : '命中空白（该点不在视口内，或已被裁掉）'
       const inViewport = cy >= 0 && cx >= 0 && cy <= window.innerHeight && cx <= window.innerWidth
       const cs = window.getComputedStyle(toolbarEl)
+      /**
+       * adj743（用户诊断："命中工具条自身 ✓"却仍看不见）：命中测试只能证明"那个点上最上层是它"，
+       * **证明不了它肚子里有东西**。所以这里把工具条**内部**也量出来：
+       * 子元素个数、首个按钮的 `display/visibility` 与尺寸、以及 `innerText` 是否为空
+       * （空 ⇒ 是个透明空盒子 ⇒ 多半是容器查询把里面的按钮/文字全隐了）。
+       */
+      const kids = Array.from(toolbarEl.children) as HTMLElement[]
+      const first = kids[0]
+      const firstCs = first ? window.getComputedStyle(first) : null
+      const firstRect = first?.getBoundingClientRect()
+      const kidDesc =
+        kids.length === 0
+          ? '子元素 0 个（**空盒子**）'
+          : `子元素 ${kids.length} 个；首个=${first.tagName.toLowerCase()}.${String(first.className).split(/\s+/).slice(0, 2).join('.')}` +
+            ` display=${firstCs?.display} visibility=${firstCs?.visibility}` +
+            ` ${Math.round(firstRect?.width ?? 0)}×${Math.round(firstRect?.height ?? 0)}`
+      const text = (toolbarEl.innerText ?? '').replace(/\s+/g, ' ').trim()
       plugin.lastToolbarInfo =
         `${stamp} · ${phase}` +
         `｜宿主=${container.closest(CM_EMBED_BLOCK) ? '实时预览' : '阅读视图/其他'}` +
         `｜显示类=${toolbarEl.hasClass('is-revealed') ? '有' : '无'}` +
         `｜样式 opacity=${cs.opacity} visibility=${cs.visibility} position=${cs.position}` +
+        ` bg=${cs.backgroundColor}` +
         `｜工具条 ${Math.round(rect.width)}×${Math.round(rect.height)} @(${Math.round(rect.left)},${Math.round(rect.top)})` +
         `｜谱面块 @(${Math.round(score.left)},${Math.round(score.top)})` +
         `｜视口内=${inViewport ? '是' : '否'}` +
         `｜命中测试@(${cx},${cy})：${hitDesc}` +
+        `｜内容：${kidDesc}｜innerText=${text.length > 0 ? `「${text.slice(0, 40)}」` : '**空**'}` +
         (facts.length > 0 ? `｜祖先链：${facts.join(' → ')}` : '｜祖先链：无裁剪层')
     })
   }

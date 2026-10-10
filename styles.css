@@ -74,6 +74,24 @@
   transition:
     opacity 120ms ease,
     visibility 0s linear 0s;
+  /**
+   * adj743（用户诊断："命中工具条自身 ✓、opacity/visibility 都正常，却仍看不见"）：
+   * 命中测试只证明"那个点上最上层是它"，证明不了**肚子里有东西**。
+   * 这里加一道**兜底**：显示态下强制整条工具条与其中的按钮/图标/文字都可见 ——
+   * 免得被宿主的某条 `visibility: hidden`（主题/容器查询/其它插件）连带隐掉。
+   * 注意：这**不会**把"窄容器里隐藏文字"的容器查询逻辑弄反（那条用的是 `display: none` 类规则，
+   * 由 `@container` 决定，本兜底不管 `display`）。
+   */
+  pointer-events: auto;
+}
+.ijipu-score-toolbar.is-revealed,
+.ijipu-score-toolbar.is-revealed .ijipu-play,
+.ijipu-score-toolbar.is-revealed .ijipu-btn-icon,
+.ijipu-score-toolbar.is-revealed .ijipu-btn-label,
+.ijipu-score-toolbar.is-revealed .ijipu-mode-select-wrap,
+.ijipu-score-toolbar.is-revealed .ijipu-page-label {
+  visibility: visible;
+  opacity: 1;
 }
 /* 移动端常显（覆盖默认隐藏）——带 .is-mobile 前缀，特异性足够 */
 .is-mobile .ijipu-score-toolbar {

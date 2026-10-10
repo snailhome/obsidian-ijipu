@@ -1862,29 +1862,38 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
    * 但**滚动容器绝不放开**（放开它编辑器就滚不动了）。同时把实测快照记进设置页诊断 ——
    * 这样"到底哪一层在挡"能靠一张截图定位，而不是继续猜。
    */
-  check('adj740/742 逐层放开"会裁剪的祖先"，且**绝不放开滚动容器**（按设计意图认，不看当前是否溢出）',
-    /const exemptClippingAncestors = \(\): string\[\] => \{/.test(pane725) &&
-      /\/hidden\|clip\/\.test\(cs\.overflowY\)/.test(pane725) &&
-      // adj742：滚动容器按"计算 overflow 是 auto/scroll"认（旧判据 scrollHeight 会漏判）
-      /const scrollByDesign = \/auto\|scroll\/\.test\(cs\.overflowY\) \|\| \/auto\|scroll\/\.test\(cs\.overflowX\)/.test(pane725) &&
-      /if \(scrollByDesign\) \{/.test(pane725) &&
-      /el\.addClass\('ijipu-cm-noclip'\)/.test(pane725) &&
-      /noClipEls\.add\(el\)/.test(pane725) &&
-      // 只走到 `.cm-editor` 为止，不去动更外层的编辑器骨架
-      /hasClass\('cm-editor'\)/.test(pane725) &&
-      // 销毁时逐个摘掉（那些都不是我们的元素）
-      /for \(const el of noClipEls\) el\.removeClass\('ijipu-cm-noclip'\)/.test(pane725) &&
-      /\.ijipu-cm-noclip \{/.test(css725nc))
-  check('adj742 诊断行含"命中测试/视口内/contain·content-visibility·transform"（回答"样式正常为何看不见"）',
+  {
+    // 逐条算出布尔值再断言（失败时 detail 直接点名哪一条不成立，省一轮排查）
+    const c743 = {
+      从container起: /let el: HTMLElement \| null = container$/m.test(pane725),
+      滚动判据: /const scrollByDesign = \/auto\|scroll\/\.test\(cs\.overflowY\) \|\| \/auto\|scroll\/\.test\(cs\.overflowX\)/.test(pane725),
+      只放开cm层: /const isCmLayer = el\.hasClass\('cm-editor'\) \|\| el\.className\.includes\('cm-'\)/.test(pane725),
+      宿主骨架不动: pane725.includes('是宿主骨架'),
+      加类: /el\.addClass\('ijipu-cm-noclip'\)/.test(pane725),
+      记类: /noClipEls\.add\(el\)/.test(pane725),
+      摘类: /for \(const el of noClipEls\) el\.removeClass\('ijipu-cm-noclip'\)/.test(pane725),
+      css规则: css725nc.includes('.ijipu-cm-noclip {'),
+    }
+    check('adj740/742/743 逐层放开"会裁剪的祖先"，且**绝不放开滚动容器 / 宿主骨架**',
+      /const exemptClippingAncestors = \(\): string\[\] => \{/.test(pane725) &&
+        /\/hidden\|clip\/\.test\(cs\.overflowY\)/.test(pane725) &&
+        Object.values(c743).every(Boolean),
+      JSON.stringify(c743))
+  }
+  check('adj742/743 诊断行含"命中测试/视口内/内容(子元素+innerText)/contain 等"（回答"样式正常为何看不见"）',
     // 宿主选择器不再只认 `.cm-embed-block`（代码块常用 `.cm-preview-code-block`）
     /const CM_EMBED_BLOCK = '\.cm-embed-block, \.cm-preview-code-block'/.test(pane725) &&
       /document\.elementFromPoint\(cx, cy\)/.test(pane725) &&
-      /命中工具条自身|命中\*\*别的元素\*\*/.test(pane725) &&
       /视口内=\$\{inViewport/.test(pane725) &&
       /extra\.push\(`contain=\$\{cs\.contain\}`\)/.test(pane725) &&
-      /content-visibility=\$\{cs\.contentVisibility\}/.test(pane725) &&
-      // CSS：宿主类规则不挑容器类名，且用重复类名抬特异性
-      /\.ijipu-cm-host\.ijipu-cm-host:hover \{/.test(css725nc))
+      // adj743：工具条**肚子里的东西**也要量（空盒子 ⇒ 容器查询/主题把内容隐了）
+      /const kids = Array\.from\(toolbarEl\.children\) as HTMLElement\[\]/.test(pane725) &&
+      /子元素 0 个/.test(pane725) &&
+      /innerText=\$\{text\.length > 0/.test(pane725) &&
+      /bg=\$\{cs\.backgroundColor\}/.test(pane725) &&
+      // CSS：宿主类规则不挑容器类名 + 显示态兜底（整条工具条与其中的按钮/图标/文字都强制可见）
+      /\.ijipu-cm-host\.ijipu-cm-host:hover \{/.test(css725nc) &&
+      /\.ijipu-score-toolbar\.is-revealed \.ijipu-btn-label/.test(css725nc))
   check('adj740 工具条诊断行记录"宿主/显示类/最终样式/坐标/祖先链"（设置页可读）',
     /lastToolbarInfo/.test(String(readFileSync('src/main.ts', 'utf8'))) &&
       /plugin\.lastToolbarInfo =/.test(pane725) &&
