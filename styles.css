@@ -69,8 +69,7 @@
 }
 .ijipu-score-toolbar.is-revealed {
   opacity: 1;
-  visibility: visible;
-  /* 淡入：立即可见，再花 120ms 淡进来（延迟 0） */
+  visibility: visible;  /* 淡入：立即可见，再花 120ms 淡进来（延迟 0） */
   transition:
     opacity 120ms ease,
     visibility 0s linear 0s;
@@ -1386,4 +1385,25 @@
   .markdown-source-view.mod-cm6 .cm-embed-block.ijipu-cm-host .embed-actions .embed-action:hover {
     background-color: rgb(0 0 0 / 68%);
   }
+}
+
+/**
+ * adj782（用户实测，PC 端代码块；两张截图 + 「预览工具条」诊断）：
+ * 「编辑模式下**两个相邻的代码块工具条重叠**」「还是没有解决工具条同在预览区外的问题」。
+ *
+ * 事实：落位判定确实选了"外侧"，工具条也确实画在块**上方**（诊断：工具条 y=312、谱面块 y=342）——
+ * 但**编辑模式里"块上方"就是上一行的行区**：上一个代码块紧挨着就必然互相压住；
+ * 上面是文字/围栏行时看着就像"压着谱面"。阅读模式正常只是因为段间本来有留白。
+ *
+ * 修法：**在块内预留一条空带**专门放工具条：容器 `padding-top`，工具条由"贴块顶外侧"改为
+ * "锚在容器顶边" ⇒ 它永远位于**谱面墨迹之上、块自己的地盘内**：不压墨迹、不压相邻块，
+ * 且阅读/编辑两种模式**表现一致**。只对代码块生效（`ijipu-toolbar-inset` 只由代码块加上）。
+ * 选择器 3 个类 > 基线的 1 个类 ⇒ 不需要 `!important`（本仓库对它有硬上限）。
+ */
+.ijipu-score.ijipu-toolbar-inset {
+  padding-top: 30px;
+}
+.ijipu-score.ijipu-toolbar-inset .ijipu-score-toolbar {
+  top: 0;
+  bottom: auto;
 }

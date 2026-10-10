@@ -485,6 +485,22 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     cropObservers.clear()
     container.empty()
     container.addClass('ijipu-score')
+    /**
+     * adj782（用户实测，PC 端代码块 + 两张截图）：
+     * 「编辑模式下**两个相邻的代码块工具条重叠**了」「还是没有解决工具条同在预览区外的问题」。
+     *
+     * 事实（来自「预览工具条」诊断 + 截图）：落位判定确实选了"**外侧**"，工具条也确实画在块的**上方**
+     * （y=312 vs 谱面块 y=342）——但**编辑模式里"块上方"就是上一行的行区**：
+     *  · 上一个代码块紧挨着 ⇒ 两条工具条必然互相压住 ✗；
+     *  · 上面是普通文字/围栏行 ⇒ 看着就像"压着谱面" ✗。
+     * 阅读模式之所以正常，只是因为段间本来有留白。
+     *
+     * 修法：**在块内预留一条空带**专门放工具条（两种模式一致）：容器加 `ijipu-toolbar-inset`，
+     * CSS 里给它 `padding-top`、并把工具条锚到容器顶边（见 styles.css）——于是工具条永远在
+     * "谱面墨迹之上、块自己的地盘里"，既不压墨迹也不压相邻块。
+     * 只对**代码块**生效（`onEditSource` 只有代码块会传）；`.jps` 文件视图/嵌入的现有观感不动。
+     */
+    if (host.onEditSource) container.addClass('ijipu-toolbar-inset')
     if (host.embedded) container.addClass('ijipu-embedded')
     markHostWidget()
 
