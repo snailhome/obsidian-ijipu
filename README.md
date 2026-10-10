@@ -10,9 +10,12 @@
 
 ## 安装 / Installation
 
-> **仅支持桌面端**（Windows / macOS / Linux）。内嵌的完整编辑器需要一个本机服务，
-> 用到了只有桌面版 Obsidian 才提供的 Node.js 接口，因此本插件在移动端不可用
-> （`manifest.json` 的 `isDesktopOnly: true`）。
+> **桌面端与手机端都支持**（Windows / macOS / Linux / Android / iOS；`manifest.json` 的 `isDesktopOnly: false`）。
+>
+> 两端的差别只在"**内嵌的完整 iJipu 编辑器**"：
+> 它需要一个本机服务（用到只有桌面版 Obsidian 才提供的 Node.js 接口），因此**桌面端**才提供；
+> **手机端**改为用宿主自己的编辑器打开 `.jps` 源码（带 iJipu 那套语法着色与语法错误提示），
+> 点「看谱」即回到谱面预览 —— 渲染、试听、格式化、` ```jps ` 代码块在两端**完全一致**。
 
 **从社区目录安装（推荐）**
 

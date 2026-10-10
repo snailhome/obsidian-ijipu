@@ -17,7 +17,7 @@
 | Release 附件有**构建来源证明** | ✓ `actions/attest-build-provenance`；核验 `gh attestation verify main.js --repo snailhome/obsidian-ijipu` |
 | CI 按**锁文件**严格安装（可复现构建） | ✓ `npm ci` |
 | 构建信息**可复现**（同 commit ⇒ 同产物） | ✓ 指纹取**提交时间**而非"打包时刻" |
-| 使用 Node/Electron API ⇒ `isDesktopOnly: true` | ✓ |
+| 若用到 Node/Electron API ⇒ 必须标 `isDesktopOnly: true`；**只在移动端不可用时才标** | ✓ **`isDesktopOnly: false`**（0.32.0 起支持手机端；`node:http`/`node:crypto` 已改为**惰性加载且仅在桌面端走**，手机端改用宿主编辑器 + 原生预览，详见 README「安装」） |
 
 ## 二、你需要做的三步（需登录，AI 无法代办）
 
