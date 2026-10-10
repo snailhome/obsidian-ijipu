@@ -21,9 +21,17 @@
  *
  * 网页产物由 `ijipu` 仓库构建并生成该文件（见 `scripts/embed-emit.mjs`），
  * 本服务只负责"按路径取出来回给浏览器"。
+ *
+ * ## 手机端安全（adj772：Obsidian 社区审核要求）
+ *
+ * 本文件依赖 `node:http` / `node:crypto`，二者**手机端不存在**。虽然 `main.ts` 只在桌面端
+ * 动态导入本模块，但审核的静态检查**只看文件自身** ⇒ 只要文件里有静态 `import 'node:…'` 就报
+ * 「Node.js APIs are not available on mobile」。所以这里：
+ *  · 类型用 `import type`（编译期擦除，不产生运行时 require）；
+ *  · 真正的 Node 模块**在函数内 `await import()`**（只有桌面端真的调用到这个函数时才会加载）。
+ *
+ * 连 `Server` 类型也不静态导入：`const server = createServer(...)` 的类型由**动态导入自动推断**。
  */
-import { createServer, type Server } from 'node:http'
-import { randomBytes } from 'node:crypto'
 import { WEBAPP_HTML, WEBAPP_ASSETS } from '../gen/webappAssets'
 
 export interface EmbedServer {
@@ -102,13 +110,15 @@ export const SOUNDFONT_URL_PREFIX = 'soundbanks/'
 export async function startEmbedServer(
   opts: { workletCode?: string; readSoundfont?: (id: string) => Promise<Buffer | null> } = {},
 ): Promise<EmbedServer> {
+  // adj772：Node 模块在**函数内**动态导入（审核要求；手机端永不走到这里，桌面端也只在首次启动时加载一次）
+  const [{ createServer }, { randomBytes }] = await Promise.all([import('node:http'), import('node:crypto')])
   const token = randomBytes(16).toString('hex')
   const html = Buffer.from(WEBAPP_HTML, 'utf8')
   const assets = decodeAssets()
   const workletCode = opts.workletCode ?? ''
   const readSoundfont = opts.readSoundfont
 
-  const server: Server = createServer((req, res) => {
+  const server = createServer((req, res) => {
     const raw = String(req.url ?? '/')
     // 剥掉 token 前缀：URL 形如 /<token>/ 或 /<token>/icons/xx.png
     const parts = raw.split('?')[0].split('/').filter((s) => s !== '')

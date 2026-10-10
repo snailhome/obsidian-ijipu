@@ -12,6 +12,12 @@
  * 时间戳改为**取该提交自身的时间**（从 git 对象里解出来），而**不是"打包那一刻"**。
  * 原因：后者让同一份源码在每次构建都产出不同字节 ⇒ 审核方重新构建永远对不上 Release 附件；
  * 前者让构建**可复现**（同 commit ⇒ 同产物），同时仍能区分不同提交的构建。
+ *
+ * adj772（社区审核的 Build verification **仍然报不一致** ⇒ 实测抓到真因）：
+ * 上面那步只解决"同机器可复现"，**跨时区仍不可复现** —— 原来用 `getHours()/getDate()` 等**本地时区**取值，
+ * 于是同一提交在 CST 构建得 `13:34`、在 CI（UTC）构建得 `05:34` ⇒ 字节不同（本轮逐字节比对确认：
+ * 两个产物**只差这一个字符串**，长度完全一样）。现改为**一律按 UTC**格式化 ⇒ 任何时区构建结果相同。
+ * （同一改动同步到应用侧 `ijipu/scripts/gen-build-info.mjs`，否则嵌入产物里的 `BUILD_DATE` 同样会跨时区漂移。）
  */
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { inflateSync } from 'node:zlib'
@@ -55,8 +61,9 @@ function commitTime(sha) {
 
 const sha = readCommitSha()
 const when = commitTime(sha) ?? new Date()
-const date = `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}`
-const stamp = `${date} ${pad(when.getHours())}:${pad(when.getMinutes())}`
+/** adj772：一律 **UTC** 取值 —— 跨时区可复现构建（此前本地时区导致 CI 与本地产物不一致） */
+const date = `${when.getUTCFullYear()}-${pad(when.getUTCMonth() + 1)}-${pad(when.getUTCDate())}`
+const stamp = `${date} ${pad(when.getUTCHours())}:${pad(when.getUTCMinutes())}`
 const commit = sha ? sha.slice(0, 8) : 'dev'
 
 const out = `// 由 scripts/gen-build-info.mjs 自动生成（勿手改）

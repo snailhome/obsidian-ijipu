@@ -325,13 +325,18 @@ export class IJipuSettingTab extends PluginSettingTab {
      * 而用户明确交代过：**音源默认走插件目录里的文件**。所以这里补一个最小入口：
      *  · 说明默认顺序（插件目录文件 → 本机缓存 → 联网下载）；
      *  · 一个「导入 .sf2…」按钮（复用 `plugin.importSoundfont`，写入插件目录，
-     *    该文件在 `.obsidian/plugins/ijipu/soundfonts/` 下，可随文库一起同步）；
+     *    该文件在「配置目录/plugins/ijipu/soundfonts/」下，可随文库一起同步）；
      *  · 异步补一行"当前插件目录里已有哪些文件"。
      */
+    /**
+     * adj772（Obsidian 社区审核）：提示文案里**不再硬编码 `.obsidian`** ——
+     * 配置目录可由用户改名（审核点：`Vault#configDir`），所以按实际值拼出来给用户看。
+     */
+    const bankDirHint = `${this.app.vault.configDir}/plugins/${this.plugin.manifest.id}/soundfonts/<id>.sf2`
     const bank = new Setting(host)
       .setName('音色库（高保真试听的音源）')
       .setDesc(
-        '试听优先用**插件目录里的文件**：`.obsidian/plugins/ijipu/soundfonts/<id>.sf2`\n' +
+        `试听优先用**插件目录里的文件**：\`${bankDirHint}\`\n` +
           '（顺序：插件目录文件 → 本机缓存 → 联网下载；想完全离线就先把文件导入进来）。\n\n' +
           '当前：正在读取…',
       )
@@ -364,7 +369,7 @@ export class IJipuSettingTab extends PluginSettingTab {
         }
       }
       bank.setDesc(
-        '试听优先用**插件目录里的文件**：`.obsidian/plugins/ijipu/soundfonts/<id>.sf2`\n' +
+        `试听优先用**插件目录里的文件**：\`${bankDirHint}\`\n` +
           '（顺序：插件目录文件 → 本机缓存 → 联网下载；想完全离线就先把文件导入进来）。\n\n' +
           `当前：\n${lines.join('\n')}`,
       )

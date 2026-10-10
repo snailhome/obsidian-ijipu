@@ -1196,19 +1196,27 @@
   flex-direction: column;
   overflow: hidden;
   position: relative;
+}
+/**
+ * adj772（Obsidian 社区审核："Avoid !important — override styles by increasing selector specificity"）：
+ * 这两条原本用 `!important` 反制宿主。改为**重复类名提权**（`.a.a` ⇒ 特异性 0,2,0），
+ * 既能压过宿主对容器/文本域的默认规则，又不再使用 `!important`。
+ * 注意：重复的是**选择器**里的类（DOM 上只有一个类），这是 CSS 里最常见的"提权但不加权重标记"写法。
+ */
+.ijipu-file-editing-fit.ijipu-file-editing-fit {
   /* 反制宿主：容器高度已按可视区钉好，不需要它那段"键盘内边距" */
-  padding-bottom: 8px !important;
-  max-height: none !important;
+  padding-bottom: 8px;
+  max-height: none;
 }
 
 .ijipu-file-editing-fit .ijipu-source-editor-fit,
-.ijipu-source-editor-fit {
+.ijipu-source-editor-fit.ijipu-source-editor-fit {
   flex: 0 0 auto;
-  /* 反制宿主：Obsidian 对 textarea 的 height/min-height/max-height 会盖掉我们的赋值 */
-  min-height: 0 !important;
-  max-height: none !important;
+  /* adj772：同样用重复类名提权替代 `!important`（反制宿主对 textarea 的 height/min/max 赋值） */
+  min-height: 0;
+  max-height: none;
   /* 默认 auto：量高度前先复位，这样 getBoundingClientRect 拿到的是真实顶部 */
-  height: auto !important;
+  height: auto;
 }
 
 /* iframe 尺寸自适应（原先在 frame.ts 里逐条内联）——与 .ijipu-web-frame 同一套规则 */

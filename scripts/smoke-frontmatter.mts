@@ -903,20 +903,27 @@ console.log('[12] .jps 文件视图：源码态填满窗口（adj402）')
   // ① 宿主 textarea 的 height/min-height/max-height；② `.view-content` 的 padding-bottom = 键盘高。
   // 这两条最容易被人"顺手简化"掉，而回归只在真机上暴露，故用断言钉住。
   //
-  // adj724b（社区审核）：反制手段由"逐条 inline + !important"改为 **CSS 类 + !important**
+  // adj724b（社区审核）：反制手段由"逐条 inline + !important"改为 **CSS 类**
   // （官方 lint 规则 `obsidianmd/no-static-styles-assignment` 不允许直接写 style），
   // 断言同步改为钉"类名 + styles.css 里的对应规则"——**防的仍是同一件事**（这两条反制被删掉）。
+  //
+  // adj772（社区审核 CSS 一节："Avoid !important — override styles by increasing selector specificity"）：
+  // 反制宿主**不再用 `!important`**，改为**重复类名提权**（`.a.a` ⇒ 特异性 0,2,0）。
+  // 断言因此同步升级，而且**比原来更强**：既要"规则在、能压过宿主（重复类名）"，又要"全文件不再有 !important 声明"。
   const cssSrc = readFileSync('styles.css', 'utf8')
-  check('adj408 反制宿主 textarea 的 height/min/max-height（改为 CSS 类 + !important）',
+  check('adj408/adj772 反制宿主 textarea 的 height/min/max-height（重复类名提权，不用 !important）',
     view.includes("addClass('ijipu-source-editor-fit')") &&
-      cssSrc.includes('.ijipu-source-editor-fit') &&
-      /max-height:\s*none\s*!important/.test(cssSrc) &&
-      /min-height:\s*0\s*!important/.test(cssSrc))
-  check('adj409 反制宿主的键盘 padding-bottom（真凶，改为 CSS 类 + !important）',
+      /\.ijipu-source-editor-fit\.ijipu-source-editor-fit\s*\{[\s\S]{0,200}?min-height:\s*0;/.test(cssSrc) &&
+      /\.ijipu-source-editor-fit\.ijipu-source-editor-fit\s*\{[\s\S]{0,200}?max-height:\s*none;/.test(cssSrc) &&
+      /\.ijipu-source-editor-fit\.ijipu-source-editor-fit\s*\{[\s\S]{0,200}?height:\s*auto;/.test(cssSrc))
+  check('adj409/adj772 反制宿主的键盘 padding-bottom（真凶；重复类名提权，不用 !important）',
     view.includes("addClass('ijipu-file-editing-fit')") &&
-      /\.ijipu-file-editing-fit[\s\S]{0,240}?padding-bottom:\s*8px\s*!important/.test(cssSrc))
+      /\.ijipu-file-editing-fit\.ijipu-file-editing-fit\s*\{[\s\S]{0,240}?padding-bottom:\s*8px;/.test(cssSrc))
   check('adj409 源码框高度按实测位置算（不再用 offsetHeight 估算）',
-    view.includes('ta.getBoundingClientRect().top') && /height:\s*auto\s*!important/.test(cssSrc))
+    view.includes('ta.getBoundingClientRect().top') && /height:\s*auto;/.test(cssSrc))
+  /** adj772：CSS 审核那条"避免 !important"的总闸门 —— 全文件不得再出现任何 `!important;` 声明 */
+  check('adj772 styles.css 不再出现 !important 声明（社区审核 CSS 一节）',
+    !/!important\s*;/.test(cssSrc), (cssSrc.match(/!important\s*;/g) ?? []).length + ' 处')
   // adj724b（社区审核）：样式必须走 CSS 类，不得再出现"直接写 style"的写法
   check('adj724b 不再直接写 style（社区审核 no-static-styles-assignment）',
     !/\.style\.(setProperty|width|height|display|border|maxHeight|flex)\b/.test(view))
@@ -2665,18 +2672,24 @@ console.log('\n[adj729] 音色库落插件目录（随文库一起走）')
   const renderSrc729 = s9('src/render.ts')
   const cssSrc729 = s9('styles.css')
 
-  check('adj729 音色库文件落在插件目录（soundfonts/<id>.sf2，走 vault.adapter）',
+  check('adj729/adj772 音色库文件落在插件目录（soundfonts/<id>.sf2，走 vault.adapter；兜底路径按 vault.configDir）',
     bankFileSrc.includes("const SOUNDFONT_DIR = 'soundfonts'") &&
       bankFileSrc.includes('createBankFileStore(app: App, manifestDir: string)') &&
       bankFileSrc.includes('app.vault.adapter.writeBinary(') &&
       bankFileSrc.includes('app.vault.adapter.readBinary(') &&
       !/app\.vault\.(createBinary|readBinary)\b/.test(bankFileSrc) &&
-      /this\.bankFiles = createBankFileStore\(this\.app, this\.manifest\.dir/.test(mainSrc729))
-  check('adj729/760 取用顺序由引擎 `planHqBankLoad` 决定（用户文件 → IndexedDB → 下载）；下载后写回插件目录',
+      /this\.bankFiles = createBankFileStore\([\s\S]{0,120}?this\.manifest\.dir/.test(mainSrc729) &&
+      // adj772（社区审核）：兜底路径**不得硬编码 `.obsidian`**，按 `vault.configDir` 拼
+      /this\.manifest\.dir \?\? `\$\{this\.app\.vault\.configDir\}\/plugins\/\$\{this\.manifest\.id\}`/.test(mainSrc729) &&
+      !/'\.obsidian\/plugins\//.test(mainSrc729))
+  check('adj729/760/adj772 取用顺序由引擎 `planHqBankLoad` 决定（用户文件 → IndexedDB → 下载）；下载后写回插件目录',
     /const plan = planHqBankLoad\(\{ userFile: !!fromFile && fromFile\.byteLength > 0, cache: !!hit \}\)/.test(soundbankSrc) &&
       /if \(plan === 'userFile' && fromFile\) return fromFile/.test(soundbankSrc) &&
       /export \{ HQ_LIBRARIES, getHqLibrary, hqBankFailureText \} from '@ijipu\/engine'/.test(soundbankSrc) &&
-      /const bank = await res\.arrayBuffer\(\)[\s\S]{0,200}?cache\.save\(lib\.id, bank\)[\s\S]{0,200}?files\.write\(lib\.id, bank\)/.test(soundbankSrc) &&
+      // adj772：下载改用 `requestUrl`（社区审核），结果仍是"写缓存 + 写插件目录"
+      /await requestUrl\(\{ url: lib\.source, throw: false \}\)[\s\S]{0,200}?cache\.save\(lib\.id, bank\)[\s\S]{0,220}?files\.write\(lib\.id, bank\)/.test(
+        soundbankSrc,
+      ) &&
       // 存量 IndexedDB 缓存也要**补写**成插件目录文件（迁移：老用户第一次试听就落盘）
       /await cache\.load\(lib\.id\)[\s\S]{0,400}?files\.write\(lib\.id, hit\)/.test(soundbankSrc))
   check('adj729 插件预览把存储层交给 playScore（否则等于没接）',
@@ -2770,9 +2783,11 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
   const bankFn = bankSrc741.slice(bankSrc741.indexOf('export async function loadHqBank'))
   const iFile = bankFn.indexOf('files.read(')
   const iCache = bankFn.indexOf('cache.load(')
-  const iFetch = bankFn.indexOf('await fetch(')
-  check('adj741 音源默认先读**插件目录里的文件**（顺序：文件 → 缓存 → 下载；手机端同样不联网）',
-    iFile >= 0 && iCache > iFile && iFetch > iCache,
+  // adj772（社区审核）：下载这一步由 `fetch(` 改为 Obsidian 的 `requestUrl(` —— 顺序判定的锚点同步换掉
+  const iFetch = bankFn.indexOf('await requestUrl(')
+  const iFetchLegacy = bankFn.indexOf('await fetch(')
+  check('adj741/adj772 音源默认先读**插件目录里的文件**（顺序：文件 → 缓存 → 下载；手机端同样不联网）',
+    iFile >= 0 && iCache > iFile && iFetch > iCache && iFetchLegacy < 0,
     `文件=${iFile} 缓存=${iCache} 下载=${iFetch}`)
 }
 

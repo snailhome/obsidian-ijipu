@@ -93,7 +93,11 @@ export default class IJipuPlugin extends Plugin {
     await this.loadSettings()
     this.workletUrl = this.makeWorkletUrl()
     // adj729：音色库文件的落点 = 插件自己的目录（`manifest.dir` 由 Obsidian 给出）
-    this.bankFiles = createBankFileStore(this.app, this.manifest.dir ?? '.obsidian/plugins/ijipu')
+    // adj772（社区审核）：兜底路径**不硬编码 `.obsidian`** —— 配置目录可由用户改名，按 `vault.configDir` 拼
+    this.bankFiles = createBankFileStore(
+      this.app,
+      this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`,
+    )
     // adj741：留一份设置页实例的引用，供"打开音色库"（手机端）把设置面板切到「说明」页签
     this.settingsTab = new IJipuSettingTab(this.app, this)
     this.addSettingTab(this.settingsTab)
