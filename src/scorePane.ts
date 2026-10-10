@@ -747,11 +747,14 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     }
     // ⚠ 捕获阶段（第三个参数 true）：任何子元素的 stopPropagation 都拦不住这次切换
     container.addEventListener('click', onContainerClick, true)
-    // 触摸端：抬起手指时若工具条仍隐藏，则补一次"显示"（部分 WebView 不派发 click 给非可点击元素）
-    container.addEventListener('pointerup', (e) => {
-      if (e.pointerType !== 'touch') return
-      if (!liveToolbar().hasClass('is-revealed')) revealToolbar(true)
-    })
+    /**
+     * adj779（用户实测「手机端代码块：刚进入显示一次，点击后隐藏，**再显示不再显示**」）：
+     *
+     * 真因是**我自己挂的两套监听在打架** —— 这里原本还有一条 `pointerup` 兜底
+     * （"触摸抬起时若隐藏就显示"），而一次触摸点击会**先 `pointerup` 再 `click`**：
+     *   `pointerup` ⇒ 显示；紧跟的 `click` ⇒ 翻转 ⇒ **又隐藏** ⇒ 净结果永远是"隐藏" ✗✗
+     * （这同时解释了"编辑模式看着根本不显示"）。**只要 click 这一条就够了**，删掉兜底。
+     */
     plugin.register(() => {
       container.removeEventListener('pointermove', onPointerMove)
       container.removeEventListener('pointerleave', onPointerLeave)
