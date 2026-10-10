@@ -111,63 +111,7 @@
   pointer-events: none;
 }
 
-/* ─────────── adj725：「编辑源码」按钮（块右上角的 `</>`）───────────
-   用户要求：「编辑切换如图的右上角方式」——照抄 Obsidian 给块自己挂的「编辑此块」
-   （见 app.css 的 `.embed-actions` / `.embed-action`：绝对定位在右上角、`--size-2-2` 内缩、
-   悬停才显、悬停给一层 `--background-modifier-hover`）。
-
-   与工具条**共用同一套显隐**（JS 同时加 `is-revealed`）：同属操作界面，导出笔记时都该消失。
-   点击后不做任何"就地编辑"——由 `host.onEditSource` 把焦点送回笔记里的这段源码。 */
-.ijipu-edit-source-btn {
-  position: absolute;
-  /* 与 Obsidian 的 `.embed-actions` 同一内缩量（`--size-2-2`，缺省 4px） */
-  top: var(--size-2-2, 4px);
-  right: var(--size-2-2, 4px);
-  z-index: 6; /* 高于工具条（5）与谱面：它压在块右上角 */
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 2px 4px;
-  border: none;
-  border-radius: var(--clickable-icon-radius, 4px);
-  /**
-   * ⚠ 底色与字色**一律不跟主题走** —— 这个按钮压在**恒为白色**的谱面纸张上
-   * （`.ijipu-svgs .ijipu-page-svg > svg { background: #ffffff }`）。
-   * 深色主题下 `--text-normal` / `--embed-action-color` 是浅灰（#dadada），压在白纸上
-   * 对比度 ≈1.1:1 ⇒ **看不见**（用户报「鼠标移上去也看不见 `</>`」）。
-   * 故固定为「半透明深底 + 白字」：白底上合成后的对比度 ≈4:1（悬停更深 ≈5.7:1），
-   * 亮/暗主题下都清楚；也天然像一枚浮在纸张上的小控件。
-   * （对比度由 `verify-score-crop.mjs` 在真实浏览器里按合成后的颜色实算，不是估的。）
-   */
-  background: rgb(0 0 0 / 55%);
-  box-shadow: 0 1px 3px rgb(0 0 0 / 30%);
-  color: #ffffff;
-  cursor: var(--cursor, pointer);
-  opacity: 0;
-  visibility: hidden;
-  transition:
-    opacity 120ms ease,
-    visibility 0s linear 120ms;
-}
-.ijipu-edit-source-btn.is-revealed {
-  opacity: 1;
-  visibility: visible;
-  transition:
-    opacity 120ms ease,
-    visibility 0s linear 0s;
-}
-/* 移动端常显（与工具条同一口径：触屏没有 hover，藏了就点不到） */
-.is-mobile .ijipu-edit-source-btn {
-  opacity: 1;
-  visibility: visible;
-}
-@media (hover: hover) {
-  /* 悬停：底色更深一档（按钮本身已在"悬停才显形"的态里，所以这就是它的悬停反馈） */
-  .ijipu-edit-source-btn.is-revealed:hover {
-    background-color: rgb(0 0 0 / 68%);
-  }
-}
-
+/* adj773：</>（块右上角那枚编辑按钮）的样式随该功能一起删除 —— 现在三处预览只有工具条最右的「编辑」。 */
 /* 尺寸变量/换行/容器查询。`display: flex` 在这里（不影响显隐 —— 显隐由上面的
    `visibility` + `opacity` 与 `is-revealed` 类控制）。 */
 .ijipu-score-toolbar {

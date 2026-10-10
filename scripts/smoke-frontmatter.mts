@@ -2410,11 +2410,17 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
    * 现固定为「半透明深底 + 白字」（≈4.8:1，悬停更深）。真实对比度由
    * `verify-score-crop.mjs` 在浏览器里按"底色合成到白纸"实算并断言 ≥3:1。
    */
-  check('adj725c `</>` 用固定的"半透明深底 + 白字"（不再跟主题取色，否则白纸上看不见）',
-    /\.ijipu-edit-source-btn\s*\{[^}]*background:\s*rgb\(0 0 0 \/ \d+%\)/.test(css725nc) &&
-      /\.ijipu-edit-source-btn\s*\{[^}]*color:\s*#ffffff/.test(css725nc) &&
-      !/\.ijipu-edit-source-btn\s*\{[^}]*color:\s*var\(--/.test(css725nc) &&
-      /\.ijipu-edit-source-btn\.is-revealed:hover\s*\{[^}]*background-color:\s*rgb\(0 0 0 \/ \d+%\)/.test(css725nc))
+  /**
+   * adj725c → **adj773 反向判据**：`</>`（块右上角那枚"编辑源码"）连同它的"半透明深底 + 白字"配色
+   * 已随功能删除（用户要求统一成工具条最右那枚「编辑」）。
+   *
+   * 原断言守的是"这枚按钮压在**恒为白**的谱面纸张上不能跟主题取色，否则看不见"这个真实教训 ——
+   * 现在的载体换成了工具条：它自带 `--background-secondary` 底色，所以这里保留两条：
+   * ① 旧按钮的样式必须**不存在**（防止有人把它捡回来）；② 工具条自身仍需有底色。
+   */
+  check('adj773 `</>` 的样式已随功能删除；工具条自身仍有底色（谱面纸张恒白）',
+    !/ijipu-edit-source-btn/.test(css725nc) &&
+      /\.ijipu-score-toolbar\s*\{[^}]*background:\s*var\(--background-secondary/.test(css725nc))
 
   /**
    * ⑦ adj725d（用户报「小节序号数字偏上，未在方框正中」）：**不能再让宿主的 sanitizeHTMLToDom 处理 SVG**。
