@@ -19,6 +19,16 @@ export type { JpsToken, JpsTokenClass } from './highlight/jpsHighlight'
 // adj757：错误/告警 → 源码"块"区间的换算（应用渲染 HTML 外框、插件打 CM6 decoration，共用这一份）
 export { jpsBlockSpan, jpsBlockMarks, jpsSeverityOf } from './highlight/jpsProblems'
 export type { JpsBlockMark } from './highlight/jpsProblems'
+// adj758（清单 B1）：试听**色块**的位置/分组/配色（应用与插件共用这一份；两端只做绘制）
+export {
+  PLAYHEAD_COLORS,
+  segVoiceColor,
+  trackKeysOf,
+  instrumentColorMap,
+  playheadBaseOf,
+  playheadPosIn,
+} from './playback/playhead'
+export type { PlayheadPos, PlayheadSegAt } from './playback/playhead'
 // adj629h：歌词行里 `{tp … }` 替谱段的识别（格式化 / 编辑器着色都要在 `C…:` 行里找它）
 export { matchSegmentHead, findSegmentEnd } from './parser/tokenizer'
 export { tokenDuration, durationMs } from './duration'

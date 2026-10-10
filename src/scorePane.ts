@@ -15,7 +15,8 @@
 import { Menu, Notice, sanitizeHTMLToDom } from 'obsidian'
 import { writeJpsConfig, mergeConfigEdits, dragDelta, clamp, formatJps, type PageConfig } from '@ijipu/engine'
 import { renderScoreFull, playScore, type PlayheadSeg } from './render'
-import { instrumentColorMap, playheadBaseOf, playheadPosIn, trackKeysOf, type PlayheadPos } from './playhead'
+// adj758（清单 B1）：色块的分组/定位/配色来自 **引擎**（应用与插件共用一份；此处只做绘制）
+import { instrumentColorMap, playheadBaseOf, playheadPosIn, trackKeysOf, type PlayheadPos } from '@ijipu/engine'
 import { resolvePageConfig } from './config'
 import { ConfigDialog } from './configDialog'
 // adj631：「保存为插件默认」要按"本次真正改动过的项"写入（changedDefs）+ 等于引擎默认则不存（isDefaultValue）

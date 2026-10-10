@@ -5,10 +5,9 @@
  * 断言来源：用户反馈「在 frontmatter 里设置像 `ijipu_note_size` 好像没生效」——
  * 覆盖键名写法兼容、值类型转换、未识别键提示、优先级四类。
  */
-import { defaultPageConfig, dragDelta, formatJps, layoutScore, parseJps, renderScoreToSvg, tokenizeJpsLine, writeJpsConfig, mergeConfigEdits, configCarryover, SCORE_FONT_OPTIONS, buildPlaySequence, GUIDE_LIMITS, GUIDE_LIMITS_EX, SEGMENT_ROW_GAP_DEFAULT, OPTIONAL_CONFIG_FIELDS, defaultConfigForReset, extractJpsConfig, extractLegacyEditorPrefs, nonDefaultConfigKeys, GM_GROUPS } from '@ijipu/engine'
+import { defaultPageConfig, dragDelta, formatJps, instrumentColorMap, layoutScore, parseJps, playheadBaseOf, playheadPosIn, renderScoreToSvg, tokenizeJpsLine, trackKeysOf, writeJpsConfig, mergeConfigEdits, configCarryover, SCORE_FONT_OPTIONS, buildPlaySequence, GUIDE_LIMITS, GUIDE_LIMITS_EX, SEGMENT_ROW_GAP_DEFAULT, OPTIONAL_CONFIG_FIELDS, defaultConfigForReset, extractJpsConfig, extractLegacyEditorPrefs, nonDefaultConfigKeys, GM_GROUPS } from '@ijipu/engine'
 import type { PageConfig } from '@ijipu/engine'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
-import { instrumentColorMap, playheadBaseOf, playheadPosIn, trackKeysOf } from '../src/playhead'
 // adj738：原来这里从 `../src/frontmatter` 导入 applyFrontmatter / frontmatterKey / PAGE_CONFIG_FIELDS 等
 // ——笔记 frontmatter 那一层（连同 `src/frontmatter.ts`）已整体删除，相关断言一并删除。
 import { PAGE_NUM_RANGES, clampNum } from '../src/numRanges'
@@ -1016,9 +1015,9 @@ console.log('[adj452] playhead blocks follow playVoice / instrument / engine bou
     const plain = [...groups.values()].map((segs) => segs.find((s) => s.yTopMin === undefined)).find(Boolean)
     if (plain) {
       const p2 = playheadPosIn([plain], plain.atMs + 1, plain.pageIndex, noteSize)
-      check('adj452 无动态定界时回退 [y−1.6×字号, y+0.6×字号]（与应用同公式）',
+      check('adj452/758 无动态定界时回退单声部默认 [y−1.6×字号, y+1.1×字号]（统一按**应用**那版：上下各留 0.5 字号延伸）',
         p2 !== null && Math.abs(p2.yTop - (plain.y - noteSize * 1.6)) < 1e-9 &&
-        Math.abs(p2.yBottom - (plain.y + noteSize * 0.6)) < 1e-9,
+        Math.abs(p2.yBottom - (plain.y + noteSize * 1.1)) < 1e-9,
         p2 ? `${p2.yTop}/${p2.yBottom}` : 'null')
     }
     // ④ 最后一段播完 / 别的页 → 不残留旧块
