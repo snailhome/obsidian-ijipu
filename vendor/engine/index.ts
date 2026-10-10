@@ -39,6 +39,9 @@ export {
   offsetOf,
 } from './diagnostics/problems'
 export type { ProblemSeverity, ProblemLabels, ProblemRow, ProblemSummary } from './diagnostics/problems'
+// adj760（清单 B3）：音源库**清单**与**取用顺序策略**（列表/顺序/失败文案共用；IO 留宿主）
+export { HQ_LIBRARIES, getHqLibrary, planHqBankLoad, hqBankFailureText } from './playback/soundbanks'
+export type { HqSampleLibrary, HqBankSource } from './playback/soundbanks'
 // adj629h：歌词行里 `{tp … }` 替谱段的识别（格式化 / 编辑器着色都要在 `C…:` 行里找它）
 export { matchSegmentHead, findSegmentEnd } from './parser/tokenizer'
 export { tokenDuration, durationMs } from './duration'

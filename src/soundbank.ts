@@ -12,36 +12,12 @@
 import { WorkletSynthesizer } from 'spessasynth_lib'
 import { instrumentToProgram, pitchToMidiNote, GmChannelAllocator, GM_VOICES } from '@ijipu/engine'
 import type { GmVoice } from '@ijipu/engine'
+// adj760（清单 B3）：音源库**清单**与**取用顺序策略**来自引擎（与应用共用）——插件里不再各存一份
+import { planHqBankLoad } from '@ijipu/engine'
+import type { HqSampleLibrary } from '@ijipu/engine'
+export { HQ_LIBRARIES, getHqLibrary, hqBankFailureText } from '@ijipu/engine'
+export type { HqSampleLibrary, HqBankSource } from '@ijipu/engine'
 import type { BankFileStore } from './bankFile'
-
-/** 高保真音源库（SF2/SF3/DLS）元数据 */
-export interface HqSampleLibrary {
-  id: string
-  name: string
-  source: string
-  fallbackSource?: string
-  sizeBytes: number
-  format: 'sf2' | 'sf3' | 'dls'
-}
-
-/** 高保真音源库列表——通用音源（GeneralUser GS）。默认库 source 为远端 raw（插件不打包 32MB SF2）；有 R2 公开桶时换上更快 URL。 */
-export const HQ_LIBRARIES: HqSampleLibrary[] = [
-  {
-    id: 'generaluser_gs',
-    name: '通用音源（GeneralUser GS）',
-    source: 'https://raw.githubusercontent.com/mrbumpy409/GeneralUser-GS/main/GeneralUser-GS.sf2',
-    fallbackSource: '',
-    sizeBytes: 32_319_396,
-    format: 'sf2',
-  },
-]
-export function getHqLibrary(id?: string | null): HqSampleLibrary {
-  if (id) {
-    const f = HQ_LIBRARIES.find((l) => l.id === id)
-    if (f) return f
-  }
-  return HQ_LIBRARIES[0]
-}
 
 /**
  * GM 全集（program 0-127，中文名）——音色设置用。
@@ -162,12 +138,15 @@ export async function loadHqBank(
   cache: HqCache,
   files?: BankFileStore | null,
 ): Promise<ArrayBuffer> {
-  if (files) {
-    const fromFile = await files.read(lib.id)
-    if (fromFile && fromFile.byteLength > 0) return fromFile
-  }
-  const hit = await cache.load(lib.id)
-  if (hit) {
+  /**
+   * adj760：**顺序由引擎的 `planHqBankLoad` 决定**（唯一口径：本地文件 → 本机缓存 → 联网下载），
+   * 本函数只负责执行与把结果写回各级 —— 免得"应用一种顺序、插件另一种顺序"。
+   */
+  const fromFile = files ? await files.read(lib.id) : null
+  const hit = fromFile && fromFile.byteLength > 0 ? null : await cache.load(lib.id)
+  const plan = planHqBankLoad({ userFile: !!fromFile && fromFile.byteLength > 0, cache: !!hit })
+  if (plan === 'userFile' && fromFile) return fromFile
+  if (plan === 'cache' && hit) {
     // 存量缓存：补写一份到插件目录（迁移；失败不影响本次试听）
     if (files) {
       try {

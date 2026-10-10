@@ -2553,12 +2553,13 @@ console.log('\n[adj729] 音色库落插件目录（随文库一起走）')
       bankFileSrc.includes('app.vault.adapter.readBinary(') &&
       !/app\.vault\.(createBinary|readBinary)\b/.test(bankFileSrc) &&
       /this\.bankFiles = createBankFileStore\(this\.app, this\.manifest\.dir/.test(mainSrc729))
-  check('adj729 取用顺序 = 插件目录文件 → IndexedDB → 下载；且下载后写回插件目录',
-    /if \(files\) \{[\s\S]{0,200}?files\.read\(lib\.id\)/.test(soundbankSrc) &&
-      /const hit = await cache\.load\(lib\.id\)/.test(soundbankSrc) &&
+  check('adj729/760 取用顺序由引擎 `planHqBankLoad` 决定（用户文件 → IndexedDB → 下载）；下载后写回插件目录',
+    /const plan = planHqBankLoad\(\{ userFile: !!fromFile && fromFile\.byteLength > 0, cache: !!hit \}\)/.test(soundbankSrc) &&
+      /if \(plan === 'userFile' && fromFile\) return fromFile/.test(soundbankSrc) &&
+      /export \{ HQ_LIBRARIES, getHqLibrary, hqBankFailureText \} from '@ijipu\/engine'/.test(soundbankSrc) &&
       /const bank = await res\.arrayBuffer\(\)[\s\S]{0,200}?cache\.save\(lib\.id, bank\)[\s\S]{0,200}?files\.write\(lib\.id, bank\)/.test(soundbankSrc) &&
       // 存量 IndexedDB 缓存也要**补写**成插件目录文件（迁移：老用户第一次试听就落盘）
-      /await cache\.load\(lib\.id\)[\s\S]{0,300}?files\.write\(lib\.id, hit\)/.test(soundbankSrc))
+      /await cache\.load\(lib\.id\)[\s\S]{0,400}?files\.write\(lib\.id, hit\)/.test(soundbankSrc))
   check('adj729 插件预览把存储层交给 playScore（否则等于没接）',
     /bankFiles: plugin\.getBankFiles\(\)/.test(s9('src/scorePane.ts')) &&
       /bankFiles\?: BankFileStore \| null/.test(renderSrc729) &&
