@@ -1857,8 +1857,8 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
    * 类一丢 ⇒ 宿主 `.cm-embed-block:hover{overflow:hidden}` 会把浮在块外的工具条整条裁掉
    * （`</>` 同时退回主题色）—— 用户看到的就是"编辑模式下什么都没有"。
    */
-  check('adj737 显示工具条前重新确认宿主块的 `ijipu-cm-host` 类（CM6 换容器后类会丢）',
-    /const revealToolbar = \(on: boolean\): void => \{[\s\S]{0,420}?if \(on\) \{[\s\S]{0,90}?markHostWidget\(\)/.test(pane725) &&
+  check('adj737/761 落位判定时确认宿主块的 `ijipu-cm-host` 类（CM6 换容器后类会丢）',
+    /const decidePlacement = \(\): void => \{[\s\S]{0,400}?markHostWidget\(\)/.test(pane725) &&
       /if \(!widget\.hasClass\('ijipu-cm-host'\)\) widget\.addClass\('ijipu-cm-host'\)/.test(pane725) &&
       /hostWidgetEl\?\.removeClass\('ijipu-cm-host'\)/.test(pane725))
 
@@ -2028,7 +2028,7 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
    * 宿主的裁剪机制不可能穷举 ⇒ 改为**自愈**：命中失败就把工具条**贴回块内**（祖先的裁剪框
    * 至少包含块本身 ⇒ 块内一定不会被裁），并在诊断里记下"兜底 + 复测结果"。
    */
-  check('adj751/755 工具条命中失败时自愈（先放宽上游、再贴回块内），且**每次显示重新判定**',
+  check('adj751/755 工具条命中失败时自愈（先放宽上游、再贴回块内），且**每个面板只判定一次**（不再每次显示重判 ⇒ 不闪动）',
     /const hitSelf = hit !== null && toolbarEl\.contains\(hit\)/.test(pane725) &&
       /if \(!hitSelf && inViewport && !wasInside\) \{/.test(pane725) &&
       /toolbarEl\.addClass\('ijipu-toolbar-inside'\)/.test(pane725) &&
@@ -2111,13 +2111,13 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
    * 修法三件：收起前看 `toolbar.matches(':hover')`、收起**延迟 240ms 并复查**、
    * 工具条自身 `pointerenter` 保持显示（`pointerleave` 再走同一套判定）。
    */
-  check('adj753 工具条"抓不住"的交互修复：悬停在工具条上不收、离开延迟 240ms 复查',
+  check('adj753/761 工具条"抓不住/闪动"的交互修复：悬停不收、离开延迟 240ms 复查、已显示则不再重跑重量级逻辑',
     /if \(toolbar\.matches\(':hover'\)\) return/.test(pane725) &&
       /hideTimer = window\.setTimeout\(\(\) => \{/.test(pane725) &&
       /\}, 240\)/.test(pane725) &&
       /toolbar\.addEventListener\('pointerenter', cancelHide\)/.test(pane725) &&
       /toolbar\.addEventListener\('pointerleave', scheduleHide\)/.test(pane725) &&
-      /cancelHide\(\)\s*\n\s*revealToolbar\(true\)/.test(pane725))
+      /cancelHide\(\)[\s\S]{0,200}?if \(toolbar\.hasClass\('is-revealed'\)\) return[\s\S]{0,80}?revealToolbar\(true\)/.test(pane725))
 
   /**
    * adj754（用户两点）：
@@ -2155,7 +2155,7 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
    * 现在：**每次显示都重新判定** —— 命中自身就**移除**贴内类（回到规范的"外部左上角"）；
    * 未命中则先**放宽上游 `contain`** 再复测，仍不行才临时贴回块内。
    */
-  check('adj755 工具条位置规范：每次显示重新判定；命中就回"外部"、失败先放宽上游再兜底',
+  check('adj761 工具条落位：**只判定一次**（外侧优先 → 放宽上游复测 → 不行才固定内侧）',
     /if \(hitSelf && wasInside\) \{/.test(pane725) &&
       /toolbarEl\.removeClass\('ijipu-toolbar-inside'\)/.test(pane725) &&
       /const relaxed = relaxUpstreamClipping\(\)/.test(pane725) &&

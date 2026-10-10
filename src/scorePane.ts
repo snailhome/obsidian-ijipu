@@ -540,13 +540,57 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
      * adj725：块右上角的 `</>` 按钮与工具条**共用这一套显隐**（`is-revealed`）——
      * 两处都是"操作界面"，导出时都该消失，行为也该一致。
      */
+    /**
+     * adj761（用户报「工具条还在预览区内，而且鼠标移动时会**闪动**」，诊断里 `opacity=0` + 位置在块内）：
+     *
+     * 根因：`adj755` 把落位改成"**每次显示都重新判定**"，而 `revealToolbar(true)` 又被
+     * **每一次 `pointermove`** 调用 ⇒ 于是一次移动里做了一整套重量级动作
+     * （打宿主类 + 逐层放宽 `contain` + 命中测试 + 内侧兜底）⇒ 工具条在"外侧 / 内侧"之间来回翻
+     * ⇒ 观感就是闪动；而这个宿主的外侧判定会失败 ⇒ 最终又停在内侧。
+     *
+     * 改成两条：
+     *  · **每个面板只判定一次落位**（先试外侧 ⇒ 不行才内侧），此后固定不动 ⇒ 不闪；
+     *  · 鼠标移动只做"确认显示 + 取消收起"这件轻量事（重量级动作只在**首次**或**重画后**做一次）。
+     */
+    let placementDecided = false
+    let placementInside = false
+    const decidePlacement = (): void => {
+      if (placementDecided) return
+      placementDecided = true
+      // 先确认宿主块被标了类（宿主容器会被 CM6 换掉，类会丢）
+      markHostWidget()
+      // 逐层放开会裁剪的祖先（滚动容器除外），并把实测快照记进诊断
+      const facts = exemptClippingAncestors()
+      // 外侧先试：这一帧按外侧渲染，下一帧量"在那个点上是不是我们"
+      window.requestAnimationFrame(() => {
+        const r = toolbar.getBoundingClientRect()
+        const hit = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2))
+        if (hit !== null && toolbar.contains(hit)) {
+          placementInside = false
+          noteToolbar('落位判定：**外侧**（命中自身）', facts, toolbar)
+          return
+        }
+        // 外侧被裁 ⇒ 再放宽上游一层并复测一次，仍不行才固定为"内侧"
+        const relaxed = relaxUpstreamClipping()
+        window.requestAnimationFrame(() => {
+          const r2 = toolbar.getBoundingClientRect()
+          const h2 = document.elementFromPoint(Math.round(r2.left + r2.width / 2), Math.round(r2.top + r2.height / 2))
+          if (h2 !== null && toolbar.contains(h2)) {
+            placementInside = false
+            noteToolbar('落位判定：**外侧**（放宽上游后命中）', [...facts, ...relaxed], toolbar)
+            return
+          }
+          placementInside = true
+          toolbar.addClass('ijipu-toolbar-inside')
+          noteToolbar('落位判定：**内侧**（外侧被裁，固定贴回块内，不再来回切）', [...facts, ...relaxed], toolbar)
+        })
+      })
+    }
     const revealToolbar = (on: boolean): void => {
-      // adj737：**先**确认宿主块被标了类再显示 —— 否则悬停那一下正好被宿主的
-      // `.cm-embed-block:hover { overflow: hidden }` 裁掉（实时预览里块容器会被 CM6 换掉，类会丢）
       if (on) {
-        markHostWidget()
-        // adj740：再逐层放开**所有**会裁剪的祖先（滚动容器除外），并把实测快照记进设置页诊断
-        noteToolbar('指针进入/键盘唤醒（显示工具条）', exemptClippingAncestors(), toolbar)
+        decidePlacement()
+        // 落位已定 ⇒ 只保证可见（轻量；不再做宿主类/放宽/命中测试）
+        if (placementInside && !toolbar.hasClass('ijipu-toolbar-inside')) toolbar.addClass('ijipu-toolbar-inside')
       }
       toolbar.toggleClass('is-revealed', on)
       editSourceBtn?.toggleClass('is-revealed', on)
@@ -580,6 +624,8 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       // 移动端由 CSS 常显兜底，这里不重复判断。
       if (e.pointerType === 'touch') return
       cancelHide()
+      // adj761：已经显示着就**什么都不用做**（此前每次都跑一整套重量级动作 ⇒ 内外翻 = 闪动）
+      if (toolbar.hasClass('is-revealed')) return
       revealToolbar(true)
     }
     const onPointerLeave = (): void => {
