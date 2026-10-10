@@ -1321,7 +1321,16 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
      * 元素已被重画（`isConnected === false`）就放弃 —— 那时新的 svg 有自己的重试。
      */
     function scheduleCropRetry(svgEl: SVGSVGElement, c: typeof cfg, attempt = 0): void {
-      const delays = [0, 60, 300]
+      /**
+       * adj780b（用户实测「关闭排版后有偶发的情况不会自动裁剪」，诊断写着
+       * 「未量到内容盒（那一刻谱面还没进渲染树；已自动重试 3 次、并挂了 ResizeObserver 等它进树）」）：
+       *
+       * 只重试 3 次（最远 300ms）对"切换模式后要等新容器真正进渲染树"这件事**太短了** ⇒
+       * 放弃补量后就永久留着空白 ✗（"偶发"正是因为大多时候来得及、偶尔来不及）。
+       * 阶梯加长到 5 档（最远 3s），覆盖"跨帧/跨布局/等字体"这些常见情形；
+       * `ResizeObserver` 那条仍作为尺寸变化时的独立补量路径。
+       */
+      const delays = [0, 60, 300, 1000, 3000]
       const run = (): void => {
         if (!svgEl.isConnected) return
         const fresh = measureContentBox(svgEl)
@@ -1332,7 +1341,7 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
           return
         }
         if (attempt + 1 < delays.length) scheduleCropRetry(svgEl, c, attempt + 1)
-        else noteCrop('未量到内容盒（那一刻谱面还没进渲染树；已自动重试 3 次、并挂了 ResizeObserver 等它进树）')
+        else noteCrop('未量到内容盒（那一刻谱面还没进渲染树；已自动重试 5 次、并挂了 ResizeObserver 等它进树）')
       }
       if (delays[attempt] === 0) window.requestAnimationFrame(run)
       else window.setTimeout(run, delays[attempt])

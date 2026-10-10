@@ -2412,7 +2412,9 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
     /const box = svgEl\.isConnected \? measureContentBox\(svgEl\) : null/.test(pane725) &&
       /if \(svgEl\.dataset\.cropRetried !== '1'\) \{[\s\S]{0,260}?observeUntilMeasured\(svgEl, c\)[\s\S]{0,80}?scheduleCropRetry\(svgEl, c\)/.test(pane725) &&
       /new ResizeObserver\(/.test(pane725) &&
-      /const delays = \[0, 60, 300\]/.test(pane725) &&
+      // adj780b：重试阶梯从 3 档加长到 5 档（最远 3s）——「偶发不裁剪」正是因为 300ms 内偶尔还没进渲染树
+      /const delays = \[0, 60, 300, 1000, 3000\]/.test(pane725) &&
+      /已自动重试 5 次、并挂了 ResizeObserver/.test(pane725) &&
       /if \(!svgEl\.isConnected\) return/.test(pane725))
   check('adj725b 补量用的观察器在重画与 destroy 时都断开（不留悬空监听）',
     /for \(const ro of cropObservers\) ro\.disconnect\(\)/.test(pane725) &&
