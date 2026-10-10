@@ -2938,15 +2938,23 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       /hoverTooltip\(\(view, pos\) => \{[\s\S]{0,80}?if \(scopeOf\(view\) === null\) return null/.test(hl) &&
       // 负对照：把"只标正文行"那一句摘掉后，判据必须为假（证明它真的在挡 markdown 文本）
       !hl.replace(hlBodyClause, '').includes(hlBodyClause))
-  check('adj774 自动格式化覆盖代码块：markdown 里"光标离开块内正文行"才格式化，其它 markdown 文本不碰',    /const isMarkdown = !isOurJpsFile && file\.extension === 'md'/.test(main774) &&
+  check('adj774/adj774e 自动格式化覆盖代码块：只对**已闭合**块的正文行触发，其它 markdown 文本不碰',
+    /const isMarkdown = !isOurJpsFile && file\.extension === 'md'/.test(main774) &&
       /const blocks = jpsBlockRanges\(editor\.getValue\(\)\)/.test(main774) &&
-      /if \(!isJpsBodyLine\(blocks, prevLine \+ 1\)\) return/.test(main774) &&
+      /**
+       * adj774e（发布前自审发现的**数据安全**问题）：自动格式化只认**已闭合**的块。
+       * 围栏扫描的口径是"未闭合的围栏延伸到文末"（为让着色/错误提示即时生效），若把这条口径
+       * 直接用到"真去改文件"上，用户忘写收尾围栏时**普通正文**也会被 `formatLine` 悄悄规范化。
+       * 装饰照旧覆盖未闭合块（那反而是"你还没收尾"的有用提示），但改文件必须保守。
+       */
+      /const closedBlock = blocks\.some\(\(b\) => b\.fenceEnd !== null && line >= b\.bodyStart && line <= b\.bodyEnd\)/.test(main774) &&
+      /if \(!closedBlock\) return/.test(main774) &&
+      // 旧判据（"只要在正文行里"）不得再用于自动格式化 —— 它没排除未闭合块
+      !/if \(!isJpsBodyLine\(blocks, prevLine \+ 1\)\) return/.test(main774) &&
       // 大文档不猜（宁可少格式化，也不能让打字变卡）
       /editor\.getValue\(\)\.length > 200_000/.test(main774) &&
-      // 负对照：去掉"必须在正文行内"这一句 ⇒ 判据为假
-      !main774
-        .replace('if (!isJpsBodyLine(blocks, prevLine + 1)) return', '')
-        .includes('if (!isJpsBodyLine(blocks, prevLine + 1)) return'))
+      // 负对照：去掉"必须是已闭合块"这一句 ⇒ 判据为假
+      !main774.replace(/if \(!closedBlock\) return/, '').includes('if (!closedBlock) return'))
 
   /**
    * adj774 **端到端行为测试**：把"最有风险的那一步"——**行号偏移**——用真实数据验一遍。

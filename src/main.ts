@@ -2,7 +2,7 @@ import { Events, Keymap, MarkdownRenderChild, MarkdownView, Notice, Platform, Pl
 // adj749d：自动格式化（光标离开本行时格式化该行）用**引擎里那份应用自己的**逐行格式化器
 import { formatLine } from '@ijipu/engine'
 // adj774：markdown 笔记里 ```jps 代码块的围栏扫描（着色/错误提示/自动格式化三处共用同一份口径）
-import { isJpsBodyLine, jpsBlockRanges } from './jpsBlocks'
+import { jpsBlockRanges } from './jpsBlocks'
 import { IJipuSettingTab } from './settings'
 import { mountScorePane, type ScorePaneHandle } from './scorePane'
 import { registerJpsEmbeds } from './embed'
@@ -432,10 +432,20 @@ export default class IJipuPlugin extends Plugin {
        * ⚠ 只在"这一行确实在 ```jps 块正文里"时才格式化。
        * 大文档下 `getValue()` + 扫描是 O(行数)，但只在**换行**时各跑一次（不是每键），可接受；
        * 超过阈值就不猜了（宁可少格式化，也不能让打字变卡）。
+       *
+       * adj774e（发布前自审发现的**数据安全**问题）：围栏扫描的口径是"**未闭合的围栏延伸到文末**"
+       * （这样用户刚敲 ` ```jps ` 还没写收尾时，着色/错误提示就已经生效 —— 见 `jpsBlocks.ts`）。
+       * 但这条口径若**直接用在自动格式化上**就危险了：用户忘了写收尾围栏时，后面**普通正文**
+       * 也会被当成块内行 ⇒ `formatLine` 一规范化就可能**悄悄改写他的文字**（例如把连续空格并成一个）。
+       *
+       * 所以自动格式化**只认已闭合的块**：装饰（着色/错误提示）照旧覆盖未闭合块 —— 那反而是个有用的
+       * 提示"你还没收尾"；而"真去改文件"这件事必须保守。
        */
       if (editor.getValue().length > 200_000) return
       const blocks = jpsBlockRanges(editor.getValue())
-      if (!isJpsBodyLine(blocks, prevLine + 1)) return
+      const line = prevLine + 1
+      const closedBlock = blocks.some((b) => b.fenceEnd !== null && line >= b.bodyStart && line <= b.bodyEnd)
+      if (!closedBlock) return
     }
     const before = editor.getLine(prevLine)
     const after = formatLine(before)
