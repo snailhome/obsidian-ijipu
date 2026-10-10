@@ -653,7 +653,22 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
         el.removeClass('ijipu-toolbar-inside')
       }
       if (placementInside && !el.hasClass('ijipu-toolbar-inside')) el.addClass('ijipu-toolbar-inside')
-      decidePlacement(el)
+      /**
+       * adj784（用户实测：「代码块**阅读/编辑模式下工具条位置不一致**」）：
+       *
+       * 根因就在这一步 —— `decidePlacement()` 靠"外侧那个点上命中测试能不能命中自己"来判断落位，
+       * 而**这个判定在两种模式下结论不同**（阅读模式的段间留白 vs 实时预览里宿主 widget 的裁剪），
+       * 判定为"内侧"时会给工具条加 `ijipu-toolbar-inside` ⇒ 位置随之变化 ✗。
+       *
+       * 而代码块现在用的是**"块内预留空带"**（adj782：容器 `padding-top` + 工具条锚容器顶边），
+       * 这套位置**纯由 CSS 决定、与模式无关** ⇒ 就**不该再参与这套落位判定**：
+       * 直接跳过，位置在两种模式下必然一致。
+       */
+      if (container.hasClass('ijipu-toolbar-inset')) {
+        noteToolbar('落位：固定为「块内预留空带」（不做与模式相关的落位判定）', [], el)
+      } else {
+        decidePlacement(el)
+      }
     }
     /**
      * adj753（用户第四轮「工具条还是没有显示」，而诊断显示它 `命中自身 ✓ / opacity=1 / 视口内=是`）：
