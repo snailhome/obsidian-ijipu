@@ -53,6 +53,8 @@ export { createPlaybackClock } from './playback/clock'
 export type { PlaybackClock, PlaybackClockOptions } from './playback/clock'
 // adj765（清单 B7）：新建空白谱的**模板文本**（唯一来源；应用侧那支 .jps 文件与插件常量都由断言钉住）
 export { DEFAULT_NEW_JPS_TEMPLATE, DEFAULT_NEW_JPS_BASE, JPS_EXT } from './samples/template'
+// adj766（清单 B8）：设置分层的**判定规则**（值等价 / 是否等于默认 / 哪些键变了）——两端共用
+export { configValuesEqual, isDefaultConfigValue, changedConfigKeys } from './settings/layers'
 // adj629h：歌词行里 `{tp … }` 替谱段的识别（格式化 / 编辑器着色都要在 `C…:` 行里找它）
 export { matchSegmentHead, findSegmentEnd } from './parser/tokenizer'
 export { tokenDuration, durationMs } from './duration'
