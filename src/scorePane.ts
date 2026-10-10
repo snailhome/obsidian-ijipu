@@ -52,6 +52,16 @@ export type ScorePaneHost = {
   container: HTMLElement
   /** 当前源码（.jps 全文 / 代码块正文） */
   getSource: () => string
+  /**
+   * adj749：**切换源码 / 谱面**（`.jps` 文件视图才给）。
+   *
+   * 为什么要放到浮动工具条上：手机端浮动工具条**常显**，而文件栏原本也在同一位置 ⇒
+   * 用户实测「会因外延的工具条而遮住一半的源码、格式化按钮」。现在按状态分家：
+   * **预览态**这两个动作在浮动工具条上（本面板），**源码态**在文件栏上。
+   */
+  onToggleSource?: () => void
+  /** adj749：**按应用规范格式化源码**（引擎 `formatJps`；文件视图与代码块都可用） */
+  onFormat?: () => void
   /** 把新源码写回（「排版」拖拽结束 / 「页面设置」保存到谱面时调用）；不提供则无写回入口 */
   writeSource?: (next: string) => void | Promise<void>
   /** 嵌入模式：更紧凑（隐藏页数标签等） */
@@ -652,25 +662,44 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     // —— 页面设置（滑杆）：对话框按字段精确设值（字体/字号等不可拖项） ——
     if (host.writeSource) {
       /**
-       * adj746（用户要求「源码如果能够按我们应用的规范格式化就更好了」）：
-       * **按应用规范格式化**代码块里的谱面源码 —— 用引擎的 `formatJps`
-       * （与应用编辑器输入时的 `formatLine` 同一份实现）⇒ "规范"只有一处定义，不另写一套。
-       * 放在 `host.writeSource` 分支里：没有写回入口的宿主（如嵌入态）不该给这个按钮。
+       * adj749（用户报，手机端：「会因外延的工具条而遮住一半的源码、格式化按钮，
+       * 可以考虑把这两个按钮放在工具条上」）：**预览态把这两个动作收进浮动工具条**。
+       * 工具条在手机端常显（`.is-mobile` 规则）⇒ 随时可点；文件栏在预览态只剩文件名，不再重叠。
        */
-      const fmtBtn = toolbar.createEl('button', { cls: 'ijipu-play ijipu-format-btn' })
-      fmtBtn.setAttr('title', '按应用规范格式化源码（音符/小节线空格、歌词里的 {tp … } 段、描述头属性）')
-      fmtBtn.appendChild(layoutIcon(15))
-      fmtBtn.createSpan({ cls: 'ijipu-btn-label', text: '格式化' })
-      fmtBtn.addEventListener('click', () => {
-        const before = host.getSource()
-        const next = formatJps(before)
-        if (next === before) {
-          new Notice('源码已是应用规范格式（无需改动）', 3000)
-          return
-        }
-        void host.writeSource?.(next)
-        new Notice('已按应用规范格式化源码', 4000)
-      })
+      if (host.onToggleSource) {
+        const srcBtn = toolbar.createEl('button', { cls: 'ijipu-play ijipu-source-btn' })
+        // adj749b（用户要求）：**按钮名统一为「编辑」**（不再叫"源码"）—— 与 `</>` 的语义一致，
+        // 用户看到的就是"编辑这份谱的源码"这一个动作。
+        srcBtn.setAttr('title', '编辑源码（手机上用 Obsidian 的编辑器，源码模式）')
+        srcBtn.appendChild(sourceIcon(15))
+        srcBtn.createSpan({ cls: 'ijipu-btn-label', text: '编辑' })
+        srcBtn.addEventListener('click', () => host.onToggleSource?.())
+      }
+      if (host.onFormat) {
+        const fmtBtn = toolbar.createEl('button', { cls: 'ijipu-play ijipu-format-btn' })
+        fmtBtn.setAttr('title', '按应用规范格式化源码（音符/小节线空格、歌词里的 {tp … } 段、描述头属性）')
+        fmtBtn.appendChild(layoutIcon(15))
+        fmtBtn.createSpan({ cls: 'ijipu-btn-label', text: '格式化' })
+        fmtBtn.addEventListener('click', () => host.onFormat?.())
+      } else {
+        /**
+         * adj746：代码块宿主没有 `onFormat` 时，仍保留"就地格式化"（它自己有 `getSource`/`writeSource`）。
+         */
+        const fmtBtn = toolbar.createEl('button', { cls: 'ijipu-play ijipu-format-btn' })
+        fmtBtn.setAttr('title', '按应用规范格式化源码（音符/小节线空格、歌词里的 {tp … } 段、描述头属性）')
+        fmtBtn.appendChild(layoutIcon(15))
+        fmtBtn.createSpan({ cls: 'ijipu-btn-label', text: '格式化' })
+        fmtBtn.addEventListener('click', () => {
+          const before = host.getSource()
+          const next = formatJps(before)
+          if (next === before) {
+            new Notice('源码已是应用规范格式（无需改动）', 3000)
+            return
+          }
+          void host.writeSource?.(next)
+          new Notice('已按应用规范格式化源码', 4000)
+        })
+      }
       const cfgBtn = toolbar.createEl('button', { cls: 'ijipu-play ijipu-config-btn' })
       cfgBtn.setAttr('title', '页面设置：按字段精确设值（字体/字号/行距/渲染开关；可保存到谱面或存为插件默认）')
       cfgBtn.appendChild(settingsIcon(15))

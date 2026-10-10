@@ -662,6 +662,16 @@
 .ijipu-file-view.ijipu-file-editing {
   overflow: hidden;
 }
+/**
+ * adj749（用户报，手机端）：「jps 文件预览视图下，会因**外延的工具条**而遮住一半的源码、格式化按钮」
+ * —— 谱面浮动工具条浮在块外侧、正好压在文件栏上方（手机端它还常显）。
+ * 分工后：**预览态**文件栏只留文件名（按钮已移进浮动工具条），所以这里给文件栏留出
+ * 浮动工具条那一条的高度，日志与文件名不会被压住（工具条高约 25px + 2px 缝）。
+ */
+.ijipu-file-bar {
+  min-height: 26px;
+  align-items: center;
+}
 .ijipu-file-bar {
   display: flex;
   align-items: center;

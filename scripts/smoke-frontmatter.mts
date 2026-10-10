@@ -1907,18 +1907,36 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
       /\.ijipu-score-toolbar\.is-revealed \.ijipu-btn-label/.test(css725nc))
   {
     const fv744 = String(readFileSync('src/fileView.ts', 'utf8'))
-    check('adj744 手机端「✎ 源码」改用 Obsidian 自己的编辑器（源码模式），并保留 textarea 回退',
-      fv744.includes('const useNativeEditor = Platform.isMobile') &&
+    const pane749 = String(readFileSync('src/scorePane.ts', 'utf8'))
+    check('adj744/749 手机端「编辑」用 Obsidian 自己的编辑器（源码模式），并保留 textarea 回退',
+      /toggleSource\(\): void \{[\s\S]{0,160}?if \(Platform\.isMobile\) \{[\s\S]{0,80}?this\.openInObsidianEditor\(\)/.test(fv744) &&
         /setViewState\(\{ type: 'markdown', state: \{ file: file\.path, mode: 'source', source: true \}, active: true \}\)/.test(fv744) &&
-        // 回退：一帧后若按钮仍在 DOM 里（本视图没被切走）⇒ 宿主拒开 ⇒ 用内联 textarea
-        /window\.requestAnimationFrame\(\(\) => \{\s*if \(!btn\.isConnected\) return\s*this\.editing = true/.test(fv744) &&
+        // 回退判据：一帧后 leaf 里装的仍是本视图 ⇒ 宿主拒开 ⇒ 用内联 textarea
+        //（adj749 修：不再用"按钮还在不在 DOM 里"判断——浮动工具条上的按钮会随面板重建，会误判）
+        /window\.requestAnimationFrame\(\(\) => \{\s*if \(this\.leaf\.view !== this\) return\s*this\.editing = true/.test(fv744) &&
         // 手机端回退框给高度下限（免得回退路径又是"框太矮"）
         /\.is-mobile \.ijipu-file-view\.ijipu-file-editing \.ijipu-source-editor \{/.test(css725nc) &&
         /min-height: 50vh/.test(css725nc),
-      `useNative=${fv744.includes('useNativeEditor')} fallback=${/btn\.isConnected/.test(fv744)}`)
+      `toggleSource=${/toggleSource/.test(fv744)} fallback=${/this\.leaf\.view !== this/.test(fv744)}`)
+    /**
+     * adj749b（用户要求）：「源码」按钮**统一叫「编辑」**；并且预览态的「编辑 / 格式化」
+     * 放在**谱面浮动工具条**上（手机端它常显），文件栏预览态只留文件名 ⇒ 两者不再互相遮挡。
+     */
+    check('adj749 预览态「编辑 / 格式化」在浮动工具条上（文件栏预览态只留文件名），按钮名统一为「编辑」',
+      /host\.onToggleSource/.test(pane749) &&
+        /srcBtn\.createSpan\(\{ cls: 'ijipu-btn-label', text: '编辑' \}\)/.test(pane749) &&
+        !/ijipu-btn-label', text: '源码' \}/.test(pane749) &&
+        /if \(this\.editing\) \{/.test(fv744) &&
+        /const toggle = bar\.createEl\('button', \{ cls: 'ijipu-btn', text: '📖 看谱' \}\)/.test(fv744) &&
+        // 文件栏在**编辑态**才给按钮（预览态无按钮 ⇒ 与浮动工具条不重叠）
+        !/text: '✎ 源码'/.test(fv744))
+  }
+
+  {
+    const fv744b = String(readFileSync('src/fileView.ts', 'utf8'))
     check('adj744b 借宿主编辑器时把该页签标记为"纯文本源码"（中和 Markdown 着色），返回时摘掉',
-      /leafEl\?\.addClass\('ijipu-plain-source'\)/.test(fv744) &&
-        /closest\('\.workspace-leaf'\)\?\.removeClass\('ijipu-plain-source'\)/.test(fv744) &&
+      /leafEl\?\.addClass\('ijipu-plain-source'\)/.test(fv744b) &&
+        /closest\('\.workspace-leaf'\)\?\.removeClass\('ijipu-plain-source'\)/.test(fv744b) &&
         /\.workspace-leaf\.ijipu-plain-source \.cm-content \.cm-line span/.test(css725nc) &&
         /\.workspace-leaf\.ijipu-plain-source \.cm-content \.cm-line a/.test(css725nc) &&
         /color: var\(--text-normal\)/.test(css725nc) &&

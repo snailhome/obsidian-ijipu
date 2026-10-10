@@ -220,6 +220,19 @@ export class IJipuFileView extends TextFileView {
   }
 
   /**
+   * adj749：**切换源码/谱面**（文件栏「📖 看谱」与谱面浮动工具条「编辑」共用一条路径）。
+   * 手机端走宿主编辑器（`adj744`），桌面端走内联 textarea。
+   */
+  toggleSource(): void {
+    if (Platform.isMobile) {
+      this.openInObsidianEditor()
+      return
+    }
+    this.editing = !this.editing
+    this.render()
+  }
+
+  /**
    * adj746：**按应用规范格式化本文件**（引擎 `formatJps` —— 与应用编辑器同一份实现）。
    *
    * 行为口径：
@@ -258,7 +271,7 @@ export class IJipuFileView extends TextFileView {
    * ⚠ 版本差异风险：万一宿主拒开（视图类型没变），**下一帧自动回退**到内联 textarea
    * （`this.editing = true` + 重画），保证"编辑源码"这条功能不会因此消失。
    */
-  private openInObsidianEditor(btn: HTMLElement): void {
+  private openInObsidianEditor(): void {
     const file = this.file
     if (!file) return
     /**
@@ -279,9 +292,14 @@ export class IJipuFileView extends TextFileView {
     void mutate
       .setViewState({ type: 'markdown', state: { file: file.path, mode: 'source', source: true }, active: true })
       .catch(() => undefined)
-    // 回退判据：一帧之后本视图仍在（说明没切走）⇒ 宿主拒开 ⇒ 用内联 textarea
+    /**
+     * 回退判据（adj749 修）：**这个 leaf 现在装的还是不是本视图** ——
+     * 换成了宿主的 markdown 编辑器就说明切成功；仍是本视图 ⇒ 宿主拒开 ⇒ 退回内联 textarea。
+     * ⚠ 不能用"按钮还在不在 DOM 里"判断：调用方可能是浮动工具条上的按钮，
+     * 那个按钮本来就随面板重建/销毁，与"视图有没有被换掉"无关（会误判成"拒开"）。
+     */
     window.requestAnimationFrame(() => {
-      if (!btn.isConnected) return
+      if (this.leaf.view !== this) return
       this.editing = true
       this.render()
     })
@@ -398,47 +416,28 @@ export class IJipuFileView extends TextFileView {
     const bar = contentEl.createDiv({ cls: 'ijipu-file-bar' })
     if (!embedded) {
       /**
-       * adj744（用户要求，手机端）：「手机查看 jps 源码的编辑框高度太小了，是否可以不要编辑框，
-       * 而是复用 ob 的编辑器的源码模式？」—— 认同，而且与项目既有口径一致
-       * （早先就把"预览里的 textarea"撤掉了，理由正是"真正的编辑交给 Obsidian 自带编辑器"）。
+       * adj749（用户报，手机端：「会因外延的工具条而遮住一半的源码、格式化按钮」）：
+       * **按钮按状态分家** ——
+       *  · **源码态**（看的是文本，浮动工具条不存在）：文件栏给「📖 看谱」+「⌥ 格式化」；
+       *  · **预览态**（谱面浮动工具条在，手机端还常显）：文件栏**只留文件名**，
+       *    「源码 / 格式化」交给浮动工具条（见 `mountScorePane` 的 `onToggleSource` / `onFormat`）
+       *    ⇒ 两者不再叠在一起。
        *
-       * 做法：手机端把「✎ 源码」变成**把当前页签切到 Obsidian 自己的编辑器**（markdown 视图 +
-       * 源码模式），于是键盘处理、软换行、撤销栈、字号、滚动全由宿主负责，不再有"框太矮"的问题；
-       * 桌面端保持原样（内联 textarea 在大屏上够用，且不必让用户丢失当前布局）。
-       * ⚠ 用 `setViewState({type:'markdown'})` 打开**非 md 扩展名**的文件属于"借宿主的编辑器"：
-       *    万一宿主拒开（不同版本行为可能有差异），下一帧若发现视图类型没变 ⇒ 自动回退到 textarea。
+       * 源码态的按钮实现（adj744 起手机端走宿主编辑器）：
+       *  手机端「✎ 源码」= 把当前页签切到 Obsidian 自己的编辑器（markdown 视图 + 源码模式），
+       *  键盘/换行/撤销栈/字号/滚动全由宿主负责；桌面端仍是内联 textarea。
+       *  ⚠ 借 `setViewState({type:'markdown'})` 打开非 md 文件属"借宿主编辑器"：万一宿主拒开
+       *    （版本差异），下一帧发现视图没切走 ⇒ 自动回退到 textarea。
        */
-      const useNativeEditor = Platform.isMobile
-      const toggle = bar.createEl('button', {
-        cls: 'ijipu-btn',
-        text: this.editing ? '📖 看谱' : '✎ 源码',
-      })
-      toggle.setAttr(
-        'title',
-        useNativeEditor
-          ? '用 Obsidian 的编辑器打开源码（源码模式）'
-          : this.editing
-            ? '切回谱面视图'
-            : '切到纯文本编辑（改动自动保存）',
-      )
-      toggle.addEventListener('click', () => {
-        if (useNativeEditor) {
-          this.openInObsidianEditor(toggle)
-          return
-        }
-        this.editing = !this.editing
-        this.render()
-      })
+      if (this.editing) {
+        const toggle = bar.createEl('button', { cls: 'ijipu-btn', text: '📖 看谱' })
+        toggle.setAttr('title', '切回谱面视图')
+        toggle.addEventListener('click', () => this.toggleSource())
+        const fmtInEdit = bar.createEl('button', { cls: 'ijipu-btn', text: '⌥ 格式化' })
+        fmtInEdit.setAttr('title', '按应用规范格式化源码（音符/小节线空格、歌词里的 {tp … } 段、描述头属性）')
+        fmtInEdit.addEventListener('click', () => this.formatSource())
+      }
       bar.createSpan({ cls: 'ijipu-page-label', text: this.file?.name ?? 'jps' })
-      /**
-       * adj746（用户要求：「源码如果能够按我们应用的规范格式化就更好了」）：
-       * 用**引擎里那份应用自己的格式化器** `formatJps`（规则实现自 JPS 规范，
-       * 应用编辑器输入时用的就是同一个 `formatLine`）——不另写一套，规范只此一家。
-       * 放在文件工具条上：手机上也能一键用（不必记命令面板）。
-       */
-      const fmt = bar.createEl('button', { cls: 'ijipu-btn', text: '⌥ 格式化' })
-      fmt.setAttr('title', '按应用规范格式化源码（Q 行音符/小节线空格、歌词里的 {tp … } 段、描述头属性）')
-      fmt.addEventListener('click', () => this.formatSource())
     } else {
       bar.createSpan({ cls: 'ijipu-page-label', text: `♫ ${this.file?.basename ?? 'jps'}` })
     }
@@ -480,6 +479,14 @@ export class IJipuFileView extends TextFileView {
       // .jps 文件自身没有笔记 frontmatter（其页面设置来自文件内的 # jps-config）
       writeSource: (next) => this.applySource(next),
       embedded,
+      /**
+       * adj749（用户报，手机端）：「手机端 jps 文件预览视图下，会因外延的工具条而遮住一半的
+       * 源码、格式化按钮，这个情况可以考虑把这两个按钮放在工具条上」——
+       * 采纳：**预览态**把「源码 / 格式化」交给**谱面浮动工具条**（手机端它常显，位置也固定），
+       * 文件栏只留文件名 ⇒ 两者不再重叠；**源码态**（没有浮动工具条）则在文件栏里给「看谱 / 格式化」。
+       */
+      onToggleSource: () => this.toggleSource(),
+      onFormat: () => this.formatSource(),
       // adj（用户要求）：.jps 文件视图知道自己的文件 ⇒ 工具栏显示「应用打开」
       // （桌面端才显示；打开前先 saveNow 把未落盘的编辑刷下去）。`file` 可能为 null ⇒ 不传则不显示。
       filePath: this.file?.path,
