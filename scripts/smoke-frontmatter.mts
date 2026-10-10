@@ -7,7 +7,8 @@
  */
 import { defaultPageConfig, dragDelta, formatJps, instrumentColorMap, layoutScore, parseJps, playheadBaseOf, playheadPosIn, renderScoreToSvg, splitParseIssues, tokenizeJpsLine, JPS_HIGHLIGHT_COLORS, JPS_PLAIN_COLORS, JPS_PROBLEM_COLORS, trackKeysOf, writeJpsConfig, mergeConfigEdits, configCarryover, SCORE_FONT_OPTIONS, buildPlaySequence, GUIDE_LIMITS, GUIDE_LIMITS_EX, SEGMENT_ROW_GAP_DEFAULT, OPTIONAL_CONFIG_FIELDS, defaultConfigForReset, extractJpsConfig, extractLegacyEditorPrefs, nonDefaultConfigKeys, GM_GROUPS } from '@ijipu/engine'
 import type { PageConfig } from '@ijipu/engine'
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 // adj738：原来这里从 `../src/frontmatter` 导入 applyFrontmatter / frontmatterKey / PAGE_CONFIG_FIELDS 等
 // ——笔记 frontmatter 那一层（连同 `src/frontmatter.ts`）已整体删除，相关断言一并删除。
 import { PAGE_NUM_RANGES, clampNum } from '../src/numRanges'
@@ -2156,6 +2157,49 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
       check('adj767 插件的时间轴/模型/时钟都来自引擎（B4/B6）',
         /createPlaybackClock\(\{/.test(pane) && /highlightLineModel\(line\.text, line\.number/.test(hl) &&
           /groupBlocksByLine\(jpsBlockMarks\(doc, errors\)\)/.test(hl))
+
+      /**
+       * adj770（清单 B 的收口闸门之二）：**vendor/engine 与应用引擎逐字节一致** ——
+       * 这条等价关系此前只靠我每次手动比对哈希（`Compare-Object` 一堆 PowerShell），
+       * 一旦忘了比，插件就会"用着旧引擎、看起来一切正常"（`E-2026-374` 的同类风险）。
+       *
+       * 跨仓：本地两个仓库并排时真比；插件 CI 只 checkout 插件仓库 ⇒ **跳过**（打印提示），
+       * 与会话既有的"示例谱不动点"跨仓断言同一套路。
+       */
+      {
+        const appEngine = '../ijipu/packages/ijipu-engine/src/engine'
+        const walk = (dir: string): string[] =>
+          readdirSync(dir).flatMap((n) => {
+            const p = `${dir}/${n}`
+            return statSync(p).isDirectory() ? walk(p) : [p]
+          })
+        const rel = (dir: string, files: string[]) =>
+          files.map((p) => p.slice(dir.length + 1).replace(/\\/g, '/')).sort()
+        if (!existsSync(appEngine)) {
+          console.log('[adj770] 未找到应用引擎目录（CI 场景）⇒ 跳过 vendor 一致性比对')
+          check('adj770 vendor/engine 与应用引擎逐字节一致（跨仓；此环境跳过）', true, 'skipped')
+        } else {
+          const vendorDir = 'vendor/engine'
+          const vFiles = rel(vendorDir, walk(vendorDir).filter((p) => p.endsWith('.ts')))
+          const aFiles = rel(appEngine, walk(appEngine).filter((p) => p.endsWith('.ts')))
+          const onlyVendor = vFiles.filter((f) => !aFiles.includes(f))
+          const onlyApp = aFiles.filter((f) => !vFiles.includes(f))
+          const diff = vFiles.filter(
+            (f) =>
+              aFiles.includes(f) &&
+              createHash('sha256').update(readFileSync(`${vendorDir}/${f}`)).digest('hex') !==
+                createHash('sha256').update(readFileSync(`${appEngine}/${f}`)).digest('hex'),
+          )
+          check('adj770 vendor/engine 与应用引擎逐字节一致（文件集 + 逐文件哈希）',
+            vFiles.length > 20 && onlyVendor.length === 0 && onlyApp.length === 0 && diff.length === 0,
+            `vendor=${vFiles.length} 应用=${aFiles.length} 仅插件有=${onlyVendor.join(',')} 仅应用有=${onlyApp.join(',')} 内容不同=${diff.join(',')}`)
+          // 负对照：故意拿两个不同文件的哈希去比，必须判"不同"（证明比对真的在比内容）
+          const fakeDiff =
+            createHash('sha256').update(readFileSync(`${vendorDir}/index.ts`)).digest('hex') !==
+            createHash('sha256').update(readFileSync(`${vendorDir}/playback/clock.ts`)).digest('hex')
+          check('adj770 vendor 一致性闸门负对照：不同文件确实判为不同', fakeDiff)
+        }
+      }
     }
 
     // ② 分词器行为：类别命中 + **覆盖整行**（CM6 的偏移靠它，漏一个字符就会错位）
