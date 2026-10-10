@@ -683,6 +683,8 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       revealToolbar(true)
     }
     const onPointerLeave = (): void => {
+      // adj781：**触摸交互下绝不自动收起**（见下面 `touchInteraction` 的说明）
+      if (touchInteraction) return
       if (hoveringToolbar()) return
       // 焦点仍在工具条内（键盘操作中）→ 不收起，避免"正在用却被藏掉"
       if (focusInToolbar()) return
@@ -696,6 +698,7 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       if (hoveringToolbar()) cancelHide()
     })
     container.addEventListener('pointerout', () => {
+      if (touchInteraction) return
       if (hoveringToolbar()) cancelHide()
       else scheduleHide()
     })
@@ -712,8 +715,31 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       if (liveToolbar().contains(e.target as Node)) revealToolbar(true)
     })
     container.addEventListener('focusout', () => {
+      // adj781：触摸交互下不要因失焦自动收起（手指点开工具条时会先失焦 ⇒ 会"刚显示就隐藏"）
+      if (touchInteraction) return
       if (!focusInToolbar()) revealToolbar(false)
     })
+
+    /**
+     * adj781（用户实测，手机端代码块）：「首进显示工具条，点击预览区隐藏后，**再点击，显示的工具条
+     * 显示后又马上隐藏**」（阅读/编辑模式都有）。
+     *
+     * 真因：**触摸设备上 Obsidian 会合成鼠标事件**（`pointerover`/`pointerout`/`pointerleave`）——
+     * 我的点击切换把工具条显出来之后，紧随其后的合成"移出"又触发了**悬停那套自动收起**
+     * （`scheduleHide()`，120ms 延迟 + 240ms 复查）⇒ 表现就是"显示后马上又消失" ✗。
+     *
+     * 触摸根本没有"指针移出"的语义（手指抬起就是结束）⇒ 这里记下**最近一次交互是不是触摸**，
+     * 是的话**一律不自动收起**，显隐只由点击切换决定。鼠标交互（`mousedown`/`pointerdown` 非 touch）
+     * 会把它复位 ⇒ 桌面端悬停那套行为完全不变。
+     */
+    let touchInteraction = Platform.isMobile
+    container.addEventListener(
+      'pointerdown',
+      (e) => {
+        touchInteraction = e.pointerType === 'touch'
+      },
+      true,
+    )
 
     /**
      * adj773 / adj777（用户实测：「手机端点击预览区**无显/隐**工具条」「PC 与手机端在 `![[x.jps]]` 嵌入的

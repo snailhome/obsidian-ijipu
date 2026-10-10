@@ -3452,6 +3452,30 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       ))
 }
 
+/**
+ * ---- adj781：触摸交互下**不得**被"悬停那套自动收起"打回（手机端"显示后又马上隐藏"）----
+ *
+ * 用户实测（手机端代码块，阅读/编辑模式都有）：「首进显示工具条，点击预览区隐藏后，再点击，
+ * **显示的工具条显示后又马上隐藏**」。
+ * 真因：触摸设备上 Obsidian 会**合成鼠标事件**（`pointerover`/`pointerout`/`pointerleave`）——
+ * 点击切换把工具条显出来后，紧随的合成"移出"又触发了悬停的自动收起 ⇒ "显示后马上消失"。
+ * 触摸没有"指针移出"语义 ⇒ 记下最近一次交互类型，是触摸就只由点击切换显隐。
+ */
+{
+  const pane781 = String(readFileSync('src/scorePane.ts', 'utf8'))
+  check('adj781 触摸交互下不自动收起（pointerleave / pointerout / focusout 三条自动隐藏路径都要让路）',
+    /let touchInteraction = Platform\.isMobile/.test(pane781) &&
+      /touchInteraction = e\.pointerType === 'touch'/.test(pane781) &&
+      // 三条自动隐藏路径都必须先看这个标记
+      /const onPointerLeave = \(\): void => \{\n      \/\/ adj781[\s\S]{0,120}?if \(touchInteraction\) return/.test(pane781) &&
+      /container\.addEventListener\('pointerout', \(\) => \{\n      if \(touchInteraction\) return/.test(pane781) &&
+      /container\.addEventListener\('focusout', \(\) => \{\n      \/\/ adj781[\s\S]{0,120}?if \(touchInteraction\) return/.test(pane781) &&
+      // 负对照：把 pointerleave 那条守卫摘掉 ⇒ 判据为假（证明它真的在挡"显示后又隐藏"）
+      !/if \(touchInteraction\) return[\s\S]{0,80}?if \(hoveringToolbar\(\)\) return/.test(
+        pane781.replace(/if \(touchInteraction\) return\n      if \(hoveringToolbar\(\)\) return/, 'if (hoveringToolbar()) return'),
+      ))
+}
+
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。
 //   实测踩过：一次编辑顺手把它删掉，套件仍以退出码报错，但输出里再也看不到 `N passed, M failed`。
 console.log(`\n${pass} passed, ${fail} failed`)
