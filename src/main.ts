@@ -487,8 +487,12 @@ export default class IJipuPlugin extends Plugin {
          */
         .catch((e: unknown) => {
           const msg = e instanceof Error ? e.message : String(e)
+          /**
+           * ⚠ 这里**不写 `console.error`**（adj776c 自审去掉）：
+           * 社区审核对 `console.*` 会报警告，而这条信息已经由 `lastEmbedError` 承载 ——
+           * 它就显示在「设置 → iJipu → 说明 → 嵌入版本地服务（诊断信息）」里，用户能直接看到并贴回来。
+           */
           this.lastEmbedError = msg
-          console.error('[iJipu] 嵌入版本地服务启动失败：', e)
           this.embedServerStarting = null
           this.embedServer = null
           return null
