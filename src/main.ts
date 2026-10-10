@@ -628,6 +628,16 @@ export default class IJipuPlugin extends Plugin {
       this.openSettingsTab('说明')
       return
     }
+    /**
+     * adj776b：桌面端但**嵌入版开关关着** ⇒ 和手机端同一处置（打开设置里的「说明」页签）。
+     * 这里有个真实场景：试听失败提示上的按钮就是调本方法的 —— 开关关着时若还去开嵌入版视图，
+     * 用户会看到一个写着"未启用"的死页签；改成直接把他送到能解决问题的那一页。
+     */
+    if (!this.embedEnabled) {
+      this.openSettingsTab('说明')
+      new Notice('「使用嵌入版 iJipu（完整应用）」当前是关闭的 ⇒ 已打开设置里的「说明」页（含音色库入口）。', 6000)
+      return
+    }
     await this.openIjipuFile(null)
     // 只推给**已 ready**的帧；这一轮一个都没推出去（应用还在启动）就过 400ms 再试，最多三次
     const push = (attempt = 0): void => {
@@ -665,6 +675,21 @@ export default class IJipuPlugin extends Plugin {
      */
     if (!Platform.isDesktopApp) {
       new Notice('完整编辑器（嵌入版 iJipu）仅桌面端可用；手机端请直接看谱面预览与试听。')
+      return
+    }
+    /**
+     * adj776b（上一条用户报障的同族缺口）：**开关关着时任何入口都不该开出一个"死页签"**。
+     *
+     * 用户报的是文件视图的「编辑」，但同一个坑还有别的入口（例如"试听失败 → 打开音色库设置"
+     * 走的就是 `openIjipuFile(null)`）。这里在**唯一的下层出口**兜住：未启用就不建视图，
+     * 只给一句能照着做的提示。调用方若要"更贴心的落点"（如音色库 ⇒ 打开设置说明页）自行先处理。
+     */
+    if (!this.embedEnabled) {
+      new Notice(
+        '「使用嵌入版 iJipu（完整应用）」当前是关闭的 ⇒ 没打开嵌入版。' +
+          '要使用完整编辑器：设置 → iJipu → 嵌入版 → 打开该开关。',
+        6000,
+      )
       return
     }
     const { workspace } = this.app

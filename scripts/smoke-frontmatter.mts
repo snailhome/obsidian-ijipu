@@ -3273,6 +3273,20 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       /openSettingsTab\('嵌入版'\)/.test(av776) &&
       // 根因路径也要钉住：开关关着 ⇒ getEmbedUrl 提前返回 null（不抛错）⇒ 所以文案必须是"未启用"而不是"启动失败"
       /if \(!this\.embedEnabled && this\.embedServer === null\) return null/.test(main776))
+  /**
+   * adj776b：**同类缺口一次清干净** —— 不只是文件视图的「编辑」，任何路径都不该在开关关着时开出"死页签"。
+   *  · `openEmbedLeaf`（下层唯一出口）⇒ 未启用只给提示、不建视图；
+   *  · `openEmbedSoundbank`（"试听失败 → 打开音色库设置"按钮）⇒ 未启用就直接送到设置「说明」页
+   *    （那里有音色库入口，正是用户要的落点）。
+   */
+  const leafGuard = 'if (!this.embedEnabled) {\n      new Notice('
+  check('adj776b 开关关着时任何入口都不开"死页签"：下层出口兜住 + 音色库入口改送设置「说明」页',
+    main776.includes(leafGuard) &&
+      /要使用完整编辑器：设置 → iJipu → 嵌入版 → 打开该开关/.test(main776) &&
+      /已打开设置里的「说明」页（含音色库入口）/.test(main776) &&
+      /if \(!this\.embedEnabled\) \{\n      this\.openSettingsTab\('说明'\)/.test(main776) &&
+      // 负对照：把下层出口那条守卫摘掉 ⇒ 判据为假（证明它真的在挡"死页签"）
+      !main776.replace(leafGuard, 'if (false) {').includes(leafGuard))
 }
 
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。
