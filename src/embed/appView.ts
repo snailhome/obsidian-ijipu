@@ -116,7 +116,7 @@ export class IJipuAppView extends ItemView {
       box.createDiv({
         text: failure
           ? `嵌入版启动失败：${failure}`
-          : '嵌入版未启用（请在「设置 → iJipu」里打开「使用嵌入版 iJipu」）',
+          : '嵌入版未启用（请在「设置 → iJipu → 嵌入版」打开「使用嵌入版 iJipu（完整应用）」）',
       })
       // 失败原因与"怎么再试"都写清楚；重试按钮直接重跑本方法（不必让用户去翻设置）
       box.createDiv({ cls: 'ijipu-web-hint-sub', text: '可点下面的「重试」；仍不行请看「设置 → iJipu → 说明」里的诊断信息。' })
@@ -125,6 +125,12 @@ export class IJipuAppView extends ItemView {
         contentEl.empty()
         void this.onOpen()
       })
+      /**
+       * adj776：把"去哪开开关"做成**一键**（用户报这条时就是因为开关关着而不知道该去哪）——
+       * 直接打开设置里的「嵌入版」页签，比让用户自己找路径友好得多。
+       */
+      const openCfg = box.createEl('button', { cls: 'ijipu-btn', text: '打开设置' })
+      openCfg.addEventListener('click', () => this.plugin.openSettingsTab('嵌入版'))
       this.markFrameReady?.()
       return
     }

@@ -487,6 +487,25 @@ export class IJipuFileView extends TextFileView {
         ? () => {
             const f = this.file
             if (!f) return
+            /**
+             * adj776（用户实测）：「PC 端点击工具条的编辑时，还是无法打开嵌入版 ijipu，提示**嵌入版未启用**」。
+             *
+             * 根因：设置里「使用嵌入版 iJipu（完整应用）」被关掉时，`getEmbedUrl()` 会**直接返回 null**
+             * （第一条提前返回），而「编辑」按钮此前**不看这个开关**、照样打开嵌入版视图
+             * ⇒ 用户得到一个写着"未启用"的**死页签**，点按钮的意图（编辑）完全没被满足。
+             *
+             * 现在：开关关着 ⇒ **退回源码编辑**（就是手机端那条路径：用宿主编辑器 + iJipu 着色/错误提示/
+             * 自动格式化），并用 Notice 说明"想用完整编辑器去哪里开开关"。这样按钮在任何设置下都有意义。
+             */
+            if (!this.plugin.embedEnabled) {
+              new Notice(
+                '「使用嵌入版 iJipu（完整应用）」当前是关闭的 ⇒ 已改用 Obsidian 编辑器编辑源码。' +
+                  '想用完整编辑器：设置 → iJipu → 嵌入版 → 打开该开关。',
+                6000,
+              )
+              this.toggleSource()
+              return
+            }
             this.embedRoutedFor = null
             this.routeToIjipu(f)
           }

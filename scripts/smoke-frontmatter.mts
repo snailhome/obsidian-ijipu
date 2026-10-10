@@ -3242,6 +3242,39 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
     `判出 ${lacksAfter.length}/${needBoth.length}`)
 }
 
+/**
+ * ---- adj776：用户实测「PC 端点击工具条的编辑时，还是无法打开嵌入版 ijipu，提示嵌入版未启用」----
+ *
+ * 根因（不是"服务起不来"，而是**开关关着**）：`getEmbedUrl()` 的第一条提前返回是
+ * `if (!this.embedEnabled && this.embedServer === null) return null` ⇒ 设置里
+ * 「使用嵌入版 iJipu（完整应用）」关掉时它**直接返回 null**（不抛错）⇒ 视图走的是"未启用"提示分支
+ * （所以我上一轮加的"启动失败：<原因>"没机会显示，用户看到的正是"未启用"）。
+ *
+ * 真正的缺口：**「编辑」按钮此前不看这个开关**，照样打开嵌入版视图 ⇒ 用户得到一个"死页签"，
+ * 而他的意图（编辑）完全没被满足。修法：开关关着 ⇒ 退回**源码编辑**（手机端那条路径）+ 说明去哪儿开开关；
+ * 视图侧那条提示也补上**确切开关名**与一键「打开设置」。
+ */
+{
+  const fv776 = String(readFileSync('src/fileView.ts', 'utf8'))
+  const av776 = String(readFileSync('src/embed/appView.ts', 'utf8'))
+  const main776 = String(readFileSync('src/main.ts', 'utf8'))
+  const guard = 'if (!this.plugin.embedEnabled) {'
+  check('adj776 嵌入版开关关着时，「编辑」退回源码编辑（不再打开一个写着"未启用"的死页签）',
+    fv776.includes(guard) &&
+      /「使用嵌入版 iJipu（完整应用）」当前是关闭的 ⇒ 已改用 Obsidian 编辑器编辑源码/.test(fv776) &&
+      /this\.toggleSource\(\)/.test(fv776) &&
+      // 打开（开关开着）时仍是原来的"每次点都生效"的路由
+      /this\.embedRoutedFor = null[\s\S]{0,80}?this\.routeToIjipu\(f\)/.test(fv776) &&
+      // 负对照：把这条守卫摘掉 ⇒ 判据为假（证明它真的在挡"死页签"）
+      !fv776.replace(guard, '').includes(guard))
+  check('adj776 视图侧提示给出确切开关名，并提供一键「打开设置」',
+    /请在「设置 → iJipu → 嵌入版」打开「使用嵌入版 iJipu（完整应用）」/.test(av776) &&
+      /createEl\('button', \{ cls: 'ijipu-btn', text: '打开设置' \}\)/.test(av776) &&
+      /openSettingsTab\('嵌入版'\)/.test(av776) &&
+      // 根因路径也要钉住：开关关着 ⇒ getEmbedUrl 提前返回 null（不抛错）⇒ 所以文案必须是"未启用"而不是"启动失败"
+      /if \(!this\.embedEnabled && this\.embedServer === null\) return null/.test(main776))
+}
+
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。
 //   实测踩过：一次编辑顺手把它删掉，套件仍以退出码报错，但输出里再也看不到 `N passed, M failed`。
 console.log(`\n${pass} passed, ${fail} failed`)
