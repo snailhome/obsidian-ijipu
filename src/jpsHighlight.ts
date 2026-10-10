@@ -31,6 +31,7 @@ import {
   parseJps,
   type JpsBlockMark,
 } from '@ijipu/engine'
+import { jpsBlockRanges, type JpsBlockRange } from './jpsBlocks'
 
 /** 类别 → CSS 类（颜色在 `styles.css`，深/浅主题各一套，取自应用 `--jp-hl-*`） */
 const CLASS_OF: Record<string, string> = {
@@ -51,8 +52,31 @@ function isOurJpsLeaf(view: EditorView): boolean {
   return view.dom.closest('.workspace-leaf.ijipu-plain-source') !== null
 }
 
+/**
+ * adj774（用户要求）：「**jps 代码块**应同时应用自动格式化、脚本颜色高亮和错误提示功能，
+ * 与手机版 jps 文件的源码编辑模式一致」。
+ *
+ * 于是本编辑器要标注的范围分两种：
+ *  · **整篇**（借宿主打开的 `.jps` 页签）：文档每一行都是 jps 源码，行号 1:1；
+ *  · **围栏块**（markdown 笔记里的 ` ```jps `）：只标注围栏内的行，且**行号要偏移**
+ *    （块的正文从文档第 `bodyStart` 行开始，而引擎解析正文时是从第 1 行数起）。
+ * 两种情形共用同一份引擎模型（`tokenizeJpsLine` / `jpsBlockMarks` / `highlightLineModel`）。
+ */
+type JpsScope =
+  | { whole: true; blocks: [] }
+  | { whole: false; blocks: JpsBlockRange[] }
+
+function scopeOf(view: EditorView): JpsScope | null {
+  if (isOurJpsLeaf(view)) return { whole: true, blocks: [] }
+  // 不是我们的 .jps 页签 ⇒ 看这篇文档里有没有 ```jps 围栏（没有就完全不管，绝不碰 markdown）
+  const blocks = jpsBlockRanges(view.state.doc.toString())
+  if (blocks.length === 0) return null
+  return { whole: false, blocks }
+}
+
 function buildDecorations(view: EditorView): DecorationSet {
-  if (!isOurJpsLeaf(view)) return Decoration.none
+  const scope = scopeOf(view)
+  if (!scope) return Decoration.none
   const problems = problemsOf(view)
   /**
    * ⚠ 这里**不能**用 `RangeSetBuilder`：错误块外框会与音符着色**重叠**（外框圈住若干 token），
@@ -65,25 +89,34 @@ function buildDecorations(view: EditorView): DecorationSet {
     while (pos <= to) {
       const line = view.state.doc.lineAt(pos)
       /**
-       * adj762（清单 B4）：token / 该行错误块 / 行级级别**一次由引擎模型给齐**
-       * （`highlightLineModel`）—— 本文件只做"模型 → CM6 decoration"的映射，
-       * 不再自己查块、自己判级别。与应用编辑器消费的是同一个模型。
+       * adj774：先判"这一行要不要标注"——
+       *  · 整篇（`.jps` 页签）⇒ 每一行都算；
+       *  · markdown 笔记里的 ```jps 块 ⇒ **只有正文行**算（围栏行是 markdown 语法，交给宿主自己着色）。
+       * 行号一律用**文档行号**（用户看到的"第 N 行"就是它），错误表也按文档行号建。
        */
-      const model = highlightLineModel(line.text, line.number, problems.byLine.get(line.number) ?? [])
-      if (model.level === 'error') ranges.push({ from: line.from, to: line.from, value: LINE_ERROR })
-      else if (model.level === 'warning') ranges.push({ from: line.from, to: line.from, value: LINE_WARN })
-      for (const b of model.blocks) {
-        ranges.push({
-          from: line.from + b.from,
-          to: line.from + b.to,
-          value: b.severity === 'error' ? BLOCK_ERROR : BLOCK_WARN,
-        })
-      }
-      let at = line.from
-      for (const token of model.tokens) {
-        const mark = MARKS[token.cls]
-        if (mark) ranges.push({ from: at, to: at + token.text.length, value: mark })
-        at += token.text.length
+      const inScope = scope.whole || scope.blocks.some((b) => line.number >= b.bodyStart && line.number <= b.bodyEnd)
+      if (inScope) {
+        /**
+         * adj762（清单 B4）：token / 该行错误块 / 行级级别**一次由引擎模型给齐**
+         * （`highlightLineModel`）—— 本文件只做"模型 → CM6 decoration"的映射，
+         * 不再自己查块、自己判级别。与应用编辑器消费的是同一个模型。
+         */
+        const model = highlightLineModel(line.text, line.number, problems.byLine.get(line.number) ?? [])
+        if (model.level === 'error') ranges.push({ from: line.from, to: line.from, value: LINE_ERROR })
+        else if (model.level === 'warning') ranges.push({ from: line.from, to: line.from, value: LINE_WARN })
+        for (const b of model.blocks) {
+          ranges.push({
+            from: line.from + b.from,
+            to: line.from + b.to,
+            value: b.severity === 'error' ? BLOCK_ERROR : BLOCK_WARN,
+          })
+        }
+        let at = line.from
+        for (const token of model.tokens) {
+          const mark = MARKS[token.cls]
+          if (mark) ranges.push({ from: at, to: at + token.text.length, value: mark })
+          at += token.text.length
+        }
       }
       pos = line.to + 1
     }
@@ -124,14 +157,37 @@ function problemsOf(view: EditorView): Problems {
   if (hit && hit.doc === doc) return hit
   const hint = new Map<number, string>()
   let byLine = new Map<number, JpsBlockMark[]>()
-  if (isOurJpsLeaf(view)) {
+  /** 把一条引擎问题（行号已换算成**文档行号**）并进提示表 */
+  const addHint = (line: number, message: string, h?: string): void => {
+    const text = h ? `${message}\n正确写法：${h}` : message
+    const prev = hint.get(line)
+    hint.set(line, prev ? `${prev}\n${text}` : text)
+  }
+  const scope = scopeOf(view)
+  if (scope) {
     try {
-      const errors = parseJps(doc).errors ?? []
-      byLine = groupBlocksByLine(jpsBlockMarks(doc, errors))
-      for (const e of errors) {
-        const text = e.hint ? `${e.message}\n正确写法：${e.hint}` : e.message
-        const prev = hint.get(e.line)
-        hint.set(e.line, prev ? `${prev}\n${text}` : text)
+      if (scope.whole) {
+        const errors = parseJps(doc).errors ?? []
+        byLine = groupBlocksByLine(jpsBlockMarks(doc, errors))
+        for (const e of errors) addHint(e.line, e.message, e.hint)
+      } else {
+        /**
+         * adj774：**只解析每个 ```jps 块的正文**（不含围栏行），再把行号偏移回文档行号。
+         * 这样笔记里其它 markdown 文本永远不会被当成 jps 源码解析 —— 既不会误报错误，
+         * 也不会因为解析整篇笔记而在长文档上变慢。
+         */
+        for (const b of scope.blocks) {
+          if (b.body.trim() === '') continue
+          const errors = parseJps(b.body).errors ?? []
+          const off = b.bodyStart - 1
+          for (const m of jpsBlockMarks(b.body, errors)) {
+            const line = m.line + off
+            const list = byLine.get(line) ?? []
+            list.push({ ...m, line })
+            byLine.set(line, list)
+          }
+          for (const e of errors) addHint(e.line + off, e.message, e.hint)
+        }
       }
     } catch {
       /* 解析器抛错时不做错误标注（不能因为标注把编辑器弄坏） */
@@ -146,9 +202,9 @@ function hintOf(view: EditorView, line: number): string | undefined {
   return problemsOf(view).hint.get(line)
 }
 
-/** 悬停某行 → 显示该行的问题（message + 正确写法） */
+/** 悬停某行 → 显示该行的问题（message + 正确写法）。`.jps` 页签与 ```jps 代码块都适用（adj774） */
 const problemTooltip = hoverTooltip((view, pos) => {
-  if (!isOurJpsLeaf(view)) return null
+  if (scopeOf(view) === null) return null
   const line = view.state.doc.lineAt(pos)
   const text = hintOf(view, line.number)
   if (!text) return null

@@ -2283,7 +2283,7 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
       /\.workspace-leaf\.ijipu-plain-source \.cm-content \.cm-line \.cm-highlight/.test(css725nc) &&
         /\.cm-content \.cm-line mark,/.test(css725nc) &&
         /background-color: transparent/.test(css725nc))
-    check('adj754/762 `.jps` 源码有错误/告警显示：行级底色（模型给级别）+ 悬停提示（接引擎 parseJps）',
+    check('adj754/762/adj774 源码有错误/告警显示：行级底色（模型给级别）+ 悬停提示（接引擎 parseJps）；范围由 `scopeOf` 决定（`.jps` 页签整篇 / ```jps 块只标正文）',
       /import \{[^}]*parseJps[^}]*\} from '@ijipu\/engine'/.test(hl754) &&
         /Decoration\.line\(\{ class: 'ijipu-jps-error-line' \}\)/.test(hl754) &&
         /Decoration\.line\(\{ class: 'ijipu-jps-warn-line' \}\)/.test(hl754) &&
@@ -2291,9 +2291,12 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
         /if \(model\.level === 'error'\)/.test(hl754) &&
         /else if \(model\.level === 'warning'\)/.test(hl754) &&
         /hoverTooltip\(/.test(hl754) &&
-        /正确写法：\$\{e\.hint\}/.test(hl754) &&
+        // adj774：与"错误提示"同一份文案（重构后提示由 `addHint` 统一拼装，字面量也随之变化）
+        /正确写法：\$\{h\}/.test(hl754) &&
         /\}, 250\)/.test(hl754) &&
         /catch \{/.test(hl754) &&
+        // adj774：范围判定从"只认 .jps 页签"升级为 scopeOf（整篇 / 围栏块正文）
+        /scopeOf\(view\)/.test(hl754) &&
         css725nc.includes('.ijipu-jps-error-line') &&
         css725nc.includes('rgba(255, 93, 108, 0.13)') &&
         css725nc.includes('.ijipu-jps-problem-hint'))
@@ -2872,6 +2875,62 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
   check('adj741 音源默认先读**插件目录里的文件**（顺序：文件 → 缓存 → 下载；手机端同样不联网）',
     iFile >= 0 && iCache > iFile && iFetch > iCache,
     `文件=${iFile} 缓存=${iCache} 下载=${iFetch}`)
+}
+
+/**
+ * ---- adj774：```jps **代码块**也要有「自动格式化 + 脚本着色 + 错误提示」（与手机端 `.jps` 源码编辑一致）----
+ *
+ * 三项能力共用同一个问题："这一行在不在 ```jps 围栏里？" —— 由纯函数 `jpsBlockRanges` 回答。
+ * 这里做**行为测试**（不只是搜源码）：围栏识别、未闭合、缩进边界、`~` 围栏、正文行判定。
+ */
+{
+  const { jpsBlockRanges, isJpsBodyLine } = await import('../src/jpsBlocks')
+  const md = ['# 笔记', '', '```jps', '5 5 6 6 | 3 3 4 4', '1 1 2 2 | 5 5 6 6', '```', '', '结尾'].join('\n')
+  const r = jpsBlockRanges(md)
+  check('adj774 围栏扫描：` ```jps ` 块的行号与正文',
+    r.length === 1 &&
+      r[0].fenceStart === 3 &&
+      r[0].fenceEnd === 6 &&
+      r[0].bodyStart === 4 &&
+      r[0].bodyEnd === 5 &&
+      r[0].body === '5 5 6 6 | 3 3 4 4\n1 1 2 2 | 5 5 6 6',
+    JSON.stringify(r[0] ?? null))
+  check('adj774 围栏扫描：正文行判定（围栏行不算正文 ⇒ 不会被自动格式化）',
+    isJpsBodyLine(r, 4) && isJpsBodyLine(r, 5) && !isJpsBodyLine(r, 3) && !isJpsBodyLine(r, 6) && !isJpsBodyLine(r, 1))
+  // 未闭合 ⇒ 延伸到文末（用户刚敲 ` ```jps ` 还没写收尾时，着色/错误提示就该生效）
+  const open = jpsBlockRanges('```jps\n5 5 6 6\n1 1 2 2')
+  check('adj774 围栏扫描：未闭合块延伸到文末',
+    open.length === 1 && open[0].fenceEnd === null && open[0].bodyStart === 2 && open[0].bodyEnd === 3)
+  // 负对照：4 空格缩进是"缩进代码块"不是围栏；其它语言不算；`~~~jps` 与带附加词的 info 串算
+  check('adj774 围栏扫描负对照：4 空格缩进不算围栏；其它语言不算；`~~~jps` 与带附加词 info 串算',
+    jpsBlockRanges('    ```jps\n5 5 6 6\n    ```').length === 0 &&
+      jpsBlockRanges('```js\n1 1 2 2\n```').length === 0 &&
+      jpsBlockRanges('~~~jps\n1 1 2 2\n~~~').length === 1 &&
+      jpsBlockRanges('```jps title=示例\n1 1 2 2\n```').length === 1)
+  // 源码接线：三处共用同一份口径；且**只在正文行**上标注/格式化
+  const hl = String(readFileSync('src/jpsHighlight.ts', 'utf8'))
+  const main774 = String(readFileSync('src/main.ts', 'utf8'))
+  const hlBodyClause = 'scope.blocks.some((b) => line.number >= b.bodyStart && line.number <= b.bodyEnd)'
+  check('adj774 着色与错误提示接到代码块：范围判定用 scopeOf，且只标正文行、行号偏移回文档行号',
+    /function scopeOf\(view: EditorView\): JpsScope \| null \{/.test(hl) &&
+      /jpsBlockRanges\(view\.state\.doc\.toString\(\)\)/.test(hl) &&
+      hl.includes(hlBodyClause) &&
+      /const off = b\.bodyStart - 1/.test(hl) &&
+      /problems\.byLine\.get\(line\.number\)/.test(hl) &&
+      // 悬停提示同样按 scope 判定（不再只认 .jps 页签）
+      /hoverTooltip\(\(view, pos\) => \{[\s\S]{0,80}?if \(scopeOf\(view\) === null\) return null/.test(hl) &&
+      // 负对照：把"只标正文行"那一句摘掉后，判据必须为假（证明它真的在挡 markdown 文本）
+      !hl.replace(hlBodyClause, '').includes(hlBodyClause))
+  check('adj774 自动格式化覆盖代码块：markdown 里"光标离开块内正文行"才格式化，其它 markdown 文本不碰',
+    /const isMarkdown = !isOurJpsFile && file\.extension === 'md'/.test(main774) &&
+      /const blocks = jpsBlockRanges\(editor\.getValue\(\)\)/.test(main774) &&
+      /if \(!isJpsBodyLine\(blocks, prevLine \+ 1\)\) return/.test(main774) &&
+      // 大文档不猜（宁可少格式化，也不能让打字变卡）
+      /editor\.getValue\(\)\.length > 200_000/.test(main774) &&
+      // 负对照：去掉"必须在正文行内"这一句 ⇒ 判据为假
+      !main774
+        .replace('if (!isJpsBodyLine(blocks, prevLine + 1)) return', '')
+        .includes('if (!isJpsBodyLine(blocks, prevLine + 1)) return'))
 }
 
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。

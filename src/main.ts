@@ -1,6 +1,8 @@
 import { Events, Keymap, MarkdownRenderChild, MarkdownView, Notice, Platform, Plugin, TFolder, TFile, type MarkdownSectionInformation, type WorkspaceLeaf } from 'obsidian'
 // adj749d：自动格式化（光标离开本行时格式化该行）用**引擎里那份应用自己的**逐行格式化器
 import { formatLine } from '@ijipu/engine'
+// adj774：markdown 笔记里 ```jps 代码块的围栏扫描（着色/错误提示/自动格式化三处共用同一份口径）
+import { isJpsBodyLine, jpsBlockRanges } from './jpsBlocks'
 import { IJipuSettingTab } from './settings'
 import { mountScorePane, type ScorePaneHandle } from './scorePane'
 import { registerJpsEmbeds } from './embed'
@@ -391,21 +393,28 @@ export default class IJipuPlugin extends Plugin {
   }
 
   /**
-   * adj749d：**光标离开本行时自动格式化该行**（只对借宿主编辑器打开的 `.jps` 生效）。
+   * adj749d：**光标离开本行时自动格式化该行**（借宿主编辑器打开的 `.jps` 页签）。
    *
    * 与应用编辑器同款行为（应用里 `docStore` 在输入防抖后逐行格式化）。
    * 判据：① 当前编辑器所属文件扩展名是 `jps`；② 它的页签带 `ijipu-plain-source` 标记
    * （只有我们主动切过去的那个页签有）⇒ 不会误伤 markdown 笔记。
+   *
+   * adj774（用户要求）：「**jps 代码块**应同时应用自动格式化……与手机版 jps 文件的源码编辑模式一致」。
+   * 于是再加一条路径：**markdown 笔记里**，光标离开的那一行若落在 ` ```jps ` 块的**正文**里，
+   * 同样按引擎 `formatLine` 规范化 —— 三项能力（着色/错误提示/自动格式化）现在覆盖同一组行。
+   * 其余 markdown 文本一律不碰（判据是"这一行确实在 jps 块正文内"，不是"文件里出现了 jps"）。
    */
   private autoFormatLeavingLine(): void {
     const view = this.app.workspace.activeEditor
     const editor = view?.editor
     const file = view?.file
-    if (!editor || !file || file.extension !== JPS_EXTENSION) return
+    if (!editor || !file) return
     // 页签标记从**活动 leaf 的视图容器**上找（`MarkdownFileInfo` 上没有 containerEl）
     const leafView = this.app.workspace.activeLeaf?.view
     const marked = leafView?.containerEl.closest('.workspace-leaf')?.hasClass('ijipu-plain-source')
-    if (marked !== true) return
+    const isOurJpsFile = file.extension === JPS_EXTENSION && marked === true
+    const isMarkdown = !isOurJpsFile && file.extension === 'md'
+    if (!isOurJpsFile && !isMarkdown) return
     const line = editor.getCursor().line
     const key = `${file.path}:${line}`
     if (this.lastFormatLineKey === null) {
@@ -417,6 +426,16 @@ export default class IJipuPlugin extends Plugin {
     const prevLine = Number(this.lastFormatLineKey.slice(this.lastFormatLineKey.lastIndexOf(':') + 1))
     this.lastFormatLineKey = key
     if (!Number.isInteger(prevLine) || prevLine < 0 || prevLine >= editor.lineCount()) return
+    if (isMarkdown) {
+      /**
+       * ⚠ 只在"这一行确实在 ```jps 块正文里"时才格式化。
+       * 大文档下 `getValue()` + 扫描是 O(行数)，但只在**换行**时各跑一次（不是每键），可接受；
+       * 超过阈值就不猜了（宁可少格式化，也不能让打字变卡）。
+       */
+      if (editor.getValue().length > 200_000) return
+      const blocks = jpsBlockRanges(editor.getValue())
+      if (!isJpsBodyLine(blocks, prevLine + 1)) return
+    }
     const before = editor.getLine(prevLine)
     const after = formatLine(before)
     if (after === before) return
