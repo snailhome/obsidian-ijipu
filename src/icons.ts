@@ -157,6 +157,36 @@ export function formatIcon(size = 15): SVGSVGElement {
   return svg
 }
 
+/**
+ * adj773（用户要求）：「**编辑**按钮统一为**带笔的图标**，现在的这个图标指示不明」
+ * （此前用的是 `sourceIcon`，即 `</>` 那种"代码"符号，用户看不出是"编辑"）。
+ *
+ * 形态：一支**斜放的铅笔**（笔身 + 笔尖两笔），与应用/Obsidian 常见的"编辑"语义一致；
+ * 与其它图标一样手绘、走 `currentColor`，亮/暗主题自动同色。
+ */
+export function editIcon(size = 15): SVGSVGElement {
+  const svg = document.createElementNS(NS, 'svg')
+  svg.setAttribute('width', String(size))
+  svg.setAttribute('height', String(size))
+  svg.setAttribute('viewBox', '0 0 14 14')
+  svg.setAttribute('fill', 'none')
+  svg.setAttribute('stroke', 'currentColor')
+  svg.setAttribute('stroke-width', SW)
+  svg.setAttribute('stroke-linecap', 'round')
+  svg.setAttribute('stroke-linejoin', 'round')
+  svg.setAttribute('aria-hidden', 'true')
+  const add = (d: string): void => {
+    const path = document.createElementNS(NS, 'path')
+    path.setAttribute('d', d)
+    svg.appendChild(path)
+  }
+  // 笔身（从右上到左下的一条斜线，两端留出头）
+  add('M 9.6 2.4 L 11.6 4.4 L 4.6 11.4 L 2.4 11.6 L 2.6 9.4 Z')
+  // 笔尖与笔身的分界（一道短横，示意"笔尖"那一段）
+  add('M 8.4 3.6 L 10.4 5.6')
+  return svg
+}
+
 export function linkIcon(size = 15): SVGSVGElement {
   const svg = document.createElementNS(NS, 'svg')
   svg.setAttribute('width', String(size))

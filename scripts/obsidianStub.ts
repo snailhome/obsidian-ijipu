@@ -45,6 +45,20 @@ export class Platform {
   static isDesktopApp = true
   static isMobileApp = false
 }
+/**
+ * adj773（社区审核：音源下载由 `fetch` 改为 Obsidian 的 `requestUrl`）：
+ * 冒烟里的 stub 也要有它 —— 转发到全局 `fetch`，这样既保留"测试可打桩 fetch"的能力，
+ * 也让 `soundbank.ts` 的下载路径在套件里跑得通（否则 `requestUrl is not a function`）。
+ */
+export async function requestUrl(opts: { url: string; throw?: boolean }): Promise<{
+  status: number
+  arrayBuffer: ArrayBuffer
+  text: string
+}> {
+  const res = await fetch(opts.url)
+  const arrayBuffer = await res.arrayBuffer()
+  return { status: res.status, arrayBuffer, text: new TextDecoder().decode(arrayBuffer) }
+}
 export function createFragment<T>(fn?: (frag: T) => void): T {
   const frag = {} as T
   void fn

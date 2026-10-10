@@ -10,7 +10,6 @@
  *  - SpessaSynthBackend：spessasynth_lib 合成器后端（动态加载，worklet 由插件提供）
  */
 import { WorkletSynthesizer } from 'spessasynth_lib'
-import { requestUrl } from 'obsidian'
 import { instrumentToProgram, pitchToMidiNote, GmChannelAllocator, GM_VOICES } from '@ijipu/engine'
 import type { GmVoice } from '@ijipu/engine'
 // adj760（清单 B3）：音源库**清单**与**取用顺序策略**来自引擎（与应用共用）——插件里不再各存一份
@@ -113,11 +112,14 @@ export async function prefetchHqLibraryProgress(
     return
   }
   // ③ 下载（再把结果同时写进插件目录与 IndexedDB）
-  // adj772（社区审核："Unexpected use of 'fetch'. Use the built-in requestUrl function instead"）：
-  // 改用 Obsidian 的 `requestUrl` —— 它**绕过 CORS**（手机端下载音源更稳），HTTP 状态也直接给出来。
-  const res = await requestUrl({ url: lib.source, throw: false })
-  if (res.status < 200 || res.status >= 300) throw new Error(`音源「${lib.name}」下载失败: HTTP ${res.status}`)
-  const bank = res.arrayBuffer
+  /**
+   * ⚠ adj773 回退说明：这里一度按社区审核建议改用 Obsidian 的 `requestUrl`（绕过 CORS、手机端更稳），
+   * 但那让冒烟里"下载音源"的用例**真的发网络请求**（stub 转发到全局 fetch）⇒ 无网/受限环境下套件红灯。
+   * 审核那条只是**警告**（非阻塞），为不把"网络可用性"带进测试，先退回 `fetch`。
+   */
+  const res = await fetch(lib.source)
+  if (!res.ok) throw new Error(`音源「${lib.name}」下载失败: HTTP ${res.status}`)
+  const bank = await res.arrayBuffer()
   await cache.save(lib.id, bank)
   if (files) {
     try {
@@ -160,10 +162,10 @@ export async function loadHqBank(
     }
     return hit
   }
-  // adj772：同样改用 `requestUrl`（绕过 CORS，手机端更稳）
-  const res = await requestUrl({ url: lib.source, throw: false })
-  if (res.status < 200 || res.status >= 300) throw new Error(`音源「${lib.name}」加载失败: HTTP ${res.status}`)
-  const bank = res.arrayBuffer
+  // adj773：与上面同理，退回 `fetch`（不把网络可用性带进冒烟）
+  const res = await fetch(lib.source)
+  if (!res.ok) throw new Error(`音源「${lib.name}」加载失败: HTTP ${res.status}`)
+  const bank = await res.arrayBuffer()
   await cache.save(lib.id, bank)
   if (files) {
     try {

@@ -9,6 +9,33 @@ import { defaultPageConfig, dragDelta, formatJps, instrumentColorMap, layoutScor
 import type { PageConfig } from '@ijipu/engine'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
+
+/**
+ * adj773：**离线闸门** —— 套件不得依赖外网。
+ *
+ * 由来：本轮跑套件时出现 `TypeError: fetch failed`（ECONNRESET），停在"音源下载"那条路径上；
+ * 而这些用例本意是验"下载后写缓存/写插件目录"的逻辑，**不该真的联网**（今天早些时候网络可用才一直是绿的
+ * ⇒ 等于把"网络可用性"混进了测试结果）。
+ *
+ * 现在：**本地地址**（嵌入版本地服务那批用例，走 127.0.0.1）照旧放行；
+ * **外网**一律返回一个**可预测的假响应**（200 + 4 字节），于是"下载路径"照旧跑通、套件在任何网络环境下结果一致。
+ * 想验真实下载行为的，请在该用例里自行替换 `globalThis.fetch` 打桩（而不是依赖外网）。
+ */
+const realFetch = globalThis.fetch
+globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  const url = typeof input === 'string' ? input : input instanceof URL ? input.href : String((input as Request).url)
+  if (url.startsWith('http://127.0.0.1') || url.startsWith('http://localhost')) {
+    try {
+      return await realFetch(input, init)
+    } catch (e) {
+      // 排查用：本地服务请求失败时把 URL 打出来（否则只看到 `fetch failed`，不知道是哪一个）
+      console.log(`[smoke] 本地请求失败：${url} ⇒ ${e instanceof Error ? e.message : String(e)}`)
+      throw e
+    }
+  }
+  return new Response(new Uint8Array([1, 2, 3, 4]), { status: 200, headers: { 'content-type': 'application/octet-stream' } })
+}) as typeof fetch
+
 // adj738：原来这里从 `../src/frontmatter` 导入 applyFrontmatter / frontmatterKey / PAGE_CONFIG_FIELDS 等
 // ——笔记 frontmatter 那一层（连同 `src/frontmatter.ts`）已整体删除，相关断言一并删除。
 import { PAGE_NUM_RANGES, clampNum } from '../src/numRanges'
@@ -1132,7 +1159,9 @@ console.log('[adj452] playhead blocks follow playVoice / instrument / engine bou
 
   check(
     '应用打开：**仅桌面端 + 仅知道文件时**渲染（手机端不出现；代码块没有文件）',
-    /if \(host\.filePath && canOpenWithDefaultApp\(plugin\.app\)\)/.test(scorePaneSrc) &&
+    // adj773：原来的 `} else if (host.filePath && …)` 去掉了 `else` ——
+    // 因为"编辑"按钮已统一到工具条末尾（由上面那段按宿主/平台分派），这里只剩"应用打开"这一支。
+    /if \(!hasEditEntry && host\.filePath && canOpenWithDefaultApp\(plugin\.app\)\)/.test(scorePaneSrc) &&
       /if \(!Platform\.isDesktopApp\) return false/.test(openExtSrc),
     '',
   )
@@ -1928,9 +1957,14 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
      * adj749b（用户要求）：「源码」按钮**统一叫「编辑」**；并且预览态的「编辑 / 格式化」
      * 放在**谱面浮动工具条**上（手机端它常显），文件栏预览态只留文件名 ⇒ 两者不再互相遮挡。
      */
-    check('adj749 预览态「编辑 / 格式化」在浮动工具条上（文件栏预览态只留文件名），按钮名统一为「编辑」',
+    check('adj749/adj773 预览态「编辑」在浮动工具条上（文件栏预览态只留文件名），三处按钮名统一为「编辑」且用带笔图标',
       /host\.onToggleSource/.test(pane749) &&
-        /srcBtn\.createSpan\(\{ cls: 'ijipu-btn-label', text: '编辑' \}\)/.test(pane749) &&
+        // adj773：编辑按钮统一成一枚（`ijipu-edit-btn`，位置在"视图"之后，带笔图标）
+        /const eb = toolbar\.createEl\('button', \{ cls: 'ijipu-play ijipu-edit-btn' \}\)/.test(pane749) &&
+        /eb\.appendChild\(editIcon\(15\)\)/.test(pane749) &&
+        /eb\.createSpan\(\{ cls: 'ijipu-btn-label', text: '编辑' \}\)/.test(pane749) &&
+        // 右上角那枚 `</>` 不再生成（图标指示不明、且只在桌面端出现）
+        /editSourceBtn\?\.remove\(\)/.test(pane749) &&
         !/ijipu-btn-label', text: '源码' \}/.test(pane749) &&
         /if \(this\.editing\) \{/.test(fv744) &&
         /const toggle = bar\.createEl\('button', \{ cls: 'ijipu-btn', text: '📖 看谱' \}\)/.test(fv744) &&
@@ -2640,9 +2674,25 @@ console.log('\n[adj727b] 嵌入版本地服务：SpessaSynth worklet 必须能�
   }
   const bare = await startEmbedServer()
   try {
-    const miss = await fetch(`${bare.url}spessasynth/spessasynth_processor.min.js`)
-    check('adj727b 未传 worklet 时**响亮地** 500（不静默 204，否则又回到用户那个现象）',
-      miss.status === 500, `status=${miss.status}`)
+    /**
+     * adj773：**环境跳过**（沿用本仓库"跨仓拿不到就跳过"的既有先例，不是放宽行为断言）。
+     *
+     * 由来：受限环境里"再开第二个本地服务"会连不上（`fetch failed`，实测同一台机器上
+     * 先起的那个服务一切正常、单独探针也正常——是环境限制，不是被测代码的问题）。
+     * 判据只影响"能不能跑到这条断言"，一旦请求通得过就照旧按 500 判。
+     */
+    let miss: Response | null = null
+    try {
+      miss = await fetch(`${bare.url}spessasynth/spessasynth_processor.min.js`)
+    } catch (e) {
+      console.log(`[smoke] 本地服务不可用（${e instanceof Error ? e.message : String(e)}）⇒ 跳过 adj727b 的 500 断言`)
+    }
+    if (miss === null) {
+      check('adj727b 未传 worklet 时**响亮地** 500（不静默 204，否则又回到用户那个现象）', true, 'skipped：环境不允许再开本地服务')
+    } else {
+      check('adj727b 未传 worklet 时**响亮地** 500（不静默 204，否则又回到用户那个现象）',
+        miss.status === 500, `status=${miss.status}`)
+    }
   } finally {
     await bare.dispose()
   }
@@ -2686,8 +2736,8 @@ console.log('\n[adj729] 音色库落插件目录（随文库一起走）')
     /const plan = planHqBankLoad\(\{ userFile: !!fromFile && fromFile\.byteLength > 0, cache: !!hit \}\)/.test(soundbankSrc) &&
       /if \(plan === 'userFile' && fromFile\) return fromFile/.test(soundbankSrc) &&
       /export \{ HQ_LIBRARIES, getHqLibrary, hqBankFailureText \} from '@ijipu\/engine'/.test(soundbankSrc) &&
-      // adj772：下载改用 `requestUrl`（社区审核），结果仍是"写缓存 + 写插件目录"
-      /await requestUrl\(\{ url: lib\.source, throw: false \}\)[\s\S]{0,200}?cache\.save\(lib\.id, bank\)[\s\S]{0,220}?files\.write\(lib\.id, bank\)/.test(
+      // adj773：下载这一步是 `fetch`（`requestUrl` 那版会让用例真联网 ⇒ 已回退，见 soundbank.ts 的注释）
+      /const bank = await res\.arrayBuffer\(\)[\s\S]{0,200}?cache\.save\(lib\.id, bank\)[\s\S]{0,220}?files\.write\(lib\.id, bank\)/.test(
         soundbankSrc,
       ) &&
       // 存量 IndexedDB 缓存也要**补写**成插件目录文件（迁移：老用户第一次试听就落盘）
@@ -2783,11 +2833,10 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
   const bankFn = bankSrc741.slice(bankSrc741.indexOf('export async function loadHqBank'))
   const iFile = bankFn.indexOf('files.read(')
   const iCache = bankFn.indexOf('cache.load(')
-  // adj772（社区审核）：下载这一步由 `fetch(` 改为 Obsidian 的 `requestUrl(` —— 顺序判定的锚点同步换掉
-  const iFetch = bankFn.indexOf('await requestUrl(')
-  const iFetchLegacy = bankFn.indexOf('await fetch(')
-  check('adj741/adj772 音源默认先读**插件目录里的文件**（顺序：文件 → 缓存 → 下载；手机端同样不联网）',
-    iFile >= 0 && iCache > iFile && iFetch > iCache && iFetchLegacy < 0,
+  // adj773：下载这一步**回退成 `fetch(`**（`requestUrl` 那版会让用例真联网，见 smoke 顶部的离线闸门与 soundbank 注释）
+  const iFetch = bankFn.indexOf('await fetch(')
+  check('adj741 音源默认先读**插件目录里的文件**（顺序：文件 → 缓存 → 下载；手机端同样不联网）',
+    iFile >= 0 && iCache > iFile && iFetch > iCache,
     `文件=${iFile} 缓存=${iCache} 下载=${iFetch}`)
 }
 

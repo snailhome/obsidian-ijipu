@@ -12,7 +12,7 @@
  * 渲染管线与 iJipu 应用一致：`resolvePageConfig`（含源内 # jps-config）→ `layoutScore`
  * → `renderScoreToSvg`；试听走 `@ijipu/engine` 的 `buildPlaySequence` + SpessaSynth。
  */
-import { Menu, Notice, sanitizeHTMLToDom } from 'obsidian'
+import { Menu, Notice, Platform, sanitizeHTMLToDom } from 'obsidian'
 import { writeJpsConfig, mergeConfigEdits, dragDelta, clamp, formatJps, type PageConfig } from '@ijipu/engine'
 import { renderScoreFull, playScore, type PlayheadSeg } from './render'
 // adj758（清单 B1）：色块的分组/定位/配色来自 **引擎**（应用与插件共用一份；此处只做绘制）
@@ -25,7 +25,7 @@ import { resolvePageConfig } from './config'
 import { ConfigDialog } from './configDialog'
 // adj631：「保存为插件默认」要按"本次真正改动过的项"写入（changedDefs）+ 等于引擎默认则不存（isDefaultValue）
 import { changedDefs, isDefaultValue } from './defs'
-import { layoutIcon, modeIcon, settingsIcon, linkIcon, playIcon, stopIcon, appOpenIcon, sourceIcon, formatIcon } from './icons'
+import { layoutIcon, modeIcon, settingsIcon, linkIcon, playIcon, stopIcon, appOpenIcon, sourceIcon, formatIcon, editIcon } from './icons'
 import { canOpenWithDefaultApp, openUrlExternally, openWithDefaultApp } from './openExternal'
 import { computeGuideLines, cropRectFor, guideLimits, guidePlacement, type GuideLine } from './guides'
 import { GUIDES_CHANGED, SETTINGS_CHANGED } from './main'
@@ -879,21 +879,19 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
        * 可以考虑把这两个按钮放在工具条上」）：**预览态把这两个动作收进浮动工具条**。
        * 工具条在手机端常显（`.is-mobile` 规则）⇒ 随时可点；文件栏在预览态只剩文件名，不再重叠。
        */
-      if (host.onToggleSource) {
-        const srcBtn = toolbar.createEl('button', { cls: 'ijipu-play ijipu-source-btn' })
-        // adj749b（用户要求）：**按钮名统一为「编辑」**（不再叫"源码"）—— 与 `</>` 的语义一致，
-        // 用户看到的就是"编辑这份谱的源码"这一个动作。
-        srcBtn.setAttr('title', '编辑源码（手机上用 Obsidian 的编辑器，源码模式）')
-        srcBtn.appendChild(sourceIcon(15))
-        srcBtn.createSpan({ cls: 'ijipu-btn-label', text: '编辑' })
-        srcBtn.addEventListener('click', () => host.onToggleSource?.())
-      }
+      /**
+       * adj773（用户要求 3）：**按钮顺序统一为「试听、排版、设置、视图、编辑」**，
+       * 「编辑」永远在**最后**（此前它在"设置"之前，用户报"编辑目前在中间"）。
+       * 所以这里的"编辑"块被删掉了 —— 它与"格式化"一起挪到「视图」（`ijipu-mode-select-wrap`）之后，
+       * 见下面标了 `adj773` 的那两段。
+       */
       if (host.onFormat && !host.onToggleSource) {
         /**
          * adj749c（用户要求）：「**应该是源码状态才需要格式化，而不是预览**，位置不对」——
          * `.jps` 文件视图（有 `onToggleSource`）**预览态不再放格式化按钮**：
          * 它的位置在源码态的文件栏上，而且源码编辑已改成**逐行自动格式化**（与应用同款）。
          * 代码块没有"源码态 UI"（宿主本身就是源码），所以那里仍保留"就地格式化"。
+         * adj773：位置从"设置之前"挪到"视图之后、编辑之前"（顺序见上）。
          */
         const fmtBtn = toolbar.createEl('button', { cls: 'ijipu-play ijipu-format-btn' })
         fmtBtn.setAttr('title', '按应用规范格式化源码（音符/小节线空格、歌词里的 {tp … } 段、描述头属性）')
@@ -1053,7 +1051,50 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       menu.showAtPosition({ x: rect.left, y: rect.bottom })
     })
 
-    // —— 「编辑」（用户要求，adj724b 改名并改行为）：优先用**嵌入的完整 iJipu**打开 ——
+    // adj773（用户要求 2/3）：右上角那枚 `</>` **不再需要** —— 工具条里已有统一的「编辑」
+    // （带笔图标、位置在最后、桌面与手机端都在）。建好即撤掉，避免同处两个"编辑"入口。
+    editSourceBtn?.remove()
+    editSourceBtn = null
+
+    /**
+     * adj773（用户要求 3）：三处「编辑」**统一成一枚**：位置在**最后**（"视图"之后）、
+     * **带笔图标**（用户说原来的 `</>` 图标"指示不明"），行为按宿主与平台分派：
+     *  · **代码块**（`onEditSource`）⇒ 在笔记源码与该块预览之间切换（桌面/手机端都可用）；
+     *  · **手机端**（`onToggleSource`）⇒ 用宿主编辑器打开 `.jps` 源码（源码模式）；
+     *  · **桌面端**（`onEdit`）⇒ 用**嵌入版 iJipu**打开编辑。
+     */
+    {
+      const editable = !!(host.onEditSource || host.onToggleSource || host.onEdit)
+      if (editable) {
+        const eb = toolbar.createEl('button', { cls: 'ijipu-play ijipu-edit-btn' })
+        eb.setAttr('aria-label', '编辑')
+        eb.setAttr(
+          'title',
+          host.onEditSource
+            ? '编辑这段源码（在笔记源码与预览之间切换）'
+            : Platform.isMobile
+              ? '编辑源码（用 Obsidian 的编辑器，源码模式）'
+              : '用嵌入的爱记谱编辑',
+        )
+        eb.appendChild(editIcon(15))
+        eb.createSpan({ cls: 'ijipu-btn-label', text: '编辑' })
+        eb.addEventListener('click', () => {
+          if (host.onEditSource) {
+            host.onEditSource()
+            return
+          }
+          if (Platform.isMobile) {
+            host.onToggleSource?.()
+            return
+          }
+          // 桌面端优先用嵌入版 iJipu（用户要求 3a）；没有这条路径时退回源码编辑
+          if (host.onEdit) host.onEdit()
+          else host.onToggleSource?.()
+        })
+      }
+    }
+
+
     // 用户原话：「工具栏里的『应用打开』按钮，现在文本应改为『编辑』，并使用嵌入版的 ijipu 来打开」。
     //  · 有 `onEdit` ⇒ 显示「编辑」（走嵌入版 iJipu 的应用页签）；
     //  · 否则退回旧行为「应用打开」（桌面端用系统默认应用打开；手机端/代码块不出现）。
@@ -1066,14 +1107,12 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
      */
     const hasEditEntry = !!(host.onEdit && host.filePath)
     const keepEmbedLink = !hasEditEntry || host.editLeavesObsidian === true
-    if (hasEditEntry) {
-      const editBtn = toolbar.createEl('button', { cls: 'ijipu-play ijipu-app-open-btn' })
-      editBtn.setAttr('title', '用嵌入的爱记谱编辑')
-      editBtn.setAttr('aria-label', '用嵌入的爱记谱编辑')
-      editBtn.appendChild(appOpenIcon(15))
-      editBtn.createSpan({ cls: 'ijipu-btn-label', text: '编辑' })
-      editBtn.addEventListener('click', () => host.onEdit?.())
-    } else if (host.filePath && canOpenWithDefaultApp(plugin.app)) {
+    /**
+     * adj773（用户要求 3）：**统一后的「编辑」按钮已经由上面那段创建**（在"视图"之后、带笔图标、
+     * 按宿主与平台分派）⇒ 这里不再另建一枚（否则同一工具条会出现两个"编辑"）。
+     * `hasEditEntry` / `keepEmbedLink` 仍保留：它们决定「打开谱面文件」链接要不要收掉。
+     */
+    if (!hasEditEntry && host.filePath && canOpenWithDefaultApp(plugin.app)) {
       const appOpenBtn = toolbar.createEl('button', { cls: 'ijipu-play ijipu-app-open-btn' })
       appOpenBtn.setAttr('title', '使用默认应用打开')
       appOpenBtn.setAttr('aria-label', '使用默认应用打开')
