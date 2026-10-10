@@ -2030,12 +2030,11 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
    * 宿主的裁剪机制不可能穷举 ⇒ 改为**自愈**：命中失败就把工具条**贴回块内**（祖先的裁剪框
    * 至少包含块本身 ⇒ 块内一定不会被裁），并在诊断里记下"兜底 + 复测结果"。
    */
-  check('adj751 工具条命中失败时自愈：贴回块内（并复测、写进诊断）',
+  check('adj751/755 工具条命中失败时自愈（先放宽上游、再贴回块内），且**每次显示重新判定**',
     /const hitSelf = hit !== null && toolbarEl\.contains\(hit\)/.test(pane725) &&
       /if \(!hitSelf && inViewport && !wasInside\) \{/.test(pane725) &&
       /toolbarEl\.addClass\('ijipu-toolbar-inside'\)/.test(pane725) &&
-      /复测=\$\{/.test(pane725) &&
-      /另有遮挡/.test(pane725) &&
+      /放宽上游/.test(pane725) &&
       /\.ijipu-score-toolbar\.is-revealed\.ijipu-toolbar-inside \{/.test(css725nc) &&
       /top: 2px;/.test(css725nc))
 
@@ -2150,6 +2149,22 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
         css725nc.includes('rgba(255, 93, 108, 0.13)') &&
         css725nc.includes('.ijipu-jps-problem-hint'))
   }
+
+  /**
+   * adj755（用户要求：「PC 端预览区，**阅读视图**下工具条在预览区外部左上角，**编辑模式**下在内部左上角，
+   * 这个要规范为**都在外部左上角**」）：
+   * 原因是 `adj751` 的"贴回块内"兜底**粘住不摘** ⇒ 某面板历史失败过一次就永远在里面。
+   * 现在：**每次显示都重新判定** —— 命中自身就**移除**贴内类（回到规范的"外部左上角"）；
+   * 未命中则先**放宽上游 `contain`** 再复测，仍不行才临时贴回块内。
+   */
+  check('adj755 工具条位置规范：每次显示重新判定；命中就回"外部"、失败先放宽上游再兜底',
+    /if \(hitSelf && wasInside\) \{/.test(pane725) &&
+      /toolbarEl\.removeClass\('ijipu-toolbar-inside'\)/.test(pane725) &&
+      /const relaxed = relaxUpstreamClipping\(\)/.test(pane725) &&
+      /const relaxUpstreamClipping = \(\): string\[\] => \{/.test(pane725) &&
+      /const isLeafContent = el\.hasClass\('workspace-leaf-content'\)/.test(pane725) &&
+      /放宽上游裁剪\*\*后命中自身/.test(pane725) &&
+      /临时贴回块内/.test(pane725))
 
   check('adj740 工具条诊断行记录"宿主/显示类/最终样式/坐标/祖先链"（设置页可读）',
     /lastToolbarInfo/.test(String(readFileSync('src/main.ts', 'utf8'))) &&

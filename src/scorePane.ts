@@ -358,16 +358,37 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
        */
       const hitSelf = hit !== null && toolbarEl.contains(hit)
       const wasInside = toolbarEl.hasClass('ijipu-toolbar-inside')
+      /**
+       * adj755（用户要求：「PC 端预览区，**阅读视图**下工具条在预览区外部左上角，**编辑模式**下在内部左上角，
+       * 这个要规范为**都在外部左上角**」）：
+       *
+       * 原因是我 `adj751` 的"贴回块内"兜底**是粘住的**（加类后从不摘除）⇒ 某个面板只要历史上失败过一次，
+       * 之后**永远**贴在里面（阅读视图没失败过 ⇒ 一直在外面）—— 这正是用户看到的不一致。
+       *
+       * 现在改成**每次显示都重新判定**，并且失败时先走"逐级放宽"这一梯，实在不行才临时贴回块内：
+       *  ① 本帧测量若命中自身 ⇒ **移除**贴内类（恢复"外部左上角"，即规范）；
+       *  ② 未命中 ⇒ 先放开**上游**（`.cm-editor` 以上直到 `.workspace-leaf-content`）会裁剪的 `contain`
+       *     （`paint`/`strict`/`content` 都会裁；step 记录进诊断），下一帧复测；
+       *  ③ 复测仍不命中 ⇒ 才加贴内类（临时兜底，且下次显示会重新判定 ⇒ 一旦不再需要就回外部）。
+       */
+      if (hitSelf && wasInside) {
+        toolbarEl.removeClass('ijipu-toolbar-inside')
+        plugin.lastToolbarInfo = `${plugin.lastToolbarInfo ?? ''}｜**恢复外部左上角**（本次命中自身，说明不再被裁）`
+      }
       if (!hitSelf && inViewport && !wasInside) {
-        toolbarEl.addClass('ijipu-toolbar-inside')
+        const relaxed = relaxUpstreamClipping()
         window.requestAnimationFrame(() => {
-          // 换位后再验一次：仍不命中就记进诊断（说明还有别的东西在挡）
           const r2 = toolbarEl.getBoundingClientRect()
           const h2 = document.elementFromPoint(Math.round(r2.left + r2.width / 2), Math.round(r2.top + r2.height / 2))
+          const ok2 = h2 !== null && toolbarEl.contains(h2)
+          if (ok2) {
+            plugin.lastToolbarInfo =
+              `${plugin.lastToolbarInfo ?? ''}｜**放宽上游裁剪**后命中自身 ✓${relaxed.length > 0 ? `（${relaxed.join('、')}）` : ''}`
+            return
+          }
+          toolbarEl.addClass('ijipu-toolbar-inside')
           plugin.lastToolbarInfo =
-            `${plugin.lastToolbarInfo ?? ''}｜**兜底**：已贴回块内；复测=${
-              h2 && toolbarEl.contains(h2) ? '命中自身 ✓' : '仍未命中（另有遮挡）'
-            }`
+            `${plugin.lastToolbarInfo ?? ''}｜放宽上游${relaxed.length > 0 ? `（${relaxed.join('、')}）` : ''}后仍未命中 ⇒ **临时贴回块内**`
         })
       }
       /**
@@ -400,6 +421,34 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
         `｜内容：${kidDesc}｜innerText=${text.length > 0 ? `「${text.slice(0, 40)}」` : '**空**'}` +
         (facts.length > 0 ? `｜祖先链：${facts.join(' → ')}` : '｜祖先链：无裁剪层')
     })
+  }
+
+  /**
+   * adj755：**放宽上游裁剪**（命中测试失败时的一梯，比"贴回块内"更尊重用户的"都在外部"要求）。
+   *
+   * 只处理 `.cm-editor` **以上**、`.workspace-leaf-content`（含）以下的祖先 ——
+   * `contain: paint/strict/content` 都会裁剪，而这些层（CM6 与 leaf 内容容器）不是界面骨架的关键，
+   * 降级为 `layout style` 只损失一点包含优化。**记录改过谁**并写进诊断，便于下一轮回溯。
+   * ⚠ 不动 `.view-content` 以上的层（那是宿主的滚动/布局骨架）。
+   */
+  const relaxUpstreamClipping = (): string[] => {
+    const done: string[] = []
+    let el: HTMLElement | null = container.closest('.cm-editor')?.parentElement ?? container.parentElement
+    let depth = 0
+    while (el && depth < 6) {
+      depth += 1
+      const isLeafContent = el.hasClass('workspace-leaf-content')
+      const cs = window.getComputedStyle(el)
+      if (/paint|strict|content/.test(cs.contain)) {
+        if (!el.hasClass('ijipu-cm-nocontain')) el.addClass('ijipu-cm-nocontain')
+        noClipEls.add(el)
+        const name = el.className.split(/\s+/).filter(Boolean).slice(0, 2).join('.') || el.tagName.toLowerCase()
+        done.push(`${name}:contain=${cs.contain}→layout style`)
+      }
+      if (isLeafContent) break
+      el = el.parentElement
+    }
+    return done
   }
 
   const stopRuntime = (): void => {
