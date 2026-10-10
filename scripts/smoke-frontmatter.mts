@@ -3360,6 +3360,48 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
     `函数体 ${body.length} 字符`)
 }
 
+/**
+ * ---- adj778：**Node 模块必须是静态导入**（用户实测：「点击编辑无法打开嵌入版，诊断显示
+ * `Failed to fetch dynamically imported module: node:http`」）----
+ *
+ * 由来：adj772 为消除社区审核那条"Node.js APIs are not available on mobile"**警告**，
+ * 把 `node:http`/`node:crypto` 改成了函数内 `await import()`。结果**直接坏掉**：
+ * 插件产物是 CJS（`format:'cjs'`，`node:*` 标 external）—— 静态导入会编译成 `require("node:http")`
+ * （Electron 渲染进程有 Node 集成，可用 ✓）；而**动态** `import('node:http')` 不享受这条转换，
+ * 被当成浏览器式模块请求去 fetch `node:http` ⇒ 必然失败 ✗。
+ *
+ * 手机端安全性由**调用侧**保证：`./embed/server` 只在桌面端被动态 import ⇒ 手机端不会加载到本文件。
+ * 这道闸门同时查**源码**与**产物**（产物存在时；`main.js` 未构建则明确跳过）——
+ * 因为这类问题只在产物里才看得出来（源码看着"很规范"）。
+ */
+{
+  const server778 = String(readFileSync('src/embed/server.ts', 'utf8'))
+  const code778 = codeOf(server778)
+  check('adj778 源码：node:http / node:crypto 必须是**静态导入**（动态 import 在渲染进程必然失败）',
+    /import \{ createServer \} from 'node:http'/.test(code778) &&
+      /import \{ randomBytes \} from 'node:crypto'/.test(code778) &&
+      // 不得再有动态导入的 node 模块
+      !/import\('node:/.test(code778))
+  /**
+   * 负对照：把静态导入换成动态形态喂进去，"不存在动态导入"这条判据必须**不再成立**。
+   * ⚠ 写法：断言**篡改样本里能搜到**该构造（"不存在"谓词在篡改样本上为假）。
+   *   （我先前把负对照写成"在含该构造的样本上断言不存在"，方向反了 —— 会永远失败。）
+   */
+  check('adj778 负对照：改回动态 import 形态后，"不存在动态导入"判据即为假',
+    /import\('node:/.test(`${code778}\nconst m = await import('node:http')`))
+  /** 产物闸门：`main.js` 里必须是 `require("node:…")`，不得残留浏览器式 `import("node:…")` */
+  if (existsSync('main.js')) {
+    const bundle = readFileSync('main.js', 'utf8')
+    const dyn = [...bundle.matchAll(/import\("node:[a-z]+"\)/g)].map((m) => m[0])
+    check('adj778 产物：main.js 里不得残留动态 import("node:*")（这正是用户看到的报错形态）',
+      dyn.length === 0 && /require\("node:http"\)/.test(bundle),
+      dyn.length ? `残留 ${dyn.join(',')}` : '')
+  } else {
+    console.log('[smoke] main.js 未构建 ⇒ 跳过 adj778 的产物形态检查')
+    check('adj778 产物：main.js 里不得残留动态 import("node:*")', true, 'skipped：未构建产物')
+  }
+}
+
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。
 //   实测踩过：一次编辑顺手把它删掉，套件仍以退出码报错，但输出里再也看不到 `N passed, M failed`。
 console.log(`\n${pass} passed, ${fail} failed`)

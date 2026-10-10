@@ -22,16 +22,26 @@
  * 网页产物由 `ijipu` 仓库构建并生成该文件（见 `scripts/embed-emit.mjs`），
  * 本服务只负责"按路径取出来回给浏览器"。
  *
- * ## 手机端安全（adj772：Obsidian 社区审核要求）
+ * ## 手机端安全（adj772 社区审核建议 → adj778 按实测回退）
  *
- * 本文件依赖 `node:http` / `node:crypto`，二者**手机端不存在**。虽然 `main.ts` 只在桌面端
- * 动态导入本模块，但审核的静态检查**只看文件自身** ⇒ 只要文件里有静态 `import 'node:…'` 就报
- * 「Node.js APIs are not available on mobile」。所以这里：
- *  · 类型用 `import type`（编译期擦除，不产生运行时 require）；
- *  · 真正的 Node 模块**在函数内 `await import()`**（只有桌面端真的调用到这个函数时才会加载）。
+ * 本文件依赖 `node:http` / `node:crypto`，二者**手机端不存在**。
  *
- * 连 `Server` 类型也不静态导入：`const server = createServer(...)` 的类型由**动态导入自动推断**。
+ * adj772 曾为了消除审核那条"Node.js APIs are not available on mobile"**警告**，把这两个模块改成
+ * **函数内 `await import('node:http')`**。结果**用户实测直接坏掉**：
+ * 「点击编辑无法打开嵌入版，诊断显示 `Failed to fetch dynamically imported module: node:http`」。
+ *
+ * 根因：Obsidian 插件跑在 Electron 的**渲染进程**里，本插件的产物是 **CJS**（`esbuild` 的
+ * `format: 'cjs'`，且 `node:*` 被标为 external）—— **静态**导入会编译成 `require("node:http")`
+ * （渲染进程有 Node 集成，可用 ✓）；而**动态** `import('node:http')` 不享受这条转换，
+ * 会被当成**浏览器式的模块请求**去 fetch `node:http` ⇒ 必然失败 ✗。
+ *
+ * 所以这里回到**静态导入**，并在**调用侧**保证手机端安全：整个 `./embed/server` 模块
+ * 只在桌面端被 `await import()`（见 `main.ts` 的 `loadEmbedServer()`）⇒ 手机端永远不会加载到本文件、
+ * 也就不会执行这两个 `require`。审核那条随之回到**警告**（非阻塞，且属静态检查的误报——
+ * 它只看文件自身，看不到"本文件在手机端根本不会被加载"）。**功能正确性优先于消除警告。**
  */
+import { createServer } from 'node:http'
+import { randomBytes } from 'node:crypto'
 import { WEBAPP_HTML, WEBAPP_ASSETS } from '../gen/webappAssets'
 
 export interface EmbedServer {
@@ -110,8 +120,9 @@ export const SOUNDFONT_URL_PREFIX = 'soundbanks/'
 export async function startEmbedServer(
   opts: { workletCode?: string; readSoundfont?: (id: string) => Promise<Buffer | null> } = {},
 ): Promise<EmbedServer> {
-  // adj772：Node 模块在**函数内**动态导入（审核要求；手机端永不走到这里，桌面端也只在首次启动时加载一次）
-  const [{ createServer }, { randomBytes }] = await Promise.all([import('node:http'), import('node:crypto')])
+  // adj778：Node 模块改为**静态导入**（见文件头的说明：动态 import('node:http') 在渲染进程里
+  // 会被当成浏览器模块请求 ⇒ 实测报 `Failed to fetch dynamically imported module: node:http`）。
+  // 手机端安全性由调用侧保证：`./embed/server` 只在桌面端被动态 import。
   const token = randomBytes(16).toString('hex')
   const html = Buffer.from(WEBAPP_HTML, 'utf8')
   const assets = decodeAssets()
