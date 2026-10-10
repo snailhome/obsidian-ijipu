@@ -179,6 +179,12 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
   let hostWidgetEl: HTMLElement | null = null
 
   /**
+   * adj740：被我们加了「放开裁剪」类的祖先元素（销毁时逐个摘掉，不去污染宿主的 DOM）。
+   * 这些类是我们唯一允许写在**别人元素**上的东西，所以必须记全、必须能干净撤销。
+   */
+  const noClipEls = new Set<HTMLElement>()
+
+  /**
    * adj725（用户要求）：**工具条浮到谱面块外侧** ⇒ 实时预览下会被宿主的 `overflow: hidden` 裁掉。
    *
    * Obsidian 的 `app.css` 里有 `.cm-embed-block:hover { overflow: hidden }`（悬停时才加），
@@ -203,6 +209,70 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     hostWidgetEl?.removeClass('ijipu-cm-host')
     widget.addClass('ijipu-cm-host')
     hostWidgetEl = widget
+  }
+
+  /**
+   * adj740（用户报「编辑视图下工具条还是不可见」）：**把所有"会裁剪"的祖先逐层放开**（滚动容器除外）。
+   *
+   * 为什么不能只处理 `.cm-embed-block`：实时预览里我们的面板外面还有一整套 CM6 容器
+   * （`.cm-editor > .cm-scroller > .cm-content > .cm-line > .cm-embed-block`），
+   * 任何一层 `overflow: hidden/clip` 都能把浮在块外的工具条裁掉；而**到底哪一层在裁**，
+   * 只有真机 DOM 量得出来。做法：
+   *  · 从面板往上走到 `.cm-editor`（含）为止（**不走更外层**，免得动到 Obsidian 的编辑器骨架）；
+   *  · 逐层取计算样式的 `overflow`/`overflow-y`，是 `hidden`/`clip` 就加 `ijipu-cm-noclip` 类放开；
+   *  · ⚠ **滚动容器绝不放开**（判据：`scrollHeight > clientHeight + 1`）—— 放开它会直接破坏编辑器滚动；
+   *  · 顺手把实测结果写成一行诊断（见 `noteToolbar`），用户截图即可定位。
+   */
+  const exemptClippingAncestors = (): string[] => {
+    const facts: string[] = []
+    let el: HTMLElement | null = container.parentElement
+    let depth = 0
+    while (el && depth < 8) {
+      depth += 1
+      const isEditorRoot = el.hasClass('cm-editor')
+      const cs = window.getComputedStyle(el)
+      const clips = /hidden|clip/.test(cs.overflowY) || /hidden|clip/.test(cs.overflowX)
+      const isScroller = el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1
+      const name = el.className.split(/\s+/).filter(Boolean).slice(0, 2).join('.') || el.tagName.toLowerCase()
+      if (clips) {
+        if (isScroller) {
+          facts.push(`${name}:裁剪但**是滚动容器**（不动它）`)
+        } else {
+          if (!el.hasClass('ijipu-cm-noclip')) el.addClass('ijipu-cm-noclip')
+          noClipEls.add(el)
+          facts.push(`${name}:裁剪→已放开`)
+        }
+      }
+      if (isEditorRoot) {
+        facts.push('到 .cm-editor 为止')
+        break
+      }
+      el = el.parentElement
+    }
+    return facts
+  }
+
+  /**
+   * adj740：把"工具条为什么看不见"的实测快照写进 `plugin.lastToolbarInfo`（设置页显示）。
+   * 记的是**用户真正关心的三件事**：宿主是哪一类（阅读视图 / 实时预览）、有没有触发显示、
+   * 以及裁剪链上每一层发生了什么 + 工具条与裁剪区的几何关系。
+   */
+  const noteToolbar = (phase: string, facts: string[], toolbarEl: HTMLElement): void => {
+    const d = new Date()
+    const hh = String(d.getHours()).padStart(2, '0')
+    const mm = String(d.getMinutes()).padStart(2, '0')
+    const ss = String(d.getSeconds()).padStart(2, '0')
+    const rect = toolbarEl.getBoundingClientRect()
+    const score = container.getBoundingClientRect()
+    const cs = window.getComputedStyle(toolbarEl)
+    plugin.lastToolbarInfo =
+      `${hh}:${mm}:${ss} · ${phase}` +
+      `｜宿主=${container.closest(CM_EMBED_BLOCK) ? '实时预览(.cm-embed-block)' : '阅读视图/其他'}` +
+      `｜显示类=${toolbarEl.hasClass('is-revealed') ? '有' : '无'}` +
+      `｜样式 opacity=${cs.opacity} visibility=${cs.visibility} position=${cs.position}` +
+      `｜工具条 ${Math.round(rect.width)}×${Math.round(rect.height)} @(${Math.round(rect.left)},${Math.round(rect.top)})` +
+      `｜谱面块 @(${Math.round(score.left)},${Math.round(score.top)})` +
+      (facts.length > 0 ? `｜祖先链：${facts.join(' → ')}` : '｜祖先链：无裁剪层')
   }
 
   const stopRuntime = (): void => {
@@ -296,7 +366,11 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     const revealToolbar = (on: boolean): void => {
       // adj737：**先**确认宿主块被标了类再显示 —— 否则悬停那一下正好被宿主的
       // `.cm-embed-block:hover { overflow: hidden }` 裁掉（实时预览里块容器会被 CM6 换掉，类会丢）
-      if (on) markHostWidget()
+      if (on) {
+        markHostWidget()
+        // adj740：再逐层放开**所有**会裁剪的祖先（滚动容器除外），并把实测快照记进设置页诊断
+        noteToolbar('指针进入/键盘唤醒（显示工具条）', exemptClippingAncestors(), toolbar)
+      }
       toolbar.toggleClass('is-revealed', on)
       editSourceBtn?.toggleClass('is-revealed', on)
     }
@@ -1034,6 +1108,9 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       // adj725：把挂到宿主 widget 容器上的类原样摘掉（那是宿主自己的元素，不留痕）
       hostWidgetEl?.removeClass('ijipu-cm-host')
       hostWidgetEl = null
+      // adj740：逐层放开的裁剪类同样要摘掉（可能有多层，且都不是我们的元素）
+      for (const el of noClipEls) el.removeClass('ijipu-cm-noclip')
+      noClipEls.clear()
       container.empty()
     },
   }

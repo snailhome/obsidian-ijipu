@@ -1850,9 +1850,39 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
    * （`</>` 同时退回主题色）—— 用户看到的就是"编辑模式下什么都没有"。
    */
   check('adj737 显示工具条前重新确认宿主块的 `ijipu-cm-host` 类（CM6 换容器后类会丢）',
-    /const revealToolbar = \(on: boolean\): void => \{[\s\S]{0,260}?if \(on\) markHostWidget\(\)/.test(pane725) &&
+    /const revealToolbar = \(on: boolean\): void => \{[\s\S]{0,420}?if \(on\) \{[\s\S]{0,90}?markHostWidget\(\)/.test(pane725) &&
       /if \(!widget\.hasClass\('ijipu-cm-host'\)\) widget\.addClass\('ijipu-cm-host'\)/.test(pane725) &&
       /hostWidgetEl\?\.removeClass\('ijipu-cm-host'\)/.test(pane725))
+
+  /**
+   * adj740（用户第二次报「编辑视图下工具条还是不可见」）：**裁剪不止一层**。
+   *
+   * 实时预览里我们的面板外面还有 `.cm-editor > .cm-scroller > .cm-content > .cm-line …` 一整套，
+   * 任何一层 `overflow: hidden/clip` 都能把浮在块外的工具条整条裁掉。修法必须**逐层放开**，
+   * 但**滚动容器绝不放开**（放开它编辑器就滚不动了）。同时把实测快照记进设置页诊断 ——
+   * 这样"到底哪一层在挡"能靠一张截图定位，而不是继续猜。
+   */
+  check('adj740 逐层放开"会裁剪的祖先"，且**绝不放开滚动容器**',
+    /const exemptClippingAncestors = \(\): string\[\] => \{/.test(pane725) &&
+      /\/hidden\|clip\/\.test\(cs\.overflowY\)/.test(pane725) &&
+      /const isScroller = el\.scrollHeight > el\.clientHeight \+ 1/.test(pane725) &&
+      /if \(isScroller\) \{/.test(pane725) &&
+      /el\.addClass\('ijipu-cm-noclip'\)/.test(pane725) &&
+      /noClipEls\.add\(el\)/.test(pane725) &&
+      // 只走到 `.cm-editor` 为止，不去动更外层的编辑器骨架
+      /hasClass\('cm-editor'\)/.test(pane725) &&
+      // 销毁时逐个摘掉（那些都不是我们的元素）
+      /for \(const el of noClipEls\) el\.removeClass\('ijipu-cm-noclip'\)/.test(pane725) &&
+      /\.ijipu-cm-noclip \{/.test(css725nc))
+  check('adj740 工具条诊断行记录"宿主/显示类/最终样式/坐标/祖先链"（设置页可读）',
+    /lastToolbarInfo/.test(String(readFileSync('src/main.ts', 'utf8'))) &&
+      /plugin\.lastToolbarInfo =/.test(pane725) &&
+      /宿主=\$\{container\.closest\(CM_EMBED_BLOCK\)/.test(pane725) &&
+      /显示类=\$\{toolbarEl\.hasClass\('is-revealed'\)/.test(pane725) &&
+      /opacity=\$\{cs\.opacity\} visibility=\$\{cs\.visibility\} position=\$\{cs\.position\}/.test(pane725) &&
+      /｜祖先链：/.test(pane725) &&
+      settings730.includes('预览工具条（诊断信息，无需操作）') &&
+      settings730.includes('lastToolbarInfo'))
   // ③c **不再往预览里塞 textarea**（用户明确要求）
   check('adj725 不再往预览里塞 textarea（用户口径：不要再单独的 textarea）',
     !pane725.includes('ijipu-block-source-editor') &&

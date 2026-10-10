@@ -608,6 +608,20 @@ export default class IJipuPlugin extends Plugin {
   lastCropInfo: string | null = null
 
   /**
+   * adj740（用户报「插件的预览区左上工具条在**编辑视图**下还是不可见，只能在阅读视图下可见」）：
+   * **预览工具条为什么没显示**的实测快照。
+   *
+   * 为什么需要它：工具条浮在谱面块**外侧**，而宿主在悬停时会给若干层祖先套 `overflow: hidden`
+   * （`app.css` 里 `.cm-embed-block:hover{overflow:hidden}` 是最外层那一条）。到底**哪一层**在裁、
+   * 或者**根本没触发显示**，只有在真机的实时预览 DOM 里量得出来 —— 我在本地没有 Obsidian 宿主，
+   * 所以把实时预览的祖先链、逐层的 `overflow`/`contain`、以及工具条与裁剪区的几何关系记下来，
+   * 用户截一张设置页的图就能定位（与 `lastCropInfo` 同一套路）。
+   *
+   * 内存字段即可——运行期诊断，不持久化。
+   */
+  lastToolbarInfo: string | null = null
+
+  /**
    * adj725d：**SVG 走的是哪条解析路径**（最近一次渲染写回）——`'xml'` / `'html-fallback（…）'`。
    *
    * 为什么要记：Obsidian 的 `sanitizeHTMLToDom`（DOMPurify）会剥掉 `dominant-baseline`

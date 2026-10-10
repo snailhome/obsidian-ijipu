@@ -1162,6 +1162,22 @@
   overflow: visible;
 }
 
+/* ─────────── adj740：把**所有**会裁剪的祖先逐层放开（滚动容器除外）───────────
+   用户第二次报「编辑视图下工具条还是不可见」⇒ 说明裁剪不止 `.cm-embed-block` 那一层：
+   实时预览里我们的面板外面还有 `.cm-editor > .cm-scroller > .cm-content > .cm-line …`，
+   任何一层 `overflow: hidden/clip` 都能把浮在块外的工具条整条裁掉。
+
+   做法（JS 在 `revealToolbar(true)` 时逐层量、逐层加类，见 `scorePane.ts` 的
+   `exemptClippingAncestors`）：只给**确实在裁剪**的祖先加这个类；**滚动容器绝不加**
+   （判据 `scrollHeight > clientHeight`）—— 放开滚动容器会直接破坏编辑器滚动。
+
+   ⚠ 特异性：这条要与宿主规则同层级可比，所以**不**依赖顺序，而是把 `overflow` 提到
+   `visible !important` 吗？——**不**。本项目对 `!important` 有硬上限（≤5 条，见社区审核一节），
+   这里靠"插件样式后加载 + 类选择器"即可；万一宿主的规则比它更强，诊断行会把那一层报出来。 */
+.ijipu-cm-noclip {
+  overflow: visible;
+}
+
 /* ─────────── adj725e：宿主自己那个 `</>`，在**本插件的块**里也要看得见 ───────────
    实时预览里 Obsidian 会给代码块挂它自己的「编辑此块」按钮（`.embed-actions > .edit-block-button`，
    `lucide-code` 图标）。插件检测到它就把自己那枚撤掉（不重复挂，见 scorePane.ts）—— 于是
