@@ -558,46 +558,83 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
      */
     let placementDecided = false
     let placementInside = false
-    const decidePlacement = (): void => {
-      if (placementDecided) return
+    /** 落位判定所针对的那个工具栏元素（CM6 换掉块容器后元素会变 ⇒ 需要重新判定） */
+    let placementEl: HTMLElement | null = null
+
+    /**
+     * adj769（用户报「编辑视图下工具条**又不显示了**」）——**铁律·同一个 bug 修到第三次就换"量法"**：
+     * 前两轮我都在"落位判定"的细节里补分支，这轮改成从**可见性**倒推：
+     *
+     * ① **先显示，再落位**：`is-revealed` 必须在任何重量级动作**之前**加上 ——
+     *    `adj761` 把"打宿主类 + 逐层放宽 `contain` + 两层 rAF 测量"放在了它前面，
+     *    这条路径一旦抛错（或踩到已被 CM6 换掉的旧元素），**显示这一步就永远不执行** ⇒ 工具条不显示；
+     * ② **取活元素**：每次显示都从容器里现查 `.ijipu-score-toolbar`（拿不到才回退到闭包里的那个），
+     *    因为实时预览会**重建块容器**，闭包里的旧元素早已脱离文档 ⇒ 类加在旧元素上 = 看不见；
+     * ③ **判定绝不外抛**：整段 `try/catch`，并把异常写进设置页诊断（下次一眼看出是不是它）；
+     * ④ **元素换了就重新判定**（不再是"一辈子只判一次"）——同一元素则沿用上次结论 ⇒ 既不抖也不瞎。
+     */
+    const liveToolbar = (): HTMLElement => container.querySelector<HTMLElement>('.ijipu-score-toolbar') ?? toolbar
+
+    const decidePlacement = (el: HTMLElement): void => {
+      if (placementDecided && placementEl === el) return
       placementDecided = true
-      // 先确认宿主块被标了类（宿主容器会被 CM6 换掉，类会丢）
-      markHostWidget()
-      // 逐层放开会裁剪的祖先（滚动容器除外），并把实测快照记进诊断
-      const facts = exemptClippingAncestors()
-      // 外侧先试：这一帧按外侧渲染，下一帧量"在那个点上是不是我们"
-      window.requestAnimationFrame(() => {
-        const r = toolbar.getBoundingClientRect()
-        const hit = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2))
-        if (hit !== null && toolbar.contains(hit)) {
-          placementInside = false
-          noteToolbar('落位判定：**外侧**（命中自身）', facts, toolbar)
-          return
-        }
-        // 外侧被裁 ⇒ 再放宽上游一层并复测一次，仍不行才固定为"内侧"
-        const relaxed = relaxUpstreamClipping()
+      placementEl = el
+      try {
+        // 先确认宿主块被标了类（宿主容器会被 CM6 换掉，类会丢）
+        markHostWidget()
+        // 逐层放开会裁剪的祖先（滚动容器除外），并把实测快照记进诊断
+        const facts = exemptClippingAncestors()
+        // 外侧先试：下一帧量"在工具条中心那个点上是不是我们自己"
         window.requestAnimationFrame(() => {
-          const r2 = toolbar.getBoundingClientRect()
-          const h2 = document.elementFromPoint(Math.round(r2.left + r2.width / 2), Math.round(r2.top + r2.height / 2))
-          if (h2 !== null && toolbar.contains(h2)) {
-            placementInside = false
-            noteToolbar('落位判定：**外侧**（放宽上游后命中）', [...facts, ...relaxed], toolbar)
-            return
+          try {
+            const r = el.getBoundingClientRect()
+            const hit = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2))
+            if (hit !== null && el.contains(hit)) {
+              placementInside = false
+              noteToolbar('落位判定：**外侧**（命中自身）', facts, el)
+              return
+            }
+            // 外侧被裁 ⇒ 再放宽上游一层并复测一次，仍不行才固定为"内侧"
+            const relaxed = relaxUpstreamClipping()
+            window.requestAnimationFrame(() => {
+              try {
+                const r2 = el.getBoundingClientRect()
+                const h2 = document.elementFromPoint(Math.round(r2.left + r2.width / 2), Math.round(r2.top + r2.height / 2))
+                if (h2 !== null && el.contains(h2)) {
+                  placementInside = false
+                  noteToolbar('落位判定：**外侧**（放宽上游后命中）', [...facts, ...relaxed], el)
+                  return
+                }
+                placementInside = true
+                liveToolbar().addClass('ijipu-toolbar-inside')
+                noteToolbar('落位判定：**内侧**（外侧被裁，固定贴回块内，不再来回切）', [...facts, ...relaxed], el)
+              } catch (err) {
+                plugin.lastToolbarInfo = `${plugin.lastToolbarInfo ?? ''}｜落位复测异常：${String(err)}`
+              }
+            })
+          } catch (err) {
+            plugin.lastToolbarInfo = `${plugin.lastToolbarInfo ?? ''}｜落位测量异常：${String(err)}`
           }
-          placementInside = true
-          toolbar.addClass('ijipu-toolbar-inside')
-          noteToolbar('落位判定：**内侧**（外侧被裁，固定贴回块内，不再来回切）', [...facts, ...relaxed], toolbar)
         })
-      })
-    }
-    const revealToolbar = (on: boolean): void => {
-      if (on) {
-        decidePlacement()
-        // 落位已定 ⇒ 只保证可见（轻量；不再做宿主类/放宽/命中测试）
-        if (placementInside && !toolbar.hasClass('ijipu-toolbar-inside')) toolbar.addClass('ijipu-toolbar-inside')
+      } catch (err) {
+        plugin.lastToolbarInfo = `${plugin.lastToolbarInfo ?? ''}｜落位判定异常（已跳过，工具条照常显示）：${String(err)}`
       }
-      toolbar.toggleClass('is-revealed', on)
+    }
+
+    const revealToolbar = (on: boolean): void => {
+      const el = liveToolbar()
+      // ① 先显示：这一步绝不依赖下面的落位判定
+      el.toggleClass('is-revealed', on)
       editSourceBtn?.toggleClass('is-revealed', on)
+      if (!on) return
+      // ② 元素换了 ⇒ 清掉旧的"贴内"痕迹并重新判定；同元素则沿用上次结论
+      if (placementEl !== null && placementEl !== el) {
+        placementDecided = false
+        placementInside = false
+        el.removeClass('ijipu-toolbar-inside')
+      }
+      if (placementInside && !el.hasClass('ijipu-toolbar-inside')) el.addClass('ijipu-toolbar-inside')
+      decidePlacement(el)
     }
     /**
      * adj753（用户第四轮「工具条还是没有显示」，而诊断显示它 `命中自身 ✓ / opacity=1 / 视口内=是`）：
@@ -614,12 +651,21 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       if (hideTimer !== 0) window.clearTimeout(hideTimer)
       hideTimer = 0
     }
+    /** adj769：一律用**活元素**判定（实时预览会重建块容器，闭包里的旧元素已脱离文档） */
+    const hoveringToolbar = (): boolean => {
+      try {
+        return liveToolbar().matches(':hover')
+      } catch {
+        return false
+      }
+    }
+    const focusInToolbar = (): boolean => liveToolbar().contains(document.activeElement)
     const scheduleHide = (): void => {
       cancelHide()
       hideTimer = window.setTimeout(() => {
         hideTimer = 0
-        if (toolbar.matches(':hover')) return
-        if (toolbar.contains(document.activeElement)) return
+        if (hoveringToolbar()) return
+        if (focusInToolbar()) return
         revealToolbar(false)
       }, 240)
     }
@@ -629,20 +675,27 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       if (e.pointerType === 'touch') return
       cancelHide()
       // adj761：已经显示着就**什么都不用做**（此前每次都跑一整套重量级动作 ⇒ 内外翻 = 闪动）
-      if (toolbar.hasClass('is-revealed')) return
+      // adj769：用**活元素**判"已显示"，否则元素被 CM6 换掉后会误判成"没显示"而反复重判
+      if (liveToolbar().hasClass('is-revealed')) return
       revealToolbar(true)
     }
     const onPointerLeave = (): void => {
-      if (toolbar.matches(':hover')) return
+      if (hoveringToolbar()) return
       // 焦点仍在工具条内（键盘操作中）→ 不收起，避免"正在用却被藏掉"
-      if (toolbar.contains(document.activeElement)) return
+      if (focusInToolbar()) return
       scheduleHide()
     }
     container.addEventListener('pointermove', onPointerMove)
     container.addEventListener('pointerleave', onPointerLeave)
     // adj753：指针在工具条上 ⇒ 绝不收起（这正是"抓不到/点不到"的原因）
-    toolbar.addEventListener('pointerenter', cancelHide)
-    toolbar.addEventListener('pointerleave', scheduleHide)
+    // adj769：改挂**容器**（冒泡），元素被 CM6 换掉后依然有效；元素自身是否悬停由 `hoveringToolbar()` 现查
+    container.addEventListener('pointerover', () => {
+      if (hoveringToolbar()) cancelHide()
+    })
+    container.addEventListener('pointerout', () => {
+      if (hoveringToolbar()) cancelHide()
+      else scheduleHide()
+    })
     /**
      * 键盘可达性的**真正入口**：工具条隐藏时 `display:none` ⇒ **不可聚焦**，`focusin` 等不到 Tab。
      * 故在容器层面监听 `keydown`：只要焦点在谱面容器内、用户敲了键，就把工具条显示出来
@@ -651,9 +704,12 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     const onKeyDown = (): void => revealToolbar(true)
     container.addEventListener('keydown', onKeyDown)
     // 焦点进出工具条时同步（指针用户用鼠标移入/移出时的兜底）
-    toolbar.addEventListener('focusin', () => revealToolbar(true))
-    toolbar.addEventListener('focusout', () => {
-      if (!toolbar.contains(document.activeElement)) revealToolbar(false)
+    // adj769：监听挂在**容器**上（事件冒泡），这样 CM6 换掉工具条元素后依然有效
+    container.addEventListener('focusin', (e) => {
+      if (liveToolbar().contains(e.target as Node)) revealToolbar(true)
+    })
+    container.addEventListener('focusout', () => {
+      if (!focusInToolbar()) revealToolbar(false)
     })
     plugin.register(() => {
       container.removeEventListener('pointermove', onPointerMove)

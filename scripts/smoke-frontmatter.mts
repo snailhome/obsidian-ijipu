@@ -1857,8 +1857,8 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
    * 类一丢 ⇒ 宿主 `.cm-embed-block:hover{overflow:hidden}` 会把浮在块外的工具条整条裁掉
    * （`</>` 同时退回主题色）—— 用户看到的就是"编辑模式下什么都没有"。
    */
-  check('adj737/761 落位判定时确认宿主块的 `ijipu-cm-host` 类（CM6 换容器后类会丢）',
-    /const decidePlacement = \(\): void => \{[\s\S]{0,400}?markHostWidget\(\)/.test(pane725) &&
+  check('adj737/761/769 落位判定时确认宿主块的 `ijipu-cm-host` 类（CM6 换容器后类会丢）',
+    /const decidePlacement = \(el: HTMLElement\): void => \{[\s\S]{0,600}?markHostWidget\(\)/.test(pane725) &&
       /if \(!widget\.hasClass\('ijipu-cm-host'\)\) widget\.addClass\('ijipu-cm-host'\)/.test(pane725) &&
       /hostWidgetEl\?\.removeClass\('ijipu-cm-host'\)/.test(pane725))
 
@@ -2181,13 +2181,15 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
    * 修法三件：收起前看 `toolbar.matches(':hover')`、收起**延迟 240ms 并复查**、
    * 工具条自身 `pointerenter` 保持显示（`pointerleave` 再走同一套判定）。
    */
-  check('adj753/761 工具条"抓不住/闪动"的交互修复：悬停不收、离开延迟 240ms 复查、已显示则不再重跑重量级逻辑',
-    /if \(toolbar\.matches\(':hover'\)\) return/.test(pane725) &&
+  check('adj753/761/769 工具条"抓不住/闪动/不显示"的三条修法：悬停不收、离开延迟复查、先显示再落位（活元素）',
+    /if \(hoveringToolbar\(\)\) return/.test(pane725) &&
       /hideTimer = window\.setTimeout\(\(\) => \{/.test(pane725) &&
       /\}, 240\)/.test(pane725) &&
-      /toolbar\.addEventListener\('pointerenter', cancelHide\)/.test(pane725) &&
-      /toolbar\.addEventListener\('pointerleave', scheduleHide\)/.test(pane725) &&
-      /cancelHide\(\)[\s\S]{0,200}?if \(toolbar\.hasClass\('is-revealed'\)\) return[\s\S]{0,80}?revealToolbar\(true\)/.test(pane725))
+      // adj769：显示必须**先**发生（落位判定不得挡住可见性），且用活元素 + try/catch
+      /const revealToolbar = \(on: boolean\): void => \{[\s\S]{0,300}?const el = liveToolbar\(\)[\s\S]{0,120}?el\.toggleClass\('is-revealed', on\)/.test(pane725) &&
+      /const liveToolbar = \(\): HTMLElement => container\.querySelector<HTMLElement>\('\.ijipu-score-toolbar'\) \?\? toolbar/.test(pane725) &&
+      /落位判定异常（已跳过，工具条照常显示）/.test(pane725) &&
+      /if \(liveToolbar\(\)\.hasClass\('is-revealed'\)\) return/.test(pane725))
 
   /**
    * adj754（用户两点）：
