@@ -625,6 +625,8 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       const el = liveToolbar()
       // ① 先显示：这一步绝不依赖下面的落位判定
       el.toggleClass('is-revealed', on)
+      // adj773：显示时清掉"用户主动收起"的标记（它用来压过"移动端常显"那条 CSS 规则）
+      if (on) el.removeClass('is-user-hidden')
       editSourceBtn?.toggleClass('is-revealed', on)
       if (!on) return
       // ② 元素换了 ⇒ 清掉旧的"贴内"痕迹并重新判定；同元素则沿用上次结论
@@ -710,6 +712,41 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     })
     container.addEventListener('focusout', () => {
       if (!focusInToolbar()) revealToolbar(false)
+    })
+
+    /**
+     * adj773（用户要求 4）：「各端各模式下（手机/PC、阅读/编辑）**至少要保证：点击编辑区应能显示工具条，
+     * 再点击隐藏**，即可以通过点击预览区来显/隐工具条」；用户报「手机端编辑视图下预览区没有显示工具条」。
+     *
+     * 为什么必须补这条路径：原来显隐**只由 hover 驱动**（`pointermove`/`pointerleave`），而
+     *  · **手机端没有 hover**（触摸不会产生 pointermove ✓ 而抬指后又没有"离开"事件 ✗）；
+     *  · 实时预览里容器常常拿不到悬停 ⇒ 用户看到的就是"没有工具条"。
+     *
+     * 规则（三处预览一致、与平台/模式无关）：
+     *  · 隐藏时点一下 ⇒ **显示**；
+     *  · 显示时点一下 ⇒ **收起**；
+     *  · 点到**工具条自身** ⇒ 不切换（否则点按钮会先把工具条收掉）；
+     *  · 点到**有自身动作的元素**（音符/小节线 `[data-cipos]`/`[data-notepos]`、链接、按钮）⇒
+     *    **只显示不收起** —— 避免"点音符听一下，工具条却跟着收起来"。
+     */
+    const onContainerClick = (e: MouseEvent): void => {
+      const target = e.target instanceof HTMLElement ? e.target : null
+      if (target?.closest('.ijipu-score-toolbar')) return
+      if (!liveToolbar().hasClass('is-revealed')) {
+        revealToolbar(true)
+        return
+      }
+      if (target?.closest('[data-cipos], [data-notepos], a, button')) return
+      // adj773：**用户主动收起**要额外打一个标记 —— "移动端常显"那条 CSS 规则（`.is-mobile .ijipu-score-toolbar`）
+      // 会无视 `is-revealed` 把工具条强制显示，所以显式的"已收起"必须能压过它（见 styles.css 的 `.is-user-hidden`）。
+      liveToolbar().addClass('is-user-hidden')
+      revealToolbar(false)
+    }
+    container.addEventListener('click', onContainerClick)
+    // 触摸端：抬起手指时若工具条仍隐藏，则补一次"显示"（部分 WebView 不派发 click 给非可点击元素）
+    container.addEventListener('pointerup', (e) => {
+      if (e.pointerType !== 'touch') return
+      if (!liveToolbar().hasClass('is-revealed')) revealToolbar(true)
     })
     plugin.register(() => {
       container.removeEventListener('pointermove', onPointerMove)

@@ -476,19 +476,21 @@ console.log('[3g] adj631 设置面板：多页签 / 收藏音色分类列表 / �
    */
   {
     const viewSrc = String(readFileSync('src/fileView.ts', 'utf8'))
-    check('adj724b 点 `.jps` 不留中间页签：把**本页签**交给插件路由（由它按模式决定就地替换/关掉）',
+    check('adj724b/adj773 点 `.jps` 不再"中转进嵌入版"：原生预览直出；`routeToIjipu` 仅供「编辑」调用（仍交出本页签）',
       /private routeToIjipu\(file: TFile\): void \{/.test(viewSrc) &&
         // 关键：把 `this.leaf` 交出去 —— 「当前页签」靠它做就地替换，而不是靠猜
         /await this\.plugin\.openIjipuFile\(file, this\.leaf\)/.test(viewSrc) &&
         // 关页签的判断已收到插件的纯函数计划里（`plan.detachSource`），视图不再自己判断
         !/this\.leaf\.detach\(\)/.test(viewSrc) &&
-        // 一个文件只路由一次（视图重画不该反复跳）
+        // 一个文件只路由一次（视图重画不该反复跳）；但「编辑」按钮每次都会先重置它 ⇒ 每次点都生效
         /if \(this\.embedRoutedFor === file\.path\) return/.test(viewSrc) &&
-        // 中转提示改成"正在打开…"（不再宣称"已打开"并教用户去哪设置）
-        /正在爱记谱（嵌入版）中打开/.test(viewSrc) &&
-        // 注意：看的是**渲染出来的文案**（`createDiv({ text: …`)），不是注释里引用的原文——
-        // 注释里必然会提到旧文案，直接搜整份源码会被自己的注释绊倒（同 E-2026-237 的坑）
-        !/text: `「\$\{file\.basename\}」已在爱记谱/.test(viewSrc))
+        /**
+         * adj773：中转页（"正在打开…" + "用源码视图编辑"按钮）整块删除 —— 点文件不再跳嵌入版。
+         * ⚠ 负向判据先**剥注释**：文件里保留了一句"已删除 renderEmbedPlaceholder"的说明，
+         * 直接搜整份源码会被自己的注释绊倒（仓库里记过的坑，见 E-2026-237 与 adj734/adj736）。
+         */
+        !/正在爱记谱（嵌入版）中打开/.test(viewSrc.replace(/\/\*[\s\S]*?\*\//g, '')) &&
+        !/renderEmbedPlaceholder/.test(viewSrc.replace(/\/\*[\s\S]*?\*\//g, '')))
     // 插件侧：按计划关掉中间页签（`plan.detachSource`），且"就地替换"时不关
     check('adj724b 插件按计划关掉中间页签（`plan.detachSource`），就地替换时不动它',
       /await this\.plugin\.openIjipuFile\(file, this\.leaf\)/.test(viewSrc) &&
@@ -2822,8 +2824,44 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       /仅桌面端可用；手机端请直接看谱面预览与试听/.test(mainSrc741) &&
       /\.\.\.\(Platform\.isDesktopApp \? \{ onEditSource/.test(mainSrc741))
 
-  check('adj741 `.jps` 文件视图在手机端走原生预览（不交给嵌入版 iframe）',
-    /if \(!Platform\.isMobile && !embedded && !this\.editing && this\.plugin\.embedEnabled/.test(fvSrc741))
+  /**
+   * adj773（用户要求 4）：各端各模式（手机/PC、阅读/编辑）都能**点击预览区显/隐工具条** ——
+   * 原来显隐只由 hover 驱动（`pointermove`/`pointerleave`），手机端没有 hover ⇒ 用户报"手机端编辑视图没有工具条"。
+   */
+  {
+    const pane773 = String(readFileSync('src/scorePane.ts', 'utf8'))
+    const css773 = String(readFileSync('styles.css', 'utf8'))
+    check('adj773 点击预览区显/隐工具条（不依赖 hover；三处预览一致）',
+      /const onContainerClick = \(e: MouseEvent\): void => \{/.test(pane773) &&
+        /container\.addEventListener\('click', onContainerClick\)/.test(pane773) &&
+        // 点到工具条自身不切换；点到有自身动作的元素（音符/小节线/链接/按钮）只显示不收起
+        /if \(target\?\.closest\('\.ijipu-score-toolbar'\)\) return/.test(pane773) &&
+        /target\?\.closest\('\[data-cipos\], \[data-notepos\], a, button'\)/.test(pane773) &&
+        // 触摸端补一次（部分 WebView 不给非可点击元素派发 click）
+        /container\.addEventListener\('pointerup'/.test(pane773) &&
+        // 用户主动收起要能压过"移动端常显"（不用 !important，靠特异性）
+        /el\.removeClass\('is-user-hidden'\)/.test(pane773) &&
+        /liveToolbar\(\)\.addClass\('is-user-hidden'\)/.test(pane773) &&
+        /\.is-mobile \.ijipu-score-toolbar\.is-user-hidden \{/.test(css773) &&
+        // ⚠ 负向判据剥注释：规则上方的说明里写了"不使用 !important"这几个字，直接搜会被自己的注释绊倒
+        !/is-user-hidden[\s\S]{0,80}!important/.test(css773.replace(/\/\*[\s\S]*?\*\//g, '')),
+      '')
+    // 负对照：把"点工具条自身不切换"这一句去掉后，判据必须为假（证明闸门真的在判）
+    {
+      const broken = pane773.replace("if (target?.closest('.ijipu-score-toolbar')) return", '')
+      check('adj773 负对照：去掉"点工具条自身不切换"后判据为假',
+        !/if \(target\?\.closest\('\.ijipu-score-toolbar'\)\) return/.test(broken))
+    }
+  }
+
+  check('adj741/adj773 `.jps` 文件视图**两端一致：一律先给原生预览**（不再在桌面端默认塞嵌入版 iframe）',
+    // adj773：桌面端"直接渲染嵌入版"那条分支已删除；手机端/桌面端走同一套原生预览
+    // ⚠ 负向判据剥注释（文件里保留了一句"已删除"的说明）
+    !/renderEmbedPlaceholder/.test(fvSrc741.replace(/\/\*[\s\S]*?\*\//g, '')) &&
+      !/if \(!Platform\.isMobile && !embedded && !this\.editing && this\.plugin\.embedEnabled/.test(fvSrc741) &&
+      // 要用嵌入版编辑 ⇒ 只有「编辑」这一条路（`onEdit` ⇒ 交给插件路由；每次点都生效）
+      /onEdit: this\.file/.test(fvSrc741) &&
+      /this\.embedRoutedFor = null/.test(fvSrc741))
 
   /**
    * 用户明确交代：「注意音源默认走的是插件目录里的文件」。

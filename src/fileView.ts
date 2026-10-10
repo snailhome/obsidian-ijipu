@@ -356,22 +356,11 @@ export class IJipuFileView extends TextFileView {
     }, 0)
   }
 
-  /** 中转页签上的一瞬间提示（正常情况下会被 `routeToIjipu()` 立刻关掉） */
-  private renderEmbedPlaceholder(): void {
-    const { contentEl } = this
-    const file = this.file
-    if (!file) return
-    this.routeToIjipu(file)
-    contentEl.empty()
-    contentEl.addClass('ijipu-file-view')
-    const box = contentEl.createDiv({ cls: 'ijipu-web-hint' })
-    box.createDiv({ text: `正在爱记谱（嵌入版）中打开「${file.basename}」…` })
-    const btn = box.createEl('button', { cls: 'ijipu-btn', text: '用源码视图编辑' })
-    btn.addEventListener('click', () => {
-      this.editing = true
-      this.render()
-    })
-  }
+  /**
+   * adj773：原 `renderEmbedPlaceholder()`（把整页 `.jps` 直接换成"嵌入版 iJipu 的 iframe + 中转提示"）
+   * **已删除** —— 用户要求"点击 `.jps` 一律先显示预览，PC 与手机端一致"。要用嵌入版编辑，
+   * 点工具条最右的「编辑」即可（桌面端走 `plugin.openIjipuFile` ⇒ 独立的嵌入版页签）。
+   */
 
   private render(): void {
     const { contentEl } = this
@@ -402,15 +391,14 @@ export class IJipuFileView extends TextFileView {
      * 关掉「使用嵌入版 iJipu」设置即整体回到旧的轻量渲染（可回退）。
      */
     /**
-     * adj741（手机端 P0）：**手机端一律走原生渲染**。
+     * adj773（用户要求 1）：「点击 OB 左侧文件列表的 `.jps`，PC 端与手机端表现不一致，
+     * **建议以手机端为准，点击 `.jps` 文件显示预览**」。
      *
-     * 上面这条路会把整页 `.jps` 交给"嵌入版 iJipu"（iframe + 本地 HTTP 服务），
-     * 而手机端没有 `node:http` ⇒ 这里显式跳过（原生预览 + 试听在手机端完全可用，
-     * 这也正是用户要的"手机端最需要的功能"）。
+     * 原来桌面端在这里直接把整页交给"嵌入版 iJipu"（iframe + 本机服务）⇒ 与手机端不一致。
+     * 现在**两端一致：一律先给原生预览**；要用嵌入版编辑就点工具条最右的「编辑」
+     * （桌面端 `onEdit` ⇒ 嵌入版；手机端 ⇒ 宿主编辑器源码模式，分派见 `scorePane` 的编辑按钮）。
+     * 设置项 `embedIjuipu` 仍生效：它决定「编辑」能不能走嵌入版（关掉即退回源码编辑）。
      */
-    if (!Platform.isMobile && !embedded && !this.editing && this.plugin.embedEnabled && this.file) {
-      return this.renderEmbedPlaceholder()
-    }
 
     // —— 文件级工具条（嵌入形态只留标题）——
     const bar = contentEl.createDiv({ cls: 'ijipu-file-bar' })
@@ -487,6 +475,22 @@ export class IJipuFileView extends TextFileView {
        */
       onToggleSource: () => this.toggleSource(),
       onFormat: () => this.formatSource(),
+      /**
+       * adj773（用户要求 3a）：桌面端「编辑」⇒ **用嵌入版 iJipu 打开编辑**（手机端不走这条，
+       * 由 `scorePane` 的编辑按钮按平台分派到 `onToggleSource` ⇒ 宿主编辑器源码模式）。
+       *
+       * 直接复用 `routeToIjipu()`：它已经做了两件关键事 —— **先 saveNow() 落盘**再交给嵌入版，
+       * 以及**把 `this.leaf` 交出去**（「设为当前页签」时才能就地替换这个文件视图页签）。
+       * 它内部有"同一文件只路由一次"的守卫（`embedRoutedFor`）⇒ 这里**先重置**，让每次点「编辑」都生效。
+       */
+      onEdit: this.file
+        ? () => {
+            const f = this.file
+            if (!f) return
+            this.embedRoutedFor = null
+            this.routeToIjipu(f)
+          }
+        : undefined,
       // adj（用户要求）：.jps 文件视图知道自己的文件 ⇒ 工具栏显示「应用打开」
       // （桌面端才显示；打开前先 saveNow 把未落盘的编辑刷下去）。`file` 可能为 null ⇒ 不传则不显示。
       filePath: this.file?.path,

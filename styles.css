@@ -95,8 +95,20 @@
 }
 /* 移动端常显（覆盖默认隐藏）——带 .is-mobile 前缀，特异性足够 */
 .is-mobile .ijipu-score-toolbar {
-  opacity: 1;
-  visibility: visible;
+  opacity: 1;  visibility: visible;
+}
+
+/**
+ * adj773（用户要求 4：各端各模式都能"点击预览区显/隐工具条"）：
+ * 上面那条"移动端常显"会**无视** `.is-revealed` 强制显示 ⇒ 用户主动收起时必须有一个能压过它的状态。
+ * 选择器特异性 `.is-mobile .ijipu-score-toolbar.is-user-hidden`（0,3,0）> 上面那条（0,2,0），
+ * 且**不使用 `!important`**（本仓库对它有硬上限，见冒烟 adj772 的闸门）。
+ */
+.ijipu-score-toolbar.is-user-hidden,
+.is-mobile .ijipu-score-toolbar.is-user-hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 /* ─────────── adj725：「编辑源码」按钮（块右上角的 `</>`）───────────
