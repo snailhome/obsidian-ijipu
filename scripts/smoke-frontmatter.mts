@@ -2911,9 +2911,14 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
   const hl = String(readFileSync('src/jpsHighlight.ts', 'utf8'))
   const main774 = String(readFileSync('src/main.ts', 'utf8'))
   const hlBodyClause = 'scope.blocks.some((b) => line.number >= b.bodyStart && line.number <= b.bodyEnd)'
-  check('adj774 着色与错误提示接到代码块：范围判定用 scopeOf，且只标正文行、行号偏移回文档行号',
-    /function scopeOf\(view: EditorView\): JpsScope \| null \{/.test(hl) &&
-      /jpsBlockRanges\(view\.state\.doc\.toString\(\)\)/.test(hl) &&
+  check('adj774/adj774b 着色与错误提示接到代码块：范围判定用 scopeOf（带按内容缓存的围栏扫描），且只标正文行、行号偏移回文档行号',
+    /function scopeOf\(view: EditorView, doc\?: string\): JpsScope \| null \{/.test(hl) &&
+      // adj774b：围栏扫描按**文档内容**缓存（长笔记里不该每次重建 decoration 都全篇转字符串 + 扫描）
+      /const blockCache = new WeakMap<EditorView, \{ doc: string; blocks: JpsBlockRange\[\] \}>\(\)/.test(hl) &&
+      /const blocks = jpsBlockRanges\(doc\)/.test(hl) &&
+      /const blocks = blocksOf\(view, text\)/.test(hl) &&
+      // 已算好的文档文本要传下去，避免第二次 toString()
+      /const scope = scopeOf\(view, doc\)/.test(hl) &&
       hl.includes(hlBodyClause) &&
       /const off = b\.bodyStart - 1/.test(hl) &&
       /problems\.byLine\.get\(line\.number\)/.test(hl) &&

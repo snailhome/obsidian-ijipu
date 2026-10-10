@@ -62,14 +62,33 @@ function isOurJpsLeaf(view: EditorView): boolean {
  *    （块的正文从文档第 `bodyStart` 行开始，而引擎解析正文时是从第 1 行数起）。
  * 两种情形共用同一份引擎模型（`tokenizeJpsLine` / `jpsBlockMarks` / `highlightLineModel`）。
  */
+/**
+ * adj774b：围栏扫描的**按内容缓存**。
+ *
+ * 需要它的原因（本轮自查发现的性能缺口）：`Decoration` 每次重建（敲键、滚动、选区变化）
+ * 都要先回答"哪些行在 ```jps 块里"，而 `view.state.doc.toString()` + 扫描是 **O(文档)**；
+ * 长笔记里"每次滚动都全篇转字符串 + 扫描"是纯浪费 —— 文档没变就该复用上一次的结果。
+ * 口径与 `problemCache` 一致：**按文档内容**判失效（内容相同即命中，内容一变立刻重算）。
+ */
+const blockCache = new WeakMap<EditorView, { doc: string; blocks: JpsBlockRange[] }>()
+
+function blocksOf(view: EditorView, doc: string): JpsBlockRange[] {
+  const hit = blockCache.get(view)
+  if (hit && hit.doc === doc) return hit.blocks
+  const blocks = jpsBlockRanges(doc)
+  blockCache.set(view, { doc, blocks })
+  return blocks
+}
+
 type JpsScope =
   | { whole: true; blocks: [] }
   | { whole: false; blocks: JpsBlockRange[] }
 
-function scopeOf(view: EditorView): JpsScope | null {
+function scopeOf(view: EditorView, doc?: string): JpsScope | null {
   if (isOurJpsLeaf(view)) return { whole: true, blocks: [] }
   // 不是我们的 .jps 页签 ⇒ 看这篇文档里有没有 ```jps 围栏（没有就完全不管，绝不碰 markdown）
-  const blocks = jpsBlockRanges(view.state.doc.toString())
+  const text = doc ?? view.state.doc.toString()
+  const blocks = blocksOf(view, text)
   if (blocks.length === 0) return null
   return { whole: false, blocks }
 }
@@ -163,7 +182,7 @@ function problemsOf(view: EditorView): Problems {
     const prev = hint.get(line)
     hint.set(line, prev ? `${prev}\n${text}` : text)
   }
-  const scope = scopeOf(view)
+  const scope = scopeOf(view, doc)
   if (scope) {
     try {
       if (scope.whole) {
