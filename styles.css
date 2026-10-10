@@ -1407,3 +1407,28 @@
   top: 0;
   bottom: auto;
 }
+
+/**
+ * adj783（用户实测）：「手机端开排版调整虚线比较困难，至少我没正常拖动过」。
+ *
+ * 两个原因，一起修：
+ *  ① JS 那边原来只挂 `mousedown`（触摸不产生 `mousemove`）⇒ 已改用 Pointer Events；
+ *  ② **浏览器会把这记触摸手势当滚动**，直接掐断手势流 ⇒ 必须声明 `touch-action: none`
+ *     （这正是"怎么拖都不动"的另一半原因）。
+ * 另：手指不如鼠标精准 ⇒ 触摸端给它一条**更宽的透明命中带**（`::before` 外扩，视觉不变）。
+ * 只读虚线（`.is-readonly`）不可拖，不给命中带提示（仍可长按查看 title）。
+ */
+.ijipu-guide-line {
+  touch-action: none;
+}
+@media (hover: none), (pointer: coarse) {
+  .ijipu-guide-line:not(.is-readonly)::before {
+    content: '';
+    position: absolute;
+    /* 竖直虚线（拖水平位置）⇒ 左右各外扩 12px；水平虚线 ⇒ 上下各扩 12px */
+    inset: -12px;
+  }
+  .ijipu-guide-line:not(.is-readonly) {
+    cursor: grab;
+  }
+}

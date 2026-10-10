@@ -2857,9 +2857,10 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
         // 点到工具条自身不切换；点到谱面内的链接不切换（那次点击有自己的语义）
         /if \(target\?\.closest\('\.ijipu-score-toolbar'\)\) return/.test(pane773) &&
         /if \(target\?\.closest\('a\.jp-link'\)\) return/.test(pane773) &&
-        // adj779：**不得再有 `pointerup` 兜底** —— 一次触摸点击会先 pointerup 再 click，
-        // 那条"隐藏就显示"的兜底会把 click 的翻转抵消掉（净结果永远隐藏），正是用户报的症状
-        !/addEventListener\('pointerup'/.test(pane773) &&
+        // adj779：**容器上不得再有 `pointerup` 兜底** —— 一次触摸点击会先 pointerup 再 click，
+        // 那条"隐藏就显示"的兜底会把 click 的翻转抵消掉（净结果永远隐藏），正是用户报的症状。
+        // ⚠ 限定在 `container.` 上：adj783 给**虚线拖拽**加的是 `window.pointerup`（收尾用，无冲突）
+        !/container\.addEventListener\('pointerup'/.test(pane773) &&
         /container\.addEventListener\('click', onContainerClick, true\)/.test(pane773) &&
         // 用户主动收起要能压过"移动端常显"（不用 !important，靠特异性）
         /el\.removeClass\('is-user-hidden'\)/.test(pane773) &&

@@ -1469,7 +1469,17 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
         for (const [k, v] of Object.entries(style)) el.style.setProperty(k, v)
         el.setAttr('title', line.title)
         if (line.readonly) continue
-        el.addEventListener('mousedown', (e) => startGuideDrag(e, line, scale))
+        /**
+         * adj783（用户实测）：「**手机端开排版调整虚线是比较困难的，至少我没正常拖动过**」。
+         *
+         * 原来只挂 `mousedown` —— 触摸拖动**根本不会产生 `mousemove`**（那是鼠标事件），
+         * 所以手机上必然拖不动。改用 **Pointer Events**（鼠标/触摸/触控笔通吃）：
+         * 事件对象 `PointerEvent` 继承 `MouseEvent`，`clientX/clientY` 语义不变 ⇒
+         * `startGuideDrag` 内部逻辑一行都不用改。
+         * 另配 `touch-action: none`（见 styles.css）—— 否则浏览器会把这记手势当**滚动**，
+         * 直接掐断手势流（这也是"怎么拖都不动"的另一半原因）。
+         */
+        el.addEventListener('pointerdown', (e) => startGuideDrag(e, line, scale))
       }
     }
 
@@ -1527,11 +1537,15 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
           })
       }
       endDragListeners = () => {
-        window.removeEventListener('mousemove', onMove)
-        window.removeEventListener('mouseup', onUp)
+        // adj783：移动端也要能拖 ⇒ 与 pointerdown 配套改用 pointermove/pointerup（+ pointercancel）
+        window.removeEventListener('pointermove', onMove)
+        window.removeEventListener('pointerup', onUp)
+        window.removeEventListener('pointercancel', onUp)
       }
-      window.addEventListener('mousemove', onMove)
-      window.addEventListener('mouseup', onUp)
+      window.addEventListener('pointermove', onMove)
+      window.addEventListener('pointerup', onUp)
+      // 触摸被系统/浏览器接管（来电、手势返回等）时也要收尾，避免"拖到一半卡住"
+      window.addEventListener('pointercancel', onUp)
     }
 
     /** 拖拽期间的按帧节流重画 */
