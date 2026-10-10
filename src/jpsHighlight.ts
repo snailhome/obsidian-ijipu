@@ -16,7 +16,6 @@
  *  · 行文（`line.text`）与 token 文本长度严格一致（`tokenizeJpsLine` 覆盖整行，含前导空白）
  *    ⇒ 偏移量即"行首偏移 + token 起点"，不会错位。
  */
-import { RangeSetBuilder } from '@codemirror/state'
 import {
   Decoration,
   ViewPlugin,
@@ -25,7 +24,7 @@ import {
   type EditorView,
   type ViewUpdate,
 } from '@codemirror/view'
-import { parseJps, tokenizeJpsLine } from '@ijipu/engine'
+import { jpsBlockMarks, parseJps, tokenizeJpsLine, type JpsBlockMark } from '@ijipu/engine'
 
 /** 类别 → CSS 类（颜色在 `styles.css`，深/浅主题各一套，取自应用 `--jp-hl-*`） */
 const CLASS_OF: Record<string, string> = {
@@ -47,27 +46,47 @@ function isOurJpsLeaf(view: EditorView): boolean {
 }
 
 function buildDecorations(view: EditorView): DecorationSet {
-  const builder = new RangeSetBuilder<Decoration>()
-  if (!isOurJpsLeaf(view)) return builder.finish()
+  if (!isOurJpsLeaf(view)) return Decoration.none
+  const problems = problemsOf(view)
+  /**
+   * ⚠ 这里**不能**用 `RangeSetBuilder`：错误块外框会与音符着色**重叠**（外框圈住若干 token），
+   * 而构建器要求"有序且不重叠"。`Decoration.set(ranges, true)` 支持重叠并按位置排序，
+   * 是 CM6 里"语法着色 + 搜索/诊断标注共存"的标准做法。
+   */
+  const ranges: { from: number; to: number; value: Decoration }[] = []
   for (const { from, to } of view.visibleRanges) {
     let pos = from
     while (pos <= to) {
       const line = view.state.doc.lineAt(pos)
       // adj754：**行级**错误/告警底色（与应用编辑器同一套观感：红底 / 橙底）
-      const problem = problemsOf(view).get(line.number)
-      if (problem === 'error') builder.add(line.from, line.from, LINE_ERROR)
-      else if (problem === 'warning') builder.add(line.from, line.from, LINE_WARN)
+      const level = problems.byLine.get(line.number)
+      if (level === 'error') ranges.push({ from: line.from, to: line.from, value: LINE_ERROR })
+      else if (level === 'warning') ranges.push({ from: line.from, to: line.from, value: LINE_WARN })
+      /**
+       * adj757（用户要求：「错误信息显示提示等共性的功能都可以独立到引擎层面」，且"应用端也应同样处理"）：
+       * **块级**外框区间由引擎给出（`jpsBlockMarks`）—— 与应用编辑器共用同一份"col → 音符块"换算，
+       * 不再在插件里重复实现（此前那段本地 `blockSpanAt` 已删）。
+       */
+      for (const mark of problems.blockMarks) {
+        if (mark.line !== line.number) continue
+        ranges.push({
+          from: line.from + mark.from,
+          to: line.from + mark.to,
+          value: mark.severity === 'error' ? BLOCK_ERROR : BLOCK_WARN,
+        })
+      }
       let at = line.from
       for (const token of tokenizeJpsLine(line.text)) {
         const mark = MARKS[token.cls]
-        if (mark) builder.add(at, at + token.text.length, mark)
+        if (mark) ranges.push({ from: at, to: at + token.text.length, value: mark })
         at += token.text.length
       }
       pos = line.to + 1
     }
   }
-  return builder.finish()
+  return Decoration.set(ranges, true)
 }
+
 
 /**
  * adj754（用户问：「如果源码有 jps 语法错误，源码是否有错误显示机制？」）：
@@ -82,21 +101,32 @@ function buildDecorations(view: EditorView): DecorationSet {
 type ProblemLevel = 'error' | 'warning'
 const LINE_ERROR = Decoration.line({ class: 'ijipu-jps-error-line' })
 const LINE_WARN = Decoration.line({ class: 'ijipu-jps-warn-line' })
+/** adj756：**块级**外框（红/橙单线）—— 与应用 `hl-err-block` / `hl-warn-block` 同观感 */
+const BLOCK_ERROR = Decoration.mark({ class: 'ijipu-jps-err-block' })
+const BLOCK_WARN = Decoration.mark({ class: 'ijipu-jps-warn-block' })
 
-const problemCache = new WeakMap<EditorView, { doc: string; map: Map<number, ProblemLevel>; hint: Map<number, string> }>()
+/** 解析结果缓存：行级级别 + 逐行的"块级"错误列（`col` 与引擎同口径） */
+type Problems = {
+  doc: string
+  byLine: Map<number, ProblemLevel>
+  blockMarks: JpsBlockMark[]
+  hint: Map<number, string>
+}
 
-function problemsOf(view: EditorView): Map<number, ProblemLevel> {
+const problemCache = new WeakMap<EditorView, Problems>()
+
+function problemsOf(view: EditorView): Problems {
   const doc = view.state.doc.toString()
   const hit = problemCache.get(view)
-  if (hit && hit.doc === doc) return hit.map
-  const map = new Map<number, ProblemLevel>()
+  if (hit && hit.doc === doc) return hit
+  const byLine = new Map<number, ProblemLevel>()
   const hint = new Map<number, string>()
   if (isOurJpsLeaf(view)) {
     try {
       for (const e of parseJps(doc).errors ?? []) {
         const level: ProblemLevel = e.severity === 'warning' ? 'warning' : 'error'
         // 同一行既有错误又有告警时，**错误优先**（与应用一致）
-        if (level === 'error' || !map.has(e.line)) map.set(e.line, level)
+        if (level === 'error' || !byLine.has(e.line)) byLine.set(e.line, level)
         const text = e.hint ? `${e.message}\n正确写法：${e.hint}` : e.message
         const prev = hint.get(e.line)
         hint.set(e.line, prev ? `${prev}\n${text}` : text)
@@ -105,13 +135,13 @@ function problemsOf(view: EditorView): Map<number, ProblemLevel> {
       /* 解析器抛错时不做错误标注（不能因为标注把编辑器弄坏） */
     }
   }
-  problemCache.set(view, { doc, map, hint })
-  return map
+  const out: Problems = { doc, byLine, blockMarks: jpsBlockMarks(doc, parseJps(doc).errors ?? []), hint }
+  problemCache.set(view, out)
+  return out
 }
 
 function hintOf(view: EditorView, line: number): string | undefined {
-  problemsOf(view)
-  return problemCache.get(view)?.hint.get(line)
+  return problemsOf(view).hint.get(line)
 }
 
 /** 悬停某行 → 显示该行的问题（message + 正确写法） */

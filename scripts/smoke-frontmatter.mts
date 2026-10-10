@@ -2137,7 +2137,7 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
         /\.cm-content \.cm-line mark,/.test(css725nc) &&
         /background-color: transparent/.test(css725nc))
     check('adj754 `.jps` 源码有错误/告警显示：行级底色 + 悬停提示（接引擎 parseJps）',
-      /import \{ parseJps, tokenizeJpsLine \} from '@ijipu\/engine'/.test(hl754) &&
+      /import \{[^}]*parseJps[^}]*\} from '@ijipu\/engine'/.test(hl754) &&
         /Decoration\.line\(\{ class: 'ijipu-jps-error-line' \}\)/.test(hl754) &&
         /Decoration\.line\(\{ class: 'ijipu-jps-warn-line' \}\)/.test(hl754) &&
         /e\.severity === 'warning' \? 'warning' : 'error'/.test(hl754) &&
@@ -2165,6 +2165,37 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
       /const isLeafContent = el\.hasClass\('workspace-leaf-content'\)/.test(pane725) &&
       /放宽上游裁剪\*\*后命中自身/.test(pane725) &&
       /临时贴回块内/.test(pane725))
+
+  /**
+   * adj756（用户要求）：「手机端源码，对于**错误的音符块**能否重点突出，如加**红外框**呀、红色背景什么的」。
+   *
+   * 应用编辑器早就有这个能力（`hl-err-block` / `hl-warn-block`：把错误的 `col` 归到**空格分隔的那个音符块**，
+   * 加单线外框）；插件侧此前只做了"整行淡红底" ⇒ 现在补上**块级**外框，口径与应用一致：
+   *  · `col` 与引擎同口径（相对行头之后的内容），换算成绝对偏移；
+   *  · 块 = 空格/制表符分隔的一段（与应用 `highlightCodeWrapped` 的定位方式一致）；
+   *  · ⚠ 外框会与音符着色**重叠** ⇒ 用 `Decoration.set(ranges, true)`（`RangeSetBuilder` 不允许重叠）。
+   */
+  {
+    const hl756 = String(readFileSync('src/jpsHighlight.ts', 'utf8'))
+    /** 只看 **import 语句**（注释里会写到 `RangeSetBuilder` 这个反面教材，不能拿全文判） */
+    const importHasBuilder = hl756
+      .split('\n')
+      .some((l) => l.trimStart().startsWith('import ') && l.includes('RangeSetBuilder'))
+    check('adj756/757 错误/告警按**音符块**加外框，且"col → 块"换算**在引擎里**（插件只消费）',
+      /Decoration\.mark\(\{ class: 'ijipu-jps-err-block' \}\)/.test(hl756) &&
+        /Decoration\.mark\(\{ class: 'ijipu-jps-warn-block' \}\)/.test(hl756) &&
+        // 插件侧：用引擎给出的块区间，不再自己实现
+        /import \{[^}]*jpsBlockMarks[^}]*\} from '@ijipu\/engine'/.test(hl756) &&
+        /for \(const mark of problems\.blockMarks\)/.test(hl756) &&
+        !/function blockSpanAt/.test(hl756) &&
+        // 重叠安全：外框与音符着色会重叠，必须用 `Decoration.set(ranges, true)`
+        /return Decoration\.set\(ranges, true\)/.test(hl756) &&
+        !importHasBuilder &&
+        css725nc.includes('.ijipu-jps-err-block') &&
+        css725nc.includes('outline: 1px solid var(--text-error') &&
+        css725nc.includes('.ijipu-jps-warn-block'),
+      `builder=${importHasBuilder} css=${css725nc.includes('.ijipu-jps-err-block')}`)
+  }
 
   check('adj740 工具条诊断行记录"宿主/显示类/最终样式/坐标/祖先链"（设置页可读）',
     /lastToolbarInfo/.test(String(readFileSync('src/main.ts', 'utf8'))) &&

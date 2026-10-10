@@ -817,6 +817,22 @@
 .workspace-leaf.ijipu-plain-source .cm-content .cm-line.ijipu-jps-warn-line {
   background-color: rgba(255, 176, 32, 0.14);
 }
+/**
+ * adj756（用户要求：「手机端源码，对于**错误的音符块**能否重点突出，如加**红外框**呀、红色背景什么的」）：
+ * **块级**外框 —— 与应用编辑器的 `hl-err-block` / `hl-warn-block` 同一套观感
+ * （单线外框 + 圆角；错误用主题的 error 色，告警用 warning 色）。
+ * 选择器足够具体（5 个类），且**不用 `!important`**。
+ */
+.workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-err-block {
+  outline: 1px solid var(--text-error, #e5534b);
+  border-radius: 2px;
+  background-color: rgba(255, 93, 108, 0.14);
+}
+.workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-warn-block {
+  outline: 1px solid var(--text-warning, #d29922);
+  border-radius: 2px;
+  background-color: rgba(255, 176, 32, 0.14);
+}
 /* 悬停提示（message + 正确写法）——与应用错误提示同一份文案 */
 .ijipu-jps-problem-tip {
   max-width: 380px;

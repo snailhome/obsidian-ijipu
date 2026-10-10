@@ -16,6 +16,9 @@ export { formatJps, formatLine } from './format/format'
 // adj752：`.jps` 源码**分词规则**（应用渲染 HTML、Obsidian 插件渲染 CM6 decoration，共用这一份口径）
 export { tokenizeJpsLine, tokenizeJpsMusic, tokenizeJpsLyric, jpsHeaderOf } from './highlight/jpsHighlight'
 export type { JpsToken, JpsTokenClass } from './highlight/jpsHighlight'
+// adj757：错误/告警 → 源码"块"区间的换算（应用渲染 HTML 外框、插件打 CM6 decoration，共用这一份）
+export { jpsBlockSpan, jpsBlockMarks, jpsSeverityOf } from './highlight/jpsProblems'
+export type { JpsBlockMark } from './highlight/jpsProblems'
 // adj629h：歌词行里 `{tp … }` 替谱段的识别（格式化 / 编辑器着色都要在 `C…:` 行里找它）
 export { matchSegmentHead, findSegmentEnd } from './parser/tokenizer'
 export { tokenDuration, durationMs } from './duration'
