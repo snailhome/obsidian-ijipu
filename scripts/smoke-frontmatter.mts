@@ -5,7 +5,7 @@
  * 断言来源：用户反馈「在 frontmatter 里设置像 `ijipu_note_size` 好像没生效」——
  * 覆盖键名写法兼容、值类型转换、未识别键提示、优先级四类。
  */
-import { defaultPageConfig, dragDelta, formatJps, instrumentColorMap, layoutScore, parseJps, playheadBaseOf, playheadPosIn, renderScoreToSvg, splitParseIssues, tokenizeJpsLine, JPS_HIGHLIGHT_COLORS, JPS_PLAIN_COLORS, JPS_PROBLEM_COLORS, trackKeysOf, writeJpsConfig, mergeConfigEdits, configCarryover, SCORE_FONT_OPTIONS, buildPlaySequence, GUIDE_LIMITS, GUIDE_LIMITS_EX, SEGMENT_ROW_GAP_DEFAULT, OPTIONAL_CONFIG_FIELDS, defaultConfigForReset, extractJpsConfig, extractLegacyEditorPrefs, nonDefaultConfigKeys, GM_GROUPS } from '@ijipu/engine'
+import { defaultPageConfig, dragDelta, formatJps, formatLine, instrumentColorMap, layoutScore, parseJps, playheadBaseOf, playheadPosIn, renderScoreToSvg, splitParseIssues, tokenizeJpsLine, JPS_HIGHLIGHT_COLORS, JPS_PLAIN_COLORS, JPS_PROBLEM_COLORS, trackKeysOf, writeJpsConfig, mergeConfigEdits, configCarryover, SCORE_FONT_OPTIONS, buildPlaySequence, GUIDE_LIMITS, GUIDE_LIMITS_EX, SEGMENT_ROW_GAP_DEFAULT, OPTIONAL_CONFIG_FIELDS, defaultConfigForReset, extractJpsConfig, extractLegacyEditorPrefs, nonDefaultConfigKeys, GM_GROUPS, highlightLineModel } from '@ijipu/engine'
 import type { PageConfig } from '@ijipu/engine'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
@@ -2931,6 +2931,87 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       !main774
         .replace('if (!isJpsBodyLine(blocks, prevLine + 1)) return', '')
         .includes('if (!isJpsBodyLine(blocks, prevLine + 1)) return'))
+
+  /**
+   * adj774 **端到端行为测试**：把"最有风险的那一步"——**行号偏移**——用真实数据验一遍。
+   *
+   * 风险点：块正文是独立交给引擎解析的（行号从 1 数起），而编辑器里用户看到的是**文档行号**。
+   * 偏移算错一位，错误提示就会标到别的行上（比"不提示"更糟）。所以这里不复述实现，
+   * 而是**按实现的口径**（`off = bodyStart - 1`）跑一遍真实数据，验证落点确实是文档行号。
+   */
+  {
+    const { jpsBlockRanges } = await import('../src/jpsBlocks')
+    const doc = [
+      '# 我的笔记', // 1
+      '', // 2
+      '一些说明文字', // 3
+      '', // 4
+      '```jps', // 5
+      '5 5 6 6 | 3 3 4 4', // 6 ← 正确行
+      '1 1 2 2 | 5 5 6 6', // 7
+      '3 3 4 4 | 1 1 2 x', // 8 ← 故意写错（x 不是音符）
+      '```', // 9
+      '', // 10
+      '结尾', // 11
+    ].join('\n')
+    const blocks = jpsBlockRanges(doc)
+    const b = blocks[0]
+    const errors = parseJps(b.body).errors ?? []
+    const docLines = errors.map((e) => e.line + (b.bodyStart - 1))
+    check('adj774 端到端：块内错误的行号偏移回**文档行号**（第 8 行那条 `x`）',
+      blocks.length === 1 &&
+        b.bodyStart === 6 &&
+        errors.length > 0 &&
+        docLines.includes(8) &&
+        // 负对照：不偏移就是"块内第 3 行"，与文档第 8 行不是一回事（证明偏移真的在起作用）
+        errors.some((e) => e.line === 3) &&
+        !errors.some((e) => e.line === 8),
+      `块内行=${errors.map((e) => e.line).join(',')} 文档行=${docLines.join(',')}`)
+    /**
+     * 着色：块正文行确实能被引擎分出 token，且**token 长度之和 == 整行长度**。
+     *
+     * 后者才是高亮器真正依赖的不变量：`buildDecorations` 用"逐 token 累加长度"算 CM6 的偏移量
+     * （见 `jpsHighlight.ts` 顶部说明）——一旦不相等，后面的 token 会整体错位、颜色串行。
+     * （教训：我先按想象写成"一定含 barline 类 / level==='none'"，实跑是 `cls=plain level=null`
+     * —— 那行没有声部头，引擎判它是普通行。断言要先跑一遍再定稿。）
+     */
+    const first = b.body.split('\n')[0]
+    const model = highlightLineModel(first, 6, [])
+    const toks = tokenizeJpsLine(first)
+    check('adj774 端到端：块正文行能分出 token，且 token 长度之和 == 整行长度（偏移不错位）',
+      model.tokens.length > 0 &&
+        toks.length > 0 &&
+        toks.reduce((n, t) => n + t.text.length, 0) === first.length &&
+        // 负对照：把 token 文本截短一个字符，"长度之和 == 整行"立刻不成立（证明这条不变量真在判）
+        toks.reduce((n, t) => n + t.text.length, 0) - 1 !== first.length,
+      `tokens=${model.tokens.length} cls=${model.tokens.map((t) => t.cls).join(',')} 行内 token 数=${toks.length}`)
+    /**
+     * 自动格式化：拿**真实示例谱**里的一行来验 —— 先把它"弄乱"（多个空格、`|` 两侧不留空格），
+     * 再过 `formatLine`，必须回到规范写法。
+     *
+     * 为什么不用我随手编的行：引擎对"没有声部头"的普通行**本来就不做规范化**
+     * （实跑 `formatLine('5  5   6 6|3 3 4 4')` 原样返回 —— 我先前断言它会被改，是我想当然了）。
+     * 示例谱那一行是真实语法，才有可比性。跨仓拿不到示例谱时**明确跳过**（沿用本套件既有先例）。
+     */
+    const sampleDir = '../ijipu/public/samples'
+    // ⚠ 不要写死文件名（示例谱是中文名，写死一个就等着跳过）—— 取目录里第一个 `.jps`
+    const sampleFile =
+      existsSync(sampleDir)
+        ? (readdirSync(sampleDir).find((f) => f.endsWith('.jps')) ?? null)
+        : null
+    if (!sampleFile) {
+      console.log('[smoke] 拿不到应用示例谱 ⇒ 跳过 adj774 的 formatLine 端到端断言')
+      check('adj774 端到端：块内"乱空格"的行经 `formatLine` 变成规范写法', true, 'skipped：跨仓缺少示例谱')
+    } else {
+      const lines = String(readFileSync(`${sampleDir}/${sampleFile}`, 'utf8')).split('\n')
+      // 挑一条"含小节线且已有音符"的实质行
+      const good = lines.find((l) => /\|/.test(l) && /\d/.test(l) && !l.trim().startsWith('#')) ?? ''
+      const messy = good.replace(/\s+/g, '  ').replace(/\s*\|\s*/g, '|')
+      check('adj774 端到端：块内"乱空格"的行经 `formatLine` 变成规范写法',
+        good !== '' && messy !== good && formatLine(messy) === good,
+        `原文=${JSON.stringify(good)} 弄乱=${JSON.stringify(messy)} 格式化=${JSON.stringify(formatLine(messy))}`)
+    }
+  }
 }
 
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。
