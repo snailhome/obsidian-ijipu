@@ -7,7 +7,8 @@
  *  - `![[xxx.jps]]` 嵌入：Obsidian 会把本视图嵌进笔记，自动切到紧凑形态（隐藏页数/编辑器）
  *  - 「⚙ 排版 → 保存到谱面」直接改写文件内容（`# jps-config` 行），与 iJipu 行为一致
  */
-import { Platform, TextFileView, type TFile, type WorkspaceLeaf } from 'obsidian'
+import { Notice, Platform, TextFileView, type TFile, type WorkspaceLeaf } from 'obsidian'
+import { formatJps } from '@ijipu/engine'
 import { mountScorePane, type ScorePaneHandle } from './scorePane'
 import type IJipuPlugin from './main'
 
@@ -218,6 +219,29 @@ export class IJipuFileView extends TextFileView {
     this.unfixHeight = null
   }
 
+  /**
+   * adj746：**按应用规范格式化本文件**（引擎 `formatJps` —— 与应用编辑器同一份实现）。
+   *
+   * 行为口径：
+   *  · 已经规范 ⇒ 只提示，不写盘（避免无意义的"文件已修改"）；
+   *  · 有改动 ⇒ 写回并**立即保存**（与源码编辑态一样走 `saveNow`），随后重画（若在谱面态，排版同步刷新）。
+   */
+  formatSource(): void {
+    const next = formatJps(this.data)
+    if (next === this.data) {
+      new Notice('源码已是应用规范格式（无需改动）', 3000)
+      return
+    }
+    this.data = next
+    void this.saveNow()
+    if (this.editing) {
+      this.render()
+    } else {
+      this.render()
+    }
+    new Notice('已按应用规范格式化源码（音符/小节线空格、替谱段、描述头属性）', 4000)
+  }
+
   /** 是否被嵌入在笔记里（`![[xxx.jps]]`）——嵌入形态用紧凑布局、不显示源码编辑器 */
   private get embedded(): boolean {
     return this.containerEl.closest('.internal-embed') !== null
@@ -406,6 +430,15 @@ export class IJipuFileView extends TextFileView {
         this.render()
       })
       bar.createSpan({ cls: 'ijipu-page-label', text: this.file?.name ?? 'jps' })
+      /**
+       * adj746（用户要求：「源码如果能够按我们应用的规范格式化就更好了」）：
+       * 用**引擎里那份应用自己的格式化器** `formatJps`（规则实现自 JPS 规范，
+       * 应用编辑器输入时用的就是同一个 `formatLine`）——不另写一套，规范只此一家。
+       * 放在文件工具条上：手机上也能一键用（不必记命令面板）。
+       */
+      const fmt = bar.createEl('button', { cls: 'ijipu-btn', text: '⌥ 格式化' })
+      fmt.setAttr('title', '按应用规范格式化源码（Q 行音符/小节线空格、歌词里的 {tp … } 段、描述头属性）')
+      fmt.addEventListener('click', () => this.formatSource())
     } else {
       bar.createSpan({ cls: 'ijipu-page-label', text: `♫ ${this.file?.basename ?? 'jps'}` })
     }

@@ -196,6 +196,21 @@ export default class IJipuPlugin extends Plugin {
       name: '打开爱记谱',
       callback: () => void this.openIjipuApp(),
     })
+    /**
+     * adj746（用户要求：「源码如果能够按我们应用的规范格式化就更好了」）：
+     * 命令面板入口（手机上尤其有用——不必去点文件工具条）。
+     * 只对**当前打开的 `.jps` 文件视图**生效；代码块里的谱面请在谱面工具条上点「↹ 格式化」。
+     */
+    this.addCommand({
+      id: 'format-jps',
+      name: '格式化当前 .jps 源码（应用规范）',
+      checkCallback: (checking) => {
+        const view = this.app.workspace.getActiveViewOfType(IJipuFileView)
+        if (!view) return false
+        if (!checking) view.formatSource()
+        return true
+      },
+    })
     this.syncEmbedRibbon()
 
     /**

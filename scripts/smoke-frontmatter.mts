@@ -5,9 +5,9 @@
  * 断言来源：用户反馈「在 frontmatter 里设置像 `ijipu_note_size` 好像没生效」——
  * 覆盖键名写法兼容、值类型转换、未识别键提示、优先级四类。
  */
-import { defaultPageConfig, dragDelta, layoutScore, parseJps, renderScoreToSvg, writeJpsConfig, mergeConfigEdits, configCarryover, SCORE_FONT_OPTIONS, buildPlaySequence, GUIDE_LIMITS, GUIDE_LIMITS_EX, SEGMENT_ROW_GAP_DEFAULT, OPTIONAL_CONFIG_FIELDS, defaultConfigForReset, extractJpsConfig, extractLegacyEditorPrefs, nonDefaultConfigKeys, GM_GROUPS } from '@ijipu/engine'
+import { defaultPageConfig, dragDelta, formatJps, layoutScore, parseJps, renderScoreToSvg, writeJpsConfig, mergeConfigEdits, configCarryover, SCORE_FONT_OPTIONS, buildPlaySequence, GUIDE_LIMITS, GUIDE_LIMITS_EX, SEGMENT_ROW_GAP_DEFAULT, OPTIONAL_CONFIG_FIELDS, defaultConfigForReset, extractJpsConfig, extractLegacyEditorPrefs, nonDefaultConfigKeys, GM_GROUPS } from '@ijipu/engine'
 import type { PageConfig } from '@ijipu/engine'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { instrumentColorMap, playheadBaseOf, playheadPosIn, trackKeysOf } from '../src/playhead'
 // adj738：原来这里从 `../src/frontmatter` 导入 applyFrontmatter / frontmatterKey / PAGE_CONFIG_FIELDS 等
 // ——笔记 frontmatter 那一层（连同 `src/frontmatter.ts`）已整体删除，相关断言一并删除。
@@ -1939,6 +1939,45 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
       /contain=\$\{cs\.contain\}→改为 layout style/.test(pane725) &&
       /\.ijipu-cm-nocontain\.ijipu-cm-nocontain \{/.test(css725nc) &&
       /contain: layout style/.test(css725nc))
+
+  /**
+   * adj746（用户要求：「源码如果能够按我们应用的规范格式化就更好了」）：
+   * 插件**直接用引擎里那份应用自己的格式化器** `formatJps`（规则实现自 JPS 规范，
+   * 应用编辑器输入时用的就是同一个 `formatLine`）——不另写一套，"规范"只有一处定义。
+   *
+   * 断言分两层：
+   *  ① 结构：三处入口都真的接了它（文件视图按钮 + 命令面板 + 代码块工具条），且都走引擎；
+   *  ② 口径：**应用自带示例谱在该格式化器下是不动点**（`formatJps(sample) === sample`）——
+   *     这正是"应用规范"的可执行定义。拿不到应用仓库时跳过（插件 CI 只有本仓库）。
+   */
+  {
+    const fv746 = String(readFileSync('src/fileView.ts', 'utf8'))
+    const main746 = String(readFileSync('src/main.ts', 'utf8'))
+    check('adj746 格式化入口接的是**引擎**的 formatJps（文件视图 / 命令面板 / 代码块工具条）',
+      /import \{ formatJps \} from '@ijipu\/engine'/.test(fv746) &&
+        /const next = formatJps\(this\.data\)/.test(fv746) &&
+        /if \(next === this\.data\)/.test(fv746) &&
+        /id: 'format-jps'/.test(main746) &&
+        /getActiveViewOfType\(IJipuFileView\)/.test(main746) &&
+        /import \{[^}]*formatJps[^}]*\} from '@ijipu\/engine'/.test(String(readFileSync('src/scorePane.ts', 'utf8'))) &&
+        /const next = formatJps\(before\)/.test(String(readFileSync('src/scorePane.ts', 'utf8'))))
+
+    // 幂等：格式化两次等于一次
+    const messy = 'V:1.0\nB:  测试\nQ:1 2  3 4|5\nC:  词 {tp 1  2| 3}\n'
+    const once = formatJps(messy)
+    check('adj746 格式化幂等（第二次不再改动）', formatJps(once) === once, JSON.stringify(once))
+
+    const samplesDir = '../ijipu/public/samples'
+    if (existsSync(samplesDir)) {
+      const files = readdirSync(samplesDir).filter((f) => f.endsWith('.jps'))
+      const changed = files.filter((f) => {
+        const src = String(readFileSync(`${samplesDir}/${f}`, 'utf8'))
+        return formatJps(src) !== src
+      })
+      check(`adj746 应用自带示例谱（${files.length} 份）在格式化下是**不动点** ⇒ 这就是"应用规范"`,
+        files.length > 0 && changed.length === 0, `被改动：${changed.join(',')}`)
+    }
+  }
 
   check('adj740 工具条诊断行记录"宿主/显示类/最终样式/坐标/祖先链"（设置页可读）',
     /lastToolbarInfo/.test(String(readFileSync('src/main.ts', 'utf8'))) &&

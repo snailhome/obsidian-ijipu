@@ -13,7 +13,7 @@
  * → `renderScoreToSvg`；试听走 `@ijipu/engine` 的 `buildPlaySequence` + SpessaSynth。
  */
 import { Menu, Notice, sanitizeHTMLToDom } from 'obsidian'
-import { writeJpsConfig, mergeConfigEdits, dragDelta, clamp, type PageConfig } from '@ijipu/engine'
+import { writeJpsConfig, mergeConfigEdits, dragDelta, clamp, formatJps, type PageConfig } from '@ijipu/engine'
 import { renderScoreFull, playScore, type PlayheadSeg } from './render'
 import { instrumentColorMap, playheadBaseOf, playheadPosIn, trackKeysOf, type PlayheadPos } from './playhead'
 import { resolvePageConfig } from './config'
@@ -651,6 +651,26 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
 
     // —— 页面设置（滑杆）：对话框按字段精确设值（字体/字号等不可拖项） ——
     if (host.writeSource) {
+      /**
+       * adj746（用户要求「源码如果能够按我们应用的规范格式化就更好了」）：
+       * **按应用规范格式化**代码块里的谱面源码 —— 用引擎的 `formatJps`
+       * （与应用编辑器输入时的 `formatLine` 同一份实现）⇒ "规范"只有一处定义，不另写一套。
+       * 放在 `host.writeSource` 分支里：没有写回入口的宿主（如嵌入态）不该给这个按钮。
+       */
+      const fmtBtn = toolbar.createEl('button', { cls: 'ijipu-play ijipu-format-btn' })
+      fmtBtn.setAttr('title', '按应用规范格式化源码（音符/小节线空格、歌词里的 {tp … } 段、描述头属性）')
+      fmtBtn.appendChild(layoutIcon(15))
+      fmtBtn.createSpan({ cls: 'ijipu-btn-label', text: '格式化' })
+      fmtBtn.addEventListener('click', () => {
+        const before = host.getSource()
+        const next = formatJps(before)
+        if (next === before) {
+          new Notice('源码已是应用规范格式（无需改动）', 3000)
+          return
+        }
+        void host.writeSource?.(next)
+        new Notice('已按应用规范格式化源码', 4000)
+      })
       const cfgBtn = toolbar.createEl('button', { cls: 'ijipu-play ijipu-config-btn' })
       cfgBtn.setAttr('title', '页面设置：按字段精确设值（字体/字号/行距/渲染开关；可保存到谱面或存为插件默认）')
       cfgBtn.appendChild(settingsIcon(15))

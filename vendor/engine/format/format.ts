@@ -13,6 +13,18 @@ import { matchSegmentHead, findSegmentEnd } from '../parser/tokenizer'
 
 export function formatJps(source: string): string {
   const lines = source.replace(/\r\n/g, '\n').split('\n')
+  /**
+   * adj747（**幂等修复**）：源若已以换行结尾，`split('\n')` 会在末尾多出一个空串 ⇒
+   * 旧实现 `join('\n') + '\n'` 会把它保留下来**再补一个换行** ⇒ 每格式化一次文件就多一行空行
+   * （`formatJps(formatJps(x)) !== formatJps(x)`）。
+   *
+   * 这正是"按应用规范格式化"要守住的性质：**规范格式必须是格式化器的不动点** ——
+   * 插件里那三个入口（文件视图按钮 / 命令 / 代码块工具条）都靠"改没改"来决定要不要写盘，
+   * 不幂等会让"格式化"这个动作变成"每次都改文件"。
+   * 顺带把末尾空行统一成**恰好一个换行**（空源返回空串，不制造只有一个换行的文件）。
+   */
+  while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
+  if (lines.length === 0) return ''
   return lines.map(formatLine).join('\n') + '\n'
 }
 
