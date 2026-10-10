@@ -877,7 +877,17 @@ console.log('[12] .jps 文件视图：源码态填满窗口（adj402）')
   const editorBlock = blockOf('.ijipu-source-editor')
   check('adj402 视图容器 height:100% + min-height:0 + border-box（可随窗口一起收缩）', viewBlock.includes('height: 100%') && viewBlock.includes('min-height: 0') && viewBlock.includes('box-sizing: border-box'), viewBlock.replace(/\s+/g, ' '))
   check('adj402 源码态容器不自己滚（.ijipu-file-editing → overflow:hidden）', /\.ijipu-file-view\.ijipu-file-editing\s*\{[^}]*overflow:\s*hidden/.test(css))
-  check('adj402 textarea 无 240px 硬下限 + flex:1（等于窗口剩余高度）', editorBlock.includes('flex: 1 1 auto') && editorBlock.includes('min-height: 0') && !editorBlock.includes('240px'), editorBlock.replace(/\s+/g, ' ').slice(0, 80))
+  /**
+   * adj744：手机端默认改用 Obsidian 自己的编辑器（源码模式）⇒ 这个 textarea 只是**回退路径**，
+   * 而回退路径在手机上得有个高度下限（用户正是报"框太矮"）。所以：
+   *  · 基规则仍须"无 240px 硬下限 + flex:1"（桌面端就是靠它等于窗口剩余高度）；
+   *  · 手机端另有一条 `min-height: 50vh` 的**回退下限**（只在 `.is-mobile` 下生效）。
+   * 断言因此按"基规则块"取（`blockOf` 取的是第一次出现），不再被后面那条手机规则干扰。
+   */
+  check('adj402/744 textarea 基规则无 240px 硬下限 + flex:1；手机端回退另有 min-height 下限',
+    editorBlock.includes('flex: 1 1 auto') && editorBlock.includes('min-height: 0') && !editorBlock.includes('240px') &&
+      /\.is-mobile \.ijipu-file-view\.ijipu-file-editing \.ijipu-source-editor\s*\{[^}]*min-height:\s*50vh/.test(css),
+    editorBlock.replace(/\s+/g, ' ').slice(0, 60))
   check('adj402 fileView 源码态给容器加 .ijipu-file-editing', view.includes("addClass('ijipu-file-editing')"))
   // adj404：真机上 WebView（随键盘缩布局视口）与 Obsidian（`--keyboard-height` 再扣一次）双重扣减，
   // 源码框会比可视区矮一个键盘高 → 按 visualViewport 实测定高，必要时临时解除 .app-container 上限。
@@ -1894,6 +1904,19 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
       // CSS：宿主类规则不挑容器类名 + 显示态兜底（整条工具条与其中的按钮/图标/文字都强制可见）
       /\.ijipu-cm-host\.ijipu-cm-host:hover \{/.test(css725nc) &&
       /\.ijipu-score-toolbar\.is-revealed \.ijipu-btn-label/.test(css725nc))
+  {
+    const fv744 = String(readFileSync('src/fileView.ts', 'utf8'))
+    check('adj744 手机端「✎ 源码」改用 Obsidian 自己的编辑器（源码模式），并保留 textarea 回退',
+      fv744.includes('const useNativeEditor = Platform.isMobile') &&
+        /setViewState\(\{ type: 'markdown', state: \{ file: file\.path, mode: 'source', source: true \}, active: true \}\)/.test(fv744) &&
+        // 回退：一帧后若按钮仍在 DOM 里（本视图没被切走）⇒ 宿主拒开 ⇒ 用内联 textarea
+        /window\.requestAnimationFrame\(\(\) => \{\s*if \(!btn\.isConnected\) return\s*this\.editing = true/.test(fv744) &&
+        // 手机端回退框给高度下限（免得回退路径又是"框太矮"）
+        /\.is-mobile \.ijipu-file-view\.ijipu-file-editing \.ijipu-source-editor \{/.test(css725nc) &&
+        /min-height: 50vh/.test(css725nc),
+      `useNative=${fv744.includes('useNativeEditor')} fallback=${/btn\.isConnected/.test(fv744)}`)
+  }
+
   check('adj740 工具条诊断行记录"宿主/显示类/最终样式/坐标/祖先链"（设置页可读）',
     /lastToolbarInfo/.test(String(readFileSync('src/main.ts', 'utf8'))) &&
       /plugin\.lastToolbarInfo =/.test(pane725) &&

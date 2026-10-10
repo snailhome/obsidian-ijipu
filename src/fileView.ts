@@ -223,6 +223,39 @@ export class IJipuFileView extends TextFileView {
     return this.containerEl.closest('.internal-embed') !== null
   }
 
+  /**
+   * adj744：**把当前页签切到 Obsidian 自己的编辑器**（手机端「✎ 源码」走这条）。
+   *
+   * 为什么借 markdown 视图：Obsidian 没有"用内置编辑器打开任意文本文件"的公开 API，
+   * 而 `MarkdownView` 的 `onLoadFile` 走的是 `TextFileView`（不校验扩展名）⇒
+   * `setViewState({ type: 'markdown', state: { file, mode: 'source', source: true } })`
+   * 就能让 `.jps` 在宿主编辑器里以**源码模式**打开（`source: true` = 纯源码，不是实时预览）。
+   *
+   * ⚠ 版本差异风险：万一宿主拒开（视图类型没变），**下一帧自动回退**到内联 textarea
+   * （`this.editing = true` + 重画），保证"编辑源码"这条功能不会因此消失。
+   */
+  private openInObsidianEditor(btn: HTMLElement): void {
+    const file = this.file
+    if (!file) return
+    const mutate = this.leaf as unknown as {
+      setViewState?: (state: { type: string; state?: unknown; active?: boolean }) => Promise<void>
+    }
+    if (typeof mutate.setViewState !== 'function') {
+      this.editing = true
+      this.render()
+      return
+    }
+    void mutate
+      .setViewState({ type: 'markdown', state: { file: file.path, mode: 'source', source: true }, active: true })
+      .catch(() => undefined)
+    // 回退判据：一帧之后本视图仍在（说明没切走）⇒ 宿主拒开 ⇒ 用内联 textarea
+    window.requestAnimationFrame(() => {
+      if (!btn.isConnected) return
+      this.editing = true
+      this.render()
+    })
+  }
+
   private teardownEmbedFrame(): void {
     if (!this.embedFrame) return
     this.plugin.bridge.detach(this.embedFrame)
@@ -328,9 +361,35 @@ export class IJipuFileView extends TextFileView {
     // —— 文件级工具条（嵌入形态只留标题）——
     const bar = contentEl.createDiv({ cls: 'ijipu-file-bar' })
     if (!embedded) {
-      const toggle = bar.createEl('button', { cls: 'ijipu-btn', text: this.editing ? '📖 看谱' : '✎ 源码' })
-      toggle.setAttr('title', this.editing ? '切回谱面视图' : '切到纯文本编辑（改动自动保存）')
+      /**
+       * adj744（用户要求，手机端）：「手机查看 jps 源码的编辑框高度太小了，是否可以不要编辑框，
+       * 而是复用 ob 的编辑器的源码模式？」—— 认同，而且与项目既有口径一致
+       * （早先就把"预览里的 textarea"撤掉了，理由正是"真正的编辑交给 Obsidian 自带编辑器"）。
+       *
+       * 做法：手机端把「✎ 源码」变成**把当前页签切到 Obsidian 自己的编辑器**（markdown 视图 +
+       * 源码模式），于是键盘处理、软换行、撤销栈、字号、滚动全由宿主负责，不再有"框太矮"的问题；
+       * 桌面端保持原样（内联 textarea 在大屏上够用，且不必让用户丢失当前布局）。
+       * ⚠ 用 `setViewState({type:'markdown'})` 打开**非 md 扩展名**的文件属于"借宿主的编辑器"：
+       *    万一宿主拒开（不同版本行为可能有差异），下一帧若发现视图类型没变 ⇒ 自动回退到 textarea。
+       */
+      const useNativeEditor = Platform.isMobile
+      const toggle = bar.createEl('button', {
+        cls: 'ijipu-btn',
+        text: this.editing ? '📖 看谱' : '✎ 源码',
+      })
+      toggle.setAttr(
+        'title',
+        useNativeEditor
+          ? '用 Obsidian 的编辑器打开源码（源码模式）'
+          : this.editing
+            ? '切回谱面视图'
+            : '切到纯文本编辑（改动自动保存）',
+      )
       toggle.addEventListener('click', () => {
+        if (useNativeEditor) {
+          this.openInObsidianEditor(toggle)
+          return
+        }
         this.editing = !this.editing
         this.render()
       })

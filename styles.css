@@ -695,6 +695,17 @@
   max-height: none;
 }
 
+/**
+ * adj744（用户报"手机上源码编辑框太矮"）：手机端默认已改为**用 Obsidian 自己的编辑器**
+ * （源码模式）打开源码 ⇒ 正常情况下走不到上面这个 textarea。
+ * 但"宿主拒开"时会**自动回退**到这里，所以给手机端的回退框一个高度下限，
+ * 免得回退路径又是"框太矮"（`min-height:0 + flex:1` 在手机上偶尔只剩几行）。
+ * ⚠ 这条**必须**放在基规则之后：冒烟按"第一次出现的 `.ijipu-source-editor` 规则块"核对基规则。
+ */
+.is-mobile .ijipu-file-view.ijipu-file-editing .ijipu-source-editor {
+  min-height: 50vh;
+}
+
 /* ---------- ![[xxx.jps]] 嵌入 ---------- */
 /* 插件接管 .internal-embed 后自己渲染谱面（详见 src/embed.ts 头部说明）。
    `is-loaded` 由插件在 post-processor 里打上，宿主据此跳过这个嵌入，
