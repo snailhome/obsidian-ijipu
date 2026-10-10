@@ -1169,12 +1169,21 @@
 
    做法（JS 在 `revealToolbar(true)` 时逐层量、逐层加类，见 `scorePane.ts` 的
    `exemptClippingAncestors`）：只给**确实在裁剪**的祖先加这个类；**滚动容器绝不加**
-   （判据 `scrollHeight > clientHeight`）—— 放开滚动容器会直接破坏编辑器滚动。
+   （adj742 修正判据：按**设计意图**认——任一轴计算 `overflow` 是 `auto`/`scroll` 就不动它；
+   旧的 `scrollHeight > clientHeight` 在"内容不多"时会漏判，用户诊断截图里 `.view-content`
+   就是这样被误放开的）—— 放开滚动容器会直接破坏编辑器滚动。
 
    ⚠ 特异性：这条要与宿主规则同层级可比，所以**不**依赖顺序，而是把 `overflow` 提到
    `visible !important` 吗？——**不**。本项目对 `!important` 有硬上限（≤5 条，见社区审核一节），
    这里靠"插件样式后加载 + 类选择器"即可；万一宿主的规则比它更强，诊断行会把那一层报出来。 */
 .ijipu-cm-noclip {
+  overflow: visible;
+}
+
+/* adj742：宿主类的放开规则**不再挑容器类名**（`.cm-embed-block` / `.cm-preview-code-block` 都可能是宿主），
+   并且用重复类名把特异性抬到 (0,3,0) —— 稳压宿主那条 `.cm-embed-block:hover { overflow: hidden }` (0,2,0)，
+   不依赖样式加载顺序。 */
+.ijipu-cm-host.ijipu-cm-host:hover {
   overflow: visible;
 }
 

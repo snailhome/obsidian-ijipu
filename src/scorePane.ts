@@ -37,8 +37,13 @@ const MODE_HINT: Record<ViewMode, string> = {
 /**
  * adj725：宿主 widget 容器（**只在实时预览里**有；阅读模式下 `el` 直接是 `.block-language-jps`）。
  * 挂在它上面的 `ijipu-cm-host` 类只为放开悬停时的 `overflow: hidden`（见 styles.css）。
+ *
+ * adj742（用户诊断截图：编辑视图里却判成"阅读视图/其他"）：实测发现**代码块**在实时预览里的容器
+ * 未必带 `.cm-embed-block`（嵌页面板才有那个类，代码块常用 `.cm-preview-code-block`）——
+ * 于是 `closest('.cm-embed-block')` 返回 `null` ⇒ 宿主类从未打上、诊断行也判错宿主。
+ * 现在两个都认（`closest()` 支持选择器列表）。
  */
-const CM_EMBED_BLOCK = '.cm-embed-block'
+const CM_EMBED_BLOCK = '.cm-embed-block, .cm-preview-code-block'
 /** 与 iJipu 应用一致的播放色块配色与定位（adj452：抽到 playhead.ts 纯函数，可单测） */
 
 export type ScorePaneHost = {
@@ -232,10 +237,16 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       const isEditorRoot = el.hasClass('cm-editor')
       const cs = window.getComputedStyle(el)
       const clips = /hidden|clip/.test(cs.overflowY) || /hidden|clip/.test(cs.overflowX)
-      const isScroller = el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1
+      /**
+       * adj742（用户诊断截图：`.view-content` 被误判成"非滚动容器"从而被放开）：
+       * **滚动容器要按"设计意图"认，而不是按当前是否溢出**（内容不多时 `scrollHeight === clientHeight`
+       * ⇒ 旧判据会漏判 ⇒ 我们就把真正的滚动容器放开了）。
+       * 判据：任一轴的计算 `overflow` 是 `auto`/`scroll` ⇒ 它天生就是滚动容器，**绝不动它**。
+       */
+      const scrollByDesign = /auto|scroll/.test(cs.overflowY) || /auto|scroll/.test(cs.overflowX)
       const name = el.className.split(/\s+/).filter(Boolean).slice(0, 2).join('.') || el.tagName.toLowerCase()
       if (clips) {
-        if (isScroller) {
+        if (scrollByDesign) {
           facts.push(`${name}:裁剪但**是滚动容器**（不动它）`)
         } else {
           if (!el.hasClass('ijipu-cm-noclip')) el.addClass('ijipu-cm-noclip')
@@ -243,6 +254,18 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
           facts.push(`${name}:裁剪→已放开`)
         }
       }
+      /**
+       * adj742：`overflow` 之外还有几种"照样裁/照样盖"的机制，它们**不体现在 overflow 上** ——
+       * 用户那句诊断里工具条 `opacity/visibility` 都正常却看不见，问题多半就在这几项上，
+       * 所以这里把它们**逐层记下来**（先诊断、再决定动不动它）。
+       */
+      const extra: string[] = []
+      if (cs.contain && cs.contain !== 'none') extra.push(`contain=${cs.contain}`)
+      if (cs.contentVisibility && cs.contentVisibility !== 'visible') extra.push(`content-visibility=${cs.contentVisibility}`)
+      if (cs.transform && cs.transform !== 'none') extra.push('transform')
+      if (cs.isolation && cs.isolation === 'isolate') extra.push('isolation:isolate')
+      if (cs.zIndex !== 'auto' && cs.position !== 'static') extra.push(`z-index=${cs.zIndex}`)
+      if (extra.length > 0) facts.push(`${name}:${extra.join(',')}`)
       if (isEditorRoot) {
         facts.push('到 .cm-editor 为止')
         break
@@ -262,17 +285,35 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     const hh = String(d.getHours()).padStart(2, '0')
     const mm = String(d.getMinutes()).padStart(2, '0')
     const ss = String(d.getSeconds()).padStart(2, '0')
-    const rect = toolbarEl.getBoundingClientRect()
-    const score = container.getBoundingClientRect()
-    const cs = window.getComputedStyle(toolbarEl)
-    plugin.lastToolbarInfo =
-      `${hh}:${mm}:${ss} · ${phase}` +
-      `｜宿主=${container.closest(CM_EMBED_BLOCK) ? '实时预览(.cm-embed-block)' : '阅读视图/其他'}` +
-      `｜显示类=${toolbarEl.hasClass('is-revealed') ? '有' : '无'}` +
-      `｜样式 opacity=${cs.opacity} visibility=${cs.visibility} position=${cs.position}` +
-      `｜工具条 ${Math.round(rect.width)}×${Math.round(rect.height)} @(${Math.round(rect.left)},${Math.round(rect.top)})` +
-      `｜谱面块 @(${Math.round(score.left)},${Math.round(score.top)})` +
-      (facts.length > 0 ? `｜祖先链：${facts.join(' → ')}` : '｜祖先链：无裁剪层')
+    const stamp = `${hh}:${mm}:${ss}`
+    /**
+     * adj742：**命中测试**（用户诊断截图证明"样式正常却看不见"⇒ 必须回答"那个点上到底是谁"）。
+     * 下一帧再量：`is-revealed` 的类刚加上，样式表要等一次重排；`elementFromPoint` 按**当前**绘制结果回答。
+     */
+    window.requestAnimationFrame(() => {
+      const rect = toolbarEl.getBoundingClientRect()
+      const score = container.getBoundingClientRect()
+      const cx = Math.round(rect.left + rect.width / 2)
+      const cy = Math.round(rect.top + rect.height / 2)
+      const hit = cx > 0 && cy > 0 ? document.elementFromPoint(cx, cy) : null
+      const hitDesc = hit
+        ? toolbarEl.contains(hit)
+          ? '命中工具条自身 ✓'
+          : `命中**别的元素**：${hit.tagName.toLowerCase()}.${String(hit.className).split(/\s+/).slice(0, 2).join('.')}`
+        : '命中空白（该点不在视口内，或已被裁掉）'
+      const inViewport = cy >= 0 && cx >= 0 && cy <= window.innerHeight && cx <= window.innerWidth
+      const cs = window.getComputedStyle(toolbarEl)
+      plugin.lastToolbarInfo =
+        `${stamp} · ${phase}` +
+        `｜宿主=${container.closest(CM_EMBED_BLOCK) ? '实时预览' : '阅读视图/其他'}` +
+        `｜显示类=${toolbarEl.hasClass('is-revealed') ? '有' : '无'}` +
+        `｜样式 opacity=${cs.opacity} visibility=${cs.visibility} position=${cs.position}` +
+        `｜工具条 ${Math.round(rect.width)}×${Math.round(rect.height)} @(${Math.round(rect.left)},${Math.round(rect.top)})` +
+        `｜谱面块 @(${Math.round(score.left)},${Math.round(score.top)})` +
+        `｜视口内=${inViewport ? '是' : '否'}` +
+        `｜命中测试@(${cx},${cy})：${hitDesc}` +
+        (facts.length > 0 ? `｜祖先链：${facts.join(' → ')}` : '｜祖先链：无裁剪层')
+    })
   }
 
   const stopRuntime = (): void => {
