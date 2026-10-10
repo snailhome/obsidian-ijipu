@@ -2275,7 +2275,8 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
       /hideTimer = window\.setTimeout\(\(\) => \{/.test(pane725) &&
       /\}, 240\)/.test(pane725) &&
       // adj769：显示必须**先**发生（落位判定不得挡住可见性），且用活元素 + try/catch
-      /const revealToolbar = \(on: boolean\): void => \{[\s\S]{0,300}?const el = liveToolbar\(\)[\s\S]{0,120}?el\.toggleClass\('is-revealed', on\)/.test(pane725) &&
+      // adj777：切换前还要**同步显式状态**（`toolbarShown = on`）—— 间距上限随新增那两行放宽
+      /const revealToolbar = \(on: boolean\): void => \{[\s\S]{0,500}?toolbarShown = on[\s\S]{0,200}?el\.toggleClass\('is-revealed', on\)/.test(pane725) &&
       /const liveToolbar = \(\): HTMLElement => container\.querySelector<HTMLElement>\('\.ijipu-score-toolbar'\) \?\? toolbar/.test(pane725) &&
       /落位判定异常（已跳过，工具条照常显示）/.test(pane725) &&
       /if \(liveToolbar\(\)\.hasClass\('is-revealed'\)\) return/.test(pane725))
@@ -2842,18 +2843,28 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
   {
     const pane773 = String(readFileSync('src/scorePane.ts', 'utf8'))
     const css773 = String(readFileSync('styles.css', 'utf8'))
-    check('adj773 点击预览区显/隐工具条（不依赖 hover；三处预览一致）',
+    check('adj773/adj777 点击预览区显/隐工具条（显式状态翻转，不依赖 hover；三处预览一致）',
       /const onContainerClick = \(e: MouseEvent\): void => \{/.test(pane773) &&
-        /container\.addEventListener\('click', onContainerClick\)/.test(pane773) &&
-        // 点到工具条自身不切换；点到有自身动作的元素（音符/小节线/链接/按钮）只显示不收起
+        // adj777：改**捕获阶段**监听 —— 别处（如 a.jp-link 的处理器）stopPropagation 拦不住这次切换
+        /container\.addEventListener\('click', onContainerClick, true\)/.test(pane773) &&
+        // adj777 的核心修法：**显式状态**（原来用 `is-revealed` 判，手机端靠 CSS 常显时并没有这个类
+        // ⇒ 第一下点击走"显示"分支、屏幕上毫无变化，要点第二下才收起）
+        /let toolbarShown = Platform\.isMobile/.test(pane773) &&
+        /toolbarShown = !toolbarShown/.test(pane773) &&
+        /toolbarShown = on/.test(pane773) &&
+        // 点到工具条自身不切换；点到谱面内的链接不切换（那次点击有自己的语义）
         /if \(target\?\.closest\('\.ijipu-score-toolbar'\)\) return/.test(pane773) &&
-        /target\?\.closest\('\[data-cipos\], \[data-notepos\], a, button'\)/.test(pane773) &&
+        /if \(target\?\.closest\('a\.jp-link'\)\) return/.test(pane773) &&
         // 触摸端补一次（部分 WebView 不给非可点击元素派发 click）
         /container\.addEventListener\('pointerup'/.test(pane773) &&
         // 用户主动收起要能压过"移动端常显"（不用 !important，靠特异性）
         /el\.removeClass\('is-user-hidden'\)/.test(pane773) &&
         /liveToolbar\(\)\.addClass\('is-user-hidden'\)/.test(pane773) &&
         /\.is-mobile \.ijipu-score-toolbar\.is-user-hidden \{/.test(css773) &&
+        // adj777：诊断（"到底有没有收到点击、命中了什么元素"）—— 显示在设置页「说明」
+        /lastToolbarClick =/.test(pane773) &&
+        /lastToolbarClick/.test(String(readFileSync('src/main.ts', 'utf8'))) &&
+        /点击预览区显\/隐工具条（诊断信息，无需操作）/.test(String(readFileSync('src/settings.ts', 'utf8'))) &&
         // ⚠ 负向判据剥注释：规则上方的说明里写了"不使用 !important"这几个字，直接搜会被自己的注释绊倒
         !/is-user-hidden[\s\S]{0,80}!important/.test(css773.replace(/\/\*[\s\S]*?\*\//g, '')),
       '')

@@ -893,6 +893,12 @@ export default class IJipuPlugin extends Plugin {
    * 内存字段即可——运行期诊断，不持久化。
    */
   lastToolbarInfo: string | null = null
+  /**
+   * adj777：「点击预览区显/隐工具条」的**诊断**（显示在设置页「说明」里）。
+   * 用户报「点击预览区无显/隐」时，这条能一眼回答"插件到底有没有收到这次点击、命中了哪个元素"——
+   * 分清"事件没到"和"到了但状态判断错"，比猜快得多。
+   */
+  lastToolbarClick: string | null = null
 
   /**
    * adj725d：**SVG 走的是哪条解析路径**（最近一次渲染写回）——`'xml'` / `'html-fallback（…）'`。
@@ -972,7 +978,16 @@ class IJipuBlock extends MarkdownRenderChild {
        * adj741：`</>`（切回笔记源码）只在桌面端给 —— 它走 `revealSource()`（CM6 编辑器操作）。
        * 手机端不传 ⇒ 面板不会挂这个按钮（触屏上"编辑此块"由 Obsidian 自己的机制负责）。
        */
-      ...(Platform.isDesktopApp ? { onEditSource: () => void this.revealSource() } : {}),
+      /**
+       * adj777（用户实测）：「**手机端 jps 代码块上工具栏上无编辑按钮**」。
+       *
+       * 原来这里是 `...(Platform.isDesktopApp ? { onEditSource: … } : {})`，注释写着"手机端不传 ⇒
+       * 面板不会挂这个按钮（触屏上"编辑此块"由 Obsidian 自己的机制负责）" —— 那是**旧的 `</>` 时代**的口径：
+       * 那时按钮是块右上角那枚 `</>`。现在按钮已经统一进工具条（用户要求"三处工具条按钮统一为
+       * 试听/排版/设置/视图/编辑"），**手机端也该有**（手机端切源码同样可用：`revealSource()` 只是
+       * "切到笔记源码并把光标放进本块"，与平台无关）。
+       */
+      onEditSource: () => void this.revealSource(),
     })
   }
 

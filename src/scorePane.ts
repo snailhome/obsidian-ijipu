@@ -622,6 +622,9 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
 
     const revealToolbar = (on: boolean): void => {
       const el = liveToolbar()
+      // adj777：把"显式状态"与**所有**显隐入口同步（hover / focus / 点击都走这里）——
+      // 否则状态会漂移，点击切换就可能出现"点一下没反应"。
+      toolbarShown = on
       // ① 先显示：这一步绝不依赖下面的落位判定
       el.toggleClass('is-revealed', on)
       // adj773：显示时清掉"用户主动收起"的标记（它用来压过"移动端常显"那条 CSS 规则）
@@ -713,34 +716,37 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     })
 
     /**
-     * adj773（用户要求 4）：「各端各模式下（手机/PC、阅读/编辑）**至少要保证：点击编辑区应能显示工具条，
-     * 再点击隐藏**，即可以通过点击预览区来显/隐工具条」；用户报「手机端编辑视图下预览区没有显示工具条」。
+     * adj773 / adj777（用户实测：「手机端点击预览区**无显/隐**工具条」「PC 与手机端在 `![[x.jps]]` 嵌入的
+     * **编辑模式**下点击也无显/隐」）：
      *
-     * 为什么必须补这条路径：原来显隐**只由 hover 驱动**（`pointermove`/`pointerleave`），而
-     *  · **手机端没有 hover**（触摸不会产生 pointermove ✓ 而抬指后又没有"离开"事件 ✗）；
-     *  · 实时预览里容器常常拿不到悬停 ⇒ 用户看到的就是"没有工具条"。
+     * 原来显隐**只由 hover 驱动**（`pointermove`/`pointerleave`），手机端没有 hover ⇒ 用户看不到工具条；
+     * adj773 补了点击切换，但判据是"有没有 `is-revealed` 类"，而**手机端工具条靠 CSS 默认常显**
+     * （`.is-mobile .ijipu-score-toolbar { opacity: 1; visibility: visible }`）时**并没有**这个类
+     * ⇒ 第一下点击走的是"显示"分支（**屏幕上毫无变化** ✗），要点**第二下**才收起 —— 感受就是"点了没反应"。
      *
-     * 规则（三处预览一致、与平台/模式无关）：
-     *  · 隐藏时点一下 ⇒ **显示**；
-     *  · 显示时点一下 ⇒ **收起**；
-     *  · 点到**工具条自身** ⇒ 不切换（否则点按钮会先把工具条收掉）；
-     *  · 点到**有自身动作的元素**（音符/小节线 `[data-cipos]`/`[data-notepos]`、链接、按钮）⇒
-     *    **只显示不收起** —— 避免"点音符听一下，工具条却跟着收起来"。
+     * adj777 改成**显式状态** `toolbarShown`（初值按平台给：手机端=已在显示、桌面端=未显示），
+     * 每次点击**翻转**它 ⇒ 点一下必有可见变化。另外：
+     *  · 用**捕获阶段**监听：别处（如 `a.jp-link` 的处理器）`stopPropagation()` 拦不掉这次切换；
+     *  · 点到**工具条自身** ⇒ 不翻转（否则点按钮会先把工具条收掉）；
+     *  · 点到谱面内的**链接** ⇒ 不翻转（那次点击有自己的语义）；
+     *  · 记一条**诊断**（`lastToolbarClick`，显示在设置页「说明」）—— 万一某平台仍不生效，
+     *    用户能一眼看出"到底有没有收到这次点击、命中了什么元素"。
      */
+    let toolbarShown = Platform.isMobile
     const onContainerClick = (e: MouseEvent): void => {
       const target = e.target instanceof HTMLElement ? e.target : null
       if (target?.closest('.ijipu-score-toolbar')) return
-      if (!liveToolbar().hasClass('is-revealed')) {
-        revealToolbar(true)
-        return
-      }
-      if (target?.closest('[data-cipos], [data-notepos], a, button')) return
-      // adj773：**用户主动收起**要额外打一个标记 —— "移动端常显"那条 CSS 规则（`.is-mobile .ijipu-score-toolbar`）
-      // 会无视 `is-revealed` 把工具条强制显示，所以显式的"已收起"必须能压过它（见 styles.css 的 `.is-user-hidden`）。
-      liveToolbar().addClass('is-user-hidden')
-      revealToolbar(false)
+      if (target?.closest('a.jp-link')) return
+      toolbarShown = !toolbarShown
+      revealToolbar(toolbarShown)
+      // 主动收起：打上能压过"移动端常显"那条 CSS 的标记（显示时由 `revealToolbar` 负责摘掉）
+      if (!toolbarShown) liveToolbar().addClass('is-user-hidden')
+      plugin.lastToolbarClick =
+        `点击预览区 ⇒ ${toolbarShown ? '显示' : '隐藏'}工具条（平台=${Platform.isMobile ? '手机' : '桌面'}；` +
+        `命中=${target?.tagName ?? '?'}${target?.className ? '.' + String(target.className).slice(0, 40) : ''}）`
     }
-    container.addEventListener('click', onContainerClick)
+    // ⚠ 捕获阶段（第三个参数 true）：任何子元素的 stopPropagation 都拦不住这次切换
+    container.addEventListener('click', onContainerClick, true)
     // 触摸端：抬起手指时若工具条仍隐藏，则补一次"显示"（部分 WebView 不派发 click 给非可点击元素）
     container.addEventListener('pointerup', (e) => {
       if (e.pointerType !== 'touch') return
