@@ -48,6 +48,9 @@ export type { JpsLineModel, JpsHighlightModel, ProblemLevel } from './highlight/
 // adj763（清单 B5）：源码高亮/问题提示**配色的唯一来源**（两端 CSS 用断言与它绑定）
 export { JPS_HIGHLIGHT_COLORS, JPS_PLAIN_COLORS, JPS_PROBLEM_COLORS, JPS_HL_CSS_VAR } from './highlight/palette'
 export type { JpsPaletteClass, JpsHighlightPalette } from './highlight/palette'
+// adj764（清单 B6）：试听**时钟**（推进 / 暂停续播 / 取消 / 到点恰好一次）——now/raf 由宿主注入
+export { createPlaybackClock } from './playback/clock'
+export type { PlaybackClock, PlaybackClockOptions } from './playback/clock'
 // adj629h：歌词行里 `{tp … }` 替谱段的识别（格式化 / 编辑器着色都要在 `C…:` 行里找它）
 export { matchSegmentHead, findSegmentEnd } from './parser/tokenizer'
 export { tokenDuration, durationMs } from './duration'

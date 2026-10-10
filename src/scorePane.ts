@@ -16,7 +16,11 @@ import { Menu, Notice, sanitizeHTMLToDom } from 'obsidian'
 import { writeJpsConfig, mergeConfigEdits, dragDelta, clamp, formatJps, type PageConfig } from '@ijipu/engine'
 import { renderScoreFull, playScore, type PlayheadSeg } from './render'
 // adj758（清单 B1）：色块的分组/定位/配色来自 **引擎**（应用与插件共用一份；此处只做绘制）
-import { instrumentColorMap, playheadBaseOf, playheadPosIn, trackKeysOf, type PlayheadPos } from '@ijipu/engine'
+// adj764（清单 B6）：时间轴推进用引擎时钟（与应用共用"推进/暂停续播/取消/到点一次"的语义）
+import { createPlaybackClock, instrumentColorMap, playheadBaseOf, playheadPosIn, trackKeysOf, type PlayheadPos } from '@ijipu/engine'
+
+/** adj764：起播延迟（与应用一致：前 200ms 不计入时间轴，避免"第一拍还没响、色块先动"） */
+const PLAY_START_DELAY_MS = 200
 import { resolvePageConfig } from './config'
 import { ConfigDialog } from './configDialog'
 // adj631：「保存为插件默认」要按"本次真正改动过的项"写入（changedDefs）+ 等于引擎默认则不存（isDefaultValue）
@@ -662,7 +666,6 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
 
     // —— 试听（播放/停止 + RAF 驱动色块跟随，与 iJipu 一致）——
     let playing: { cancel: () => void; totalMs: number; track: PlayheadSeg[] } | null = null
-    let playStart = 0
     // 试听按钮：图标 + 文字（窄容器里文字由 @container 规则隐藏，只留图标）
     const playBtn = toolbar.createEl('button', { cls: 'ijipu-play' })
     const playIconEl = playBtn.createSpan({ cls: 'ijipu-btn-icon' })
@@ -704,41 +707,47 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       svgEl.appendChild(rect)
     }
 
-    const stopPlayFn = (): void => {
-      playing?.cancel()
-      playing = null
-      cancelAnimationFrame(rafId)
-      clearPlayBlock()
-      setPlayState(false)
-      plugin.unregisterPlay(stopPlayFn)
-    }
-
-    const tick = (): void => {
-      const currentMs = performance.now() - playStart - 200 // 与 iJipu 一致的 200ms 起播延迟
-      const noteSize = cfg.note_size ?? 13
-      const track = playing?.track ?? []
-      clearPlayBlock()
-      if (currentMs > 0 && track.length) {
-        // adj452：按 (页, 曲行, 声部, 音色, 声部角色) **逐组建色块**——与 iJipu 应用同规则：
-        // 多声部各声部一块；重叠区（bz 伴奏 / dsb 上下层）在同一曲行里同时发声也各有各的块
-        // （旧实现"每个曲行只取一个当前拍段"只画得出一块，且高度用硬编码、不按音色配色）。
-        const colorMap = instrumentColorMap(track)
-        for (const [key, segs] of trackKeysOf(track)) {
-          const pageIndex = Number(key.split('|')[0])
-          if (!Number.isInteger(pageIndex) || pageIndex < 0 || pageIndex >= svgEls.length) continue
-          const pos = playheadPosIn(segs, currentMs, pageIndex, noteSize)
-          if (pos) addBlock(pageIndex, pos, colorMap)
+    /**
+     * adj764（清单 B6：用户要求「播放及色块显示等共性的功能都可以独立到引擎层面」）：
+     * 时间轴推进改用**引擎时钟** `createPlaybackClock` —— 与应用共用同一套
+     * "推进 / 暂停续播 / 取消后不再回调 / 到点恰好一次"的语义；本文件只做"每帧画色块"。
+     * 起播延迟 200ms（与应用一致）从时间轴里扣掉：`currentMs = ms - PLAY_START_DELAY_MS`
+     * （旧写法是 `performance.now() - playStart - 200`，等价但现在只有一份口径）。
+     */
+    const clock = createPlaybackClock({
+      onTick: (ms) => {
+        const currentMs = ms - PLAY_START_DELAY_MS
+        const noteSize = cfg.note_size ?? 13
+        const track = playing?.track ?? []
+        clearPlayBlock()
+        if (currentMs > 0 && track.length) {
+          // adj452：按 (页, 曲行, 声部, 音色, 声部角色) **逐组建色块**——与 iJipu 应用同规则：
+          // 多声部各声部一块；重叠区（bz 伴奏 / dsb 上下层）在同一曲行里同时发声也各有各的块
+          // （旧实现"每个曲行只取一个当前拍段"只画得出一块，且高度用硬编码、不按音色配色）。
+          const colorMap = instrumentColorMap(track)
+          for (const [key, segs] of trackKeysOf(track)) {
+            const pageIndex = Number(key.split('|')[0])
+            if (!Number.isInteger(pageIndex) || pageIndex < 0 || pageIndex >= svgEls.length) continue
+            const pos = playheadPosIn(segs, currentMs, pageIndex, noteSize)
+            if (pos) addBlock(pageIndex, pos, colorMap)
+          }
         }
-      }
-      const total = playing?.totalMs ?? 0
-      if (currentMs >= total) {
+      },
+      onEnd: () => {
         clearPlayBlock()
         playing = null
         setPlayState(false)
         plugin.unregisterPlay(stopPlayFn)
-        return
-      }
-      rafId = window.requestAnimationFrame(tick)
+      },
+    })
+
+    const stopPlayFn = (): void => {
+      playing?.cancel()
+      playing = null
+      clock.cancel()
+      clearPlayBlock()
+      setPlayState(false)
+      plugin.unregisterPlay(stopPlayFn)
     }
 
     stopPlay = stopPlayFn
@@ -760,10 +769,8 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
             return
           }
           playing = r
-          playStart = performance.now()
           setPlayState(true)
-          cancelAnimationFrame(rafId)
-          rafId = window.requestAnimationFrame(tick)
+          clock.start()
           plugin.registerPlay(stopPlayFn)
         })
         .catch((e) => {
