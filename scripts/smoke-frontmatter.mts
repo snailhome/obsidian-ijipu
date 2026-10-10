@@ -2107,6 +2107,21 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
         clsOf('[fenye]')[0] === 'pagebreak')
   }
 
+  /**
+   * adj753（用户第四轮「工具条还是没有显示」，而诊断显示 `命中自身 ✓ / opacity=1 / 视口内=是`）：
+   * 真因是**交互**：工具条浮在块**外侧上方**，而显示由"指针在谱面容器内移动"触发 ⇒
+   * 用户把指针往上移去点它时就离开了容器 ⇒ 120ms 后自动收起 ⇒ 观感"根本没出现 / 抓不住"。
+   * 修法三件：收起前看 `toolbar.matches(':hover')`、收起**延迟 240ms 并复查**、
+   * 工具条自身 `pointerenter` 保持显示（`pointerleave` 再走同一套判定）。
+   */
+  check('adj753 工具条"抓不住"的交互修复：悬停在工具条上不收、离开延迟 240ms 复查',
+    /if \(toolbar\.matches\(':hover'\)\) return/.test(pane725) &&
+      /hideTimer = window\.setTimeout\(\(\) => \{/.test(pane725) &&
+      /\}, 240\)/.test(pane725) &&
+      /toolbar\.addEventListener\('pointerenter', cancelHide\)/.test(pane725) &&
+      /toolbar\.addEventListener\('pointerleave', scheduleHide\)/.test(pane725) &&
+      /cancelHide\(\)\s*\n\s*revealToolbar\(true\)/.test(pane725))
+
   check('adj740 工具条诊断行记录"宿主/显示类/最终样式/坐标/祖先链"（设置页可读）',
     /lastToolbarInfo/.test(String(readFileSync('src/main.ts', 'utf8'))) &&
       /plugin\.lastToolbarInfo =/.test(pane725) &&

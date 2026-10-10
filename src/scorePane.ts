@@ -501,19 +501,48 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       toolbar.toggleClass('is-revealed', on)
       editSourceBtn?.toggleClass('is-revealed', on)
     }
+    /**
+     * adj753（用户第四轮「工具条还是没有显示」，而诊断显示它 `命中自身 ✓ / opacity=1 / 视口内=是`）：
+     *
+     * 根因是**交互**而不是绘制 —— 工具条浮在谱面块**外侧上方**，而"显示"由**指针在谱面容器内移动**
+     * 触发；用户把指针往上移去点它时，指针已离开容器 ⇒ 120ms 后它自己收起来 ⇒
+     * 观感就是"根本没出现 / 抓不住"。三处修（都属于这个交互缺陷本身）：
+     *  ① 收起判定加上"**指针是否正悬在工具条上**"（`:hover`）—— 工具条当然算"还在用"；
+     *  ② 收起**延迟 240ms** 并在到期时复查，给"从谱面移到工具条"这段路留出时间；
+     *  ③ 工具条自身 `pointerenter` 保持显示、`pointerleave` 再走同一套判定。
+     */
+    let hideTimer = 0
+    const cancelHide = (): void => {
+      if (hideTimer !== 0) window.clearTimeout(hideTimer)
+      hideTimer = 0
+    }
+    const scheduleHide = (): void => {
+      cancelHide()
+      hideTimer = window.setTimeout(() => {
+        hideTimer = 0
+        if (toolbar.matches(':hover')) return
+        if (toolbar.contains(document.activeElement)) return
+        revealToolbar(false)
+      }, 240)
+    }
     const onPointerMove = (e: PointerEvent): void => {
       // 说明：`.ijipu-score` 区在窄栏里可能几乎占满，故不做区域判定，只认"指针在谱面容器内移动"；
       // 移动端由 CSS 常显兜底，这里不重复判断。
       if (e.pointerType === 'touch') return
+      cancelHide()
       revealToolbar(true)
     }
     const onPointerLeave = (): void => {
+      if (toolbar.matches(':hover')) return
       // 焦点仍在工具条内（键盘操作中）→ 不收起，避免"正在用却被藏掉"
       if (toolbar.contains(document.activeElement)) return
-      revealToolbar(false)
+      scheduleHide()
     }
     container.addEventListener('pointermove', onPointerMove)
     container.addEventListener('pointerleave', onPointerLeave)
+    // adj753：指针在工具条上 ⇒ 绝不收起（这正是"抓不到/点不到"的原因）
+    toolbar.addEventListener('pointerenter', cancelHide)
+    toolbar.addEventListener('pointerleave', scheduleHide)
     /**
      * 键盘可达性的**真正入口**：工具条隐藏时 `display:none` ⇒ **不可聚焦**，`focusin` 等不到 Tab。
      * 故在容器层面监听 `keydown`：只要焦点在谱面容器内、用户敲了键，就把工具条显示出来
