@@ -2109,6 +2109,55 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
           css725nc.includes(JPS_PROBLEM_COLORS.warning.outlineVar))
     }
 
+    /**
+     * adj767（清单 B 的收口闸门）：
+     * ① **结构闸门**：每个源文件的"文件名出现在头部注释里"至多一次 —— 本轮我两次用临时脚本改大文件时
+     *    把整段"文件头 + import"复制成了两份（`scorePane.ts` 一度多出 781 行），类型检查**不会**报错，
+     *    事后靠肉眼才发现。这条断言就是那道闸门。
+     * ② **去重闸门**：B1–B8 要求"删除各自的重复实现"，这里逐项核对插件侧不再自带实现、而是消费引擎。
+     *    断言按"代码"判（先剥块注释：注释里提到函数名是正常的）。
+     */
+    {
+      const srcFiles = readdirSync('src').filter((f) => f.endsWith('.ts'))
+      const dupes = srcFiles.filter((f) => {
+        const s = String(readFileSync(`src/${f}`, 'utf8'))
+        const needle = `* ${f} `
+        let n = 0
+        let i = -1
+        while ((i = s.indexOf(needle, i + 1)) >= 0) n++
+        return n > 1
+      })
+      check('adj767 结构闸门：源文件头块没有被复制成两份（文件名在头注释里至多一次）',
+        dupes.length === 0, `可疑文件：${dupes.join(', ')}`)
+      // 负对照：把某文件的头块人为复制一份，指标必须变成 2（证明这道闸门真的抓得住）
+      {
+        const probe = String(readFileSync('src/scorePane.ts', 'utf8'))
+        const doubled = probe + '\n' + probe
+        let n = 0
+        let i = -1
+        while ((i = doubled.indexOf('* scorePane.ts ', i + 1)) >= 0) n++
+        check('adj767 结构闸门负对照：复制一份头块后指标确实 >1', n > 1, `计数=${n}`)
+      }
+
+      const code = (p: string) => String(readFileSync(p, 'utf8')).replace(/\/\*[\s\S]*?\*\//g, '')
+      const pane = code('src/scorePane.ts')
+      const bank = code('src/soundbank.ts')
+      const hl = code('src/jpsHighlight.ts')
+      const nf = code('src/newFile.ts')
+      const defs = code('src/defs.ts')
+      const rnd = code('src/render.ts')
+      check('adj767 插件不再自带色块/问题/音源/模板/分层判定的实现（B1/B2/B3/B7/B8）——全部消费引擎',
+        !/const PLAYHEAD_COLORS/.test(pane) && !/function trackKeysOf/.test(pane) &&
+          !/function playheadPosIn/.test(pane) && !/function blockSpanAt/.test(hl) &&
+          !/const HQ_LIBRARIES/.test(bank) && !/function splitParseIssues/.test(rnd) &&
+          /export const NEW_JPS_TEMPLATE = DEFAULT_NEW_JPS_TEMPLATE/.test(nf) &&
+          /export const sameConfigValue = configValuesEqual/.test(defs) &&
+          /isDefaultConfigValue\(getDefault\(def\), value\)/.test(defs))
+      check('adj767 插件的时间轴/模型/时钟都来自引擎（B4/B6）',
+        /createPlaybackClock\(\{/.test(pane) && /highlightLineModel\(line\.text, line\.number/.test(hl) &&
+          /groupBlocksByLine\(jpsBlockMarks\(doc, errors\)\)/.test(hl))
+    }
+
     // ② 分词器行为：类别命中 + **覆盖整行**（CM6 的偏移靠它，漏一个字符就会错位）
     const line = 'Q: 1 2 3 | 4 - 5 C: 词 {tp 1 | 2} &hx <'
     const toks = tokenizeJpsLine(line)
