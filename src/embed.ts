@@ -37,7 +37,7 @@
  *
  * 若 `app.embedRegistry` 不可用（更老的宿主），退回 post-processor 认领（打 `is-loaded`）作为兜底。
  */
-import { Component, MarkdownRenderChild, TFile } from 'obsidian'
+import { Component, MarkdownRenderChild, Platform, TFile } from 'obsidian'
 import type { App, MarkdownPostProcessorContext } from 'obsidian'
 import { mountScorePane, type ScorePaneHandle } from './scorePane'
 import { jpsLinkpath } from './sourceEdit'
@@ -221,6 +221,15 @@ class JpsEmbedHost {
          * 不再固定在某一种位置上——用户选了哪种就用哪种。
          */
         onEdit: () => {
+          /**
+           * adj785（用户实测）：手机端嵌入区的「编辑」原来走 `openIjipuFile()` ⇒ 只会弹
+           * 「完整编辑器（嵌入版 iJipu）仅桌面端可用…」⇒ 用户感受是"点了没反应"。
+           * 用户建议并采纳：**手机端点击「编辑」直接打开该 `.jps` 文件并进入源码编辑状态**。
+           */
+          if (Platform.isMobile) {
+            void this.plugin.openJpsForSourceEdit(file)
+            return
+          }
           void this.plugin.openIjipuFile(file)
         },
         /**

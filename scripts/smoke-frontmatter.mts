@@ -1817,10 +1817,22 @@ console.log('\n[adj724b] community review: forbidden APIs / styles must stay fix
   }
   check('adj724b 工具条浮层背景带主题变量兜底（否则无该变量的环境里看不清边界）',
     /\.ijipu-score-toolbar\s*\{[^}]*background:\s*var\(--background-secondary,/.test(cssToolbar))
-  check('adj724b 工具条悬停显示/离开收起 + 键盘可唤醒',
-    /addEventListener\('pointermove', onPointerMove\)/.test(scorePaneSrc) &&
-      /addEventListener\('pointerleave', onPointerLeave\)/.test(scorePaneSrc) &&
+  /**
+   * adj785（用户要求，推翻旧的"悬停驱动"）：
+   * 「**PC 端鼠标移动时马上显示工具条的操作也不要有**，就通过点击预览区显/隐工具条」；
+   * 「预览区**首开时先显示一下工具条，3 秒后隐藏**，点击预览区可显/隐」。
+   *
+   * ⇒ 悬停那两条监听（pointermove/pointerleave）**必须已删除**；
+   *   改为"首开显示 + 3s 自动收起 + 点击切换 + 键盘可唤醒"。
+   */
+  check('adj785 取消悬停驱动显隐；改为「首开显示 → 3 秒自动收起」+ 点击切换 + 键盘可唤醒',
+    !/addEventListener\('pointermove', onPointerMove\)/.test(scorePaneSrc) &&
+      !/addEventListener\('pointerleave', onPointerLeave\)/.test(scorePaneSrc) &&
       /addEventListener\('keydown', onKeyDown\)/.test(scorePaneSrc) &&
+      // 首开显式显示一次，并在 3 秒后自动收起（焦点已在工具条里 / 用户已手动切换过则不收）
+      /revealToolbar\(true\)[\s\S]{0,40}?const firstShowTimer = window\.setTimeout\(/.test(scorePaneSrc) &&
+      /\}, 3000\)/.test(scorePaneSrc) &&
+      /plugin\.register\(\(\) => window\.clearTimeout\(firstShowTimer\)\)/.test(scorePaneSrc) &&
       /toggleClass\('is-revealed', on\)/.test(scorePaneSrc))
 }
 
@@ -2276,10 +2288,13 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
       /\}, 240\)/.test(pane725) &&
       // adj769：显示必须**先**发生（落位判定不得挡住可见性），且用活元素 + try/catch
       // adj777：切换前还要**同步显式状态**（`toolbarShown = on`）—— 间距上限随新增那两行放宽
+      // 悬停相关的"抓不住/闪动"三条修法在 adj785 之后只剩"先显示再落位"与"延迟复查"仍适用
       /const revealToolbar = \(on: boolean\): void => \{[\s\S]{0,500}?toolbarShown = on[\s\S]{0,200}?el\.toggleClass\('is-revealed', on\)/.test(pane725) &&
       /const liveToolbar = \(\): HTMLElement => container\.querySelector<HTMLElement>\('\.ijipu-score-toolbar'\) \?\? toolbar/.test(pane725) &&
       /落位判定异常（已跳过，工具条照常显示）/.test(pane725) &&
-      /if \(liveToolbar\(\)\.hasClass\('is-revealed'\)\) return/.test(pane725))
+      // adj785：悬停驱动已取消 —— 这条"已显示就 return"的守卫随 `onPointerMove` 一起删除
+      // ⚠ 限定 `container.`：adj783 给**虚线拖拽**加的是 `window.pointermove`（收尾用，与显隐无关）
+      !/container\.addEventListener\('pointermove'/.test(pane725))
 
   /**
    * adj754（用户两点）：
@@ -3466,16 +3481,24 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
  */
 {
   const pane781 = String(readFileSync('src/scorePane.ts', 'utf8'))
-  check('adj781 触摸交互下不自动收起（pointerleave / pointerout / focusout 三条自动隐藏路径都要让路）',
+  /**
+   * adj781 → adj785 更新口径：悬停驱动那两条自动隐藏路径（pointerleave/pointerout）**已被用户要求删除**
+   * ⇒ 现在"触摸下不自动收起"这条要求由**更简单的结构**保证：剩下的唯一自动收起是
+   * `focusout`（失焦延迟收起）与"首开 3 秒后收起"，二者都带守卫（触摸 / 焦点在工具条内 / 用户已切换）。
+   */
+  check('adj781/adj785 触摸交互下不自动收起：focusout 与首开 3 秒收起都要让路（悬停路径已删除）',
     /let touchInteraction = Platform\.isMobile/.test(pane781) &&
       /touchInteraction = e\.pointerType === 'touch'/.test(pane781) &&
-      // 三条自动隐藏路径都必须先看这个标记
-      /const onPointerLeave = \(\): void => \{\n      \/\/ adj781[\s\S]{0,120}?if \(touchInteraction\) return/.test(pane781) &&
-      /container\.addEventListener\('pointerout', \(\) => \{\n      if \(touchInteraction\) return/.test(pane781) &&
-      /container\.addEventListener\('focusout', \(\) => \{\n      \/\/ adj781[\s\S]{0,120}?if \(touchInteraction\) return/.test(pane781) &&
-      // 负对照：把 pointerleave 那条守卫摘掉 ⇒ 判据为假（证明它真的在挡"显示后又隐藏"）
-      !/if \(touchInteraction\) return[\s\S]{0,80}?if \(hoveringToolbar\(\)\) return/.test(
-        pane781.replace(/if \(touchInteraction\) return\n      if \(hoveringToolbar\(\)\) return/, 'if (hoveringToolbar()) return'),
+      // 悬停那两条自动隐藏路径已删除（用户要求"不要鼠标移动就显示"）
+      !/addEventListener\('pointerleave'/.test(pane781) &&
+      !/addEventListener\('pointerout'/.test(pane781) &&
+      // focusout 仍要看这个标记（手指点开工具条会先失焦）
+      /container\.addEventListener\('focusout', \(\) => \{[\s\S]{0,160}?if \(touchInteraction\) return/.test(pane781) &&
+      // 首开 3 秒收起也要看"焦点是否已在工具条内"
+      /const firstShowTimer = window\.setTimeout\(\(\) => \{[\s\S]{0,120}?if \(focusInToolbar\(\)\) return/.test(pane781) &&
+      // 负对照：把 focusout 那条守卫摘掉 ⇒ 判据为假（证明它真的在挡"显示后又隐藏"）
+      !/addEventListener\('focusout', \(\) => \{[\s\S]{0,160}?if \(touchInteraction\) return/.test(
+        pane781.replace(/if \(touchInteraction\) return\n      \/\*\*[\s\S]{0,400}?\*\/\n      if \(!focusInToolbar\(\)\) scheduleHide\(\)/, 'if (!focusInToolbar()) scheduleHide()'),
       ))
 }
 

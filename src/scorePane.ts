@@ -486,21 +486,15 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     container.empty()
     container.addClass('ijipu-score')
     /**
-     * adj782（用户实测，PC 端代码块 + 两张截图）：
-     * 「编辑模式下**两个相邻的代码块工具条重叠**了」「还是没有解决工具条同在预览区外的问题」。
+     * adj785（用户要求，推翻 adj782 的"块内预留空带"）：
+     * 「不管是嵌入 jps 文件，还是 jps 代码块，预览区前面有个空白区域…这是不对的，
+     *  **jps 代码块或嵌入块应与其它块一样，像正常的块一样布局排列**，块周边间距应与其它块一样的标准，
+     *  而**工具条应是浮在其它元素上方的**，工具条显示时可能会对其它元素有遮挡」。
      *
-     * 事实（来自「预览工具条」诊断 + 截图）：落位判定确实选了"**外侧**"，工具条也确实画在块的**上方**
-     * （y=312 vs 谱面块 y=342）——但**编辑模式里"块上方"就是上一行的行区**：
-     *  · 上一个代码块紧挨着 ⇒ 两条工具条必然互相压住 ✗；
-     *  · 上面是普通文字/围栏行 ⇒ 看着就像"压着谱面" ✗。
-     * 阅读模式之所以正常，只是因为段间本来有留白。
-     *
-     * 修法：**在块内预留一条空带**专门放工具条（两种模式一致）：容器加 `ijipu-toolbar-inset`，
-     * CSS 里给它 `padding-top`、并把工具条锚到容器顶边（见 styles.css）——于是工具条永远在
-     * "谱面墨迹之上、块自己的地盘里"，既不压墨迹也不压相邻块。
-     * 只对**代码块**生效（`onEditSource` 只有代码块会传）；`.jps` 文件视图/嵌入的现有观感不动。
+     * ⇒ 取消"预留空带"，回到**浮在块外正上方**（允许与相邻块/上一行重叠，这是用户明确接受的口径）。
+     * 于是块本身的排版与间距完全回到普通块的标准（不再有额外的 30px 空带）。
      */
-    if (host.onEditSource) container.addClass('ijipu-toolbar-inset')
+
     if (host.embedded) container.addClass('ijipu-embedded')
     markHostWidget()
 
@@ -654,21 +648,10 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       }
       if (placementInside && !el.hasClass('ijipu-toolbar-inside')) el.addClass('ijipu-toolbar-inside')
       /**
-       * adj784（用户实测：「代码块**阅读/编辑模式下工具条位置不一致**」）：
-       *
-       * 根因就在这一步 —— `decidePlacement()` 靠"外侧那个点上命中测试能不能命中自己"来判断落位，
-       * 而**这个判定在两种模式下结论不同**（阅读模式的段间留白 vs 实时预览里宿主 widget 的裁剪），
-       * 判定为"内侧"时会给工具条加 `ijipu-toolbar-inside` ⇒ 位置随之变化 ✗。
-       *
-       * 而代码块现在用的是**"块内预留空带"**（adj782：容器 `padding-top` + 工具条锚容器顶边），
-       * 这套位置**纯由 CSS 决定、与模式无关** ⇒ 就**不该再参与这套落位判定**：
-       * 直接跳过，位置在两种模式下必然一致。
+       * adj785：取消 adj782/adj784 的"块内空带"后，这里恢复**统一走落位判定**（浮在块外正上方，
+       * 被裁才贴回块内）。工具条现在允许遮挡其它元素（用户明确接受），所以外侧优先即可。
        */
-      if (container.hasClass('ijipu-toolbar-inset')) {
-        noteToolbar('落位：固定为「块内预留空带」（不做与模式相关的落位判定）', [], el)
-      } else {
-        decidePlacement(el)
-      }
+      decidePlacement(el)
     }
     /**
      * adj753（用户第四轮「工具条还是没有显示」，而诊断显示它 `命中自身 ✓ / opacity=1 / 视口内=是`）：
@@ -703,36 +686,16 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
         revealToolbar(false)
       }, 240)
     }
-    const onPointerMove = (e: PointerEvent): void => {
-      // 说明：`.ijipu-score` 区在窄栏里可能几乎占满，故不做区域判定，只认"指针在谱面容器内移动"；
-      // 移动端由 CSS 常显兜底，这里不重复判断。
-      if (e.pointerType === 'touch') return
-      cancelHide()
-      // adj761：已经显示着就**什么都不用做**（此前每次都跑一整套重量级动作 ⇒ 内外翻 = 闪动）
-      // adj769：用**活元素**判"已显示"，否则元素被 CM6 换掉后会误判成"没显示"而反复重判
-      if (liveToolbar().hasClass('is-revealed')) return
-      revealToolbar(true)
-    }
-    const onPointerLeave = (): void => {
-      // adj781：**触摸交互下绝不自动收起**（见下面 `touchInteraction` 的说明）
-      if (touchInteraction) return
-      if (hoveringToolbar()) return
-      // 焦点仍在工具条内（键盘操作中）→ 不收起，避免"正在用却被藏掉"
-      if (focusInToolbar()) return
-      scheduleHide()
-    }
-    container.addEventListener('pointermove', onPointerMove)
-    container.addEventListener('pointerleave', onPointerLeave)
-    // adj753：指针在工具条上 ⇒ 绝不收起（这正是"抓不到/点不到"的原因）
-    // adj769：改挂**容器**（冒泡），元素被 CM6 换掉后依然有效；元素自身是否悬停由 `hoveringToolbar()` 现查
-    container.addEventListener('pointerover', () => {
-      if (hoveringToolbar()) cancelHide()
-    })
-    container.addEventListener('pointerout', () => {
-      if (touchInteraction) return
-      if (hoveringToolbar()) cancelHide()
-      else scheduleHide()
-    })
+    /**
+     * adj785（用户要求）：「**PC 端鼠标移动时马上显示工具条的操作也不要有**，就通过点击预览区显/隐工具条」。
+     *
+     * 所以整套"悬停驱动显隐"**取消**（原行为：指针在容器内移动 ⇒ 显示；移出 ⇒ 240ms 后收起）。
+     * 现在的口径只有三种，彼此不打架：
+     *  · **首开**：显示一次，3 秒后自动隐藏（用户要求，见本函数末尾）；
+     *  · **点击预览区**：显/隐切换（唯一的手动开关，各端一致）；
+     *  · **键盘**：焦点进入工具条或容器内敲键时显示（纯键盘用户的入口）。
+     * （`scheduleHide`/`cancelHide`/`hoveringToolbar` 仍留给"键盘/焦点"路径与点击路径使用。）
+     */
     /**
      * 键盘可达性的**真正入口**：工具条隐藏时 `display:none` ⇒ **不可聚焦**，`focusin` 等不到 Tab。
      * 故在容器层面监听 `keydown`：只要焦点在谱面容器内、用户敲了键，就把工具条显示出来
@@ -748,7 +711,11 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     container.addEventListener('focusout', () => {
       // adj781：触摸交互下不要因失焦自动收起（手指点开工具条时会先失焦 ⇒ 会"刚显示就隐藏"）
       if (touchInteraction) return
-      if (!focusInToolbar()) revealToolbar(false)
+      /**
+       * adj785：悬停那套已取消，但"键盘/焦点离开工具条后收起"仍然需要 ——
+       * 于是这里改用 `scheduleHide()`（延迟复查、且复查时若焦点又回到工具条内就不收）。
+       */
+      if (!focusInToolbar()) scheduleHide()
     })
 
     /**
@@ -811,6 +778,24 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     }
     // ⚠ 捕获阶段（第三个参数 true）：任何子元素的 stopPropagation 都拦不住这次切换
     container.addEventListener('click', onContainerClick, true)
+
+    /**
+     * adj785（用户要求 a）：「笔记中的预览区（嵌入 jps 文件或 jps 代码块）**首开时先显示一下工具条，
+     * 3 秒后隐藏**，点击预览区可显/隐」。
+     *
+     * 于是这里在挂载时**显式显示一次**，并在 3 秒后自动收起（除非用户在这 3 秒里手动切换过、
+     * 或焦点已经进了工具条 —— 那说明他正在用，不该被收走）。
+     * 放在这一段（`toolbarShown` 声明之后）是为了避免 TDZ。
+     */
+    revealToolbar(true)
+    const firstShowTimer = window.setTimeout(() => {
+      if (focusInToolbar()) return
+      if (!toolbarShown) return
+      toolbarShown = false
+      revealToolbar(false)
+      liveToolbar().addClass('is-user-hidden')
+    }, 3000)
+    plugin.register(() => window.clearTimeout(firstShowTimer))
     /**
      * adj779（用户实测「手机端代码块：刚进入显示一次，点击后隐藏，**再显示不再显示**」）：
      *
@@ -820,8 +805,7 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
      * （这同时解释了"编辑模式看着根本不显示"）。**只要 click 这一条就够了**，删掉兜底。
      */
     plugin.register(() => {
-      container.removeEventListener('pointermove', onPointerMove)
-      container.removeEventListener('pointerleave', onPointerLeave)
+      // adj785：悬停那两条监听已取消，这里只清理仍在用的监听
       container.removeEventListener('keydown', onKeyDown)
     })
     if (!host.embedded) toolbar.createSpan({ cls: 'ijipu-page-label', text: `${svgs.length} 页` })
@@ -1417,7 +1401,18 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
          */
         const shrunk = !!box && box.h < h * 0.98 && box.w < w * 0.98
         if (box && shrunk) {
-          svgEl.setAttribute('viewBox', `${box.x} ${box.y} ${box.w} ${box.h}`)
+          /**
+           * adj786（用户实测）：「之前要求的**谱面视图要在四边预留 2px 留白**，好像没有做到」。
+           *
+           * 原来这里把 viewBox 直接设成**墨迹的紧边界** ⇒ 墨迹贴着容器边缘（CSS 那条
+           * `.ijipu-score { padding: 2px }` 是容器内边距，不是"谱面四周的白"）⇒ 观感上"没有 2px 留白" ✗。
+           * 现在把裁剪框**四边各外扩 2px** ⇒ 谱面四周稳定留出 2px 白边（与"退回按边距裁剪"那一支的口径一致）。
+           */
+          const PAD = 2
+          svgEl.setAttribute(
+            'viewBox',
+            `${box.x - PAD} ${box.y - PAD} ${box.w + PAD * 2} ${box.h + PAD * 2}`,
+          )
           // 回传给插件，供设置页显示（运行期诊断；见 IJipuPlugin.lastCropInfo 的说明）
           noteCrop(
             `按墨迹裁剪 ${box.w.toFixed(0)}×${box.h.toFixed(0)}（整页 ${Math.round(w)}×${Math.round(h)}，高度只剩 ${((box.h / h) * 100).toFixed(0)}%）`,

@@ -623,6 +623,23 @@ export default class IJipuPlugin extends Plugin {
   }
 
   /**
+   * adj785（用户实测）：「手机端，嵌入 jps 文件 `![[xxx.jps]]` 时，预览区也会出工具条，
+   * 但**编辑按钮不可用，点击没有响应**，建议**点击编辑时直接进到 jps 文件，并进入源码编辑状态**」。
+   *
+   * 原因：嵌入区的「编辑」走的是 `openIjipuFile()` ⇒ 手机端那条路只会弹
+   * 「完整编辑器（嵌入版 iJipu）仅桌面端可用…」并返回 ⇒ 用户感受就是"点了没反应"。
+   * 现在按用户建议：**打开该 `.jps` 文件（它自己的文件视图）并直接切到源码编辑**
+   * —— 手机端就是"用 Obsidian 编辑器打开源码"（`IJipuView.toggleSource()` 内部按平台分派）。
+   */
+  async openJpsForSourceEdit(file: TFile): Promise<void> {
+    const leaf = this.app.workspace.getLeaf('tab')
+    await leaf.openFile(file)
+    const view = leaf.view as unknown as { toggleSource?: () => void }
+    if (typeof view.toggleSource === 'function') view.toggleSource()
+    this.app.workspace.revealLeaf(leaf)
+  }
+
+  /**
    * adj728（用户要求）：**打开嵌入版 iJipu 的「设置 → 音色库」**。
    *
    * 用途：插件那条"试听失败"提示上的按钮。音源（GeneralUser GS，32MB）自动下载在部分网络
