@@ -5,7 +5,7 @@
  * 断言来源：用户反馈「在 frontmatter 里设置像 `ijipu_note_size` 好像没生效」——
  * 覆盖键名写法兼容、值类型转换、未识别键提示、优先级四类。
  */
-import { defaultPageConfig, dragDelta, formatJps, instrumentColorMap, layoutScore, parseJps, playheadBaseOf, playheadPosIn, renderScoreToSvg, splitParseIssues, tokenizeJpsLine, trackKeysOf, writeJpsConfig, mergeConfigEdits, configCarryover, SCORE_FONT_OPTIONS, buildPlaySequence, GUIDE_LIMITS, GUIDE_LIMITS_EX, SEGMENT_ROW_GAP_DEFAULT, OPTIONAL_CONFIG_FIELDS, defaultConfigForReset, extractJpsConfig, extractLegacyEditorPrefs, nonDefaultConfigKeys, GM_GROUPS } from '@ijipu/engine'
+import { defaultPageConfig, dragDelta, formatJps, instrumentColorMap, layoutScore, parseJps, playheadBaseOf, playheadPosIn, renderScoreToSvg, splitParseIssues, tokenizeJpsLine, JPS_HIGHLIGHT_COLORS, JPS_PLAIN_COLORS, JPS_PROBLEM_COLORS, trackKeysOf, writeJpsConfig, mergeConfigEdits, configCarryover, SCORE_FONT_OPTIONS, buildPlaySequence, GUIDE_LIMITS, GUIDE_LIMITS_EX, SEGMENT_ROW_GAP_DEFAULT, OPTIONAL_CONFIG_FIELDS, defaultConfigForReset, extractJpsConfig, extractLegacyEditorPrefs, nonDefaultConfigKeys, GM_GROUPS } from '@ijipu/engine'
 import type { PageConfig } from '@ijipu/engine'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 // adj738：原来这里从 `../src/frontmatter` 导入 applyFrontmatter / frontmatterKey / PAGE_CONFIG_FIELDS 等
@@ -2085,12 +2085,29 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
         // 依赖显式声明（运行期仍由 Obsidian 提供，构建时 external ⇒ 不增产物）
         /"@codemirror\/state"/.test(String(readFileSync('package.json', 'utf8'))) &&
         /"@codemirror\/view"/.test(String(readFileSync('package.json', 'utf8'))))
-    check('adj752 高亮配色取自应用 `--jp-hl-*` 的两套值（深/浅主题各一套）',
-      css725nc.includes('.ijipu-jps-note') &&
-        css725nc.includes('color: #ffb86c') && // 深色：应用 --jp-hl-note
-        css725nc.includes('color: #b35900') && // 浅色：应用 .theme-light 的 --jp-hl-note
-        css725nc.includes('.theme-light .workspace-leaf.ijipu-plain-source') &&
-        /\.ijipu-jps-pagebreak/.test(css725nc))
+    /**
+     * adj763（清单 B5）：`.ijipu-jps-*` 的色值必须与**引擎色板**一致 ——
+     * Obsidian 侧只能是静态 CSS，所以这里用**断言**把 CSS 与引擎常量钉在一起：
+     * 应用那边改配色时本仓库立刻红灯（此前靠人手抄，抄漏了没人知道）。
+     */
+    {
+      const missingDark = Object.values(JPS_HIGHLIGHT_COLORS.dark).filter((v) => !css725nc.includes(`color: ${v}`))
+      const missingLight = Object.values(JPS_HIGHLIGHT_COLORS.light).filter((v) => !css725nc.includes(`color: ${v}`))
+      check('adj752/763 高亮配色取自引擎色板的两套值（深/浅主题各一套，逐色核对）',
+        css725nc.includes('.ijipu-jps-note') &&
+          missingDark.length === 0 &&
+          missingLight.length === 0 &&
+          css725nc.includes('.theme-light .workspace-leaf.ijipu-plain-source') &&
+          /\.ijipu-jps-pagebreak/.test(css725nc),
+        `缺深色=${missingDark.join(',')} 缺浅色=${missingLight.join(',')}`)
+      check('adj763 错误/告警配色与引擎一致（行底 / 块底 / 外框线色）',
+        css725nc.includes(JPS_PROBLEM_COLORS.error.lineBg) &&
+          css725nc.includes(JPS_PROBLEM_COLORS.warning.lineBg) &&
+          css725nc.includes(JPS_PROBLEM_COLORS.error.blockBg) &&
+          css725nc.includes(JPS_PROBLEM_COLORS.warning.blockBg) &&
+          css725nc.includes(JPS_PROBLEM_COLORS.error.outlineVar) &&
+          css725nc.includes(JPS_PROBLEM_COLORS.warning.outlineVar))
+    }
 
     // ② 分词器行为：类别命中 + **覆盖整行**（CM6 的偏移靠它，漏一个字符就会错位）
     const line = 'Q: 1 2 3 | 4 - 5 C: 词 {tp 1 | 2} &hx <'
