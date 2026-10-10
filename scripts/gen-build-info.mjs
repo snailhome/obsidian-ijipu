@@ -21,6 +21,7 @@
  */
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { inflateSync } from 'node:zlib'
+import { execFileSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -44,26 +45,42 @@ function readCommitSha() {
 /**
  * 从 git 对象里取出该提交的时间（committer 那行）。
  * 对象是 zlib 压缩的 `<type> <size>\0<content>`，其中 `committer ... <ts> <tz>` 的 ts 是秒级 Unix 时间。
+ *
+ * adj772（第二次抓因）：**CI 里读不到松散对象**（`actions/checkout` 是打包克隆 ⇒ 对象在 packfile 里），
+ * 于是旧写法回退到 `new Date()` = **构建时刻** ⇒ 同提交在 CI 与本地必然不同（实测戳 `05:58` vs `05:57`）。
+ * 现在补一条**兜底路径**：读不到松散对象时，用 `git log -1 --format=%cI HEAD` 取**同一个提交时间**
+ * （CI 里 git 可用；本地沙箱若禁用子进程则自然走上面那条），两条路径给出**同一个值** ⇒ 真正可复现。
+ * 两条都失败时**不写时间**（返回 null ⇒ 上层用"无时间戳"形态），绝不回退到"当前时间"。
  */
 function commitTime(sha) {
   if (!sha) return null
   try {
     const objPath = join(root, '.git', 'objects', sha.slice(0, 2), sha.slice(2))
-    if (!existsSync(objPath)) return null // packfile 里（clone 场景）时取不到，退回当前时间
-    const raw = inflateSync(readFileSync(objPath)).toString('utf8')
-    const m = /^committer .*? (\d+) [+-]\d{4}$/m.exec(raw)
-    if (!m) return null
-    return new Date(Number(m[1]) * 1000)
+    if (existsSync(objPath)) {
+      const raw = inflateSync(readFileSync(objPath)).toString('utf8')
+      const m = /^committer .*? (\d+) [+-]\d{4}$/m.exec(raw)
+      if (m) return new Date(Number(m[1]) * 1000)
+    }
   } catch {
-    return null
+    /* 落到下面的 git 兜底 */
   }
+  try {
+    // 打包克隆（CI）场景：用 git 自己解包取同一个提交时间（结果与上面一致）
+    const out = execFileSync('git', ['log', '-1', '--format=%ct', sha], { cwd: root, encoding: 'utf8' }).trim()
+    const ts = Number(out)
+    if (Number.isFinite(ts) && ts > 0) return new Date(ts * 1000)
+  } catch {
+    /* 两条都失败 ⇒ 不写时间 */
+  }
+  return null
 }
 
 const sha = readCommitSha()
-const when = commitTime(sha) ?? new Date()
+/** adj772：提交时间取不到时**不写时间**（确定性优先）——绝不回退"构建时刻"，否则审核方重建必然对不上 */
+const when = commitTime(sha)
 /** adj772：一律 **UTC** 取值 —— 跨时区可复现构建（此前本地时区导致 CI 与本地产物不一致） */
-const date = `${when.getUTCFullYear()}-${pad(when.getUTCMonth() + 1)}-${pad(when.getUTCDate())}`
-const stamp = `${date} ${pad(when.getUTCHours())}:${pad(when.getUTCMinutes())}`
+const date = when ? `${when.getUTCFullYear()}-${pad(when.getUTCMonth() + 1)}-${pad(when.getUTCDate())}` : '未知日期'
+const stamp = when ? `${date} ${pad(when.getUTCHours())}:${pad(when.getUTCMinutes())}` : `${date}（提交时间不可读）`
 const commit = sha ? sha.slice(0, 8) : 'dev'
 
 const out = `// 由 scripts/gen-build-info.mjs 自动生成（勿手改）
