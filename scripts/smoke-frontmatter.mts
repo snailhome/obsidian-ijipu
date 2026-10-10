@@ -2408,9 +2408,9 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
    * 两条补量路径都要在：`ResizeObserver`（尺寸 0→真实那一刻，准）+ 定时重试（没有 RO 时的兜底）；
    * 且**只在"没量到"时挂** —— "量到的盒几乎等于整页"是真量到了，重试没有意义。
    */
-  check('adj725b 量不到内容盒时补量（游离时不量 + ResizeObserver + 定时重试）',
+  check('adj725b/adj780 内容盒不可用（没量到 **或** 几乎等于整页=可能量得太早）就补量一次（游离时不量 + ResizeObserver + 定时重试）',
     /const box = svgEl\.isConnected \? measureContentBox\(svgEl\) : null/.test(pane725) &&
-      /if \(!box\) \{[\s\S]{0,240}?observeUntilMeasured\(svgEl, c\)[\s\S]{0,80}?scheduleCropRetry\(svgEl, c\)/.test(pane725) &&
+      /if \(svgEl\.dataset\.cropRetried !== '1'\) \{[\s\S]{0,260}?observeUntilMeasured\(svgEl, c\)[\s\S]{0,80}?scheduleCropRetry\(svgEl, c\)/.test(pane725) &&
       /new ResizeObserver\(/.test(pane725) &&
       /const delays = \[0, 60, 300\]/.test(pane725) &&
       /if \(!svgEl\.isConnected\) return/.test(pane725))
@@ -3425,6 +3425,30 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
           'const target = e.target instanceof Element ? e.target : null',
           'const target = e.target instanceof HTMLElement ? e.target : null',
         ),
+      ))
+}
+
+/**
+ * ---- adj780：关闭排版虚线回到「谱面」视图时，墨迹四周空白必须被**及时**消除 ----
+ *
+ * 用户实测：「点排版 → 调虚线 → 再点排版关闭 ⇒ 视图是谱面视图了，但墨迹四周的空白没被及时消除」。
+ * 根因：裁剪只在"完全没量到内容盒"（`!box`）时才安排补量；而"量到的盒几乎等于整页"这一支
+ * 被判成"真的量到了、重试没意义" ⇒ 退回按边距裁剪后**不再补量** ⇒ 空白留着。
+ * 但那一支也可能是**量得太早**（渲染/字体未就绪、刚切模式未重排）。
+ */
+{
+  const pane780 = String(readFileSync('src/scorePane.ts', 'utf8'))
+  check('adj780 裁剪：内容盒"量得太早"也要补量一次（且每个 svg 至多补一次，避免自激循环）',
+    /if \(svgEl\.dataset\.cropRetried !== '1'\) \{/.test(pane780) &&
+      /svgEl\.dataset\.cropRetried = '1'/.test(pane780) &&
+      /observeUntilMeasured\(svgEl, c\)/.test(pane780) &&
+      /scheduleCropRetry\(svgEl, c\)/.test(pane780) &&
+      // 补量路径本身会重新测量并重下 viewBox（否则补量无意义）
+      /const fresh = measureContentBox\(svgEl\)/.test(pane780) &&
+      /if \(paneMode === 'score'\) applyViewBox\(svgEl, 'score', c\)/.test(pane780) &&
+      // 负对照：把"每个 svg 只补一次"的守卫去掉 ⇒ 判据为假（它正是防自激循环的那道闸）
+      !/if \(svgEl\.dataset\.cropRetried !== '1'\) \{/.test(
+        pane780.replace(/if \(svgEl\.dataset\.cropRetried !== '1'\) \{/, 'if (true) {'),
       ))
 }
 
