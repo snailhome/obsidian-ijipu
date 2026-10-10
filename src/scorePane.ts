@@ -734,7 +734,14 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
      */
     let toolbarShown = Platform.isMobile
     const onContainerClick = (e: MouseEvent): void => {
-      const target = e.target instanceof HTMLElement ? e.target : null
+      /**
+       * adj779b（用户发来的诊断写的是「命中=?」）：判据要从 `HTMLElement` 放宽到 `Element` ✗➜✓。
+       *
+       * 原因：谱面是 **SVG**，点在音符/小节线上时 `e.target` 是 `SVGElement`（不是 `HTMLElement`）⇒
+       * 原来会被丢成 `null` ⇒ ① 诊断里只能看到 `命中=?`（没法定位）；② **"点到谱面内链接不切换"那条例外失效**
+       * （SVG 里的 `<a class="jp-link">` 点一下会被当成普通点击、顺手把工具条收掉）。
+       */
+      const target = e.target instanceof Element ? e.target : null
       if (target?.closest('.ijipu-score-toolbar')) return
       if (target?.closest('a.jp-link')) return
       toolbarShown = !toolbarShown

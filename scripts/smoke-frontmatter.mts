@@ -3404,6 +3404,30 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
   }
 }
 
+/**
+ * ---- adj779b：点击目标判定要认 **SVG 元素**（用户发来的诊断写着「命中=?」）----
+ *
+ * 谱面是 SVG：点在音符/小节线上时 `e.target` 是 `SVGElement`，而代码里只认 `HTMLElement`
+ * ⇒ 被丢成 `null` ⇒ ① 诊断只能显示 `命中=?`（没法定位）；② "点到谱面内链接不切换"那条例外失效
+ * （SVG 里的 `<a class="jp-link">` 点一下会被当成普通点击、顺手把工具条收掉）。
+ */
+{
+  const pane779b = String(readFileSync('src/scorePane.ts', 'utf8'))
+  check('adj779b 点击目标判定认任意 Element（SVG 也认），诊断能报出真实命中元素',
+    /const target = e\.target instanceof Element \? e\.target : null/.test(pane779b) &&
+      // 不得再只认 HTMLElement（那会把 SVG 上的点击丢成 null）
+      !/const target = e\.target instanceof HTMLElement \? e\.target : null/.test(pane779b) &&
+      // 诊断里要带上命中元素的标签与类（否则只能看到"命中=?"）
+      /命中=\$\{target\?\.tagName \?\? '\?'\}/.test(pane779b) &&
+      // 负对照：换回"只认 HTMLElement"后，判据必须为假
+      !/const target = e\.target instanceof Element \? e\.target : null/.test(
+        pane779b.replace(
+          'const target = e.target instanceof Element ? e.target : null',
+          'const target = e.target instanceof HTMLElement ? e.target : null',
+        ),
+      ))
+}
+
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。
 //   实测踩过：一次编辑顺手把它删掉，套件仍以退出码报错，但输出里再也看不到 `N passed, M failed`。
 console.log(`\n${pass} passed, ${fail} failed`)
