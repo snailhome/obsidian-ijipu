@@ -791,6 +791,45 @@
   color: #c73d8f;
 }
 
+/**
+ * adj754（用户报：「`#====xx====` 还是显示为 Markdown 的高亮黄色背景」）：
+ * `==xx==` 是 Obsidian 的**高亮语法**，宿主给 `.cm-highlight` 挂了 `background: var(--text-highlight-bg)`
+ * ⇒ 在 `.jps` 注释行里出现 `#====xx====` 就被染成黄底（注释本是 `#` 开头，语义完全不同）。
+ * `adj744b` 只中和了颜色/字重/字形/下划线，**没中和背景** ⇒ 这里补上。
+ * 选择器比宿主那条（`.cm-highlight` 一个类）更具体，且不用 `!important`。
+ */
+.workspace-leaf.ijipu-plain-source .cm-content .cm-line .cm-highlight,
+.workspace-leaf.ijipu-plain-source .cm-content .cm-line .cm-highlight *,
+.workspace-leaf.ijipu-plain-source .cm-content .cm-line mark,
+.workspace-leaf.ijipu-plain-source .cm-content .cm-line .cm-strong,
+.workspace-leaf.ijipu-plain-source .cm-content .cm-line .cm-em {
+  background: transparent;
+  background-color: transparent;
+}
+
+/**
+ * adj754：`.jps` 源码里的**语法错误/告警**行底色（与应用编辑器同一套观感：
+ * 错误淡红、告警淡橙；应用的 `hl-error-line` 是 `rgba(255,93,108,0.13)`）。
+ */
+.workspace-leaf.ijipu-plain-source .cm-content .cm-line.ijipu-jps-error-line {
+  background-color: rgba(255, 93, 108, 0.13);
+}
+.workspace-leaf.ijipu-plain-source .cm-content .cm-line.ijipu-jps-warn-line {
+  background-color: rgba(255, 176, 32, 0.14);
+}
+/* 悬停提示（message + 正确写法）——与应用错误提示同一份文案 */
+.ijipu-jps-problem-tip {
+  max-width: 380px;
+}
+.ijipu-jps-problem-msg {
+  color: var(--text-normal);
+}
+.ijipu-jps-problem-hint {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
 /* ---------- ![[xxx.jps]] 嵌入 ---------- */
 /* 插件接管 .internal-embed 后自己渲染谱面（详见 src/embed.ts 头部说明）。
    `is-loaded` 由插件在 post-processor 里打上，宿主据此跳过这个嵌入，

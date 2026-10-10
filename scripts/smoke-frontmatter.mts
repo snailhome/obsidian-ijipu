@@ -2076,7 +2076,7 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
   {
     const hlSrc = String(readFileSync('src/jpsHighlight.ts', 'utf8'))
     check('adj752 插件用 CM6 扩展给 `.jps` 源码上应用那套高亮（规则来自引擎，只碰带标记的页签）',
-      /import \{ tokenizeJpsLine \} from '@ijipu\/engine'/.test(hlSrc) &&
+      /import \{[^}]*tokenizeJpsLine[^}]*\} from '@ijipu\/engine'/.test(hlSrc) &&
         /ViewPlugin\.fromClass/.test(hlSrc) &&
         /Decoration\.mark\(\{ class: name \}\)/.test(hlSrc) &&
         /closest\('\.workspace-leaf\.ijipu-plain-source'\)/.test(hlSrc) &&
@@ -2121,6 +2121,35 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
       /toolbar\.addEventListener\('pointerenter', cancelHide\)/.test(pane725) &&
       /toolbar\.addEventListener\('pointerleave', scheduleHide\)/.test(pane725) &&
       /cancelHide\(\)\s*\n\s*revealToolbar\(true\)/.test(pane725))
+
+  /**
+   * adj754（用户两点）：
+   * ① 「`#====xx====` 还是显示为 Markdown 的高亮黄色背景」——`==xx==` 是宿主的**高亮语法**，
+   *    给 `.cm-highlight` 挂了 `background: var(--text-highlight-bg)`；`adj744b` 只中和了
+   *    颜色/字重/字形/下划线，**漏了背景** ⇒ 现在补上（且选择器更具体、不用 `!important`）。
+   * ② 「如果源码有 jps 语法错误，源码是否有错误显示机制？」—— 现在有了：接引擎 `parseJps().errors`
+   *    做**行级**误差底色（错误淡红 / 告警淡橙）＋ **悬停提示**（message + 正确写法），
+   *    文案与应用的错误提示同源；整篇解析故**防抖 250ms**，并包裹 try/catch（标注绝不弄坏编辑器）。
+   */
+  {
+    const hl754 = String(readFileSync('src/jpsHighlight.ts', 'utf8'))
+    check('adj754 中和宿主的 `==高亮==` 背景（不中和会变成 Markdown 黄底）',
+      /\.workspace-leaf\.ijipu-plain-source \.cm-content \.cm-line \.cm-highlight/.test(css725nc) &&
+        /\.cm-content \.cm-line mark,/.test(css725nc) &&
+        /background-color: transparent/.test(css725nc))
+    check('adj754 `.jps` 源码有错误/告警显示：行级底色 + 悬停提示（接引擎 parseJps）',
+      /import \{ parseJps, tokenizeJpsLine \} from '@ijipu\/engine'/.test(hl754) &&
+        /Decoration\.line\(\{ class: 'ijipu-jps-error-line' \}\)/.test(hl754) &&
+        /Decoration\.line\(\{ class: 'ijipu-jps-warn-line' \}\)/.test(hl754) &&
+        /e\.severity === 'warning' \? 'warning' : 'error'/.test(hl754) &&
+        /hoverTooltip\(/.test(hl754) &&
+        /正确写法：\$\{e\.hint\}/.test(hl754) &&
+        /\}, 250\)/.test(hl754) &&
+        /catch \{/.test(hl754) &&
+        css725nc.includes('.ijipu-jps-error-line') &&
+        css725nc.includes('rgba(255, 93, 108, 0.13)') &&
+        css725nc.includes('.ijipu-jps-problem-hint'))
+  }
 
   check('adj740 工具条诊断行记录"宿主/显示类/最终样式/坐标/祖先链"（设置页可读）',
     /lastToolbarInfo/.test(String(readFileSync('src/main.ts', 'utf8'))) &&
