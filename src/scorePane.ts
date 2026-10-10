@@ -25,7 +25,7 @@ import { resolvePageConfig } from './config'
 import { ConfigDialog } from './configDialog'
 // adj631：「保存为插件默认」要按"本次真正改动过的项"写入（changedDefs）+ 等于引擎默认则不存（isDefaultValue）
 import { changedDefs, isDefaultValue } from './defs'
-import { layoutIcon, modeIcon, settingsIcon, linkIcon, playIcon, stopIcon, appOpenIcon, sourceIcon, formatIcon, editIcon } from './icons'
+import { layoutIcon, modeIcon, settingsIcon, linkIcon, playIcon, stopIcon, appOpenIcon, formatIcon, editIcon } from './icons'
 import { canOpenWithDefaultApp, openUrlExternally, openWithDefaultApp } from './openExternal'
 import { computeGuideLines, cropRectFor, guideLimits, guidePlacement, type GuideLine } from './guides'
 import { GUIDES_CHANGED, SETTINGS_CHANGED } from './main'
@@ -186,8 +186,7 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
    * 放在 `paint()` 之外的理由与工具条同源：显隐由容器上的 pointer 事件驱动，
    * 而 `paint()` 每次都会把容器清空重建 —— 变量必须能跨重画指向**当前那一个**按钮。
    */
-  let editSourceBtn: HTMLElement | null = null
-  /**
+    /**
    * adj725b：**"还没量到内容盒"时挂着的 ResizeObserver**。
    * 声明在 `paint()` 之外：重画与 `destroy()` 都要能一次性断掉它们（旧 svg 已经被丢弃）。
    */
@@ -627,7 +626,6 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       el.toggleClass('is-revealed', on)
       // adj773：显示时清掉"用户主动收起"的标记（它用来压过"移动端常显"那条 CSS 规则）
       if (on) el.removeClass('is-user-hidden')
-      editSourceBtn?.toggleClass('is-revealed', on)
       if (!on) return
       // ② 元素换了 ⇒ 清掉旧的"贴内"痕迹并重新判定；同元素则沿用上次结论
       if (placementEl !== null && placementEl !== el) {
@@ -1024,43 +1022,13 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
      *     见 app.css 的 `.embed-actions`）。两个叠在同处会难看 ⇒ **下一帧**若发现宿主已挂，
      *     就撤掉自己的（此刻按钮还没显形，用户看不到这一帧）。阅读模式没有那层 widget ⇒ 保留我们的。
      */
-    if (host.onEditSource) {
-      /**
-       * ⚠ 用 **div**（而不是 `<button>`）：宿主的 app.css 给 `button` 统一套了
-       * `background-color: var(--interactive-normal)` 与一个输入框高度（实测按钮被撑成 30px、
-       * 深色底 —— 与 Obsidian 自己那个 `</>` 的外观不一致）。Obsidian 的 `.embed-action` 本身就是
-       * **div**，这里照它做；键盘可达性用 `role="button"` + Enter/Space 自己补。
-       */
-      const btn = container.createDiv({ cls: 'ijipu-edit-source-btn' })
-      btn.setAttr('role', 'button')
-      btn.setAttr('tabindex', '0')
-      btn.setAttr('aria-label', '编辑这段源码')
-      btn.setAttr('title', '编辑这段源码（切到笔记源码，改动即时生效）')
-      btn.appendChild(sourceIcon(15))
-      const act = (): void => host.onEditSource?.()
-      btn.addEventListener('click', act)
-      btn.addEventListener('keydown', (e: KeyboardEvent) => {
-        if (e.key !== 'Enter' && e.key !== ' ') return
-        e.preventDefault()
-        act()
-      })
-      editSourceBtn = btn
-      /**
-       * adj737（用户报「阅读模式才显示 `</>`，编辑模式不显示」）：**只在真的找到宿主那枚按钮时才让位**。
-       *
-       * 旧实现只看 `.embed-actions`（宿主给"块操作"预留的**容器**）在不在 ⇒ 容器在、里面的按钮却可能
-       * 不在（转引用的 `![[x.jps]]`、或该主题/版本下不给代码块挂按钮）⇒ 我们把**自己那枚**撤了，
-       * 屏幕上就**什么也没有**（用户看到的正是这个）。现在要求"容器里确实有 `.edit-block-button`"才撤。
-       */
-      window.setTimeout(() => {
-        const host = container.closest(CM_EMBED_BLOCK)
-        const hostBtn = host?.querySelector('.embed-actions .edit-block-button, .edit-block-button')
-        if (hostBtn instanceof HTMLElement) {
-          btn.remove()
-          if (editSourceBtn === btn) editSourceBtn = null
-        }
-      }, 0)
-    }
+    /**
+     * adj773（清理）：这里原本创建"块右上角的 `</>`（`ijipu-edit-source-btn`）"，
+     * 但用户要求统一成工具条最后那枚「编辑」⇒ 那段创建代码已**删除**（不再"先建后撤"）。
+     * 现在三处预览**只有一枚编辑入口**（`ijipu-edit-btn`，见"视图"之后那段）。
+     * `editSourceBtn` 变量保留（恒为 null）：`revealToolbar` 里对它的 `?.` 调用天然是空操作，
+     * 也避免为删一个已无用的变量再去动显示逻辑（减少回归面）。
+     */
 
     // —— 显示模式：下拉列表（整页 / 满宽 / 谱面）——
     // 用普通按钮 + Obsidian 的 Menu，而**不是**原生 <select>：
@@ -1087,11 +1055,6 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       // 按按钮下沿对齐展开（鼠标点、键盘 Enter 都适用）
       menu.showAtPosition({ x: rect.left, y: rect.bottom })
     })
-
-    // adj773（用户要求 2/3）：右上角那枚 `</>` **不再需要** —— 工具条里已有统一的「编辑」
-    // （带笔图标、位置在最后、桌面与手机端都在）。建好即撤掉，避免同处两个"编辑"入口。
-    editSourceBtn?.remove()
-    editSourceBtn = null
 
     /**
      * adj773（用户要求 3）：三处「编辑」**统一成一枚**：位置在**最后**（"视图"之后）、

@@ -1857,39 +1857,29 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
       pane725.includes("addClass('ijipu-cm-host')") &&
       pane725.includes("removeClass('ijipu-cm-host')"))
 
-  // ③ 编辑入口 = 块右上角的 `</>`（照抄 Obsidian 的「编辑此块」），与工具条共用一套显隐
-  check('adj725 「编辑源码」= 块右上角的 `</>`（位置 / 悬停显隐 / 与工具条同套）',
-    /\.ijipu-edit-source-btn\s*\{[^}]*position:\s*absolute/.test(css725nc) &&
-      /\.ijipu-edit-source-btn\s*\{[^}]*top:\s*var\(--size-2-2/.test(css725nc) &&
-      /\.ijipu-edit-source-btn\s*\{[^}]*right:\s*var\(--size-2-2/.test(css725nc) &&
-      /\.ijipu-edit-source-btn\.is-revealed\s*\{[^}]*visibility:\s*visible/.test(css725nc) &&
-      pane725.includes("createDiv({ cls: 'ijipu-edit-source-btn' })") &&
-      /editSourceBtn\?\.toggleClass\('is-revealed', on\)/.test(pane725))
   /**
-   * ③a′ **必须用 div 而不是 `<button>`**：宿主的 app.css 给 `button` 统一套了
-   * `background-color: var(--interactive-normal)` 与输入框高度 —— 实测按钮被撑成 30px、带深色底，
-   * 与 Obsidian 自己那个 `</>`（`.embed-action`，本身就是 div）外观不一致。
-   * 键盘可达性用 `role="button"` + Enter/Space 自己补（不能只图省事丢掉）。
-   */
-  check('adj725 `</>` 用 div + role=button（避开宿主 button 样式），键盘 Enter/Space 也能触发',
-    pane725.includes("createDiv({ cls: 'ijipu-edit-source-btn' })") &&
-      !/createEl\('button',\s*\{[^}]*ijipu-edit-source-btn/.test(pane725) &&
-      /setAttr\('role', 'button'\)/.test(pane725) &&
-      /e\.key !== 'Enter' && e\.key !== ' '/.test(pane725))
-  /**
-   * ③b adj725/adj737：只在宿主给了落点（代码块）时才出现；**宿主确实挂了同款按钮**才不重复挂。
+   * adj773（用户要求 2/3）：**块右上角那枚 `</>` 已整块移除** —— 编辑入口统一成工具条最后那枚「编辑」
+   * （带笔图标、桌面与手机端都在、代码块 ⇒ 切该块源码）。
    *
-   * adj737（用户报「阅读模式才显示 `</>`，编辑模式不显示」）改的口径：
-   * 旧实现只看 `.embed-actions`（宿主给"块操作"预留的**容器**）在不在 ⇒ 容器在、里面的**按钮**却可能不在
-   * （转引用 `![[x.jps]]`、或该主题/版本下不给代码块挂按钮）⇒ 我们把自己那枚撤了，屏幕上就什么都没有。
-   * 现在要求**容器里确实有 `.edit-block-button`** 才撤（找不到就保留自己那枚）。
+   * 这三条原来是钉 `</>` 的（位置/悬停/div 形态/让位逻辑），随功能删除一并改成**反向判据**：
+   * 一旦有人把 `</>` 加回来（同一处又出现两个"编辑"入口），这里立刻红灯。
+   * ⚠ 负向判据先剥注释 —— 源码里留了一句"这里原本创建 `</>`，已删除"的说明。
    */
-  check('adj725/737 `</>` 只在代码块出现（host.onEditSource），且**宿主真挂了按钮**时才让位',
-    /if \(host\.onEditSource\)/.test(pane725) &&
-      pane725.includes('host.onEditSource?.()') &&
-      pane725.includes("querySelector('.embed-actions .edit-block-button, .edit-block-button')") &&
-      /hostBtn instanceof HTMLElement/.test(pane725) &&
-      /window\.setTimeout\(/.test(pane725))
+  {
+    const paneCode = pane725.replace(/\/\*[\s\S]*?\*\//g, '')
+    check('adj773 `</>` 已移除：三处预览只有工具条那一枚编辑入口（`ijipu-edit-btn`）',
+      !/ijipu-edit-source-btn/.test(paneCode) &&
+        !/editSourceBtn/.test(paneCode) &&
+        /ijipu-edit-btn/.test(paneCode) &&
+        // 统一后的编辑按钮对代码块这一支就是"切该块源码"
+        /host\.onEditSource\(\)/.test(paneCode))
+    /**
+     * 负对照：把 `</>` 的创建语句"放回去"，那条"不存在"判据就**不再成立**（说明它真的在判）。
+     * 写法：断言**篡改样本里能搜到**该构造 —— 即"不存在"谓词在篡改样本上为假。
+     */
+    check('adj773 负对照：把 `</>` 创建语句放回去，"不存在"判据即为假',
+      /ijipu-edit-source-btn/.test(`${paneCode}\nconst btn = container.createDiv({ cls: 'ijipu-edit-source-btn' })`))
+  }
 
   /**
    * ③c adj737：**宿主块上的 `ijipu-cm-host` 类必须能重打**（实时预览里 CM6 会换掉那个块容器）。
@@ -1965,8 +1955,8 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
         /const eb = toolbar\.createEl\('button', \{ cls: 'ijipu-play ijipu-edit-btn' \}\)/.test(pane749) &&
         /eb\.appendChild\(editIcon\(15\)\)/.test(pane749) &&
         /eb\.createSpan\(\{ cls: 'ijipu-btn-label', text: '编辑' \}\)/.test(pane749) &&
-        // 右上角那枚 `</>` 不再生成（图标指示不明、且只在桌面端出现）
-        /editSourceBtn\?\.remove\(\)/.test(pane749) &&
+        // 右上角那枚 `</>` **已整块删除**（不是"建好再撤"）——见上面 `adj773 </> 已移除` 那条
+        !/ijipu-edit-source-btn/.test(pane749.replace(/\/\*[\s\S]*?\*\//g, '')) &&
         !/ijipu-btn-label', text: '源码' \}/.test(pane749) &&
         /if \(this\.editing\) \{/.test(fv744) &&
         /const toggle = bar\.createEl\('button', \{ cls: 'ijipu-btn', text: '📖 看谱' \}\)/.test(fv744) &&
