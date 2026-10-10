@@ -3330,6 +3330,36 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       !main776.replace(leafGuard, 'if (false) {').includes(leafGuard))
 }
 
+/**
+ * ---- adj777b：手机端那条「编辑」路径必须**平台无关**（用户实测"手机端代码块无编辑按钮"的后续把关）----
+ *
+ * 我把 `onEditSource` 的家门口从 `Platform.isDesktopApp ? {...} : {}` 改成无条件传，
+ * 那么在手机端点它就会真的走 `revealSource()` ⇒ 它**不能**含任何桌面专属调用，
+ * 否则手机端会静默失效（点一下没反应）—— 这正是本轮要钉住的东西。
+ */
+{
+  const main777b = String(readFileSync('src/main.ts', 'utf8'))
+  // 取出 revealSource 的函数体（到下一个同缩进的 `}` 为止）
+  const start = main777b.indexOf('private async revealSource()')
+  const body = start < 0 ? '' : main777b.slice(start, main777b.indexOf('\n  }', start) + 4)
+  check('adj777b 代码块「编辑」不再按平台门控，且 revealSource() 只用跨平台 API（手机端点它也能生效）',
+    // 面板那头：不再有"桌面端才传 onEditSource"的写法
+    // ⚠ 负向判据必须剥注释（这已是第 4 次被自己的注释绊倒：注释里引用了那句旧写法）——
+    //    所以这里用本套件的 `codeOf()`，而不是直接搜原文
+    !/Platform\.isDesktopApp \? \{ onEditSource/.test(codeOf(main777b)) &&
+      /onEditSource: \(\) => void this\.revealSource\(\),/.test(main777b) &&
+      body.length > 200 &&
+      // 只用跨平台 API
+      /view\.setState\(\{ mode: 'source'/.test(body) &&
+      /ed\.setCursor\(/.test(body) &&
+      /ed\.scrollIntoView\(/.test(body) &&
+      /ed\.focus\(\)/.test(body) &&
+      // 反向钉住：函数体里不得出现桌面专属判断（有的话手机端会失效）
+      !/Platform\.isDesktopApp/.test(body) &&
+      !/node:|electron/i.test(body),
+    `函数体 ${body.length} 字符`)
+}
+
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。
 //   实测踩过：一次编辑顺手把它删掉，套件仍以退出码报错，但输出里再也看不到 `N passed, M failed`。
 console.log(`\n${pass} passed, ${fail} failed`)

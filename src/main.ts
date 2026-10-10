@@ -975,8 +975,10 @@ class IJipuBlock extends MarkdownRenderChild {
       getSource: () => this.source,
       writeSource: (next) => this.writeSource(next),
       /**
-       * adj741：`</>`（切回笔记源码）只在桌面端给 —— 它走 `revealSource()`（CM6 编辑器操作）。
-       * 手机端不传 ⇒ 面板不会挂这个按钮（触屏上"编辑此块"由 Obsidian 自己的机制负责）。
+       * adj741（历史）原来这里写的是"`</>`（切回笔记源码）**只在桌面端给** —— 手机端由 Obsidian 自己的机制负责"。
+       * adj777 已按用户实测推翻该口径（"手机端 jps 代码块上工具栏上无编辑按钮"）：按钮统一进工具条后，
+       * **两端都要有**；`revealSource()` 本身只用跨平台 API
+       * （`MarkdownView.setState` / `editor.setCursor` / `scrollIntoView` / `focus`）⇒ 手机端可用。
        */
       /**
        * adj777（用户实测）：「**手机端 jps 代码块上工具栏上无编辑按钮**」。
