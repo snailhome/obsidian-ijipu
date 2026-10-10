@@ -1979,6 +1979,32 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
     }
   }
 
+  /**
+   * adj748（用户报：「jps 文件的源码模式切回**阅读模式**，还是源码，只是显示方式不同，
+   * 而不是我们所希望的**预览视图**」）：
+   *
+   * 期望的心智模型 = **源码模式 → 宿主编辑器；阅读模式 → 我们的谱面预览**。
+   * 由于 `adj744` 把页签换成了宿主的 markdown 视图（源码模式），用户再切阅读模式时
+   * 宿主的 markdown 阅读视图仍会渲染同一个文件（所以"还是源码"）。
+   * 修法：监听布局变化，把"躺在 markdown **阅读模式**里的 `.jps`"重新按扩展名打开
+   * （`.jps` 注册给本插件的文件视图 ⇒ 自动换回谱面预览）；**源码模式一律不动**（那是用户要的编辑态）。
+   */
+  {
+    const main748 = String(readFileSync('src/main.ts', 'utf8'))
+    check('adj748 阅读模式里的 `.jps` 自动换回谱面预览（源码模式不动；三处判据齐备）',
+      /private restoreJpsPreview\(\): void \{/.test(main748) &&
+        /getLeavesOfType\('markdown'\)/.test(main748) &&
+        /file\.extension !== JPS_EXTENSION/.test(main748) &&
+        /view\.getMode\(\) !== 'preview'/.test(main748) &&
+        /void leaf\.openFile\(file\)/.test(main748) &&
+        // 三个工作区事件都要挂（模式切换在不同 Obsidian 版本里触发的事件名不完全一样），并做一帧合并
+        /on\('layout-change', schedulePreviewRestore\)/.test(main748) &&
+        /on\('active-leaf-change', schedulePreviewRestore\)/.test(main748) &&
+        /on\('file-open', schedulePreviewRestore\)/.test(main748) &&
+        /this\.previewRestorePending = true/.test(main748),
+      `restore=${/restoreJpsPreview/.test(main748)} guard=${/getMode\(\) !== 'preview'/.test(main748)}`)
+  }
+
   check('adj740 工具条诊断行记录"宿主/显示类/最终样式/坐标/祖先链"（设置页可读）',
     /lastToolbarInfo/.test(String(readFileSync('src/main.ts', 'utf8'))) &&
       /plugin\.lastToolbarInfo =/.test(pane725) &&

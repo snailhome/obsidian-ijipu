@@ -156,6 +156,31 @@ export default class IJipuPlugin extends Plugin {
     this.registerEvent(this.app.workspace.on('active-leaf-change', () => this.stopAll()))
 
     /**
+     * adj748（用户报：「jps 文件的源码模式切回**阅读模式**，还是源码，只是显示方式不同，
+     * 而不是我们所希望的**预览视图**」）：
+     *
+     * 起因是 `adj744`：手机端「✎ 源码」把那个页签换成了**宿主的 markdown 视图**（源码模式）。
+     * 于是用户再切"阅读模式"时，宿主的 markdown **阅读视图**又把这个 `.jps` 当 markdown 渲染
+     * ⇒ 看到的还是源码（只是排版不同），**不是我们的谱面预览**。
+     *
+     * 期望的心智模型（用户原话）：**源码模式 = 宿主编辑器；阅读模式 = 我们的预览视图**。
+     * 做法：监听布局变化，凡是"**某个 `.jps` 文件正躺在 markdown 视图的阅读模式里**"，
+     * 就把它按扩展名重新打开 —— `.jps` 注册给本插件的文件视图 ⇒ 自动换回**谱面预览**。
+     * （不监听源码模式：那条正是用户要的编辑态，保持不动；因此也不会来回打架。）
+     */
+    const schedulePreviewRestore = (): void => {
+      if (this.previewRestorePending) return
+      this.previewRestorePending = true
+      window.requestAnimationFrame(() => {
+        this.previewRestorePending = false
+        this.restoreJpsPreview()
+      })
+    }
+    this.registerEvent(this.app.workspace.on('layout-change', schedulePreviewRestore))
+    this.registerEvent(this.app.workspace.on('active-leaf-change', schedulePreviewRestore))
+    this.registerEvent(this.app.workspace.on('file-open', schedulePreviewRestore))
+
+    /**
      * ⑦ adj724b（嵌入版）：完整 iJipu 应用页签。
      *
      * 三件事：
@@ -292,6 +317,25 @@ export default class IJipuPlugin extends Plugin {
   private embedServerModule: typeof import('./embed/server') | null = null
   /** adj741：设置页实例（手机端"打开音色库"要把它切到「说明」页签） */
   private settingsTab: IJipuSettingTab | null = null
+  /** adj748：`restoreJpsPreview()` 的合并标记（布局事件会连续来好几次，一帧只处理一次） */
+  private previewRestorePending = false
+
+  /**
+   * adj748：把"躺在 markdown **阅读模式**里的 `.jps`"换回本插件的**谱面预览**。
+   *
+   * 判据三件：① 该 leaf 是 markdown 视图；② 它的文件扩展名是 `jps`；③ 视图模式是 `preview`（阅读模式）。
+   * 命中就 `leaf.openFile(file)` —— `.jps` 在本插件里注册为专用视图，于是自动换成谱面预览。
+   * ⚠ 只在阅读模式下动作：源码模式是用户要的编辑态（`adj744`），绝不打扰，因此不会来回切。
+   */
+  private restoreJpsPreview(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
+      const view = leaf.view as unknown as { file?: TFile | null; getMode?: () => string }
+      const file = view.file
+      if (!file || file.extension !== JPS_EXTENSION) continue
+      if (typeof view.getMode === 'function' && view.getMode() !== 'preview') continue
+      void leaf.openFile(file)
+    }
+  }
 
   /**
    * adj741：打开本插件的设置面板并切到指定页签（手机端点"打开音色库"时用）。
