@@ -3011,6 +3011,69 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
         good !== '' && messy !== good && formatLine(messy) === good,
         `原文=${JSON.stringify(good)} 弄乱=${JSON.stringify(messy)} 格式化=${JSON.stringify(formatLine(messy))}`)
     }
+
+    /**
+     * adj774 **真实示例谱走一遍代码块管线**：围栏扫描 → 只解析正文 → 逐行着色模型。
+     *
+     * 为什么值得单列：前面几条用的是我编的 3 行小样；真实谱有描述头、多声部、歌词、注释、
+     * 空行与 `# jps-config`，**行数多** ⇒ 一旦偏移/范围判定有 off-by-one，真实谱最容易暴露。
+     */
+    if (sampleFile) {
+      const sample = String(readFileSync(`${sampleDir}/${sampleFile}`, 'utf8'))
+      const wrapped = ['# 笔记开头', '', '```jps', ...sample.split('\n'), '```', '', '结尾'].join('\n')
+      const wb = jpsBlockRanges(wrapped)
+      const body = wb[0]?.body ?? ''
+      const bodyLines = body.split('\n')
+      // ① 围栏扫描：正文就是原始谱的每一行（一行不多、一行不少）
+      check('adj774 真实示例谱：围栏扫描出的正文 == 原谱全文（逐行一致）',
+        wb.length === 1 &&
+          bodyLines.length === sample.split('\n').length &&
+          bodyLines.every((l, i) => l === sample.split('\n')[i]),
+        `块内 ${bodyLines.length} 行 vs 原谱 ${sample.split('\n').length} 行`)
+      // ② 着色：正文里"有实质内容"的行，绝大多数都能分出 token（空行/纯注释允许没有）
+      const substantial = bodyLines.filter((l) => l.trim() !== '' && !l.trim().startsWith('//'))
+      const colored = substantial.filter((l) => highlightLineModel(l, 1, []).tokens.length > 0)
+      check('adj774 真实示例谱：正文的实质行都能分出 token（代码块里真会上色）',
+        substantial.length > 0 && colored.length === substantial.length,
+        `${colored.length}/${substantial.length}`)
+      // ③ 错误行号：真实谱若有错，偏移后必须落在"笔记的文档行号"区间内（不能越界/为 0）
+      const errs = parseJps(body).errors ?? []
+      const offset = (wb[0]?.bodyStart ?? 1) - 1
+      check('adj774 真实示例谱：错误行号偏移后落在文档行号区间内（不越界）',
+        errs.every((e) => e.line >= 1 && e.line <= bodyLines.length) &&
+          errs.every((e) => e.line + offset >= wb[0].bodyStart && e.line + offset <= wb[0].bodyEnd),
+        `错误 ${errs.length} 条，偏移 ${offset}`)
+    }
+
+    /**
+     * adj774 边界：**CRLF（Windows 库）**、**一篇笔记里两个 jps 块**、**列表/引用里缩进的围栏**。
+     * Windows 用户的 `.md` 常见 `\r\n` —— 扫描必须先规范化，否则"块的正文"会多出 `\r`，
+     * 交给引擎解析就可能把好行判错。
+     */
+    const crlf = ['前', '```jps', '5 5 6 6 | 3 3 4 4', '```', '后'].join('\r\n')
+    const two = ['```jps', '5 5 6 6 | 3 3 4 4', '```', '中间文字', '```jps', '1 1 2 2 | 5 5 6 6', '```'].join('\n')
+    const quoted = ['> ```jps', '> 5 5 6 6 | 3 3 4 4', '> ```'].join('\n')
+    const rCrlf = jpsBlockRanges(crlf)
+    const rTwo = jpsBlockRanges(two)
+    check('adj774 边界：CRLF 文档能识别（正文不含 `\\r`）',
+      rCrlf.length === 1 &&
+        rCrlf[0].fenceStart === 2 &&
+        !rCrlf[0].body.includes('\r') &&
+        rCrlf[0].body === '5 5 6 6 | 3 3 4 4',
+      JSON.stringify(rCrlf[0]?.body ?? null))
+    check('adj774 边界：一篇笔记里两个 jps 块各自成块、行号正确',
+      rTwo.length === 2 &&
+        rTwo[0].fenceStart === 1 &&
+        rTwo[0].bodyStart === 2 &&
+        rTwo[0].bodyEnd === 2 &&
+        rTwo[1].fenceStart === 5 &&
+        rTwo[1].bodyStart === 6 &&
+        rTwo[1].bodyEnd === 6,
+      JSON.stringify(rTwo.map((b) => [b.fenceStart, b.bodyStart, b.bodyEnd])))
+    // 负对照：引用块里的 `> ```jps ` 不是围栏（我们只认"≤3 空格缩进"的开栏行）——
+    // 这类内容交给宿主自己渲染，插件不去着色，避免把引用里的文字当 jps 源码改坏。
+    check('adj774 边界负对照：引用块里的 `> ``` ` 不被当成 jps 围栏',
+      quoted.split('\n').some((l) => l.startsWith('>')) && jpsBlockRanges(quoted).length === 0)
   }
 }
 
