@@ -702,48 +702,61 @@
  * 所以这里写成"页签类 + .cm-content + .cm-line + 我们的类"（5 个类）；且**不用 `!important`**
  * （本项目对它有 ≤5 条硬上限）。
  */
-.workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-line-header {
+.workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-line-header,
+.ijipu-has-jps-block .cm-content .cm-line .ijipu-jps-line-header {
   color: #00f0ff;
   text-shadow: 0.4px 0 0 currentColor, -0.4px 0 0 currentColor;
 }
-.workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-note {
+.workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-note,
+.ijipu-has-jps-block .cm-content .cm-line .ijipu-jps-note {
   color: #ffb86c;
 }
-.workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-barline {
+.workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-barline,
+.ijipu-has-jps-block .cm-content .cm-line .ijipu-jps-barline {
   color: #6272a4;
   text-shadow: 0.4px 0 0 currentColor, -0.4px 0 0 currentColor;
 }
-.workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-lyric {
+.workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-lyric,
+.ijipu-has-jps-block .cm-content .cm-line .ijipu-jps-lyric {
   color: #7dd6a8;
 }
-.workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-comment {
+.workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-comment,
+.ijipu-has-jps-block .cm-content .cm-line .ijipu-jps-comment {
   color: #6a7bb8;
 }
-.workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-pagebreak {
+.workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-pagebreak,
+.ijipu-has-jps-block .cm-content .cm-line .ijipu-jps-pagebreak {
   color: #ff79c6;
   text-shadow: 0.4px 0 0 currentColor, -0.4px 0 0 currentColor;
 }
-.workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-decoration {
+.workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-decoration,
+.ijipu-has-jps-block .cm-content .cm-line .ijipu-jps-decoration {
   color: var(--text-accent);
   opacity: 0.85;
 }
 /* 浅色主题用应用浅色那套（`theme.css` 的 `.theme-light` 段）——深色下上面那套已经很亮 */
-.theme-light .workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-line-header {
+.theme-light .workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-line-header,
+.theme-light .ijipu-has-jps-block .cm-content .cm-line .ijipu-jps-line-header {
   color: #0891a6;
 }
-.theme-light .workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-note {
+.theme-light .workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-note,
+.theme-light .ijipu-has-jps-block .cm-content .cm-line .ijipu-jps-note {
   color: #b35900;
 }
-.theme-light .workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-barline {
+.theme-light .workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-barline,
+.theme-light .ijipu-has-jps-block .cm-content .cm-line .ijipu-jps-barline {
   color: #5a6a9e;
 }
-.theme-light .workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-lyric {
+.theme-light .workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-lyric,
+.theme-light .ijipu-has-jps-block .cm-content .cm-line .ijipu-jps-lyric {
   color: #2f8f5f;
 }
-.theme-light .workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-comment {
+.theme-light .workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-comment,
+.theme-light .ijipu-has-jps-block .cm-content .cm-line .ijipu-jps-comment {
   color: #6a7bb8;
 }
-.theme-light .workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-pagebreak {
+.theme-light .workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-pagebreak,
+.theme-light .ijipu-has-jps-block .cm-content .cm-line .ijipu-jps-pagebreak {
   color: #c73d8f;
 }
 
@@ -767,10 +780,12 @@
  * adj754：`.jps` 源码里的**语法错误/告警**行底色（与应用编辑器同一套观感：
  * 错误淡红、告警淡橙；应用的 `hl-error-line` 是 `rgba(255,93,108,0.13)`）。
  */
-.workspace-leaf.ijipu-plain-source .cm-content .cm-line.ijipu-jps-error-line {
+.workspace-leaf.ijipu-plain-source .cm-content .cm-line.ijipu-jps-error-line,
+.ijipu-has-jps-block .cm-content .cm-line.ijipu-jps-error-line {
   background-color: rgba(255, 93, 108, 0.13);
 }
-.workspace-leaf.ijipu-plain-source .cm-content .cm-line.ijipu-jps-warn-line {
+.workspace-leaf.ijipu-plain-source .cm-content .cm-line.ijipu-jps-warn-line,
+.ijipu-has-jps-block .cm-content .cm-line.ijipu-jps-warn-line {
   background-color: rgba(255, 176, 32, 0.14);
 }
 /**
@@ -779,12 +794,14 @@
  * （单线外框 + 圆角；错误用主题的 error 色，告警用 warning 色）。
  * 选择器足够具体（5 个类），且**不用 `!important`**。
  */
-.workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-err-block {
+.workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-err-block,
+.ijipu-has-jps-block .cm-content .cm-line .ijipu-jps-err-block {
   outline: 1px solid var(--text-error, #e5534b);
   border-radius: 2px;
   background-color: rgba(255, 93, 108, 0.14);
 }
-.workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-warn-block {
+.workspace-leaf.ijipu-plain-source .cm-content .cm-line .ijipu-jps-warn-block,
+.ijipu-has-jps-block .cm-content .cm-line .ijipu-jps-warn-block {
   outline: 1px solid var(--text-warning, #d29922);
   border-radius: 2px;
   background-color: rgba(255, 176, 32, 0.14);

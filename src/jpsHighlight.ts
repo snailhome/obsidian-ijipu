@@ -95,6 +95,15 @@ function scopeOf(view: EditorView, doc?: string): JpsScope | null {
 
 function buildDecorations(view: EditorView): DecorationSet {
   const scope = scopeOf(view)
+  /**
+   * adj774c（本轮自查发现的真 bug）：「token 颜色」的 CSS 原来**只**写在
+   * `.workspace-leaf.ijipu-plain-source`（借宿主打开的 `.jps` 页签）之下 ⇒ **markdown 笔记里的
+   * ```jps 代码块拿不到那些颜色**（页签上没有这个类），于是"代码块有 decoration 却没上色"。
+   *
+   * 修法：在**编辑器根节点**上打一个容器类，CSS 里让两套作用域并列生效（见 `styles.css`）。
+   * 放在这里是因为本方法每次重建都会跑，能覆盖"文档里新增/删除 jps 块"的情形。
+   */
+  view.dom.classList.toggle('ijipu-has-jps-block', scope !== null && !scope.whole)
   if (!scope) return Decoration.none
   const problems = problemsOf(view)
   /**

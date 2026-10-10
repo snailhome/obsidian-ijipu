@@ -3148,6 +3148,66 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       !/在库里打开 `\.jps` 会用这个完整编辑器打开/.test(codeOf(settings775)))
 }
 
+/**
+ * ---- adj774c：CSS **结构闸门**（本轮教训：断言全是字符串匹配 ⇒ "CSS 结构已坏"抓不到 ⇒ 套件绿而样式死）----
+ *
+ * 由来：我修"代码块不上色"时，用脚本把新选择器**插进了声明块内部**（`X {` 换行 `Y {`），
+ * 整块规则因此作废、颜色全失效，而 `npm run smoke` 依然 **360 passed** ✗ —— 这是"断言绿、功能死"的盲区。
+ * 现在把它变成机器闸门：去注释后校验 ① 大括号平衡、② 嵌套不超过 `@media` 允许的一层、
+ * ③ **同一层里不得出现"选择器紧跟选择器"**（就是本轮那种坏法）。配负对照。
+ */
+{
+  const css774c = String(readFileSync('styles.css', 'utf8')).replace(/\/\*[\s\S]*?\*\//g, '')
+  /** 返回 { balance, maxDepth, badSelectors } */
+  const inspectCss = (css: string): { balance: number; maxDepth: number; badSelectors: number } => {
+    const lines = css.split('\n')
+    let depth = 0
+    let maxDepth = 0
+    let badSelectors = 0
+    /** 每层"刚刚开了一条规则（不是 at-rule）"的标记 */
+    const opened: boolean[] = []
+    for (const raw of lines) {
+      const t = raw.trim()
+      if (t.endsWith('{')) {
+        const isAt = t.startsWith('@')
+        if (!isAt && opened[depth] === true) badSelectors++
+        depth++
+        if (depth > maxDepth) maxDepth = depth
+        opened[depth] = !isAt
+      } else if (t === '}') {
+        opened[depth] = false
+        depth--
+      }
+    }
+    return { balance: depth, maxDepth, badSelectors }
+  }
+  const real = inspectCss(css774c)
+  check('adj774c CSS 结构闸门：大括号平衡、嵌套不超 @media 一层、同层不出现"选择器紧跟选择器"',
+    real.balance === 0 && real.maxDepth <= 2 && real.badSelectors === 0,
+    `balance=${real.balance} maxDepth=${real.maxDepth} badSelectors=${real.badSelectors}`)
+  /**
+   * 负对照：本轮真实踩过的坏法（选择器插进声明块）必须被判出来。
+   * ⚠ 注意它**括号是平衡的**（2 开 2 闭）—— 危害在"同层出现第二条规则"，不在括号数
+   * （我一开始把期望写成 `balance !== 0`，跑出来 balance=0 才发现这层想错了）。
+   */
+  const broken = '.a {\n.b {\n  color: red;\n}\n}'
+  const b = inspectCss(broken)
+  check('adj774c 负对照：把选择器插进声明块（本轮踩过的坏法）会被判出',
+    b.badSelectors > 0,
+    `balance=${b.balance} badSelectors=${b.badSelectors}`)
+  /**
+   * adj774c 还钉住这次修法的结果：token 颜色必须**同时**对"借宿主打开的 .jps 页签"和
+   * "含 ```jps 块的 markdown 笔记"生效（后者原来完全没有颜色 ⇒ 代码块看着没上色）。
+   */
+  check('adj774c token 颜色两种作用域并列生效（markdown 笔记里的 ```jps 也会上色）',
+    /\.workspace-leaf\.ijipu-plain-source \.cm-content \.cm-line \.ijipu-jps-note,\n\.ijipu-has-jps-block \.cm-content \.cm-line \.ijipu-jps-note \{/.test(
+      css774c,
+    ) &&
+      /classList\.toggle\('ijipu-has-jps-block'/.test(String(readFileSync('src/jpsHighlight.ts', 'utf8'))) &&
+      // 中和 Markdown 着色那几条**不得**扩到容器作用域（否则会影响整篇笔记的文字颜色）
+      !/\.ijipu-has-jps-block \.cm-content \.cm-line \{/.test(css774c))
+}
+
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。
 //   实测踩过：一次编辑顺手把它删掉，套件仍以退出码报错，但输出里再也看不到 `N passed, M failed`。
 console.log(`\n${pass} passed, ${fail} failed`)
