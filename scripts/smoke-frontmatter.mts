@@ -5,7 +5,7 @@
  * 断言来源：用户反馈「在 frontmatter 里设置像 `ijipu_note_size` 好像没生效」——
  * 覆盖键名写法兼容、值类型转换、未识别键提示、优先级四类。
  */
-import { defaultPageConfig, dragDelta, formatJps, formatLine, instrumentColorMap, layoutScore, parseJps, playheadBaseOf, playheadPosIn, renderScoreToSvg, splitParseIssues, tokenizeJpsLine, JPS_HIGHLIGHT_COLORS, JPS_PLAIN_COLORS, JPS_PROBLEM_COLORS, trackKeysOf, writeJpsConfig, mergeConfigEdits, configCarryover, SCORE_FONT_OPTIONS, buildPlaySequence, GUIDE_LIMITS, GUIDE_LIMITS_EX, SEGMENT_ROW_GAP_DEFAULT, OPTIONAL_CONFIG_FIELDS, defaultConfigForReset, extractJpsConfig, extractLegacyEditorPrefs, nonDefaultConfigKeys, GM_GROUPS, highlightLineModel } from '@ijipu/engine'
+import { defaultPageConfig, dragDelta, formatJps, formatLine, instrumentColorMap, layoutScore, parseJps, playheadBaseOf, playheadPosIn, renderScoreToSvg, splitParseIssues, tokenizeJpsLine, JPS_HIGHLIGHT_COLORS, JPS_PLAIN_COLORS, JPS_PROBLEM_COLORS, trackKeysOf, writeJpsConfig, mergeConfigEdits, configCarryover, SCORE_FONT_OPTIONS, buildPlaySequence, GUIDE_LIMITS, GUIDE_LIMITS_EX, SEGMENT_ROW_GAP_DEFAULT, OPTIONAL_CONFIG_FIELDS, defaultConfigForReset, extractJpsConfig, extractLegacyEditorPrefs, nonDefaultConfigKeys, GM_GROUPS, highlightLineModel, jpsBlockMarks } from '@ijipu/engine'
 import type { PageConfig } from '@ijipu/engine'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
@@ -3037,7 +3037,29 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
     }
 
     /**
-     * adj774 **真实示例谱走一遍代码块管线**：围栏扫描 → 只解析正文 → 逐行着色模型。
+     * adj774f：**块外框（marks）在偏移后的落点** —— 这是"错误提示"三件套里最后一处未做行为验证的环节。
+     *
+     * 行级底色用 `e.line + off`（已验）；块外框用的是 `jpsBlockMarks(body, errors)` 的 `line` **和** `from/to`：
+     *  `line` 必须同样偏移到文档行号，而 `from/to` 是**行内列范围**（不参与偏移）——
+     *  偏移错了会圈错行，列范围错了会在行内圈错位置（两者都会让用户看到"红线在别处"）。
+     */
+    const marks = jpsBlockMarks(b.body, errors)
+    const offM = b.bodyStart - 1
+    const errLineRel = errors.find((e) => e.line === 3)?.line ?? null
+    const onErrDocLine = marks.filter((m) => m.line + offM === 8)
+    const sampleLine = (b.body.split('\n')[2] ?? '').length
+    check('adj774f 块外框 marks：行号偏移到文档行、列范围仍在本行内（圈错行/圈错位置都能被抓到）',
+      marks.length > 0 &&
+        errLineRel === 3 &&
+        onErrDocLine.length > 0 &&
+        onErrDocLine.every((m) => m.from >= 0 && m.to > m.from && m.to <= sampleLine) &&
+        // 负对照：不偏移的话 marks 会落在"块内第 3 行"，与文档第 8 行不是同一处
+        marks.every((m) => m.line + offM !== m.line) &&
+        !marks.some((m) => m.line === 8),
+      `marks=${marks.length} 文档行=${[...new Set(marks.map((m) => m.line + offM))].join(',')}`)
+
+    /**
+     * ---- adj774 **真实示例谱走一遍代码块管线**：围栏扫描 → 只解析正文 → 逐行着色模型。
      *
      * 为什么值得单列：前面几条用的是我编的 3 行小样；真实谱有描述头、多声部、歌词、注释、
      * 空行与 `# jps-config`，**行数多** ⇒ 一旦偏移/范围判定有 off-by-one，真实谱最容易暴露。
