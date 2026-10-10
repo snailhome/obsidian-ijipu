@@ -291,6 +291,23 @@ export class IJipuSettingTab extends PluginSettingTab {
       )
 
     /**
+     * adj775（用户报「点编辑开了页签/右栏，但没有嵌入版显示」）：**嵌入版启动诊断**。
+     *
+     * 为什么必须显示出来：嵌入版要把整页应用放进 iframe，前提是插件的**本机 HTTP 服务**起得来
+     * （固定端口 47821，被占则回退随机端口）。起不来时视图会画出"失败原因 + 重试"，
+     * 但那条提示会随页签关闭而消失 ⇒ 在这里留一份**最近一次失败原因**，用户可以直接贴给我定位。
+     */
+    this.containerEl.createEl('h3', { text: '嵌入版 iJipu（预览工具条的「编辑」用它）' })
+    new Setting(this.containerEl)
+      .setName('嵌入版本地服务（诊断信息，无需操作）')
+      .setDesc(
+        '最近一次启动失败的原因（成功则为「（无错误）」）：\n' +
+          (this.plugin.lastEmbedError ?? '（无错误）') +
+          '\n\n若这里显示失败：点一次「编辑」会在页签里给出"重试"按钮；' +
+          '仍不行可重载 Obsidian 释放端口（47821）后再试。',
+      )
+
+    /**
      * adj736（用户判断）：**取消 frontmatter 这一块**。
      *
      * 用户原话：「这处的复制最小模板对于用户来说意义不大；复制 frontmatter 模板，对于用户来说太复杂，

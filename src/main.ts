@@ -74,7 +74,8 @@ export default class IJipuPlugin extends Plugin {
    * 关掉「使用嵌入版 iJipu」或卸载插件时释放。
    */
   private embedServer: EmbedServer | null = null
-  private embedServerStarting: Promise<EmbedServer> | null = null
+  /** adj775：允许为 `null` —— 启动失败时把它清回 null（下一次打开即**重试**，而不是永远抛同一个错） */
+  private embedServerStarting: Promise<EmbedServer | null> | null = null
   /** 桥（vault 读写 + postMessage 路由）；`onload` 里建，因为要读设置 */
   bridge!: IJipuBridge
   /** 左侧栏图标元素（设置开关切换时显隐） */
@@ -476,10 +477,29 @@ export default class IJipuPlugin extends Plugin {
           this.bridge.setRoot('')
           return s
         })
+        /**
+         * adj775（用户报「点编辑开了页签，但没有嵌入版显示」）：**失败必须能被重试**。
+         *
+         * 此前失败会让 `embedServerStarting` 变成**一个永远 rejected 的 promise** ⇒
+         * 此后每次 `await` 都抛同一个错，页签里永远空白，用户也没有任何补救手段。
+         * 现在这里把错误记进诊断、把 `embedServerStarting` **清回 null**（下一次打开即重试），
+         * 并把它转成"返回 null"（视图侧会画出可读提示 + 重试按钮，见 `embed/appView.ts`）。
+         */
+        .catch((e: unknown) => {
+          const msg = e instanceof Error ? e.message : String(e)
+          this.lastEmbedError = msg
+          console.error('[iJipu] 嵌入版本地服务启动失败：', e)
+          this.embedServerStarting = null
+          this.embedServer = null
+          return null
+        })
     }
     const s = await this.embedServerStarting
-    return s.url
+    return s ? s.url : null
   }
+
+  /** adj775：最近一次嵌入版服务启动失败的原因（设置页「说明」里显示，方便用户/我定位） */
+  lastEmbedError: string | null = null
 
   /**
    * 同步版本的 URL（只读已启动的服务）。

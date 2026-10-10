@@ -2926,8 +2926,7 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       /hoverTooltip\(\(view, pos\) => \{[\s\S]{0,80}?if \(scopeOf\(view\) === null\) return null/.test(hl) &&
       // 负对照：把"只标正文行"那一句摘掉后，判据必须为假（证明它真的在挡 markdown 文本）
       !hl.replace(hlBodyClause, '').includes(hlBodyClause))
-  check('adj774 自动格式化覆盖代码块：markdown 里"光标离开块内正文行"才格式化，其它 markdown 文本不碰',
-    /const isMarkdown = !isOurJpsFile && file\.extension === 'md'/.test(main774) &&
+  check('adj774 自动格式化覆盖代码块：markdown 里"光标离开块内正文行"才格式化，其它 markdown 文本不碰',    /const isMarkdown = !isOurJpsFile && file\.extension === 'md'/.test(main774) &&
       /const blocks = jpsBlockRanges\(editor\.getValue\(\)\)/.test(main774) &&
       /if \(!isJpsBodyLine\(blocks, prevLine \+ 1\)\) return/.test(main774) &&
       // 大文档不猜（宁可少格式化，也不能让打字变卡）
@@ -3080,6 +3079,47 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
     check('adj774 边界负对照：引用块里的 `> ``` ` 不被当成 jps 围栏',
       quoted.split('\n').some((l) => l.startsWith('>')) && jpsBlockRanges(quoted).length === 0)
   }
+}
+
+/**
+ * ---- adj775：用户报「PC 端 jps 文件预览的工具条点击编辑**有打开右侧栏/页签，但没有嵌入版 iJipu 显示出来**」----
+ *
+ * 根因（按代码链路定位）：`embed/appView.ts` 的 `onOpen()` 直接 `await plugin.getEmbedUrl()`，
+ * 一旦取 URL 抛错（本机服务启动失败 / 端口被上一次实例占着 / 动态导入失败…），`onOpen` 就**中途中断**
+ * ⇒ 页签开出来却**一片空白**，用户完全不知道发生了什么；而且 `main.ts` 里 `embedServerStarting`
+ * 会留下一个**永远 rejected 的 promise** ⇒ 此后每次打开都抛同一个错，**没有任何补救手段**。
+ *
+ * 三条修复各配一条断言（都带负对照）：失败也要画可读提示 + 能重试；失败要清回 null 以便重试；失败原因要留在设置页诊断里。
+ */
+{
+  const appView775 = String(readFileSync('src/embed/appView.ts', 'utf8'))
+  const main775 = String(readFileSync('src/main.ts', 'utf8'))
+  const settings775 = String(readFileSync('src/settings.ts', 'utf8'))
+  check('adj775 嵌入版视图：取 URL 抛错也必须画出可读提示 + 「重试」按钮（绝不空白）',
+    /try \{[\s\S]{0,120}?url = await this\.plugin\.getEmbedUrl\(\)/.test(appView775) &&
+      /catch \(e\) \{[\s\S]{0,120}?failure = e instanceof Error \? e\.message : String\(e\)/.test(appView775) &&
+      /嵌入版启动失败：\$\{failure\}/.test(appView775) &&
+      /createEl\('button', \{ cls: 'ijipu-btn', text: '重试' \}\)/.test(appView775) &&
+      // 重试 = 重新跑一遍 onOpen（不必让用户去翻设置或重载 Obsidian）
+      /retry\.addEventListener\('click', \(\) => \{[\s\S]{0,120}?void this\.onOpen\(\)/.test(appView775) &&
+      // 负对照：把 try/catch 摘掉后，"取 URL 被包住"这条判据必须为假
+      !/try \{[\s\S]{0,120}?url = await this\.plugin\.getEmbedUrl\(\)/.test(
+        appView775.replace(/try \{/, '').replace(/catch \(e\) \{/, ''),
+      ))
+  check('adj775 失败可重试：`embedServerStarting` 必须清回 null，且记下原因、返回 null（不再留一个永远 rejected 的 promise）',
+    /\.catch\(\(e: unknown\) => \{/.test(main775) &&
+      /this\.lastEmbedError = msg/.test(main775) &&
+      /this\.embedServerStarting = null/.test(main775) &&
+      /this\.embedServer = null/.test(main775) &&
+      /return null\s*\}\)/.test(main775) &&
+      /private embedServerStarting: Promise<EmbedServer \| null> \| null = null/.test(main775) &&
+      /return s \? s\.url : null/.test(main775) &&
+      // 负对照：去掉"清回 null"那一句 ⇒ 判据为假（说明它真的在防"永久失败"）
+      // ⚠ 用**全局**替换：`String.replace(字符串)` 只换第一处，会把"字段声明里那个 `= null`"留下
+      //   ⇒ 负对照自己变成假阴性（本轮踩到过）
+      !/this\.embedServerStarting = null/.test(main775.replace(/this\.embedServerStarting = null/g, '')))
+  check('adj775 失败原因可在「设置 → iJipu → 说明」里看到（用户能直接贴回来定位）',
+    /lastEmbedError/.test(settings775) && /嵌入版本地服务（诊断信息，无需操作）/.test(settings775))
 }
 
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。

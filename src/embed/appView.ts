@@ -96,11 +96,34 @@ export class IJipuAppView extends ItemView {
     const pending = this.openToken !== '' ? this.plugin.pendingOpenPaths.get(this.openToken) : undefined
     if (this.openToken !== '') this.plugin.pendingOpenPaths.delete(this.openToken)
 
-    const url = await this.plugin.getEmbedUrl()
+    /**
+     * adj775（用户报）：「PC 端 jps 文件预览的工具条点击编辑有打开右侧栏/页签，但**没有嵌入版 iJipu 显示出来**」。
+     *
+     * 根因：这里以前是 `const url = await this.plugin.getEmbedUrl()` 直接 await ——
+     * 只要取 URL 的过程中**抛了错**（本机服务启动失败、端口被上一次实例占着、动态导入失败…），
+     * `onOpen` 就**中途中断**：页签/右栏开出来了，里面**一片空白**，用户完全不知道发生了什么。
+     * 现在整段包 try/catch，失败也**一定画出一块可读的提示 + 重试按钮**（绝不空白）。
+     */
+    let url: string | null = null
+    let failure = ''
+    try {
+      url = await this.plugin.getEmbedUrl()
+    } catch (e) {
+      failure = e instanceof Error ? e.message : String(e)
+    }
     if (!url) {
-      contentEl.createDiv({
-        cls: 'ijipu-web-hint',
-        text: '嵌入版未启用（请在「设置 → iJipu」里打开「使用嵌入版 iJipu」）',
+      const box = contentEl.createDiv({ cls: 'ijipu-web-hint' })
+      box.createDiv({
+        text: failure
+          ? `嵌入版启动失败：${failure}`
+          : '嵌入版未启用（请在「设置 → iJipu」里打开「使用嵌入版 iJipu」）',
+      })
+      // 失败原因与"怎么再试"都写清楚；重试按钮直接重跑本方法（不必让用户去翻设置）
+      box.createDiv({ cls: 'ijipu-web-hint-sub', text: '可点下面的「重试」；仍不行请看「设置 → iJipu → 说明」里的诊断信息。' })
+      const retry = box.createEl('button', { cls: 'ijipu-btn', text: '重试' })
+      retry.addEventListener('click', () => {
+        contentEl.empty()
+        void this.onOpen()
       })
       this.markFrameReady?.()
       return
