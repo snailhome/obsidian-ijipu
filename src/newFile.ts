@@ -5,37 +5,20 @@
  * ② **点击指向不存在的 `.jps` 的内部链接**（`[[谱名.jps]]`）→ 在**链接所在笔记的同级目录**建同名文件
  *    （用户口径："如果文件不存在，应能正确创建 jps 文件，建议默认创建在与链接文件同级的目录下"）。
  *
- * 模板为什么内嵌在这里、而不是读应用仓库的 `ijipu/src/samples/未命名.jps`：
- * 两个仓库各自独立打包（插件产物是单文件 `main.js`），构建期拿不到对方源码。
- * 所以这里留一份**同口径副本**——改模板时两处都要动（应用那份是「新建」模板的唯一出处，
- * 见应用 `src/AGENTS.md` 的 adj481 约定）。
+ * 模板为什么现在从**引擎**取、而不再各写一份：adj765（清单 B7）把它收进
+ * `@ijipu/engine` 的 `DEFAULT_NEW_JPS_TEMPLATE` —— 应用侧仍以 `src/samples/未命名.jps`
+ * 这份**文件**为可见形态（adj481 的文件驱动约定），但由冒烟断言把两者钉在一起，
+ * 谁改了一边而没改另一边就红灯。插件这里只做改名转出，保持既有导出名不变。
  */
 import { Notice, TFolder, type App, type TFile } from 'obsidian'
+import { DEFAULT_NEW_JPS_TEMPLATE, DEFAULT_NEW_JPS_BASE, JPS_EXT } from '@ijipu/engine'
 
-/** 新建 .jps 的默认模板内容（与应用「新建」模板 `src/samples/未命名.jps` **逐字一致**，含结尾换行） */
-export const NEW_JPS_TEMPLATE = `#===========描述头定义===========
-V: 1.0
-B: 未命名
-Z: 佚名 词曲
-D: C
-P: 4/4
-S: 本乐谱使用「爱记谱 https://ijipu.pages.dev」编制
-#==========以下为简谱主体==========
-Q: 1 2 3 4 |
-C: 这是歌词
-
-
-
-
-
-#===以下为页面设置，请勿手动修改===
-# jps-config:{}
-`
-
+/** 新建 .jps 的默认模板内容（真源在引擎，与应用「新建」模板 `src/samples/未命名.jps` 逐字一致，含结尾换行） */
+export const NEW_JPS_TEMPLATE = DEFAULT_NEW_JPS_TEMPLATE
 /** 新建文件的默认基名（与应用的「未命名」同口径） */
-export const NEW_JPS_BASE = '未命名'
+export const NEW_JPS_BASE = DEFAULT_NEW_JPS_BASE
 /** 新建文件的扩展名（与 `fileView.ts` 的 `JPS_EXTENSION` 一致） */
-export const NEW_JPS_EXT = '.jps'
+export const NEW_JPS_EXT = JPS_EXT
 
 /**
  * 在同目录**已存在的文件名**里挑一个不冲突的 `未命名[ n].jps`（纯函数，供冒烟断言）。

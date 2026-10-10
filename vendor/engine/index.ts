@@ -51,6 +51,8 @@ export type { JpsPaletteClass, JpsHighlightPalette } from './highlight/palette'
 // adj764（清单 B6）：试听**时钟**（推进 / 暂停续播 / 取消 / 到点恰好一次）——now/raf 由宿主注入
 export { createPlaybackClock } from './playback/clock'
 export type { PlaybackClock, PlaybackClockOptions } from './playback/clock'
+// adj765（清单 B7）：新建空白谱的**模板文本**（唯一来源；应用侧那支 .jps 文件与插件常量都由断言钉住）
+export { DEFAULT_NEW_JPS_TEMPLATE, DEFAULT_NEW_JPS_BASE, JPS_EXT } from './samples/template'
 // adj629h：歌词行里 `{tp … }` 替谱段的识别（格式化 / 编辑器着色都要在 `C…:` 行里找它）
 export { matchSegmentHead, findSegmentEnd } from './parser/tokenizer'
 export { tokenDuration, durationMs } from './duration'
