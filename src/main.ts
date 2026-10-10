@@ -1,4 +1,6 @@
 import { Events, Keymap, MarkdownRenderChild, MarkdownView, Notice, Platform, Plugin, TFolder, TFile, type MarkdownSectionInformation, type WorkspaceLeaf } from 'obsidian'
+// adj749d：自动格式化（光标离开本行时格式化该行）用**引擎里那份应用自己的**逐行格式化器
+import { formatLine } from '@ijipu/engine'
 import { IJipuSettingTab } from './settings'
 import { mountScorePane, type ScorePaneHandle } from './scorePane'
 import { registerJpsEmbeds } from './embed'
@@ -236,6 +238,19 @@ export default class IJipuPlugin extends Plugin {
         return true
       },
     })
+    /**
+     * adj749d（用户要求）：「建议**自动格式化**，即取消预览区的格式化图标，与应用中一样，
+     * 在**光标位置离开本行时对该行进行自动格式化**」。
+     *
+     * 实现走 Obsidian 的**公开 `Editor` API**（不加 `@codemirror/*` 依赖 —— 本项目的规矩是
+     * "新增依赖必须先询问"，而这里完全用不着）：
+     *  · 监听 `selectionchange`（光标移动的可靠信号）；
+     *  · 取当前编辑器的**光标行号**，与上一次比较，**变化时格式化刚离开的那一行**；
+     *  · 只对**我们借宿主编辑器打开的 `.jps`** 生效（页签上有 `ijipu-plain-source` 标记，
+     *    由 `fileView.openInObsidianEditor` 打上）⇒ **绝不碰真正的 markdown 笔记**；
+     *  · 用引擎的 `formatLine`（与应用编辑器逐行格式化**同一份实现**），行没变就不动（不产生无谓撤销项）。
+     */
+    this.registerDomEvent(document, 'selectionchange', () => this.autoFormatLeavingLine())
     this.syncEmbedRibbon()
 
     /**
@@ -319,6 +334,8 @@ export default class IJipuPlugin extends Plugin {
   private settingsTab: IJipuSettingTab | null = null
   /** adj748：`restoreJpsPreview()` 的合并标记（布局事件会连续来好几次，一帧只处理一次） */
   private previewRestorePending = false
+  /** adj749d：上一次的"文件:光标行"，用于判断"光标离开了哪一行"（自动格式化用） */
+  private lastFormatLineKey: string | null = null
 
   /**
    * adj748：把"躺在 markdown **阅读模式**里的 `.jps`"换回本插件的**谱面预览**。
@@ -359,6 +376,40 @@ export default class IJipuPlugin extends Plugin {
       this.soundfontPrefix = this.embedServerModule.SOUNDFONT_URL_PREFIX
     }
     return this.embedServerModule
+  }
+
+  /**
+   * adj749d：**光标离开本行时自动格式化该行**（只对借宿主编辑器打开的 `.jps` 生效）。
+   *
+   * 与应用编辑器同款行为（应用里 `docStore` 在输入防抖后逐行格式化）。
+   * 判据：① 当前编辑器所属文件扩展名是 `jps`；② 它的页签带 `ijipu-plain-source` 标记
+   * （只有我们主动切过去的那个页签有）⇒ 不会误伤 markdown 笔记。
+   */
+  private autoFormatLeavingLine(): void {
+    const view = this.app.workspace.activeEditor
+    const editor = view?.editor
+    const file = view?.file
+    if (!editor || !file || file.extension !== JPS_EXTENSION) return
+    // 页签标记从**活动 leaf 的视图容器**上找（`MarkdownFileInfo` 上没有 containerEl）
+    const leafView = this.app.workspace.activeLeaf?.view
+    const marked = leafView?.containerEl.closest('.workspace-leaf')?.hasClass('ijipu-plain-source')
+    if (marked !== true) return
+    const line = editor.getCursor().line
+    const key = `${file.path}:${line}`
+    if (this.lastFormatLineKey === null) {
+      this.lastFormatLineKey = key
+      return
+    }
+    if (this.lastFormatLineKey === key) return
+    // 上一处光标所在行 = 刚离开的那一行（格式只影响该行；行号在格式化过程中不变）
+    const prevLine = Number(this.lastFormatLineKey.slice(this.lastFormatLineKey.lastIndexOf(':') + 1))
+    this.lastFormatLineKey = key
+    if (!Number.isInteger(prevLine) || prevLine < 0 || prevLine >= editor.lineCount()) return
+    const before = editor.getLine(prevLine)
+    const after = formatLine(before)
+    if (after === before) return
+    // 只替换这一行（保留撤销栈；光标位置由编辑器自行映射）
+    editor.setLine(prevLine, after)
   }
 
   /**

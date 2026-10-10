@@ -125,6 +125,38 @@ export function sourceIcon(size = 15): SVGSVGElement {
   return svg
 }
 
+/**
+ * adj749c（用户报，手机端：「格式化按钮的**图标与排版重复**」）：
+ * 给「格式化」一个**自己的**图标 —— 与「排版」（`layoutIcon` = 应用的排版 PNG）区分开。
+ *
+ * 形状：三长一短的横线 + 左侧对齐的缩进标记（"规范整理文本"的通用语汇），
+ * 同样手绘、走 `currentColor`（亮/暗主题自动同色，见 `sourceIcon` 的说明）。
+ */
+export function formatIcon(size = 15): SVGSVGElement {
+  const svg = document.createElementNS(NS, 'svg')
+  svg.setAttribute('width', String(size))
+  svg.setAttribute('height', String(size))
+  svg.setAttribute('viewBox', '0 0 14 14')
+  svg.setAttribute('fill', 'none')
+  svg.setAttribute('stroke', 'currentColor')
+  svg.setAttribute('stroke-width', SW)
+  svg.setAttribute('stroke-linecap', 'round')
+  svg.setAttribute('stroke-linejoin', 'round')
+  svg.setAttribute('aria-hidden', 'true')
+  const add = (d: string): void => {
+    const path = document.createElementNS(NS, 'path')
+    path.setAttribute('d', d)
+    svg.appendChild(path)
+  }
+  // 三条整行
+  add('M 2.2 3.2 H 11.8')
+  add('M 2.2 7 H 11.8')
+  add('M 2.2 10.8 H 11.8')
+  // 左侧"缩进/对齐"标记（短竖线 + 点，示意"按规范整理"）
+  add('M 2.2 3.2 V 10.8')
+  return svg
+}
+
 export function linkIcon(size = 15): SVGSVGElement {
   const svg = document.createElementNS(NS, 'svg')
   svg.setAttribute('width', String(size))

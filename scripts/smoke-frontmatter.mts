@@ -2023,6 +2023,48 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
       `restore=${/restoreJpsPreview/.test(main748)} guard=${/getMode\(\) !== 'preview'/.test(main748)}`)
   }
 
+  /**
+   * adj751（用户第三轮报「很顽固呀，工具条还是没有显示」）：
+   * 诊断里 **命中测试命中的是 `div.cm-line`** ⇒ "浮到块外侧"在这个宿主（`.jps` 嵌入 + CM6 实时预览）
+   * 被某层裁剪，而 `overflow`/`contain` 都不是（前者没报裁剪层、后者已降级）。
+   * 宿主的裁剪机制不可能穷举 ⇒ 改为**自愈**：命中失败就把工具条**贴回块内**（祖先的裁剪框
+   * 至少包含块本身 ⇒ 块内一定不会被裁），并在诊断里记下"兜底 + 复测结果"。
+   */
+  check('adj751 工具条命中失败时自愈：贴回块内（并复测、写进诊断）',
+    /const hitSelf = hit !== null && toolbarEl\.contains\(hit\)/.test(pane725) &&
+      /if \(!hitSelf && inViewport && !wasInside\) \{/.test(pane725) &&
+      /toolbarEl\.addClass\('ijipu-toolbar-inside'\)/.test(pane725) &&
+      /复测=\$\{/.test(pane725) &&
+      /另有遮挡/.test(pane725) &&
+      /\.ijipu-score-toolbar\.is-revealed\.ijipu-toolbar-inside \{/.test(css725nc) &&
+      /top: 2px;/.test(css725nc))
+
+  /**
+   * adj749c（用户要求，手机端）：
+   *  a) 格式化按钮**不再借用"排版"图标**（用户报"图标与排版重复"）⇒ 用新加的 `formatIcon`；
+   *  b) **预览态不放格式化按钮**（"应该是源码状态才需要格式化，而不是预览，位置不对"）——
+   *     `.jps` 文件视图的格式化在**源码态文件栏**上（`adj749`），预览态工具条只剩「编辑」；
+   *  c) **自动格式化**：与应用同款"光标离开本行时格式化该行"，走 Obsidian 公开 `Editor` API
+   *     （不引入 `@codemirror/*` 依赖），且只对带 `ijipu-plain-source` 标记的 `.jps` 页签生效。
+   */
+  check('adj749c 格式化按钮用专属图标；预览态（有「编辑」）不再放格式化按钮',
+    /export function formatIcon\(size = 15\): SVGSVGElement \{/.test(String(readFileSync('src/icons.ts', 'utf8'))) &&
+      /fmtBtn\.appendChild\(formatIcon\(15\)\)/.test(pane725) &&
+      /if \(host\.onFormat && !host\.onToggleSource\) \{/.test(pane725) &&
+      !/fmtBtn\.appendChild\(layoutIcon\(15\)\)/.test(pane725))
+  {
+    const main751 = String(readFileSync('src/main.ts', 'utf8'))
+    check('adj749d 自动格式化：光标离开本行时按应用规范格式化该行（仅 .jps 页签，公开 Editor API）',
+      /registerDomEvent\(document, 'selectionchange', \(\) => this\.autoFormatLeavingLine\(\)\)/.test(main751) &&
+        /private autoFormatLeavingLine\(\): void \{/.test(main751) &&
+        /const after = formatLine\(before\)/.test(main751) &&
+        /editor\.setLine\(prevLine, after\)/.test(main751) &&
+        /file\.extension !== JPS_EXTENSION/.test(main751) &&
+        /hasClass\('ijipu-plain-source'\)/.test(main751) &&
+        /import \{ formatLine \} from '@ijipu\/engine'/.test(main751),
+      `auto=${/autoFormatLeavingLine/.test(main751)} setLine=${/setLine\(/.test(main751)}`)
+  }
+
   check('adj740 工具条诊断行记录"宿主/显示类/最终样式/坐标/祖先链"（设置页可读）',
     /lastToolbarInfo/.test(String(readFileSync('src/main.ts', 'utf8'))) &&
       /plugin\.lastToolbarInfo =/.test(pane725) &&

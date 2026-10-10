@@ -20,7 +20,7 @@ import { resolvePageConfig } from './config'
 import { ConfigDialog } from './configDialog'
 // adj631：「保存为插件默认」要按"本次真正改动过的项"写入（changedDefs）+ 等于引擎默认则不存（isDefaultValue）
 import { changedDefs, isDefaultValue } from './defs'
-import { layoutIcon, modeIcon, settingsIcon, linkIcon, playIcon, stopIcon, appOpenIcon, sourceIcon } from './icons'
+import { layoutIcon, modeIcon, settingsIcon, linkIcon, playIcon, stopIcon, appOpenIcon, sourceIcon, formatIcon } from './icons'
 import { canOpenWithDefaultApp, openUrlExternally, openWithDefaultApp } from './openExternal'
 import { computeGuideLines, cropRectFor, guideLimits, guidePlacement, type GuideLine } from './guides'
 import { GUIDES_CHANGED, SETTINGS_CHANGED } from './main'
@@ -345,6 +345,31 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
         : '命中空白（该点不在视口内，或已被裁掉）'
       const inViewport = cy >= 0 && cx >= 0 && cy <= window.innerHeight && cx <= window.innerWidth
       const cs = window.getComputedStyle(toolbarEl)
+      /**
+       * adj751（用户第三轮报「很顽固呀，工具条还是没有显示」，诊断里**命中测试命中的是 `div.cm-line`**）：
+       *
+       * 命中测试是唯一"用眼睛量"的判据 —— 它说"那个点上最上层不是我们" ⇒ 无论是因为
+       * 哪一层裁剪（`overflow`/`contain`/`clip-path`/mask/滚动容器…我们不可能穷举宿主的机制），
+       * 都说明"浮到块外侧"这条路在**这个宿主**里走不通。
+       *
+       * 于是给一个**自愈兜底**：命中失败就把工具条**贴回块内**（左上角内侧）——
+       * 块内必然不会被任何祖先裁掉（祖先的裁剪框至少包含块本身）。
+       * 下一帧再量一次：这次命中测试必须命中工具条自身，否则把结论写进诊断（供继续追）。
+       */
+      const hitSelf = hit !== null && toolbarEl.contains(hit)
+      const wasInside = toolbarEl.hasClass('ijipu-toolbar-inside')
+      if (!hitSelf && inViewport && !wasInside) {
+        toolbarEl.addClass('ijipu-toolbar-inside')
+        window.requestAnimationFrame(() => {
+          // 换位后再验一次：仍不命中就记进诊断（说明还有别的东西在挡）
+          const r2 = toolbarEl.getBoundingClientRect()
+          const h2 = document.elementFromPoint(Math.round(r2.left + r2.width / 2), Math.round(r2.top + r2.height / 2))
+          plugin.lastToolbarInfo =
+            `${plugin.lastToolbarInfo ?? ''}｜**兜底**：已贴回块内；复测=${
+              h2 && toolbarEl.contains(h2) ? '命中自身 ✓' : '仍未命中（另有遮挡）'
+            }`
+        })
+      }
       /**
        * adj743（用户诊断："命中工具条自身 ✓"却仍看不见）：命中测试只能证明"那个点上最上层是它"，
        * **证明不了它肚子里有东西**。所以这里把工具条**内部**也量出来：
@@ -675,19 +700,17 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
         srcBtn.createSpan({ cls: 'ijipu-btn-label', text: '编辑' })
         srcBtn.addEventListener('click', () => host.onToggleSource?.())
       }
-      if (host.onFormat) {
-        const fmtBtn = toolbar.createEl('button', { cls: 'ijipu-play ijipu-format-btn' })
-        fmtBtn.setAttr('title', '按应用规范格式化源码（音符/小节线空格、歌词里的 {tp … } 段、描述头属性）')
-        fmtBtn.appendChild(layoutIcon(15))
-        fmtBtn.createSpan({ cls: 'ijipu-btn-label', text: '格式化' })
-        fmtBtn.addEventListener('click', () => host.onFormat?.())
-      } else {
+      if (host.onFormat && !host.onToggleSource) {
         /**
-         * adj746：代码块宿主没有 `onFormat` 时，仍保留"就地格式化"（它自己有 `getSource`/`writeSource`）。
+         * adj749c（用户要求）：「**应该是源码状态才需要格式化，而不是预览**，位置不对」——
+         * `.jps` 文件视图（有 `onToggleSource`）**预览态不再放格式化按钮**：
+         * 它的位置在源码态的文件栏上，而且源码编辑已改成**逐行自动格式化**（与应用同款）。
+         * 代码块没有"源码态 UI"（宿主本身就是源码），所以那里仍保留"就地格式化"。
          */
         const fmtBtn = toolbar.createEl('button', { cls: 'ijipu-play ijipu-format-btn' })
         fmtBtn.setAttr('title', '按应用规范格式化源码（音符/小节线空格、歌词里的 {tp … } 段、描述头属性）')
-        fmtBtn.appendChild(layoutIcon(15))
+        // adj749c：用**格式化自己的图标**（此前借的是"排版"图标 ⇒ 用户报"图标与排版重复"）
+        fmtBtn.appendChild(formatIcon(15))
         fmtBtn.createSpan({ cls: 'ijipu-btn-label', text: '格式化' })
         fmtBtn.addEventListener('click', () => {
           const before = host.getSource()

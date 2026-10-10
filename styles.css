@@ -1240,6 +1240,19 @@
   overflow: visible;
 }
 
+/**
+ * adj751（用户第三轮报「很顽固，工具条还是没有显示」；诊断里命中测试命中的是 `div.cm-line`）：
+ * 命中测试证明"浮到块外侧"这条路在这个宿主里被裁掉了。**自愈兜底**：JS 一旦发现工具条在那个点上
+ * 不是最上层，就给它加这个类，把工具条**贴回块内左上角** ——
+ * 祖先的裁剪框至少包含块本身，所以块内一定不会被裁。
+ * 视觉上仍尽量小干扰：只在块的 2px 内边距内，半透明深底（与 `</>` 同一套观感）。
+ */
+.ijipu-score-toolbar.is-revealed.ijipu-toolbar-inside {
+  top: 2px;
+  left: 2px;
+  bottom: auto;
+}
+
 /* adj745：`contain: paint/strict/content` 同样会**裁剪**（且不体现在 `overflow` 上）——
    用户诊断里 `![[xxx.jps]]` 的 `.internal-embed.ijipu-embed:contain=paint` 正是元凶：
    工具条浮在嵌入框**外侧**，被它整条裁掉。这里把**我们自己元素**上的 contain 降级为
