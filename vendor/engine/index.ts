@@ -29,6 +29,16 @@ export {
   playheadPosIn,
 } from './playback/playhead'
 export type { PlayheadPos, PlayheadSegAt } from './playback/playhead'
+// adj759（清单 B2）：解析问题的分级/排序/计数/展示行（应用与插件共用；宿主可传自己的品牌标签）
+export {
+  DEFAULT_PROBLEM_LABELS,
+  problemRowOf,
+  summarizeProblems,
+  splitParseIssues,
+  problemHintLines,
+  offsetOf,
+} from './diagnostics/problems'
+export type { ProblemSeverity, ProblemLabels, ProblemRow, ProblemSummary } from './diagnostics/problems'
 // adj629h：歌词行里 `{tp … }` 替谱段的识别（格式化 / 编辑器着色都要在 `C…:` 行里找它）
 export { matchSegmentHead, findSegmentEnd } from './parser/tokenizer'
 export { tokenDuration, durationMs } from './duration'

@@ -13,7 +13,8 @@ import {
 } from '@ijipu/engine'
 import { SpessaSynthBackend, HqCache, getHqLibrary, loadHqBank } from './soundbank'
 import type { BankFileStore } from './bankFile'
-import { splitParseIssues, type ParseIssue } from './parseIssues'
+// adj759（清单 B2）：问题分级/展示行来自引擎（splitParseIssues 在这里既用又转出）
+import { splitParseIssues, type ProblemRow as ParseIssue } from '@ijipu/engine'
 
 /**
  * 谱面设置解析（优先级：默认 < 插件默认设置 < 源内 `# jps-config`）。
@@ -28,8 +29,9 @@ export type { ResolvedConfig } from './config'
  * 解析结果的严重级别拆分（adj394）——实现见 `parseIssues.ts`（纯逻辑、可单测）：
  * 引擎同时产出 `error`（阻断渲染）与 `warning`（提示，不阻断）。
  */
-export { splitParseIssues } from './parseIssues'
-export type { ParseIssues, ParseIssue } from './parseIssues'
+// adj759（清单 B2）：问题分级已下沉引擎（应用与插件共用；措辞也统一成 错误[第N行 第M列] …）
+export { splitParseIssues } from '@ijipu/engine'
+export type { ProblemRow as ParseIssue } from '@ijipu/engine'
 
 /**
  * adj638（用户报"描述头 `D: C#` 的升降符与字母还重叠 / 又过宽"）：**插件也实测字体**。
