@@ -230,6 +230,52 @@ export default class IJipuPlugin extends Plugin {
       },
     })
 
+    /**
+     * adj811（B3 收尾）：**导出 PNG** —— 位图渲染需要 canvas ⇒ 只能走**嵌入版通道**
+     * （插件 → iframe 的 `render.png` ✓，应用侧复用 `svgToCanvas` ⇒ 与 GUI 导出同一套 ✓）。
+     * 依赖：① 嵌入版 RPC 总开关已开（默认关 ✓）② 嵌入版已打开过（否则 `appRpc` 会明确报错 ✓）。
+     */
+    this.addCommand({
+      id: 'export-jps-png',
+      name: '导出当前谱面为 PNG（需要嵌入版通道）',
+      checkCallback: (checking) => {
+        if (!contextSource()) return false
+        if (!checking) {
+          void (async () => {
+            const c = await contextSourceAsync()
+            if (!c) return
+            if (this.appRpc === null) {
+              new Notice('iJipu：嵌入版通道不可用（请先打开一次嵌入版 iJipu）')
+              return
+            }
+            try {
+              const res = await this.appRpc.request<{ pngs: string[] }>('render.png', { source: c.source, scale: 2 })
+              const dir = c.file?.parent?.path ?? ''
+              const base = (c.file?.basename ?? 'score').replace(/\.jps$/i, '')
+              const made: string[] = []
+              for (let i = 0; i < res.pngs.length; i += 1) {
+                const b64 = res.pngs[i].split(',')[1] ?? ''
+                const bytes = Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0))
+                const name = res.pngs.length > 1 ? `${base}-${i + 1}.png` : `${base}.png`
+                const path = dir === '' || dir === '/' ? name : `${dir}/${name}`
+                const existing = this.app.vault.getAbstractFileByPath(path)
+                // Obsidian 的 `*Binary` 接口要 `ArrayBuffer`（不是 `Uint8Array` ✗）
+                const bytesAsBuffer = bytes.buffer as ArrayBuffer
+                if (existing instanceof TFile) await this.app.vault.modifyBinary(existing, bytesAsBuffer)
+                else await this.app.vault.createBinary(path, bytesAsBuffer)
+                made.push(name)
+              }
+              new Notice(`iJipu：已导出 ${made.join('、')}`)
+            } catch (e) {
+              // 诚实报错：通道未启用/嵌入版没开/应用侧渲染失败 —— 原因原样透出 ✓
+              new Notice(`iJipu：PNG 导出失败 —— ${e instanceof Error ? e.message : String(e)}`, 6000)
+            }
+          })()
+        }
+        return true
+      },
+    })
+
     this.addCommand({
       id: 'copy-jps-svg',
       name: '复制当前谱面的 SVG 源码到剪贴板',
