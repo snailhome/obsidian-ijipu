@@ -3837,6 +3837,50 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
     `白名单：${[...new Set(methods808)].join('、')}`)
 }
 
+/**
+ * ---- adj810（方案 B / B3）：**应用侧**入站 RPC 的安全边界（跨仓读文件，与 `adj733` 同一手法）----
+ *
+ * 插件侧的出站请求（`createAppRequester` ✓）只有配"应用侧也守规矩"才安全：
+ *  · 只在**被嵌入**时注册监听（独立浏览器空转 ✓）；
+ *  · 只认 `event.source === window.parent` ✓；
+ *  · 白名单 + 参数校验（`source` 字符串/长度、`scale` 1–4）✓；
+ *  · 诚实降级（错误码 + 原因，不假装成功 ✗）；
+ *  · **复用应用既有渲染**（`svgToCanvas`）⇒ 与 GUI 导出同一套，不许再写一份 ✗。
+ */
+{
+  const bridgePath = '../ijipu/src/ipc/obsidianBridge.ts'
+  const has810 = existsSync(bridgePath)
+  const b810 = has810 ? String(readFileSync(bridgePath, 'utf8')) : ''
+  const main810 = has810 ? String(readFileSync('../ijipu/src/main.tsx', 'utf8')) : ''
+  check('adj810 B3 应用侧入站 RPC：只在被嵌入时生效、来源校验、白名单、参数校验、诚实降级、复用既有渲染',
+    has810 &&
+      // ① 只在被嵌入时注册
+      /window\.parent !== window && window\.parent !== null/.test(b810) &&
+      /if \(!embedded\) return \(\) => \{\}/.test(b810) &&
+      // ② 来源校验（不是宿主就不回包）
+      /if \(ev\.source !== window\.parent\) return/.test(b810) &&
+      // ③ 白名单（与插件侧 APP_METHODS 对应的**可实现子集**）
+      /export const APP_BRIDGE_METHODS = \['render\.svg', 'render\.png', 'export\.midi'\] as const/.test(b810) &&
+      /if \(!\(APP_BRIDGE_METHODS as readonly string\[\]\)\.includes\(method\)\)/.test(b810) &&
+      // ④ 参数校验
+      /typeof source !== 'string' \|\| source\.length > 500_000/.test(b810) &&
+      /scaleRaw >= 1 && scaleRaw <= 4/.test(b810) &&
+      // ⑤ 诚实降级（四种错误码都在）
+      /notFound: -32601/.test(b810) &&
+      /invalidParams: -32602/.test(b810) &&
+      /internal: -32603/.test(b810) &&
+      /unsupported: -32000/.test(b810) &&
+      // ⑥ 复用应用既有渲染（不许第二份实现）
+      /import \{ svgToCanvas \} from '\.\.\/export\/export'/.test(b810) &&
+      // ⑦ 应答信封
+      /__ijipuAppResponse: 1/.test(b810) &&
+      // ⑧ 入口真的装了它（在 load 里 ✓）
+      /installObsidianBridge\(\{/.test(main810) &&
+      // 负对照：去掉来源校验 ⇒ 判据为假（**全局**替换：这类行会出现多处 ✓）
+      !/ev\.source !== window\.parent/.test(b810.replace(/ev\.source !== window\.parent/g, 'false')),
+    has810 ? '' : `（找不到 ${bridgePath}：请确认两仓库同级 ✓）`)
+}
+
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。
 //   实测踩过：一次编辑顺手把它删掉，套件仍以退出码报错，但输出里再也看不到 `N passed, M failed`。
 console.log(`\n${pass} passed, ${fail} failed`)
