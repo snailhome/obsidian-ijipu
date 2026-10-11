@@ -1730,7 +1730,26 @@ toolbar.dataset.ijipuPane = String(paneId)
       svgEl.dataset.origVb = orig
       if (mode === 'score') {
         const [, , w, h] = orig.split(/[\s,]+/).map(Number)
-        const box = contentBoxOf(svgEl)
+        const box = ((): { x: number; y: number; w: number; h: number } | null => {
+      const b = contentBoxOf(svgEl)
+      if (b === null) return null
+      /**
+       * adj831（用户诊断：`按墨迹裁剪 489×27（整页 595×842，高度只剩 3%）` ✗）：
+       *
+       * 上面那道闸只要求"盒比整页小" ✓ ⇒ **退化盒（又扁又窄）能溜过去** ✗ ——
+       * 一旦如此，谱面视图会被裁成一条 27px 的横带 ✓，而"导出谱面（墨迹 ± N px）"更是直接报废 ✗。
+       *
+       * 判据：**一行谱的真实墨迹也不会只有 27px 高**（数字 + 减时线 + 歌词，最少也在 40px 上下 ✓），
+       * 宽度同理（一个小节也 > 40px ✓）。不满足 ⇒ 当作"量取不可靠"，返回 null
+       * ⇒ 走既有的**退回按边距裁剪**分支 ✓，并把原因写进诊断 ✓（比裁成条带好得多 ✗）。
+       */
+      const MIN_INK = 40
+      if (b.w < MIN_INK || b.h < MIN_INK) {
+        noteCrop(`墨迹盒退化（${Math.round(b.w)}×${Math.round(b.h)}）⇒ 视为量取不可靠，退回按边距裁剪`)
+        return null
+      }
+      return b
+    })()
         /**
          * adj724b：**量到的盒必须真的比整页小**，否则视为"量取不可靠"退回边距兜底。
          *
