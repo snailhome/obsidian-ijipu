@@ -3575,8 +3575,9 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       // "是滚动容器就不动"这条规则仍在，只是对"我们的 pre"开一个口子
       /\(scrollByDesign && !isOurPre\) \? '是滚动容器'/.test(pane791) &&
       // 负对照：把那个口子去掉 ⇒ 判据为假（证明它真的是这条口子在起作用）
-      !/\(scrollByDesign && !isOurPre\) \? '是滚动容器'/.test(
-        pane791.replace(/(scrollByDesign && !isOurPre) \? '是滚动容器'/, "scrollByDesign ? '是滚动容器'"),
+      // ⚠ 全局替换、且别在替换串里塞引号（上一版就是这里写坏了 ⇒ 断言与提交都红了 ✗）
+      !/\(scrollByDesign && !isOurPre\)/.test(
+        pane791.replace(/\(scrollByDesign && !isOurPre\)/g, '(scrollByDesign)'),
       ))
 }
 
