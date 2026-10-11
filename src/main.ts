@@ -322,6 +322,21 @@ export default class IJipuPlugin extends Plugin {
               return
             }
             try {
+              /**
+               * adj845（用户实测：窗口选对 ✓、总开关开 ✓、服务无错误 ✓，但 `render.png` **无应答** ✗）：
+               * 用一个**应用已支持的轻量方法**先探活 ✓ —— 若探针也不通 ⇒ 是**通道本身**的问题（桥没装/被拦 ✗）；
+               * 若探针通、PNG 不通 ⇒ 是 **PNG 那条链路**的问题（canvas/字体/分页 ✗）。一次就能分清 ✓。
+               */
+              let ping = '未探'
+              try {
+                const r = await this.appRpc.request<{ svgs: string[] }>('render.svg', { source: c.source }, 4000)
+                ping = `render.svg 探针通了 ✓（${r.svgs.length} 页）`
+              } catch (e) {
+                ping = `render.svg 探针也不通 ✗ —— ${e instanceof Error ? e.message : String(e)}`
+                new Notice(`iJipu：嵌入版通道不通（${ping}）`, 8000)
+                this.lastEmbedError = `${new Date().toLocaleTimeString()} · ${ping}`
+                return
+              }
               const res = await this.appRpc.request<{ pngs: string[] }>('render.png', { source: c.source, scale: 2 })
               const dir = c.file?.parent?.path ?? ''
               const base = (c.file?.basename ?? 'score').replace(/\.jps$/i, '')
