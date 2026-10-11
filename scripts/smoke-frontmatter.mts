@@ -3625,6 +3625,34 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       ))
 }
 
+/**
+ * ---- adj798：工具条被搬到 body 后**不能丢上下文**（用户实测：点击显示的与滚动中的按钮大小不一致）----
+ *
+ * 尺寸来自 `.is-mobile .ijipu-score-toolbar { --ijipu-ctl-h: 触控尺寸 }` 与
+ * `.ijipu-embedded .ijipu-score-toolbar { --ijipu-ctl-h: 21px }` —— 都是按**祖先**匹配的；
+ * 搬到 `document.body` 后祖先没了 ⇒ 命中不到 ⇒ 两条工具条尺寸不一致 ✗。
+ * 修法：搬出去时把上下文标记搬到工具条自己身上，CSS 对这两个标记镜像同样的尺寸变量。
+ */
+{
+  const pane798 = String(readFileSync('src/scorePane.ts', 'utf8'))
+  const css798 = String(readFileSync('styles.css', 'utf8'))
+  check('adj798 移植到 body 的工具条带上上下文标记，CSS 镜像同样的尺寸变量（两侧尺寸一致）',
+    /el\.toggleClass\('ijipu-ported-mobile', Platform\.isMobile\)/.test(pane798) &&
+      /el\.toggleClass\('ijipu-ported-embedded', container\.closest\('\.ijipu-embedded'\) !== null\)/.test(pane798) &&
+      // 搬回容器时摘掉（回到祖先上下文）
+      /el\.removeClass\('ijipu-ported-mobile'\)/.test(pane798) &&
+      /el\.removeClass\('ijipu-ported-embedded'\)/.test(pane798) &&
+      // CSS 镜像值必须与"祖先版"一致（30px 触控 / 21px 嵌入）
+      /\.ijipu-score-toolbar\.ijipu-ported-mobile \{\n  display: flex;\n  --ijipu-ctl-h: var\(--touch-size-xs, 30px\);/.test(css798) &&
+      /\.ijipu-score-toolbar\.ijipu-ported-embedded \{\n  --ijipu-ctl-h: 21px;/.test(css798) &&
+      // 与祖先版口径一致：都引用同一个触控变量
+      /\.is-mobile \.ijipu-score-toolbar \{\n  display: flex;\n  --ijipu-ctl-h: var\(--touch-size-xs, 30px\);/.test(css798) &&
+      // 负对照：把"移植标记"那两行去掉 ⇒ 判据为假
+      !/el\.toggleClass\('ijipu-ported-mobile'/.test(
+        pane798.replace("el.toggleClass('ijipu-ported-mobile', Platform.isMobile)", ''),
+      ))
+}
+
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。
 //   实测踩过：一次编辑顺手把它删掉，套件仍以退出码报错，但输出里再也看不到 `N passed, M failed`。
 console.log(`\n${pass} passed, ${fail} failed`)

@@ -769,6 +769,13 @@ toolbar.dataset.ijipuPane = String(paneId)
        * 收起时再挂回容器（见 `clearOutsideFixed`），保持 DOM 与"下次显示"的干净。
        */
       if (el.parentElement !== document.body) document.body.appendChild(el)
+      /**
+       * adj798：搬到 body 就**丢了祖先上下文** ⇒ `.is-mobile` / `.ijipu-embedded` 那两条控制
+       * **按钮尺寸**的规则不再命中 ✗ ⇒ "点击显示的"与"滚动中的"工具栏大小不一致（用户实测 ✓）。
+       * 这里把上下文标记搬到工具条自己身上，CSS 里对这两个标记镜像同样的尺寸变量。
+       */
+      el.toggleClass('ijipu-ported-mobile', Platform.isMobile)
+      el.toggleClass('ijipu-ported-embedded', container.closest('.ijipu-embedded') !== null)
       const host = container.getBoundingClientRect()
       const h = el.getBoundingClientRect().height || 28
       el.style.setProperty('position', 'fixed')
@@ -780,6 +787,9 @@ toolbar.dataset.ijipuPane = String(paneId)
     const clearOutsideFixed = (el: HTMLElement): void => {
       // adj793c：挂到 body 的工具栏要**挂回容器**（否则收起后它仍留在 body 上，下次显示会错位/堆积）
       if (el.parentElement === document.body && container.isConnected) container.appendChild(el)
+      // adj798：搬回来就摘掉"移植上下文"标记（回到容器里，祖先上下文重新生效）
+      el.removeClass('ijipu-ported-mobile')
+      el.removeClass('ijipu-ported-embedded')
       el.style.removeProperty('position')
       el.style.removeProperty('left')
       el.style.removeProperty('top')

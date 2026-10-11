@@ -155,6 +155,29 @@
   --ijipu-ctl-h: 21px;
   --ijipu-ctl-w: 32px;
 }
+
+/**
+ * adj798（用户实测）：「**点击显示的工具条**和**页面滚动中的工具条**，按钮大小不一致」。
+ *
+ * 真因：外侧落位时工具条被移到 `document.body`（adj793c，为摆脱祖先裁剪/层叠）⇒
+ * 它**失去了祖先上下文** ✗ —— 上面那两条按 `.is-mobile` / `.ijipu-embedded` **祖先**匹配的尺寸规则
+ * 就不再命中 ⇒ 于是"在 body 上那条"用基础尺寸（24px）、"仍在容器里那条"用触控尺寸（30px）⇒ 大小不一致 ✓✓。
+ *
+ * 修法：搬出去时把**上下文标记**一并搬到工具条自己身上（`ijipu-ported-mobile` / `ijipu-ported-embedded`），
+ * 并在 CSS 里给这两个标记**镜像同样的尺寸变量**（值必须与上面两条一致，避免以后再漂）。
+ */
+.ijipu-score-toolbar.ijipu-ported-mobile {
+  display: flex;
+  --ijipu-ctl-h: var(--touch-size-xs, 30px);
+}
+.ijipu-score-toolbar.ijipu-ported-embedded {
+  --ijipu-ctl-h: 21px;
+  --ijipu-ctl-w: 32px;
+}
+/* 移动端 + 嵌入：与 `.is-mobile .ijipu-embedded .ijipu-score-toolbar` 同口径（触控尺寸优先） */
+.ijipu-score-toolbar.ijipu-ported-mobile.ijipu-ported-embedded {
+  --ijipu-ctl-h: var(--touch-size-xs, 30px);
+}
 .is-mobile .ijipu-embedded .ijipu-score-toolbar {
   --ijipu-ctl-h: var(--touch-size-xxs, 24px);
 }
