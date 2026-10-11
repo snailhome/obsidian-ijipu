@@ -79,6 +79,17 @@ import {
   unregisterJpsFileCreator,
 } from '../src/newFile'
 import { TFolder as StubTFolder } from './obsidianStub'
+// adj862（T-5）：工具条槽位契约 / 菜单模型 / 平台策略都是**纯数据**，直接 import 逐项断言
+import {
+  DESKTOP_AUTO_HIDE_MS,
+  MENU_ONLY_ACTIONS,
+  MOBILE_MIN_TARGET_PX,
+  SCORE_TOOLBAR_SLOTS,
+  buildScoreMenu,
+  hasScoreMenuItem,
+  scoreMenuIds,
+  toolbarPolicy,
+} from '../src/scoreMenu'
 
 let pass = 0
 let fail = 0
@@ -3657,29 +3668,45 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
 /**
  * ---- adj798：工具条被搬到 body 后**不能丢上下文**（用户实测：点击显示的与滚动中的按钮大小不一致）----
  *
- * 尺寸来自 `.is-mobile .ijipu-score-toolbar { --ijipu-ctl-h: 触控尺寸 }` 与
+ * 尺寸来自 `.is-mobile .ijipu-score-toolbar { --ijipu-ctl-h: … }` 与
  * `.ijipu-embedded .ijipu-score-toolbar { --ijipu-ctl-h: 21px }` —— 都是按**祖先**匹配的；
  * 搬到 `document.body` 后祖先没了 ⇒ 命中不到 ⇒ 两条工具条尺寸不一致 ✗。
  * 修法：搬出去时把上下文标记搬到工具条自己身上，CSS 对这两个标记镜像同样的尺寸变量。
+ *
+ * ⚠ adj862 改了**值**（移动端 30px → **44px**，T-5「触控目标 ≥44px」），但本条断言守的性质没变：
+ * **"祖先版"与"移植版"必须同值**。原来把 `var(--touch-size-xs, 30px)` 写死在正则里 ⇒ 值一改
+ * 就红灯（且会诱使人去"改断言"而不是看清性质）。现在改成**逐对比值**：
+ * 值本身由 adj862 的样式闸门守（44px），本条只守"搬出/搬回两面不漂"。
  */
 {
   const pane798 = String(readFileSync('src/scorePane.ts', 'utf8'))
   const css798 = String(readFileSync('styles.css', 'utf8'))
+  /** 取某选择器块里某个 CSS 变量的值（`[^}]*` 允许块内带注释；点号等元字符先转义） */
+  const cssVar798 = (sel: string, name: string): string | null =>
+    new RegExp(`${sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{[^}]*${name}: ([^;]+);`).exec(css798)?.[1]?.trim() ??
+    null
+  /** 祖先版 → 移植版 的配对（三对：手机 / 嵌入 / 手机+嵌入） */
+  const pairs798: [string, string][] = [
+    ['.is-mobile .ijipu-score-toolbar', '.ijipu-score-toolbar.ijipu-ported-mobile'],
+    ['.ijipu-embedded .ijipu-score-toolbar', '.ijipu-score-toolbar.ijipu-ported-embedded'],
+    ['.is-mobile .ijipu-embedded .ijipu-score-toolbar', '.ijipu-score-toolbar.ijipu-ported-mobile.ijipu-ported-embedded'],
+  ]
+  const sameVar798 = (name: string): boolean =>
+    pairs798.every(([a, b]) => cssVar798(a, name) !== null && cssVar798(a, name) === cssVar798(b, name))
   check('adj798 移植到 body 的工具条带上上下文标记，CSS 镜像同样的尺寸变量（两侧尺寸一致）',
     /el\.toggleClass\('ijipu-ported-mobile', Platform\.isMobile\)/.test(pane798) &&
       /el\.toggleClass\('ijipu-ported-embedded', container\.closest\('\.ijipu-embedded'\) !== null\)/.test(pane798) &&
       // 搬回容器时摘掉（回到祖先上下文）
       /el\.removeClass\('ijipu-ported-mobile'\)/.test(pane798) &&
       /el\.removeClass\('ijipu-ported-embedded'\)/.test(pane798) &&
-      // CSS 镜像值必须与"祖先版"一致（30px 触控 / 21px 嵌入）
-      /\.ijipu-score-toolbar\.ijipu-ported-mobile \{\n  display: flex;\n  --ijipu-ctl-h: var\(--touch-size-xs, 30px\);/.test(css798) &&
-      /\.ijipu-score-toolbar\.ijipu-ported-embedded \{\n  --ijipu-ctl-h: 21px;/.test(css798) &&
-      // 与祖先版口径一致：都引用同一个触控变量
-      /\.is-mobile \.ijipu-score-toolbar \{\n  display: flex;\n  --ijipu-ctl-h: var\(--touch-size-xs, 30px\);/.test(css798) &&
+      // CSS：三对"祖先版 / 移植版"的尺寸变量**逐对同值**（高度与宽度都查）
+      sameVar798('--ijipu-ctl-h') &&
+      sameVar798('--ijipu-ctl-w') &&
       // 负对照：把"移植标记"那两行去掉 ⇒ 判据为假
       !/el\.toggleClass\('ijipu-ported-mobile'/.test(
         pane798.replace("el.toggleClass('ijipu-ported-mobile', Platform.isMobile)", ''),
-      ))
+      ),
+    pairs798.map(([a, b]) => `${cssVar798(a, '--ijipu-ctl-h') ?? '?'}=${cssVar798(b, '--ijipu-ctl-h') ?? '?'}`).join('｜'))
 }
 
 /**
@@ -3896,6 +3923,134 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       // 负对照：去掉来源校验 ⇒ 判据为假（**全局**替换：这类行会出现多处 ✓）
       !/ev\.source !== window\.parent/.test(b810.replace(/ev\.source !== window\.parent/g, 'false')),
     has810 ? '' : `（找不到 ${bridgePath}：请确认两仓库同级 ✓）`)
+}
+
+/**
+ * ---- adj862（T-5 定稿）：工具条固定 5 位 + **唯一 menuModel** + 移动分支 ----
+ *
+ * 用户 2026-10-11 定稿口径（原话）：
+ *  · 工具条 = `▶ 试听` / `☰ 排版` / `谱面·页面` / `✎ 编辑` / `⋯ 更多`，**设置移入菜单**；
+ *  · 「**同一份菜单数据、不同的呈现**」⇒ 桌面 `⋯` / 桌面右键 / 手机 Action Sheet 共用一份；
+ *  · 移动端**不是"缩小版桌面"**：触控目标 ≥44px、无 hover 依赖、无右键依赖、常驻不自动收起。
+ *
+ * 这一节把上面三条**机器化**（AGENTS §六之三·3：只写文档 = 无效约束）：
+ *  ① 纯模型断言（槽位契约、菜单正/负对照、平台策略、移动端菜单差异）；
+ *  ② **结构闸门**：`scorePane.ts` 源码里"工具条只建 5 个按钮"且槽位顺序与契约一致、
+ *     另外四个入口建在**游离容器**（`menuOnly`）里 —— 都是可数的事实，不靠 CSS 藏；
+ *  ③ **样式闸门**：移动端 44px 的两处（容器内 / 被搬到 body 的那份）都在；
+ *  ④ 图标跨仓逐字节比对（`更多.png`，与 `Jianpu.png` 同一手法；应用仓库不在时跳过比对）。
+ */
+{
+  const slots = SCORE_TOOLBAR_SLOTS.map((s) => s.id) as readonly string[]
+  const pane862 = codeOf(String(readFileSync('src/scorePane.ts', 'utf8')))
+  const css862 = String(readFileSync('styles.css', 'utf8'))
+  const icons862 = String(readFileSync('src/icons.ts', 'utf8'))
+
+  // —— ① 槽位契约 ——
+  check('adj862 工具条**恰好 5 位**，顺序 = 试听 / 排版 / 谱面·页面 / 编辑 / ⋯ 更多',
+    slots.length === 5 && slots.join(',') === 'play,guides,mode,edit,more',
+    `实际：${slots.join(',')}`)
+  check('adj862 负对照：工具条槽位里**没有**"只进菜单"的四个入口（入口不许重复）',
+    MENU_ONLY_ACTIONS.every((a) => !slots.includes(a)),
+    `槽位=${slots.join(',')}｜菜单专属=${MENU_ONLY_ACTIONS.join(',')}`)
+
+  // —— ② 菜单模型（正 / 负对照）——
+  const menuFull = buildScoreMenu({
+    isMobile: false,
+    hasWriteSource: true,
+    hasFormat: true,
+    hasAppOpen: true,
+    embedTitle: '小星星.jps',
+  })
+  check('adj862 满能力宿主的桌面菜单含 设置 / 格式化 / 在应用中打开 / 打开谱面文件',
+    MENU_ONLY_ACTIONS.every((id) => hasScoreMenuItem(menuFull, id)),
+    `实际：${scoreMenuIds(menuFull).join('、')}`)
+  check('adj862 负对照：宿主没给 writeSource ⇒ 菜单里就没有「设置」',
+    !hasScoreMenuItem(buildScoreMenu({ isMobile: false, hasWriteSource: false, hasFormat: false, hasAppOpen: false }), 'settings'))
+  check('adj862 真实宿主能力：代码块（只有 writeSource）⇒ 菜单恰好只有「设置」一项',
+    scoreMenuIds(buildScoreMenu({ isMobile: false, hasWriteSource: true, hasFormat: false, hasAppOpen: false })).join(',') === 'settings',
+    `实际：${scoreMenuIds(buildScoreMenu({ isMobile: false, hasWriteSource: true, hasFormat: false, hasAppOpen: false })).join('、') || '（空）'}`)
+  check('adj862 菜单项都带面向用户的标题与说明（不许只给 id：手机 Action Sheet 上 id 看不见）',
+    menuFull.every((s) => s.items.every((i) => i.label.length > 0 && i.title.length > 0)))
+  check('adj862 负对照：把「设置」的能力标志关掉后，该组整组消失（不留空标题）',
+    menuFull.length === 3 &&
+      buildScoreMenu({ isMobile: false, hasWriteSource: false, hasFormat: false, hasAppOpen: false }).length === 0)
+
+  // —— ③ 移动端策略 + 移动端菜单差异 ——
+  const pDesk = toolbarPolicy(false)
+  const pMob = toolbarPolicy(true)
+  check(`adj862 移动端触控目标 ≥${MOBILE_MIN_TARGET_PX}px（桌面保持样式基线 ${pDesk.minTargetPx}px）`,
+    pMob.minTargetPx === MOBILE_MIN_TARGET_PX && pMob.minTargetPx >= 44 && pDesk.minTargetPx < 44,
+    `手机=${pMob.minTargetPx}｜桌面=${pDesk.minTargetPx}`)
+  check('adj862 移动端**常驻**（autoHideMs=0，不自动收起）＋ 两端都不依赖 hover ＋ 点击可切换',
+    pMob.autoHideMs === 0 && pDesk.autoHideMs === DESKTOP_AUTO_HIDE_MS &&
+      !pMob.hoverHide && !pDesk.hoverHide && pMob.toggleOnClick && pDesk.toggleOnClick,
+    `手机 autoHide=${pMob.autoHideMs}｜桌面 autoHide=${pDesk.autoHideMs}`)
+  check('adj862 右键菜单**仅桌面**（手机没有右键、长按被宿主占用 ⇒ 唯一入口是 ⋯）',
+    pDesk.contextMenu === true && pMob.contextMenu === false)
+  check('adj862 移动端菜单里没有「在应用中打开」（嵌入版视图只在桌面注册）',
+    !hasScoreMenuItem(buildScoreMenu({ isMobile: true, hasWriteSource: true, hasAppOpen: true }), 'app-open') &&
+      hasScoreMenuItem(buildScoreMenu({ isMobile: false, hasWriteSource: true, hasAppOpen: true }), 'app-open'))
+
+  // —— ④ scorePane 结构闸门（可数事实；负对照：删掉一处槽位标记即判负）——
+  const toolbarBtnCount = [...pane862.matchAll(/toolbar\.createEl\('button'/g)].length
+  const menuOnlyBtnCount = [...pane862.matchAll(/menuOnly\.createEl\('button'/g)].length
+  const slotOrder = [...pane862.matchAll(/dataset\.slot = '([a-z]+)'/g)].map((m) => m[1])
+  check('adj862 工具条上**只建 5 个按钮**，且 `dataset.slot` 顺序与槽位契约完全一致',
+    toolbarBtnCount === 5 && slotOrder.join(',') === slots.join(','),
+    `按钮数=${toolbarBtnCount}｜顺序=${slotOrder.join(',')}`)
+  check('adj862 负对照：去掉一处 `dataset.slot` ⇒ 顺序判据立刻为假（闸门真的在量东西）',
+    [...pane862.replace("dataset.slot = 'edit'", '').matchAll(/dataset\.slot = '([a-z]+)'/g)].map((m) => m[1]).join(',') !== slots.join(','))
+  check('adj862 设置 / 格式化 / 在应用中打开 / 打开谱面文件 建在**游离容器**（不进工具条 DOM）',
+    menuOnlyBtnCount === 4 &&
+      ['ijipu-config-btn', 'ijipu-format-btn', 'ijipu-app-open-btn', 'ijipu-embed-link'].every((c) =>
+        new RegExp(`menuOnly\\.createEl\\('button', \\{ cls: '[^']*${c}`).test(pane862)),
+    `游离容器按钮数=${menuOnlyBtnCount}`)
+  check('adj862 负对照：这四个入口不许再出现在工具条上（`toolbar.createEl` + 它们的类名）',
+    !/toolbar\.createEl\('button', \{ cls: '[^']*(ijipu-config-btn|ijipu-format-btn|ijipu-app-open-btn|ijipu-embed-link)/.test(pane862))
+  check('adj862 三入口共用同一份模型：⋯ 菜单 / 右键 / 手机 Action Sheet 都走 `buildScoreMenu` + `Menu`',
+    /from '\.\/scoreMenu'/.test(pane862) &&
+      /const sections = buildScoreMenu\(\{/.test(pane862) &&
+      /menu\.showAtPosition\(/.test(pane862) &&
+      /if \(at instanceof HTMLElement\)/.test(pane862) && // 按钮锚点 vs 鼠标锚点（右键）
+      /if \(policy\.contextMenu\) \{/.test(pane862) &&
+      /container\.addEventListener\('contextmenu'/.test(pane862) &&
+      /openScoreMenu\(\{ x: e\.clientX, y: e\.clientY \}\)/.test(pane862) &&
+      /moreBtn\.dataset\.slot = 'more'/.test(pane862) &&
+      /moreBtn\.addEventListener\('click', \(\) => openScoreMenu\(moreBtn\)\)/.test(pane862))
+  check('adj862 菜单动作 id **每个都有**对应的按钮路由（少一个就是"点了没反应"）',
+    MENU_ONLY_ACTIONS.every((id) => new RegExp(`case '${id}':`).test(pane862)) &&
+      !MENU_ONLY_ACTIONS.every((id) => new RegExp(`case '${id}':`).test(pane862.replace("case 'settings':", ''))),
+    `动作=${MENU_ONLY_ACTIONS.join(',')}`)
+  check('adj862 负对照：把右键守卫换成"总是注册" ⇒ 判据为假（移动端不得注册右键）',
+    !/if \(policy\.contextMenu\) \{/.test(pane862.replace('if (policy.contextMenu) {', 'if (true) {')))
+  check('adj862 移动分支消费 `policy`（常驻不自动收起），不再各处散判 `Platform.isMobile`',
+    /const policy = toolbarPolicy\(Platform\.isMobile\)/.test(pane862) &&
+      /if \(policy\.autoHideMs <= 0\) return/.test(pane862))
+
+  // —— ⑤ 样式闸门：移动端 44px（容器内 + 被搬到 body 的那份都要） ——
+  check('adj862 移动端样式：两处 `--ijipu-ctl-h: 44px` + 44px 宽度下限（否则图标态仍 36px 宽）',
+    /\.is-mobile \.ijipu-score-toolbar \{[^}]*--ijipu-ctl-h: 44px/.test(css862) &&
+      /\.ijipu-score-toolbar\.ijipu-ported-mobile \{[^}]*--ijipu-ctl-h: 44px/.test(css862) &&
+      /\.is-mobile \.ijipu-embedded \.ijipu-score-toolbar \{[^}]*--ijipu-ctl-h: 44px/.test(css862) &&
+      /\.is-mobile \.ijipu-score-toolbar \.ijipu-play,[\s\S]{0,400}?min-width: 44px/.test(css862))
+  check('adj862 负对照：把那两处 44px 改回 30px ⇒ 样式判据为假',
+    !/\.is-mobile \.ijipu-score-toolbar \{[^}]*--ijipu-ctl-h: 44px/.test(
+      css862.replace(/(\.is-mobile \.ijipu-score-toolbar \{[^}]*--ijipu-ctl-h: )44px/, '$130px')))
+
+  // —— ⑥ 图标同源（两端同一枚「更多」PNG；应用仓库不在时跳过逐字节比对） ——
+  {
+    const plugIcon = 'vendor/icons/更多.png'
+    const appIcon = '../ijipu/public/icons/更多.png'
+    const hasAppIcon = existsSync(appIcon)
+    check('adj862「更多」图标：vendor 里是合法 PNG，且（应用仓库在时）与应用**逐字节相同**',
+      existsSync(plugIcon) &&
+        readFileSync(plugIcon).subarray(1, 4).toString('latin1') === 'PNG' &&
+        (!hasAppIcon || readFileSync(appIcon).equals(readFileSync(plugIcon))) &&
+        /export function moreIcon/.test(icons862) &&
+        /moreIcon/.test(pane862),
+      hasAppIcon ? '' : '（找不到应用仓库：跳过逐字节比对）')
+  }
 }
 
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。

@@ -148,7 +148,13 @@
    （此前删掉基础块里的 display 时漏了这条，靠 smoke 断言抓出来）。 */
 .is-mobile .ijipu-score-toolbar {
   display: flex;
-  --ijipu-ctl-h: var(--touch-size-xs, 30px);
+  /**
+   * adj862（T-5 移动端硬口径，用户 2026-10-11 定）：**触控目标 ≥44px**。
+   * 此前跟 Obsidian 的 `--touch-size-xs`（30px），工具条 5 个按钮挤在一排时手指容易点错；
+   * 宽度下限（图标态的 `--ijipu-ctl-w`）一并给到 44 ⇒ 每个槽位都是 ≥44×44 的触控区。
+   */
+  --ijipu-ctl-h: 44px;
+  --ijipu-ctl-w: 44px;
 }
 /* 嵌入形态更紧凑；移动端仍用触控尺寸，免得手指点不到 */
 .ijipu-embedded .ijipu-score-toolbar {
@@ -168,7 +174,9 @@
  */
 .ijipu-score-toolbar.ijipu-ported-mobile {
   display: flex;
-  --ijipu-ctl-h: var(--touch-size-xs, 30px);
+  /* adj862：与 `.is-mobile .ijipu-score-toolbar` 同口径（44px —— 两条必须一起改，否则搬出/搬回尺寸不一致） */
+  --ijipu-ctl-h: 44px;
+  --ijipu-ctl-w: 44px;
 }
 /**
  * adj799（社区审核 **Error** `obsidianmd/no-static-styles-assignment`）：
@@ -188,10 +196,13 @@
 }
 /* 移动端 + 嵌入：与 `.is-mobile .ijipu-embedded .ijipu-score-toolbar` 同口径（触控尺寸优先） */
 .ijipu-score-toolbar.ijipu-ported-mobile.ijipu-ported-embedded {
-  --ijipu-ctl-h: var(--touch-size-xs, 30px);
+  --ijipu-ctl-h: 44px;
+  --ijipu-ctl-w: 44px;
 }
 .is-mobile .ijipu-embedded .ijipu-score-toolbar {
-  --ijipu-ctl-h: var(--touch-size-xxs, 24px);
+  /* adj862：移动端**一律** ≥44px（嵌入形态在小屏上同样要用手指点，不能回落到 --touch-size-xxs） */
+  --ijipu-ctl-h: 44px;
+  --ijipu-ctl-w: 44px;
 }
 /* 统一控件高度：选择器带 .ijipu-score-toolbar 前缀，压过主题/移动端对 button 的高度约束 */
 .ijipu-score-toolbar .ijipu-play,
@@ -203,6 +214,19 @@
   max-height: var(--ijipu-ctl-h);
   align-items: center;
   line-height: 1;
+}
+/**
+ * adj862（T-5 移动端硬口径）：**每个槽位 ≥44×44**。
+ * 高度已由 `--ijipu-ctl-h: 44px` 给到；宽度下限必须**独立**给出 —— 图标态宽度取
+ * `--ijipu-ctl-w`，而那条只在 `@container (max-width: 400px)` 里生效 ⇒ 宽容器下的移动端
+ * （平板横屏、桌面模式手机）按钮会退回 36px 宽、点不准。
+ */
+.is-mobile .ijipu-score-toolbar .ijipu-play,
+.is-mobile .ijipu-score-toolbar .ijipu-mode-select-wrap,
+.ijipu-score-toolbar.ijipu-ported-mobile .ijipu-play,
+.ijipu-score-toolbar.ijipu-ported-mobile .ijipu-mode-select-wrap {
+  min-width: 44px;
+  justify-content: center;
 }
 .ijipu-play {
   display: inline-flex;

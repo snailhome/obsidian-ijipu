@@ -4,10 +4,14 @@
  * 抽出来的原因：这三种入口需要完全一致的行为（试听色块、显示模式、排版辅助虚线、来源徽标、
  * 页面设置、frontmatter/设置变更即时重渲染、渲染失败提示），各写一份必然漂移。
  *
- * 工具条两枚图标按钮（与 iJipu 顶栏一致）：
+ * 工具条（adj862 / T-5 定稿）**固定 5 位**：`▶ 试听` / `☰ 排版` / `谱面·页面` / `✎ 编辑` / `⋯ 更多`：
+ *  · **试听**＝播放/停止（边听边看高亮色块）；
  *  · **排版**（田字格）＝ 开关**排版辅助虚线**，显示后可**拖动虚线**调边距/行距，
  *    松手即写回谱面源码的 `# jps-config`（与 iJipu「拖动结束即持久化」一致）；
- *  · **页面设置**（滑杆）＝ 打开对话框按字段精确设值（字体/字号等不可拖项）。
+ *  · **谱面·页面**＝显示模式（整页 / 满宽 / 谱面）；
+ *  · **编辑**＝按宿主与平台分派（笔记源码 / 宿主编辑器 / 嵌入版 iJipu，见下面那段）；
+ *  · **⋯ 更多**＝低频入口（设置 / 格式化 / 打开…）——与**桌面右键**、**手机底部 Action Sheet**
+ *    共用同一份菜单模型（`scoreMenu.ts` 的 `buildScoreMenu`）。
  *
  * 渲染管线与 iJipu 应用一致：`resolvePageConfig`（含源内 # jps-config）→ `layoutScore`
  * → `renderScoreToSvg`；试听走 `@ijipu/engine` 的 `buildPlaySequence` + SpessaSynth。
@@ -25,7 +29,8 @@ import { resolvePageConfig } from './config'
 import { ConfigDialog } from './configDialog'
 // adj631：「保存为插件默认」要按"本次真正改动过的项"写入（changedDefs）+ 等于引擎默认则不存（isDefaultValue）
 import { changedDefs, isDefaultValue } from './defs'
-import { layoutIcon, modeIcon, settingsIcon, linkIcon, playIcon, stopIcon, appOpenIcon, formatIcon, editIcon } from './icons'
+import { layoutIcon, modeIcon, settingsIcon, linkIcon, playIcon, stopIcon, appOpenIcon, formatIcon, editIcon, moreIcon } from './icons'
+import { buildScoreMenu, scoreMenuIds, toolbarPolicy, type ScoreMenuActionId } from './scoreMenu'
 import { canOpenWithDefaultApp, openUrlExternally, openWithDefaultApp } from './openExternal'
 import { computeGuideLines, cropRectFor, guideLimits, guidePlacement, type GuideLine } from './guides'
 import { GUIDES_CHANGED, SETTINGS_CHANGED } from './main'
@@ -587,6 +592,34 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     const toolbar = container.createDiv({ cls: 'ijipu-score-toolbar' })
 // adj794e：打上面板 id —— 工具条可能被移到 document.body（外侧落位），销毁时据此精确清理
 toolbar.dataset.ijipuPane = String(paneId)
+
+    /**
+     * adj862（T-5 定稿，用户口径）：「**工具条只放高频，固定 5 位**：试听 / 排版 / 谱面·页面 /
+     * 编辑 / ⋯ 更多；**设置等低频项移入菜单**」。
+     *
+     * `menuOnly` 就是这些**只进菜单**的按钮的容器：它们照旧按原样创建（`ConfigDialog` 那段
+     * 40 行逻辑、格式化、"在应用中打开"、"打开谱面文件"全部**一行不改**），但**不挂进工具条 DOM**
+     * —— 由「⋯ 更多」菜单的菜单项用 `.click()` 触发同一批监听器（零重复实现）。
+     *
+     * 为什么用"游离容器"而不是"建完再 `remove()`"：`remove()` 之后 DOM 会被重建，
+     * 而这里连一次插入都不做 ⇒ 「工具条 = 5 位」是**结构事实**（冒烟可对源码计数验证），
+     * 不依赖 CSS 藏、也不依赖执行顺序。游离元素上的 `.click()` 照常派发事件（元素无需在文档里）。
+     */
+    const menuOnly = createDiv({ cls: 'ijipu-menu-only' })
+    /** 只进菜单的按钮（按宿主能力赋值；仍是原来那些按钮对象，处理器完全复用） */
+    let fmtBtn: HTMLElement | null = null
+    let cfgBtn: HTMLElement | null = null
+    let appOpenBtn: HTMLElement | null = null
+    let linkBtn: HTMLElement | null = null
+    /** 嵌入模式下「打开谱面文件」的目标文件名（菜单项标题与提示据此显示） */
+    let embedLinkTitle: string | null = null
+
+    /**
+     * adj862：**平台策略一处给出**（`scoreMenu.ts` 的 `toolbarPolicy`）——
+     * 移动端：触控目标 ≥44px、**常驻不自动收起**、无 hover 依赖、无右键依赖；
+     * 桌面：24px、3 秒自动收起、给右键菜单。渲染端只消费，不再各自 `if (Platform.isMobile)` 散判。
+     */
+    const policy = toolbarPolicy(Platform.isMobile)
     /**
      * adj724b（用户要求）：**工具条默认隐藏，鼠标移到谱面上才显示**。
      *
@@ -1084,6 +1117,12 @@ toolbar.dataset.ijipuPane = String(paneId)
       autoHideTimer = 0
     }
     const startAutoHide = (): void => {
+      /**
+       * adj862（T-5 移动端口径）：**手机端常驻、不自动收起**（`policy.autoHideMs === 0`）——
+       * 触屏没有 hover，工具条一旦自己消失，用户得先点一下预览区才能再点按钮；而且手机上
+       * 没有右键那类替代入口。桌面保持既有行为（显示 3 秒后收起，见 adj785/adj797c）。
+       */
+      if (policy.autoHideMs <= 0) return
       clearAutoHide()
       autoHideTimer = window.setTimeout(() => {
         autoHideTimer = 0
@@ -1148,6 +1187,8 @@ toolbar.dataset.ijipuPane = String(paneId)
     let playing: { cancel: () => void; totalMs: number; track: PlayheadSeg[] } | null = null
     // 试听按钮：图标 + 文字（窄容器里文字由 @container 规则隐藏，只留图标）
     const playBtn = toolbar.createEl('button', { cls: 'ijipu-play' })
+    // adj862：工具条槽位标记（顺序契约见 `scoreMenu.ts` 的 SCORE_TOOLBAR_SLOTS；冒烟按它核对顺序）
+    playBtn.dataset.slot = 'play'
     const playIconEl = playBtn.createSpan({ cls: 'ijipu-btn-icon' })
     const playLabel = playBtn.createSpan({ cls: 'ijipu-btn-label', text: '试听' })
     /** 切换试听按钮的「图标 + 文字 + 悬停说明」（三者必须同步换，否则窄容器下会显示错） */
@@ -1275,6 +1316,7 @@ toolbar.dataset.ijipuPane = String(paneId)
 
     // —— 排版（田字格）：开关"排版辅助虚线"，显示后可拖动虚线调边距/行距 ——
     const guidesBtn = toolbar.createEl('button', { cls: 'ijipu-play ijipu-guides-btn' })
+    guidesBtn.dataset.slot = 'guides'
     guidesBtn.setAttr(
       'title',
       plugin.showGuides
@@ -1317,7 +1359,7 @@ toolbar.dataset.ijipuPane = String(paneId)
          * 代码块没有"源码态 UI"（宿主本身就是源码），所以那里仍保留"就地格式化"。
          * adj773：位置从"设置之前"挪到"视图之后、编辑之前"（顺序见上）。
          */
-        const fmtBtn = toolbar.createEl('button', { cls: 'ijipu-play ijipu-format-btn' })
+        fmtBtn = menuOnly.createEl('button', { cls: 'ijipu-play ijipu-format-btn' })
         fmtBtn.setAttr('title', '按应用规范格式化源码（音符/小节线空格、歌词里的 {tp … } 段、描述头属性）')
         // adj749c：用**格式化自己的图标**（此前借的是"排版"图标 ⇒ 用户报"图标与排版重复"）
         fmtBtn.appendChild(formatIcon(15))
@@ -1333,7 +1375,7 @@ toolbar.dataset.ijipuPane = String(paneId)
           new Notice('已按应用规范格式化源码', 4000)
         })
       }
-      const cfgBtn = toolbar.createEl('button', { cls: 'ijipu-play ijipu-config-btn' })
+      cfgBtn = menuOnly.createEl('button', { cls: 'ijipu-play ijipu-config-btn' })
       cfgBtn.setAttr('title', '页面设置：按字段精确设值（字体/字号/行距/渲染开关；可保存到谱面或存为插件默认）')
       cfgBtn.appendChild(settingsIcon(15))
       cfgBtn.createSpan({ cls: 'ijipu-btn-label', text: '设置' })
@@ -1426,6 +1468,7 @@ toolbar.dataset.ijipuPane = String(paneId)
     //  · 它的弹层底色/文字色由平台决定，深色主题下会变成浅底浅字。
     // 自绘这三部分后宽度严格等于内容，菜单则完全跟随主题配色（且自带当前项勾选）。
     const modeWrap = toolbar.createEl('button', { cls: 'ijipu-mode-select-wrap' })
+    modeWrap.dataset.slot = 'mode'
     modeWrap.setAttr('type', 'button')
     modeWrap.setAttr('aria-label', '显示模式')
     modeWrap.setAttr('aria-haspopup', 'menu')
@@ -1456,6 +1499,7 @@ toolbar.dataset.ijipuPane = String(paneId)
       const editable = !!(host.onEditSource || host.onToggleSource || host.onEdit)
       if (editable) {
         const eb = toolbar.createEl('button', { cls: 'ijipu-play ijipu-edit-btn' })
+        eb.dataset.slot = 'edit'
         eb.setAttr('aria-label', '编辑')
         eb.setAttr(
           'title',
@@ -1510,7 +1554,8 @@ toolbar.dataset.ijipuPane = String(paneId)
      * `hasEditEntry` / `keepEmbedLink` 仍保留：它们决定「打开谱面文件」链接要不要收掉。
      */
     if (!hasEditEntry && host.filePath && canOpenWithDefaultApp(plugin.app)) {
-      const appOpenBtn = toolbar.createEl('button', { cls: 'ijipu-play ijipu-app-open-btn' })
+      // adj862：「应用打开」不再占工具条位置 ⇒ 建在游离容器里，由「⋯ 更多」菜单按 id 触发 `.click()`
+      appOpenBtn = menuOnly.createEl('button', { cls: 'ijipu-play ijipu-app-open-btn' })
       appOpenBtn.setAttr('title', '使用默认应用打开')
       appOpenBtn.setAttr('aria-label', '使用默认应用打开')
       appOpenBtn.appendChild(appOpenIcon(15))
@@ -1530,15 +1575,99 @@ toolbar.dataset.ijipuPane = String(paneId)
       })
     }
 
-    // —— 工具栏右端：打开谱面文件（仅嵌入模式；容器窄时只留链接图标）——
+    // —— 「打开谱面文件」不再占工具条位置（adj862）：建在游离容器里，由「⋯ 更多」菜单触发 ——
     // adj726/727：有「编辑」且「编辑」留在站内时不再建；「编辑」会离开 Obsidian（默认应用）时保留。
     if (host.embedded && host.embedTitle && keepEmbedLink) {
-      const link = toolbar.createEl('button', { cls: 'ijipu-embed-link' })
-      link.setAttr('title', `打开谱面文件：${host.embedTitle}`)
-      link.setAttr('aria-label', `打开谱面文件：${host.embedTitle}`)
-      link.appendChild(linkIcon(15))
-      link.createSpan({ cls: 'ijipu-embed-link-text', text: host.embedTitle })
-      link.addEventListener('click', () => host.onOpenFile?.())
+      linkBtn = menuOnly.createEl('button', { cls: 'ijipu-embed-link' })
+      embedLinkTitle = host.embedTitle
+      linkBtn.setAttr('title', `打开谱面文件：${host.embedTitle}`)
+      linkBtn.setAttr('aria-label', `打开谱面文件：${host.embedTitle}`)
+      linkBtn.appendChild(linkIcon(15))
+      linkBtn.createSpan({ cls: 'ijipu-embed-link-text', text: host.embedTitle })
+      linkBtn.addEventListener('click', () => host.onOpenFile?.())
+    }
+
+    /**
+     * adj862（T-5 定稿）：工具条**第 5 位**「⋯ 更多」——低频入口（设置 / 格式化 / 打开…）的唯一出口。
+     *
+     * ## 三入口共用**同一份** menuModel（用户口径：「同一份菜单数据、不同的呈现」）
+     *   · 桌面 `⋯ 更多` 按钮 ⇒ `showAtPosition`（贴着按钮下沿弹出）
+     *   · 桌面**预览区右键** ⇒ `showAtPosition`（鼠标位置；见下面的 `contextmenu` 监听）
+     *   · 移动端 ⇒ 同一份数据 + 同一个 `Menu`：Obsidian 在手机上**本身**就把它渲染成
+     *     **底部 Action Sheet**（`obsidian.asar` 的 app.css：`.is-phone .menu { position: absolute;
+     *     bottom: 0; border-radius: … 0 0 }` + `.menu-grabber`）⇒ 不另写一套渲染 ✗（少一套就少一处漂移）。
+     *
+     * ## 为什么是"触发按钮的 `.click()`"而不是把处理器搬过来
+     * 那四个入口（设置对话框 40 行、格式化、应用打开、打开谱面文件）**各自带着自己的前置条件与
+     * 副作用**（`ConfigDialog` 的 onApply、落盘钩子 `beforeOpenExternal`、宿主写回…）。
+     * 搬一遍 = 两份实现，必然漂移（本项目已多次复发）。这里只做**路由**：菜单项 id → 对应按钮。
+     */
+    const runScoreMenuAction = (id: ScoreMenuActionId): void => {
+      switch (id) {
+        case 'settings':
+          cfgBtn?.click()
+          return
+        case 'format':
+          fmtBtn?.click()
+          return
+        case 'app-open':
+          appOpenBtn?.click()
+          return
+        case 'embed-link':
+          linkBtn?.click()
+          return
+      }
+    }
+    const openScoreMenu = (at: HTMLElement | { x: number; y: number }): void => {
+      const sections = buildScoreMenu({
+        isMobile: Platform.isMobile,
+        hasWriteSource: cfgBtn !== null,
+        hasFormat: fmtBtn !== null,
+        hasAppOpen: appOpenBtn !== null,
+        embedTitle: embedLinkTitle ?? undefined,
+      })
+      const menu = new Menu()
+      sections.forEach((sec, i) => {
+        if (i > 0) menu.addSeparator()
+        // 组标题：桌面菜单里是灰字不可点行；手机上就是 Action Sheet 的小标题
+        menu.addItem((item) => item.setTitle(sec.title).setIsLabel(true))
+        for (const it of sec.items) {
+          menu.addItem((item) => item.setTitle(it.label).onClick(() => runScoreMenuAction(it.id)))
+        }
+      })
+      if (at instanceof HTMLElement) {
+        const r = at.getBoundingClientRect()
+        menu.showAtPosition({ x: Math.round(r.left), y: Math.round(r.bottom + 4) })
+      } else {
+        menu.showAtPosition({ x: Math.round(at.x), y: Math.round(at.y) })
+      }
+      // 诊断：菜单里到底有哪些项（用户报告"某个入口不见了"时，这一行直接给出答案）
+      plugin.lastToolbarClick =
+        `⋯ 更多 ⇒ 菜单（平台=${Platform.isMobile ? '手机' : '桌面'}；` +
+        `项=${scoreMenuIds(sections).join('、') || '（空）'}）`
+    }
+    const moreBtn = toolbar.createEl('button', { cls: 'ijipu-play ijipu-more-btn' })
+    moreBtn.dataset.slot = 'more'
+    moreBtn.setAttr('type', 'button')
+    moreBtn.setAttr('aria-label', '更多')
+    moreBtn.setAttr('aria-haspopup', 'menu')
+    moreBtn.setAttr('title', '更多：设置 / 格式化 / 打开（桌面在预览区右键是同一份菜单）')
+    moreBtn.appendChild(moreIcon(15))
+    moreBtn.createSpan({ cls: 'ijipu-btn-label', text: '更多' })
+    moreBtn.addEventListener('click', () => openScoreMenu(moreBtn))
+    /**
+     * **桌面右键预览区** = 与「⋯ 更多」同一份菜单（T-5 三入口之一）。
+     * 移动端**不注册**（`policy.contextMenu` 为 false）：手机没有右键，长按又被宿主的文本选择/
+     * 块菜单占用 ⇒ 移动端唯一入口是 `⋯ 更多`（点开就是底部 Action Sheet）。
+     */
+    if (policy.contextMenu) {
+      container.addEventListener('contextmenu', (e) => {
+        const t = e.target instanceof Element ? e.target : null
+        // 右键落在工具条自身上 ⇒ 交回宿主（例如以后要"右键工具条"做别的）
+        if (t?.closest('.ijipu-score-toolbar')) return
+        e.preventDefault()
+        openScoreMenu({ x: e.clientX, y: e.clientY })
+      })
     }
 
     // adj738：这里原来两条提示都属"笔记 frontmatter 那一层"——

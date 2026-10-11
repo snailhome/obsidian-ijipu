@@ -19,6 +19,7 @@
  * 形状由样式类 `.ijipu-tool-icon` 负责（见 `styles.css`）。
  */
 import layoutPng from '../vendor/icons/排版.png'
+import morePng from '../vendor/icons/更多.png'
 import playPng from '../vendor/icons/播放.png'
 import scorePng from '../vendor/icons/谱面.png'
 import settingsPng from '../vendor/icons/设置.png'
@@ -64,6 +65,17 @@ export function stopIcon(size = 15): HTMLElement {
 /** 「排版」图标：行距（与应用顶栏「排版」按钮同一形状） */
 export function layoutIcon(size = 15): HTMLElement {
   return pngIcon(layoutPng, size)
+}
+
+/**
+ * 「更多」图标：三点（与应用顶栏「更多」按钮**同一枚 PNG**，adj862）。
+ *
+ * 为什么必须与应用同图：T-5 起工具条第 5 位就是它，且它承载"设置/导出/复制"等全部低频入口
+ * ⇒ 两端形状不一致会让用户以为是两个不同的东西。图片从 `ijipu/public/icons/更多.png` 逐字节同步
+ * （冒烟 `adj862` 里有跨仓逐字节比对，和 `Jianpu.png` 那条同一手法）。
+ */
+export function moreIcon(size = 15): HTMLElement {
+  return pngIcon(morePng, size)
 }
 
 /** 「页面设置」图标：齿轮（与应用顶栏「设置」按钮同一形状） */
