@@ -4,6 +4,9 @@ import { formatLine } from '@ijipu/engine'
 // adj774：markdown 笔记里 ```jps 代码块的围栏扫描（着色/错误提示/自动格式化三处共用同一份口径）
 import { jpsBlockRanges } from './jpsBlocks'
 import { createIjipuApi, type IjipuApi } from './api'
+import { createEmbedRpc, type EmbedRpc } from './embed/rpc'
+// adj807（B2）：RPC 的 `render.svg` 允许带 `pageConfig` 覆盖 ⇒ 这里只需要它的**类型**
+import type { PageConfig } from '@ijipu/engine'
 import { IJipuSettingTab } from './settings'
 import { mountScorePane, type ScorePaneHandle } from './scorePane'
 import { registerJpsEmbeds } from './embed'
@@ -59,6 +62,13 @@ export default class IJipuPlugin extends Plugin {
    * `docs/OBSIDIAN-API.md`）。`onload` 里创建（设置以**函数**形式传入，改动即时生效）。
    */
   api!: IjipuApi
+  /**
+   * adj807（方案 B / **B2**）：嵌入版 RPC 的**总开关** —— 用户裁决 ③「**默认关闭**」✓。
+   * 打开后才接受嵌入版 iframe 的 `postMessage` 请求（方法白名单见 `src/embed/rpc.ts` ✓）。
+   * 设置界面里的开关在下一轮补 UI；现在可用控制台/后续设置项打开，**默认是关** ✓。
+   */
+  allowExternalApi = false
+  private embedRpc: EmbedRpc | null = null
   /** 插件内事件广播（当前用于设置变更 → 打开中的谱面即时重渲染） */
   readonly events = new Events()
   /** 「排版辅助虚线」是否显示（与 iJipu 顶栏「排版」按钮同一个开关；所有面板共享、不落盘） */
@@ -403,6 +413,8 @@ export default class IJipuPlugin extends Plugin {
     if (Platform.isDesktopApp) this.registerView(VIEW_TYPE_IJIPU_APP, (leaf) => new IJipuAppView(leaf, this))
     this.registerDomEvent(window, 'message', (ev) => {
       void this.bridge.handle(ev)
+      // adj807（B2）：同一条 window message 监听里再交给嵌入版 RPC（它自己做来源校验与白名单 ✓）
+      this.embedRpc?.handle(ev)
     })
     this.addCommand({
       id: 'open-app',
@@ -421,6 +433,24 @@ export default class IJipuPlugin extends Plugin {
      * 设置用**函数**读取 ⇒ 用户改设置后 API 立刻跟随，不出现"设置变了 API 还是旧的"✓。
      */
     this.api = createIjipuApi(() => this.settings)
+    /**
+     * adj807（B2）：**嵌入版 RPC**（postMessage）——只做"要用应用才有的能力"的通道 ✓。
+     *  · 纯 TS 能力仍在 `api.ts` 直调引擎（不绕 iframe ✓）；
+     *  · 本通道**默认关闭**（`allowExternalApi`），开着时也只认**方法白名单** ✓；
+     *  · 来源校验：只接受"src 带本插件 token 的 iframe"那个窗口 ✓（与 `IJipuBridge` 同一口径 ✓）。
+     */
+    this.embedRpc = createEmbedRpc({
+      app: this.app,
+      isEnabled: () => this.allowExternalApi,
+      getIframeWindow: () => {
+        for (const f of Array.from(document.querySelectorAll('iframe'))) {
+          if (f.src.includes('token=') && f.contentWindow !== null) return f.contentWindow
+        }
+        return null
+      },
+      renderSvg: (source, pageConfig) => this.api.renderSvg(source, pageConfig as Partial<PageConfig> | undefined),
+      pluginVersion: this.manifest.version,
+    })
     this.registerCommands()
     /**
      * adj746（用户要求：「源码如果能够按我们应用的规范格式化就更好了」）：
