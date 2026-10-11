@@ -155,6 +155,8 @@ export default class IJipuPlugin extends Plugin {
 
   /** adj844：最近一次"嵌入版窗口选取"的结论（进诊断报告 ✓） */
   lastEmbedFrameInfo: string | null = null
+  /** adj847：向嵌入版服务**实际取回一次 HTML** 的结论（分辨"iframe 里是旧 JS"还是"产物没更新"✓） */
+  embedServeInfo: string | null = null
   /** 插件内事件广播（当前用于设置变更 → 打开中的谱面即时重渲染） */
   readonly events = new Events()
   /** 「排版辅助虚线」是否显示（与 iJipu 顶栏「排版」按钮同一个开关；所有面板共享、不落盘） */
@@ -1155,6 +1157,12 @@ export default class IJipuPlugin extends Plugin {
     push(`  嵌入版服务：${this.lastEmbedError ?? '（无错误）'}`)
 
     push('')
+    push('— 嵌入版服务产物自检（adj847；**若显示"（本次取样后才取回，请再点一次生成并复制）"就再点一次** ✓）—')
+    push(
+      `  ${this.embedServeInfo ?? '（本次取样后才取回，请再点一次「生成并复制」即可看到结果 ✓）'}`,
+    )
+
+    push('')
     push('— 嵌入版 iframe 候选（用于定位「未在 N 秒内应答」）—')
     {
       const frames = Array.from(document.querySelectorAll('iframe'))
@@ -1178,6 +1186,41 @@ export default class IJipuPlugin extends Plugin {
       }
       push(`  嵌入版服务错误：${this.lastEmbedError ?? '（无错误）'}｜总开关 allowExternalApi=${this.allowExternalApi ? '开' : '关'}`)
     }
+
+    push('')
+    push('— 嵌入版服务**实际发出的**产物是否含桥（adj847 ✓）—')
+    /**
+     * adj847（用户实测：探针仍不通 ✗，而报告构建是 `@f059a55a` ✓）：
+     * 需要分辨两种可能 ——
+     *  (a) iframe 里跑的还是**旧的应用 JS**（嵌入视图没真正重载 ✗）；
+     *  (b) 顶层安装仍未生效 ✗。
+     * 做法：**直接向嵌入版本机服务取一次 HTML** ✓，看**服务端正在发的**那份产物里
+     * 有没有桥的关键字（`__ijipuAppResponse` ✓）与体积 ✓ ——
+     * 有 ⇒ (a)（**重开嵌入视图**即可 ✓）；没有 ⇒ 产物没更新成功 ✗。
+     */
+    push(
+      (() => {
+        const win = this.embedRpcWindow()
+        const frames = Array.from(document.querySelectorAll('iframe'))
+        const url = frames.map((f) => f.src).find((s) => /^https?:\/\/(127\.0\.0\.1|localhost)/.test(s)) ?? ''
+        if (url === '') return '  （取不到嵌入版 URL ⇒ 没打开过嵌入版）'
+        return `  目标：${url.replace(/^https?:\/\//, '').slice(0, 60)}｜窗口=${win === null ? '无' : '有'}｜` +
+          '（下面这次取回是**异步**的，稍后本报告末尾会补一行结果 ✓）'
+      })(),
+    )
+    void (async () => {
+      try {
+        const frames = Array.from(document.querySelectorAll('iframe'))
+        const url = frames.map((f) => f.src).find((s) => /^https?:\/\/(127\.0\.0\.1|localhost)/.test(s)) ?? ''
+        if (url === '') return
+        const html = await (await fetch(url)).text()
+        this.embedServeInfo =
+          `取回 ${html.length} 字符｜含桥关键字(__ijipuAppResponse)=${html.includes('__ijipuAppResponse') ? '是 ✓' : '否 ✗'}` +
+          `｜含顶层安装关键字(installObsidianBridge)=${html.includes('installObsidianBridge') ? '是 ✓' : '否（被压缩改名，正常）'}`
+      } catch (e) {
+        this.embedServeInfo = `取回失败：${e instanceof Error ? e.message : String(e)}`
+      }
+    })()
 
     push('')
     push('— 源码态事件序列（最近 12 条；用于定位"按 Ctrl+P 闪回预览"）—')
