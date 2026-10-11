@@ -3559,6 +3559,27 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       ))
 }
 
+/**
+ * ---- adj791：`<pre>`（代码块外层）也要放开裁剪 ----
+ *
+ * 用户诊断的祖先链里出现 **`el-pre`** ⇒ 代码块外那层 `<pre>`（默认 `overflow: auto`）被"滚动容器绝不动"
+ * 的规则挡下 ⇒ 永远放不开 ⇒ 浮在块外的工具条被裁掉 ✗。
+ * 但它**只包着我们这一块**（`querySelector('.ijipu-score')` 命中自己）⇒ 放开是安全的；
+ * 真正的滚动容器（`.cm-scroller` / `.markdown-preview-view`）仍严格不动。
+ */
+{
+  const pane791 = String(readFileSync('src/scorePane.ts', 'utf8'))
+  check('adj791 只包着本插件面板的 `<pre>` 允许放开裁剪（真正的滚动容器仍不动）',
+    /const isOurPre = el\.tagName === 'PRE' && el\.querySelector\('\.ijipu-score'\) !== null/.test(pane791) &&
+      /const canTouch = isCmLayer \|\| isOurs \|\| isOurPre/.test(pane791) &&
+      // "是滚动容器就不动"这条规则仍在，只是对"我们的 pre"开一个口子
+      /\(scrollByDesign && !isOurPre\) \? '是滚动容器'/.test(pane791) &&
+      // 负对照：把那个口子去掉 ⇒ 判据为假（证明它真的是这条口子在起作用）
+      !/\(scrollByDesign && !isOurPre\) \? '是滚动容器'/.test(
+        pane791.replace(/(scrollByDesign && !isOurPre) \? '是滚动容器'/, "scrollByDesign ? '是滚动容器'"),
+      ))
+}
+
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。
 //   实测踩过：一次编辑顺手把它删掉，套件仍以退出码报错，但输出里再也看不到 `N passed, M failed`。
 console.log(`\n${pass} passed, ${fail} failed`)

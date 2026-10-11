@@ -279,10 +279,19 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
        * ⚠ 宿主的骨架（`.view-content` / `.workspace-leaf` / 别人的 `.internal-embed`）一律不动。
        */
       const isOurs = el.hasClass('ijipu-embed') || el.hasClass('ijipu-score') || el.hasClass('block-language-jps')
-      const canTouch = isCmLayer || isOurs
+      /**
+       * adj791（用户诊断里祖先链出现 **`el-pre`**）：代码块外面那层 **`<pre>`** 很可能就是真正的裁剪层
+       * （`<pre>` 默认 `overflow: auto` ⇒ 被上面的"滚动容器绝不动"规则挡下 ⇒ 永远放不开 ⇒ 工具条被裁 ✗）。
+       *
+       * 但这个 `<pre>` **只包着我们这一块**（`querySelector('.ijipu-score')` 命中它自己 ✓）——
+       * 它的内容是按块尺寸渲染的，不需要滚动 ⇒ 放开它的 `overflow` 是**安全的**（不影响编辑器滚动：
+       * 真正的滚动容器在更外层 `.cm-scroller` / `.markdown-preview-view`，那些仍然不动）。
+       */
+      const isOurPre = el.tagName === 'PRE' && el.querySelector('.ijipu-score') !== null
+      const canTouch = isCmLayer || isOurs || isOurPre
       if (clips) {
         // 不动它的理由（为空 = 该放开）——写成变量而不是嵌套三元，免得模板字符串里套引号
-        const whyNot = scrollByDesign ? '是滚动容器' : canTouch ? '' : '是宿主骨架'
+        const whyNot = (scrollByDesign && !isOurPre) ? '是滚动容器' : canTouch ? '' : '是宿主骨架'
         if (whyNot !== '') {
           facts.push(`${name}:裁剪但（${whyNot}）不动它`)
         } else {
