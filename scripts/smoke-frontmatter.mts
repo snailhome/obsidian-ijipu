@@ -1756,7 +1756,10 @@ console.log('\n[adj724b] community review: forbidden APIs / styles must stay fix
       /getAttribute\('data-page-bg'\)/.test(scorePaneSrc) &&
       /const box = measureContentBox\(svgEl\)/.test(scorePaneSrc) &&
       /svgEl\.dataset\.contentBox = /.test(scorePaneSrc) &&
-      /const box = contentBoxOf\(svgEl\)/.test(scorePaneSrc))
+      // adj831：取盒改成"带退化闸的 IIFE" ⇒ 判据同步为"仍会调用 contentBoxOf ✓ 且有退化判据" ✓
+      /const box = \(\(\): \{ x: number; y: number; w: number; h: number \} \| null => \{/.test(scorePaneSrc) &&
+      /const b = contentBoxOf\(svgEl\)/.test(scorePaneSrc) &&
+      /const MIN_INK = 40/.test(scorePaneSrc))
   //    ③ 量到的盒**必须真的比整页小**（容差 2%）才用它 —— 防止 `getBBox()` 把整页白底算进来
   //       导致"裁剪等于没裁"（现象正是"谱面还是 A4 那么大空白"）；不满足则退回边距兜底。
   check('adj724b 裁剪以"实测内容盒"为主路径，且要求它真的比整页小（否则退回边距兜底）',
