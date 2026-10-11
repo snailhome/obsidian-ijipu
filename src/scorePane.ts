@@ -680,34 +680,34 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
      * `left = 块.left − 参照系.left`、`top = 块.top − 工具条高 − 2 − 参照系.top`。
      * 同时**下一帧与 50ms 后各重算一次**（首帧布局常未稳定，这也是坐标偏掉的一半原因）。
      */
-    const fixedContainingBlock = (from: HTMLElement): HTMLElement | null => {
-      let el: HTMLElement | null = from.parentElement
-      while (el) {
-        const cs = window.getComputedStyle(el)
-        const makesCb =
-          cs.transform !== 'none' ||
-          cs.filter !== 'none' ||
-          cs.perspective !== 'none' ||
-          cs.willChange.includes('transform') ||
-          /paint|strict|content/.test(cs.contain) ||
-          cs.position === 'fixed'
-        if (makesCb) return el
-        el = el.parentElement
-      }
-      return null
-    }
+    /**
+     * adj793c：挂到 `document.body` 之后，**不再需要**"找 fixed 参照系"那套（body 下没有 transform 祖先）
+     * ⇒ 该辅助函数已删除（上一版用它算坐标；现在坐标就是视口坐标）。
+     */
     const positionOutsideFixed = (el: HTMLElement): void => {
+      /**
+       * adj793c（用户：坐标已正确、`position=fixed` 已生效，但命中测试仍落到 `div.cm-line` ✗）：
+       *
+       * 结论：`fixed` 也**跨不出祖先的层叠上下文** —— z-index 只在**同一个**上下文里比大小，
+       * 而工具条仍在块（`.cm-embed-block` / `.ijipu-score`）的上下文里 ⇒ 相邻 `.cm-line` 只要落在
+       * 更高的上下文，就照样盖住它 ✗。
+       *
+       * 唯一可靠的做法：**把工具条挂到 `document.body`**（脱离块的整棵子树）⇒ 不受任何祖先的
+       * 裁剪与层叠约束 ⇒ 一定画在最上层；此时坐标也用**视口**坐标（body 下没有 transform 祖先）。
+       * 收起时再挂回容器（见 `clearOutsideFixed`），保持 DOM 与"下次显示"的干净。
+       */
+      if (el.parentElement !== document.body) document.body.appendChild(el)
       const host = container.getBoundingClientRect()
       const h = el.getBoundingClientRect().height || 28
-      const cb = fixedContainingBlock(el)
-      const cbRect = cb ? cb.getBoundingClientRect() : { left: 0, top: 0 }
       el.style.setProperty('position', 'fixed')
-      el.style.setProperty('left', `${Math.round(host.left - cbRect.left)}px`)
-      el.style.setProperty('top', `${Math.round(host.top - cbRect.top - h - TOOLBAR_GAP)}px`)
+      el.style.setProperty('left', `${Math.round(host.left)}px`)
+      el.style.setProperty('top', `${Math.round(host.top - h - TOOLBAR_GAP)}px`)
       el.style.setProperty('bottom', 'auto')
-      el.style.setProperty('z-index', '30')
+      el.style.setProperty('z-index', '40')
     }
     const clearOutsideFixed = (el: HTMLElement): void => {
+      // adj793c：挂到 body 的工具栏要**挂回容器**（否则收起后它仍留在 body 上，下次显示会错位/堆积）
+      if (el.parentElement === document.body && container.isConnected) container.appendChild(el)
       el.style.removeProperty('position')
       el.style.removeProperty('left')
       el.style.removeProperty('top')
