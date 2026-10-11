@@ -637,6 +637,16 @@
 .ijipu-file-view > * {
   flex: 0 0 auto;
 }
+/**
+ * adj794e：再加一道保险 —— 预览态下面板与 SVG 层都**按内容高度**参与布局，
+ * 不允许任何一层把面板"压小"（压小之后内容就成了"面板内部的溢出"，不计入父容器可滚高度 ✗）。
+ * 只给这两层，**不动 `svg` 本身**（它靠 `width/height` + `viewBox` 维持比例）。
+ */
+.ijipu-file-view .ijipu-score,
+.ijipu-file-view .ijipu-svgs {
+  height: auto;
+  max-height: none;
+}
 .ijipu-file-view.ijipu-file-editing {
   overflow: hidden;
 }

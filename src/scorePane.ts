@@ -1808,6 +1808,16 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
         el.removeClass('ijipu-cm-nocontain')
       }
       noClipEls.clear()
+      /**
+       * adj794e（用户实测：手机端"嵌入 jps 文件的编辑可直达源码 ✓，但**工具栏卡在了原地不消失**"）：
+       *
+       * 外侧落位时工具条被挂到 `document.body`（adj793c，为摆脱祖先裁剪/层叠）⇒
+       * 面板销毁时 `container.empty()` 只清容器**内**的东西 ✗ ⇒ 它就留在 body 上不动 ✓✓
+       * （我上一版把它放进 `plugin.register(...)` ✗ —— 那个回调只在**插件卸载**时跑，
+       *  面板销毁根本不会触发 ✗，所以完全没生效 ✓）。这里在**真正的 destroy** 里收掉。
+       */
+      const tb = liveToolbar()
+      if (tb.parentElement === document.body) tb.remove()
       container.empty()
     },
   }
