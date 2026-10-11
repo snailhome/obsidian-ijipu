@@ -1232,9 +1232,15 @@ export default class IJipuPlugin extends Plugin {
         const url = frames.map((f) => f.src).find((s) => /^https?:\/\/(127\.0\.0\.1|localhost)/.test(s)) ?? ''
         if (url === '') return
         const html = (await requestUrl(url)).text
+        /**
+         * adj853：加一个**新版嵌入产物独有**的标记 —— `Obsidian 桥已安装`（adj852 才有的日志串 ✓）。
+         * 用它回答"**插件此刻内存里到底是不是新产物**"✓：
+         *  · 是 ✓ ⇒ 插件已换产物 ✓（那"没有安装日志"就是安装仍没执行 ✗ ⇒ 把安装再前移 ✓）；
+         *  · 否 ✗ ⇒ 插件**仍在发旧产物** ⇒ 只需**真正重载插件** ✓（我重建后必须重载 ✓）。
+         */
         this.embedServeInfo =
           `取回 ${html.length} 字符｜含桥关键字(__ijipuAppResponse)=${html.includes('__ijipuAppResponse') ? '是 ✓' : '否 ✗'}` +
-          `｜含顶层安装关键字(installObsidianBridge)=${html.includes('installObsidianBridge') ? '是 ✓' : '否（被压缩改名，正常）'}`
+          `｜含**新版独有**标记(Obsidian 桥已安装)=${html.includes('Obsidian 桥已安装') ? '**是 ✓（插件已是新产物）**' : '**否 ✗（插件仍在发旧产物 ⇒ 请重载插件）**'}`
       } catch (e) {
         this.embedServeInfo = `取回失败：${e instanceof Error ? e.message : String(e)}`
       }
