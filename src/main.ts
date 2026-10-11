@@ -4,7 +4,7 @@ import { formatLine } from '@ijipu/engine'
 // adj774：markdown 笔记里 ```jps 代码块的围栏扫描（着色/错误提示/自动格式化三处共用同一份口径）
 import { jpsBlockRanges } from './jpsBlocks'
 import { createIjipuApi, type IjipuApi } from './api'
-import { createEmbedRpc, type EmbedRpc } from './embed/rpc'
+import { createAppRequester, createEmbedRpc, type AppRequester, type EmbedRpc } from './embed/rpc'
 // adj807（B2）：RPC 的 `render.svg` 允许带 `pageConfig` 覆盖 ⇒ 这里只需要它的**类型**
 import type { PageConfig } from '@ijipu/engine'
 import { IJipuSettingTab } from './settings'
@@ -69,6 +69,19 @@ export default class IJipuPlugin extends Plugin {
    */
   allowExternalApi = false
   private embedRpc: EmbedRpc | null = null
+  /** adj809（B3 起步）：反方向请求器（插件 → 嵌入版，如 render.png） */
+  appRpc: AppRequester | null = null
+
+  /**
+   * adj809（B3 起步）：当前**嵌入版 iframe 的窗口** —— 收发消息与来源校验都用它 ✓。
+   * 判据：`src` 里带本插件发的 `token=`（与 `IJipuBridge` 的登记口径一致 ✓）。
+   */
+  private embedRpcWindow(): Window | null {
+    for (const f of Array.from(document.querySelectorAll('iframe'))) {
+      if (f.src.includes('token=') && f.contentWindow !== null) return f.contentWindow
+    }
+    return null
+  }
   /** 插件内事件广播（当前用于设置变更 → 打开中的谱面即时重渲染） */
   readonly events = new Events()
   /** 「排版辅助虚线」是否显示（与 iJipu 顶栏「排版」按钮同一个开关；所有面板共享、不落盘） */
@@ -415,6 +428,7 @@ export default class IJipuPlugin extends Plugin {
       void this.bridge.handle(ev)
       // adj807（B2）：同一条 window message 监听里再交给嵌入版 RPC（它自己做来源校验与白名单 ✓）
       this.embedRpc?.handle(ev)
+      this.appRpc?.handleResponse(ev)
     })
     this.addCommand({
       id: 'open-app',
@@ -451,6 +465,7 @@ export default class IJipuPlugin extends Plugin {
       renderSvg: (source, pageConfig) => this.api.renderSvg(source, pageConfig as Partial<PageConfig> | undefined),
       pluginVersion: this.manifest.version,
     })
+    this.appRpc = createAppRequester({ isEnabled: () => this.allowExternalApi, getIframeWindow: () => this.embedRpcWindow() })
     this.registerCommands()
     /**
      * adj746（用户要求：「源码如果能够按我们应用的规范格式化就更好了」）：

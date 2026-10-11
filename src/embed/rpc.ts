@@ -123,3 +123,76 @@ export function createEmbedRpc(deps: Deps): EmbedRpc {
 
   return { handle, methods: RPC_METHODS }
 }
+
+/**
+ * adj809（B3 起步）：协议的**反方向** —— 插件 → 嵌入版（"要用**应用**才有的能力"）✓。
+ *
+ * 为什么必须双向：`render.png` / `export.midi` / `playback.*` 的实现都在**应用侧**
+ * （canvas / 分页 / 音色库 ✓）⇒ 插件只能"请求应用做"，不能自己做 ✓。
+ *
+ * 约定：
+ *  · 信封用**另一个标记**（`__ijipuAppRequest`）—— 与应用→插件那条通道（`__ijipuRpcRequest`）
+ *    分开，避免两个 listener 互相误认 ✗；
+ *  · 方法**白名单** + `params` 校验 + `isEnabled()` 总开关（与入站同一口径 ✓）；
+ *  · **按 id 关联 + 超时**（默认 10s）：应用没应答就 reject，绝不无限等待 ✓；
+ *  · 只向**我们的 iframe 窗口**发（复用同一个 getter ✓）。
+ */
+export const APP_METHODS = ['render.png', 'export.midi', 'playback.play', 'playback.stop'] as const
+
+export type AppResponse =
+  | { __ijipuAppResponse: 1; id: number; ok: true; result: unknown }
+  | { __ijipuAppResponse: 1; id: number; ok: false; error: { code: number; message: string } }
+
+export type AppRequester = {
+  /** 处理 iframe 回来的应答（挂在同一条 window message 监听上 ✓） */
+  handleResponse: (ev: MessageEvent) => void
+  /** 发一个请求（未启用 / 无 iframe / 超时 ⇒ reject ✓） */
+  request: <T = unknown>(method: string, params?: Record<string, unknown>, timeoutMs?: number) => Promise<T>
+  /** 有没有在飞的请求（诊断用 ✓） */
+  pendingCount: () => number
+}
+
+export function createAppRequester(deps: Pick<Deps, 'isEnabled' | 'getIframeWindow'>): AppRequester {
+  let seq = 0
+  const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: number }>()
+
+  const handleResponse = (ev: MessageEvent): void => {
+    const data = ev.data as AppResponse | null
+    if (data === null || typeof data !== 'object' || data.__ijipuAppResponse !== 1) return
+    const win = deps.getIframeWindow()
+    if (win === null || ev.source !== win) return
+    const slot = pending.get(data.id)
+    if (slot === undefined) return
+    pending.delete(data.id)
+    window.clearTimeout(slot.timer)
+    if (data.ok) slot.resolve(data.result)
+    else slot.reject(new Error(`${data.error.code}: ${data.error.message}`))
+  }
+
+  const request = <T = unknown>(method: string, params: Record<string, unknown> = {}, timeoutMs = 10_000): Promise<T> =>
+    new Promise<T>((resolve, reject) => {
+      if (!deps.isEnabled()) {
+        reject(new Error('嵌入版通道未启用（设置 → iJipu → 开发者）'))
+        return
+      }
+      const win = deps.getIframeWindow()
+      if (win === null) {
+        reject(new Error('嵌入版未打开（先在笔记里打开一次嵌入版）'))
+        return
+      }
+      if (!(APP_METHODS as readonly string[]).includes(method)) {
+        reject(new Error(`未知方法：${method}`))
+        return
+      }
+      seq += 1
+      const id = seq
+      const timer = window.setTimeout(() => {
+        pending.delete(id)
+        reject(new Error(`嵌入版未在 ${timeoutMs}ms 内应答：${method}`))
+      }, timeoutMs)
+      pending.set(id, { resolve: resolve as (v: unknown) => void, reject, timer })
+      win.postMessage({ __ijipuAppRequest: 1, id, method, params }, '*')
+    })
+
+  return { handleResponse, request, pendingCount: () => pending.size }
+}
