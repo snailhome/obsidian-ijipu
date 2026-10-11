@@ -390,9 +390,13 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
               `${plugin.lastToolbarInfo ?? ''}｜**放宽上游裁剪**后命中自身 ✓${relaxed.length > 0 ? `（${relaxed.join('、')}）` : ''}`
             return
           }
-          toolbarEl.addClass('ijipu-toolbar-inside')
+          /**
+           * adj787（用户要求）：「工具条**还是要求显示在外部**」——这条"临时贴回块内"的兜底**取消**：
+           * 允许遮挡其它元素（已能自动隐藏 + 点击显隐），只有"外侧"一种落位。若某环境下真的看不见，
+           * 诊断里会留下上面的命中测试事实，便于定位（而不是悄悄换成一个用户不要的位置）。
+           */
           plugin.lastToolbarInfo =
-            `${plugin.lastToolbarInfo ?? ''}｜放宽上游${relaxed.length > 0 ? `（${relaxed.join('、')}）` : ''}后仍未命中 ⇒ **临时贴回块内**`
+            `${plugin.lastToolbarInfo ?? ''}｜放宽上游${relaxed.length > 0 ? `（${relaxed.join('、')}）` : ''}后仍未命中 ⇒ 仍保持**外侧**（用户口径；不贴回块内）`
         })
       }
       /**
@@ -614,9 +618,18 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
                   noteToolbar('落位判定：**外侧**（放宽上游后命中）', [...facts, ...relaxed], el)
                   return
                 }
-                placementInside = true
-                liveToolbar().addClass('ijipu-toolbar-inside')
-                noteToolbar('落位判定：**内侧**（外侧被裁，固定贴回块内，不再来回切）', [...facts, ...relaxed], el)
+                /**
+                 * adj787（用户要求）：「工具条**还是要求显示在外部**」——允许它遮挡其它元素
+                 * （因为已经能自动隐藏、也能点击预览区显/隐，遮挡不再是问题）。
+                 * 所以这里**不再贴回块内**：即使外侧那个点没命中自己（被裁剪/被别的元素盖住），
+                 * 也保持"外侧"落位，只把事实记进诊断，方便日后排查"看不见"的情况。
+                 */
+                placementInside = false
+                noteToolbar(
+                  '落位：保持**外侧**（用户口径：允许遮挡其它元素，不贴回块内）',
+                  [...facts, ...relaxed],
+                  el,
+                )
               } catch (err) {
                 plugin.lastToolbarInfo = `${plugin.lastToolbarInfo ?? ''}｜落位复测异常：${String(err)}`
               }
@@ -1140,8 +1153,16 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
             host.onEditSource()
             return
           }
+          /**
+           * adj787（用户实测「手机端嵌入 `![[xxx.jps]]` 的工具条「编辑」点了**还是没反应**」）：
+           *
+           * 原来这里是 `host.onToggleSource?.()` —— 而**嵌入宿主没有 `onToggleSource`**（它只有 `onEdit`
+           * 与 `onOpenFile`）⇒ `?.()` 空调用 ⇒ 什么都没发生 ✗（我上一轮加在 `embed.ts` 里的
+           * "手机端 onEdit ⇒ 打开 .jps 并进源码编辑"因此**根本没被走到**）。
+           * 现在手机端**回退到 `onEdit`**：嵌入宿主会给它，行为就是"打开该 .jps 并进入源码编辑"。
+           */
           if (Platform.isMobile) {
-            host.onToggleSource?.()
+            ;(host.onToggleSource ?? host.onEdit)?.()
             return
           }
           // 桌面端优先用嵌入版 iJipu（用户要求 3a）；没有这条路径时退回源码编辑

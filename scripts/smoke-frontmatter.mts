@@ -2086,13 +2086,21 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
    * 宿主的裁剪机制不可能穷举 ⇒ 改为**自愈**：命中失败就把工具条**贴回块内**（祖先的裁剪框
    * 至少包含块本身 ⇒ 块内一定不会被裁），并在诊断里记下"兜底 + 复测结果"。
    */
-  check('adj751/755 工具条命中失败时自愈（先放宽上游、再贴回块内），且**每个面板只判定一次**（不再每次显示重判 ⇒ 不闪动）',
-    /const hitSelf = hit !== null && toolbarEl\.contains\(hit\)/.test(pane725) &&
-      /if \(!hitSelf && inViewport && !wasInside\) \{/.test(pane725) &&
-      /toolbarEl\.addClass\('ijipu-toolbar-inside'\)/.test(pane725) &&
+  /**
+   * adj751/755 → **adj787 新口径**（用户要求：「工具条**还是要求显示在外部**」——允许遮挡其它元素，
+   * 因为已能自动隐藏、也能点击预览区显/隐）。
+   *
+   * ⇒ 原来"命中失败 ⇒ 贴回块内"的两条路径**都已取消**：只有"外侧"一种落位。
+   * 保留的自愈手段是**放宽上游裁剪**（`ijipu-cm-host` / 逐层放开 overflow）与"每个面板只判定一次"。
+   */
+  check('adj751/755/adj787 命中失败只放宽上游裁剪；**不再贴回块内**（始终外部、允许遮挡），且每个面板只判定一次',
+    !/toolbarEl\.addClass\('ijipu-toolbar-inside'\)/.test(pane725) &&
+      // 两条路径都保留诊断，便于日后排查"看不见"
       /放宽上游/.test(pane725) &&
-      /\.ijipu-score-toolbar\.is-revealed\.ijipu-toolbar-inside \{/.test(css725nc) &&
-      /top: 2px;/.test(css725nc))
+      /保持\*\*外侧\*\*/.test(pane725) &&
+      /const hitSelf = hit !== null && toolbarEl\.contains\(hit\)/.test(pane725) &&
+      // 该 CSS 类仍保留定义（历史样式），但源码里**不得再有人加它**
+      /\.ijipu-score-toolbar\.is-revealed\.ijipu-toolbar-inside \{/.test(css725nc))
 
   /**
    * adj749c（用户要求，手机端）：
