@@ -94,6 +94,9 @@ import {
   scoreMenuIds,
   toolbarPolicy,
 } from '../src/scoreMenu'
+// adj873：手机端「保存图片到谱面同目录」的**纯逻辑**（谱名 + 重名递增）——
+// 纯函数直接跑边界，比只对源码做字符串匹配强（那一条也留着，见下面的 adj873 区块）
+import { IMAGE_EXT, scorePngBase, uniquePngName } from '../src/imageSave'
 
 let pass = 0
 let fail = 0
@@ -4125,22 +4128,23 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
   check('adj863 负对照：去掉 `source` 比对 ⇒ 判据为假（跨谱误用会拿别的谱的盒去裁）',
     !/this\.lastInk\.source === source/.test(main863.replace('this.lastInk.source === source', 'true')))
 
-  // —— ③ 三条出口都按设置裁：SVG 导出 / 复制 SVG / PNG（PNG 把**盒**交给应用侧） ——
-  check('adj863 导出 SVG 走 `applyExportRange`（page = 原样；score = 引擎裁）；adj864 复制 SVG 与它**共用**同一实现',
+  // —— ③ 四条出口都按设置裁：SVG 导出 / 复制 SVG / 复制为图片（PNG 把**盒**交给应用侧）/ 保存图片（adj873） ——
+  check('adj863 导出 SVG 走 `applyExportRange`（page = 原样；score = 引擎裁）；adj864/adj873 复制 SVG / 复制为图片 / 保存图片都**共用**同一实现',
     /applyExportRange\(\s*source: string,\s*svgs: string\[\],\s*pane\?: \{ box: RangeBox \| null; mode: 'page' \| 'full' \| 'score' \},?\s*\): \{ svgs: string\[\]; box: RangeBox \| null; error\?: string \}/.test(main863) &&
       /const out = rangeBox\(\{/.test(main863) &&
       /svgs: r\.box === null \? svgs : svgs\.map\(\(s\) => applyRangeToSvg\(s, r\.box as RangeBox\)\)/.test(main863) &&
       [...main863.matchAll(/const ranged = this\.applyExportRange\(c\.source, r\.svgs\)/g)].length === 1 &&
       /async copyScoreSvg\(\s*source: string,\s*pane\?: \{ box: RangeBox \| null; mode: 'page' \| 'full' \| 'score' \},?\s*\): Promise<void>/.test(main863) &&
       /const ranged = this\.applyExportRange\(source, r\.svgs, pane\)/.test(main863) &&
-      [...main863.matchAll(/if \(ranged\.error !== undefined\) \{/g)].length === 4)
+      // adj873 起是**五处**：导出 PNG / 导出 SVG / 复制为图片 / 保存图片 / 复制 SVG（每处都要如实报错）
+      [...main863.matchAll(/if \(ranged\.error !== undefined\) \{/g)].length === 5)
   check('adj863 PNG 走应用通道时把**算好的盒**传过去（`params.crop`），应用侧不重算几何',
     /let probeSvgs: string\[\] = \[\]/.test(main863) &&
       /const ranged = this\.applyExportRange\(c\.source, probeSvgs\)/.test(main863) &&
       /if \(ranged\.box !== null\) params\.crop = ranged\.box/.test(main863) &&
       /const res = await this\.appRpc\.request<\{ pngs: string\[\] \}>\('render\.png', params\)/.test(main863))
   check('adj863 负对照：删掉 `params.crop = ranged.box` ⇒ 判据为假（PNG 会悄悄还是整页）',
-    // ⚠ 必须**全局**替换：adj864 起这段代码在 main.ts 里出现了两处（导出 PNG + 复制为图片），
+    // ⚠ 必须**全局**替换：adj864/adj873 起这段代码在 main.ts 里出现了**三处**（导出 PNG + 复制为图片 + 保存图片），
     //    `String.replace(字符串)` 只换第一处 ⇒ 负对照会自己失败（本仓库已踩过同样的坑，见 adj825）
     !/if \(ranged\.box !== null\) params\.crop = ranged\.box/.test(
       main863.replace(/if \(ranged\.box !== null\) params\.crop = ranged\.box/g, ''),
@@ -4166,12 +4170,12 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       ))
 
   // —— ⑤ 设置项：L1 界面偏好（进 `types.ts` + 设置页下拉），**不进** `defs.ts` 的 DEFS（那是 L2） ——
-  check('adj863/adj864 导出范围是 L1 设置：`types.ts` 声明 + 设置页下拉（跟随视图 / 页面 / 谱面）+ 默认「页面」',
+  check('adj863/adj864/adj873 导出范围是 L1 设置：`types.ts` 声明 + 设置页下拉（跟随视图 / 页面 / 谱面）+ 默认「跟随视图」（用户 2026-10-11 定稿）',
     /exportRange\?: ExportRangeSetting/.test(types863) &&
       /export type ExportRangeSetting = 'view' \| 'page' \| 'score'/.test(types863) &&
-      /export const DEFAULT_EXPORT_RANGE: ExportRangeSetting = 'page'/.test(types863) &&
-      /dd\.addOption\('view', '跟随视图（与当前显示模式一致）'\)/.test(settings863) &&
-      /dd\.addOption\('page', '导出页面（整页 \+ 留白，默认）'\)/.test(settings863) &&
+      /export const DEFAULT_EXPORT_RANGE: ExportRangeSetting = 'view'/.test(types863) &&
+      /dd\.addOption\('view', '跟随视图（与当前显示模式一致，默认）'\)/.test(settings863) &&
+      /dd\.addOption\('page', '导出页面（整页 \+ 留白）'\)/.test(settings863) &&
       /dd\.addOption\('score', '导出谱面（墨迹 \+ 每边 2px）'\)/.test(settings863) &&
       /this\.plugin\.settings\.exportRange = v === 'view' \? 'view' : v === 'score' \? 'score' : 'page'/.test(settings863))
   check('adj863 负对照：`exportRange` 不得混进 `defs.ts` 的 DEFS（那是**跟着谱走**的 L2，会把本机偏好写进别人的谱）',
@@ -4232,26 +4236,30 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       rangeIds.every((id) => (MENU_ONLY_ACTIONS as readonly string[]).includes(id)))
 
   // —— ② 动作接上（菜单项 → 插件方法；面板传**自己手里的**墨迹盒，比插件缓存新鲜） ——
-  check('adj864 三个图片项分别调 `copyScoreImage(source, 1|2|4, paneRange)`（面板实测盒 + 当前模式）',
-    /const paneRange = \{ box: svgEls\[0\] \? contentBoxOf\(svgEls\[0\]\) : null, mode: paneMode \}/.test(pane864) &&
-      /case 'copy-image-1':\s*void plugin\.copyScoreImage\(source, 1, paneRange\)/.test(pane864) &&
-      /case 'copy-image-2':\s*void plugin\.copyScoreImage\(source, 2, paneRange\)/.test(pane864) &&
-      /case 'copy-image-4':\s*void plugin\.copyScoreImage\(source, 4, paneRange\)/.test(pane864) &&
+  // ⚠ adj873 起图片三项是**按平台分派**的（手机 `saveScoreImage` / 桌面 `copyScoreImage`）——
+  //   期望值跟着改成三元形态，判据本身**不放宽**（两端与三个尺度都逐条列出）。
+  check('adj864/adj873 三个图片项都按平台分派（手机 `saveScoreImage(source, 1|2|4, paneImage)` / 桌面 `copyScoreImage(…, paneImage)`）',
+    /const paneImage = \{ \.\.\.paneRange, targetPath: host\.filePath \?\? host\.notePath \}/.test(pane864) &&
+      /case 'copy-image-1':\s*void \(Platform\.isMobile \? plugin\.saveScoreImage\(source, 1, paneImage\) : plugin\.copyScoreImage\(source, 1, paneImage\)\)/.test(pane864) &&
+      /case 'copy-image-2':\s*void \(Platform\.isMobile \? plugin\.saveScoreImage\(source, 2, paneImage\) : plugin\.copyScoreImage\(source, 2, paneImage\)\)/.test(pane864) &&
+      /case 'copy-image-4':\s*void \(Platform\.isMobile \? plugin\.saveScoreImage\(source, 4, paneImage\) : plugin\.copyScoreImage\(source, 4, paneImage\)\)/.test(pane864) &&
       /case 'copy-svg':\s*void plugin\.copyScoreSvg\(source, paneRange\)/.test(pane864) &&
       /case 'copy-source':\s*void plugin\.copyScoreSource\(source\)/.test(pane864) &&
       /case 'range-view':\s*plugin\.setExportRange\('view'\)/.test(pane864) &&
       /case 'range-page':\s*plugin\.setExportRange\('page'\)/.test(pane864) &&
       /case 'range-score':\s*plugin\.setExportRange\('score'\)/.test(pane864))
-  check('adj864 菜单把当前范围与"视图写实"传给模型（`range` + `paneModeLabel`），单选项打勾走 `setChecked`',
-    /range: plugin\.settings\.exportRange \?\? 'page',/.test(pane864) &&
+  check('adj864/adj873 菜单把当前范围与"视图写实"传给模型（`range` + `paneModeLabel`），单选项打勾走 `setChecked`',
+    // adj873：缺省值读 `types.ts` 的 `DEFAULT_EXPORT_RANGE`（默认值只有**一处**定义），不再是字面量 `'page'`
+    /range: plugin\.settings\.exportRange \?\? DEFAULT_EXPORT_RANGE,/.test(pane864) &&
+      /import \{ DEFAULT_EXPORT_RANGE \} from '\.\/types'/.test(pane864) &&
       /paneModeLabel: MODE_LABEL\[paneMode\],/.test(pane864) &&
       /if \(it\.checked !== undefined\) item\.setChecked\(it\.checked\)/.test(pane864) &&
       /checked: ctx\.range === 'view',/.test(menu864) &&
       /checked: ctx\.range === 'page',/.test(menu864) &&
       /checked: ctx\.range === 'score',/.test(menu864))
   check('adj864 负对照：删掉 `case \'copy-image-2\'` 那一支 ⇒ 判据为假（菜单项会变成"点了没反应"）',
-    !/case 'copy-image-2':\s*void plugin\.copyScoreImage\(source, 2, paneRange\)/.test(
-      pane864.replace("case 'copy-image-2':\n          void plugin.copyScoreImage(source, 2, paneRange)", ''),
+    !/case 'copy-image-2':\s*void \(Platform\.isMobile \? plugin\.saveScoreImage\(source, 2, paneImage\) : plugin\.copyScoreImage\(source, 2, paneImage\)\)/.test(
+      pane864.replace("case 'copy-image-2':\n          void (Platform.isMobile ? plugin.saveScoreImage(source, 2, paneImage) : plugin.copyScoreImage(source, 2, paneImage))", ''),
     ))
 
   // —— ③ 图片路径：应用渲染 → 插件补 pHYs → 剪贴板；失败如实说 ——
@@ -4611,6 +4619,156 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
     api868 === '' ||
       (/嵌入版通道/.test(api868) && !/开发者/.test(api868) &&
         !/重载即回到关闭/.test(api868) && !/重载后回到关闭/.test(api868) && !/仅本会话有效/.test(api868)))
+}
+
+/**
+ * ---- adj873（用户 2026-10-11 两项定稿）：① 导出范围默认改「跟随视图」；② 手机端「保存图片」 ----
+ *
+ * ## ① 导出范围默认值
+ * 旧默认 `page`（adj863/adj864 的裁决：怕老用户升级后导出尺寸突变）。用户 `2026-10-11` **明确**改成
+ * `view`（跟随视图）：导出/复制默认就与**看到的**一致。代价由"菜单/设置页都把当前值打勾"兜住。
+ *
+ * ## ② 手机端图片出口
+ * 手机宿主 WebView **写不了剪贴板图片**（`copyPngBytesToClipboard` 必抛错）⇒ 手机上把
+ * `⋯ 更多 → 图片出口` 从「复制」改成「**保存到谱面同目录**」（`<谱名>.png`，重名加 `-2`/`-3`…，
+ * **绝不静默覆盖** ✗）；**桌面端保持复制不变**。动作 id 仍是 `copy-image-1|2|4`（路由表不动）。
+ *
+ * 四条闸门都带**负对照**（把口径做坏 ⇒ 判据必须变假，不许"怎么写都绿"）：
+ *  ① 菜单文案：手机**没有**「复制为图片」、桌面**没有**「保存图片」；
+ *  ② 路由：手机 `saveScoreImage` / 桌面 `copyScoreImage`（**对调两端 ⇒ 判假**）；
+ *  ③ `saveScoreImage` 真的写库（`vault.createBinary`）且重名递增（**删掉递增后缀 ⇒ 判假**）；
+ *  ④ 默认导出范围 = `'view'`（**写回 `'page'` ⇒ 判假**）。
+ */
+{
+  const pane873 = codeOf(String(readFileSync('src/scorePane.ts', 'utf8')))
+  const main873 = codeOf(String(readFileSync('src/main.ts', 'utf8')))
+  const menu873 = codeOf(String(readFileSync('src/scoreMenu.ts', 'utf8')))
+  const types873 = codeOf(String(readFileSync('src/types.ts', 'utf8')))
+  const set873 = codeOf(String(readFileSync('src/settings.ts', 'utf8')))
+  const img873 = codeOf(String(readFileSync('src/imageSave.ts', 'utf8')))
+  const fv873 = codeOf(String(readFileSync('src/fileView.ts', 'utf8')))
+  const em873 = codeOf(String(readFileSync('src/embed.ts', 'utf8')))
+
+  // —— ① 菜单文案按平台切换（动作 id 不变；手机端不许出现"复制为图片"） ——
+  const imageIds873 = ['copy-image-1', 'copy-image-2', 'copy-image-4'] as const
+  const menuOf873 = (isMobile: boolean) =>
+    buildScoreMenu({ isMobile, hasWriteSource: true, hasFormat: false, hasAppOpen: false, range: 'view', paneModeLabel: '谱面' })
+  const label873 = (m: ReturnType<typeof menuOf873>, id: string): string =>
+    m.flatMap((s) => s.items).find((i) => i.id === id)?.label ?? ''
+  /** 菜单里**所有**面向用户的文字（组标题 + 项标题 + 项说明）——负向判据必须查全部，不能只看 label */
+  const textsOf873 = (m: ReturnType<typeof menuOf873>): string[] =>
+    m.flatMap((s) => [s.title, ...s.items.flatMap((i) => [i.label, i.title])])
+  const texts873mob = textsOf873(menuOf873(true))
+  const texts873desk = textsOf873(menuOf873(false))
+  const menuWording873 = (src: string): boolean =>
+    /const saveOnMobile = ctx\.isMobile/.test(src) &&
+    /label: saveOnMobile \? `保存图片（\$\{scale\}×\$\{extra\}）` : `复制为图片（\$\{scale\}×\$\{extra\}）`/.test(src) &&
+    /title: saveOnMobile\s*\?\s*`保存 PNG 图片到谱面同目录/.test(src)
+  check('adj873 手机菜单：图片三项都是「保存图片…」、**通篇没有**「复制为图片」也不提剪贴板（点之前就知道会存到哪）',
+    imageIds873.every((id) => hasScoreMenuItem(menuOf873(true), id) && label873(menuOf873(true), id).startsWith('保存图片')) &&
+      label873(menuOf873(true), 'copy-image-2') === '保存图片（2×，默认）' &&
+      texts873mob.every((t) => !t.includes('复制为图片')) &&
+      texts873mob.every((t) => !t.includes('剪贴板')) &&
+      menuWording873(menu873),
+    `手机：${imageIds873.map((id) => label873(menuOf873(true), id)).join('｜')}`)
+  check('adj873 桌面菜单：图片三项仍是「复制为图片…」、没有「保存图片」（桌面剪贴板能写图片 ⇒ 行为不变）',
+    imageIds873.every((id) => label873(menuOf873(false), id).startsWith('复制为图片')) &&
+      label873(menuOf873(false), 'copy-image-2') === '复制为图片（2×，默认）' &&
+      texts873desk.every((t) => !t.includes('保存图片')) &&
+      texts873desk.some((t) => t.includes('复制为 PNG 图片到剪贴板')),
+    `桌面：${imageIds873.map((id) => label873(menuOf873(false), id)).join('｜')}`)
+  check('adj873 负对照：把两端文案**对调**（桌面用手机那句话）⇒ 上面那条"文案按平台切换"的判据为假',
+    (() => {
+      const flip873 = 'label: saveOnMobile ? `复制为图片（${scale}×${extra}）` : `保存图片（${scale}×${extra}）`'
+      const orig873 = 'label: saveOnMobile ? `保存图片（${scale}×${extra}）` : `复制为图片（${scale}×${extra}）`'
+      const wrong873 = menu873.split(orig873).join(flip873)
+      return wrong873 !== menu873 && !menuWording873(wrong873)
+    })())
+
+  // —— ② 路由：手机保存 / 桌面复制（同一个 case，两端都逐条列出） ——
+  const route873 = (src: string): boolean =>
+    (src.match(/Platform\.isMobile \? plugin\.saveScoreImage\(source, [124], paneImage\) : plugin\.copyScoreImage\(source, [124], paneImage\)/g) ?? []).length === 3 &&
+    (src.match(/targetPath: host\.filePath \?\? host\.notePath/g) ?? []).length === 1
+  check('adj873 路由：三个尺度都按平台分派 —— 手机 `saveScoreImage` / 桌面 `copyScoreImage`；落点 = `filePath ?? notePath`',
+    route873(pane873) &&
+      /case 'copy-image-1':\s*void \(Platform\.isMobile \? plugin\.saveScoreImage\(source, 1, paneImage\) : plugin\.copyScoreImage\(source, 1, paneImage\)\)/.test(pane873) &&
+      /case 'copy-image-4':\s*void \(Platform\.isMobile \? plugin\.saveScoreImage\(source, 4, paneImage\) : plugin\.copyScoreImage\(source, 4, paneImage\)\)/.test(pane873))
+  check('adj873 负对照：把两平台**对调**（手机复制、桌面保存）⇒ 上面那条路由判据为假',
+    (() => {
+      let swapped873 = pane873
+      for (const d of [1, 2, 4]) {
+        swapped873 = swapped873
+          .split(`Platform.isMobile ? plugin.saveScoreImage(source, ${d}, paneImage) : plugin.copyScoreImage(source, ${d}, paneImage)`)
+          .join(`Platform.isMobile ? plugin.copyScoreImage(source, ${d}, paneImage) : plugin.saveScoreImage(source, ${d}, paneImage)`)
+      }
+      return swapped873 !== pane873 && !route873(swapped873)
+    })())
+  check('adj873 落点信息来自宿主：代码块传 `notePath`（宿主笔记）、文件视图/嵌入用既有 `filePath`（谱面文件本身）',
+    /notePath: this\.sourcePath,/.test(main873) && /notePath\?: string/.test(pane873) &&
+      /filePath: this\.file\?\.path,/.test(fv873) && /filePath: file\.path,/.test(em873))
+  check('adj873 负对照：把代码块那行 `notePath:` 去掉 ⇒ 判据为假（代码块会退回库根，图片存错地方）',
+    !/notePath: this\.sourcePath,/.test(main873.split('notePath: this.sourcePath,').join('')))
+
+  // —— ③ `saveScoreImage` 真的写库 + 重名递增（绝不静默覆盖） ——
+  const saveStart873 = main873.indexOf('async saveScoreImage(')
+  const saveEnd873 = main873.indexOf('async copyScoreSvg(')
+  const save873 = saveStart873 >= 0 && saveEnd873 > saveStart873 ? main873.slice(saveStart873, saveEnd873) : ''
+  /**
+   * 判据写成**一个函数**：正反两条断言用**同一份判据**（负对照不许另写一条更宽松的）。
+   * 量的是"真的落盘"这件事：`vault.createBinary(...)` + 写前用 `uniquePngName` 挑名字 +
+   * 撞名时**明确报错不覆盖** + Notice 里给出**写到了哪个库内路径**与"只保存第 1 页"。
+   */
+  const writesToVault873 = (src: string): boolean =>
+    src.includes('vault.createBinary(path, withDpi.buffer as ArrayBuffer)') &&
+    src.includes('uniquePngName(names, scorePngBase(pane?.targetPath))') &&
+    src.includes("dirOfPath(pane?.targetPath ?? '')") &&
+    src.includes('getAbstractFileByPath(path) !== null') &&
+    src.includes('已保存到 ${path}') &&
+    src.includes('只保存第 1 页')
+  check('adj873 `saveScoreImage` 写进**谱面所在目录**（`.jps` 同目录 / 代码块用宿主笔记目录 / 取不到库根），Notice 报完整库内路径',
+    save873.length > 800 && writesToVault873(save873) &&
+      // 与「复制为图片」**同一套取图路径**：探活 → resolveRangeBox → render.png（带 crop）→ 补 pHYs
+      /await this\.appRpc\.request<\{ svgs: string\[\] \}>\('render\.svg', \{ source \}, 4000\)/.test(save873) &&
+      /const ranged = this\.resolveRangeBox\(source, probe\.svgs, pane\)/.test(save873) &&
+      /await this\.appRpc\.request<\{ pngs: string\[\] \}>\('render\.png', params\)/.test(save873) &&
+      /const withDpi = insertPngPhys\(bytes, dpi\)/.test(save873),
+    `saveScoreImage=${save873.length} 字符`)
+  check('adj873 负对照：把"挑不重名"那段删掉（直接 `path = 谱名.png` 落盘）⇒ 上面那条判据为假（会静默覆盖已有图片）',
+    !writesToVault873(save873.split('uniquePngName(names, scorePngBase(pane?.targetPath))').join('`${scorePngBase(pane?.targetPath)}${IMAGE_EXT}`')))
+  check('adj873 重名递增（纯函数）：`<谱名>.png` → `-2` → `-3`…；取第一个空位；大小写不敏感（Windows/macOS 同一文件）',
+    uniquePngName([], '小星星') === `小星星${IMAGE_EXT}` &&
+      uniquePngName(['小星星.png'], '小星星') === '小星星-2.png' &&
+      uniquePngName(['小星星.png', '小星星-2.png'], '小星星') === '小星星-3.png' &&
+      uniquePngName(['小星星.png', '小星星-3.png'], '小星星') === '小星星-2.png' &&
+      uniquePngName(['小星星.PNG', 'x.md'], '小星星') === '小星星-2.png' &&
+      uniquePngName(['小星星-2.png'], '小星星') === '小星星.png')
+  check('adj873 谱名取自参考路径：`.jps` 文件视图/嵌入 = 谱面文件基名；代码块 = 宿主笔记基名（与既有导出命令同口径）；取不到 = `score`',
+    scorePngBase('曲谱集/小星星.jps') === '小星星' &&
+      scorePngBase('小星星.JPS') === '小星星' &&
+      scorePngBase('a/b/练习.md') === '练习' &&
+      scorePngBase('小星星.v2.jps') === '小星星.v2' &&
+      scorePngBase(undefined) === 'score' && scorePngBase('') === 'score' && scorePngBase('a/b/') === 'score')
+  check('adj873 负对照：把递增后缀（`-${i}`）去掉 ⇒ "重名递增"的源码判据为假（就只剩一个固定名字了）',
+    /const name = `\$\{base\}-\$\{i\}\$\{IMAGE_EXT\}`/.test(img873) &&
+      !/const name = `\$\{base\}-\$\{i\}\$\{IMAGE_EXT\}`/.test(
+        img873.split('const name = `${base}-${i}${IMAGE_EXT}`').join('const name = `${base}${IMAGE_EXT}`')))
+
+  // —— ④ 导出范围默认 = `view`（用户 2026-10-11 定稿），且默认值只有**一处**定义 ——
+  const defaultView873 = (src: string): boolean => /export const DEFAULT_EXPORT_RANGE: ExportRangeSetting = 'view'/.test(src)
+  check('adj873 默认导出范围 = `view`（跟随视图）：`types.ts` 一处定义，设置页 / 菜单 / 范围解析都读它（不许各写一份字面量）',
+    defaultView873(types873) &&
+      /this\.settings\.exportRange \?\? DEFAULT_EXPORT_RANGE/.test(main873) &&
+      /range: plugin\.settings\.exportRange \?\? DEFAULT_EXPORT_RANGE,/.test(pane873) &&
+      /dd\.setValue\(this\.plugin\.settings\.exportRange \?\? DEFAULT_EXPORT_RANGE\)/.test(set873) &&
+      /dd\.addOption\('view', '跟随视图（与当前显示模式一致，默认）'\)/.test(set873) &&
+      // 旧口径必须消失：默认标记不再挂在「导出页面」上
+      !/导出页面（整页 \+ 留白，默认）/.test(set873))
+  check('adj873 负对照：把默认值写回 `\'page\'` ⇒ 上面那条判据为假（默认口径真的由这一行决定）',
+    !defaultView873(types873.split("DEFAULT_EXPORT_RANGE: ExportRangeSetting = 'view'").join("DEFAULT_EXPORT_RANGE: ExportRangeSetting = 'page'")))
+  check('adj873 `types.ts` 保留旧口径（`page`）的**历史说明**与"为何改"（否则下一个人会以为是手滑改错的）',
+    /用户 2026-10-11 定稿/.test(String(readFileSync('src/types.ts', 'utf8'))) &&
+      /旧口径（`page`/.test(String(readFileSync('src/types.ts', 'utf8'))) &&
+      /现在改成 `view`/.test(String(readFileSync('src/types.ts', 'utf8'))))
 }
 
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。

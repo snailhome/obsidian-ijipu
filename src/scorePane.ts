@@ -38,6 +38,8 @@ import { canOpenWithDefaultApp, openUrlExternally, openWithDefaultApp } from './
 import { computeGuideLines, cropRectFor, guideLimits, guidePlacement, type GuideLine } from './guides'
 import { GUIDES_CHANGED, SETTINGS_CHANGED } from './main'
 import type IJipuPlugin from './main'
+// adj873：导出范围的**缺省值**只有一处定义（`types.ts`）——菜单打勾 / 设置页 / 解析都读它
+import { DEFAULT_EXPORT_RANGE } from './types'
 
 type ViewMode = 'page' | 'full' | 'score'
 const MODE_LABEL: Record<ViewMode, string> = { page: '整页', full: '满宽', score: '谱面' }
@@ -144,6 +146,14 @@ export type ScorePaneHost = {
    * （用户要求：手机端不出现）——点它用系统默认应用（`.jps` 关联的 iJipu 桌面版）打开去编辑。
    */
   filePath?: string
+  /**
+   * adj873：**宿主笔记**的库内路径（```jps 代码块才有；文件视图 / 嵌入不传）。
+   *
+   * 为什么面板要知道它：手机端「保存图片」要写进**谱面所在目录** ——
+   * `.jps` 文件视图 / 嵌入用 `filePath` 的父目录，而**代码块没有自己的文件** ⇒ 用宿主笔记的父目录。
+   * 面板不自己算目录（`imageSave.ts` 的纯函数 + `main.ts` 的 `saveScoreImage` 一处落地）。
+   */
+  notePath?: string
   /**
    * 「应用打开」之前的**落盘钩子**：先把未保存的编辑写进文件，再交给外部应用。
    * 不提供就只在"已经落盘"的状态下打开（嵌入模式的写回是即时的，故嵌入可以不传）。
@@ -1684,6 +1694,12 @@ toolbar.dataset.ijipuPane = String(paneId)
         box: { x: number; y: number; w: number; h: number } | null
         mode: ViewMode
       }
+      /**
+       * adj873：**图片出口的落点** —— 比 `paneRange` 多一位"这份谱在哪"：
+       * `.jps` 文件视图 / 嵌入 ⇒ 谱面文件本身；```jps 代码块 ⇒ 宿主笔记（只取它的目录）。
+       * 手机端「保存图片」用它决定写进哪个目录、叫什么名字；桌面端复制用不到（多传一位无害 ✓）。
+       */
+      const paneImage = { ...paneRange, targetPath: host.filePath ?? host.notePath }
       switch (id) {
         case 'settings':
           cfgBtn?.click()
@@ -1691,14 +1707,20 @@ toolbar.dataset.ijipuPane = String(paneId)
         case 'format':
           fmtBtn?.click()
           return
+        /**
+         * adj873（用户 2026-10-11 要求）：`copy-image-*` **按平台分派落点**（动作 id 不变）——
+         *  · **手机**：宿主剪贴板写不了图片 ⇒ `saveScoreImage`（存到谱面同目录，`<谱名>.png`）；
+         *  · **桌面**：照旧 `copyScoreImage`（PNG → 剪贴板）。
+         * 这就是"两端同一份菜单模型、只有落点不同"的那条分派（冒烟 `adj873` 正/负对照都盯着它）。
+         */
         case 'copy-image-1':
-          void plugin.copyScoreImage(source, 1, paneRange)
+          void (Platform.isMobile ? plugin.saveScoreImage(source, 1, paneImage) : plugin.copyScoreImage(source, 1, paneImage))
           return
         case 'copy-image-2':
-          void plugin.copyScoreImage(source, 2, paneRange)
+          void (Platform.isMobile ? plugin.saveScoreImage(source, 2, paneImage) : plugin.copyScoreImage(source, 2, paneImage))
           return
         case 'copy-image-4':
-          void plugin.copyScoreImage(source, 4, paneRange)
+          void (Platform.isMobile ? plugin.saveScoreImage(source, 4, paneImage) : plugin.copyScoreImage(source, 4, paneImage))
           return
         case 'copy-svg':
           void plugin.copyScoreSvg(source, paneRange)
@@ -1731,7 +1753,8 @@ toolbar.dataset.ijipuPane = String(paneId)
         hasAppOpen: appOpenBtn !== null,
         embedTitle: embedLinkTitle ?? undefined,
         // adj864：菜单里能改「导出范围」；"跟随视图"把当前显示模式写实（不点开也知道会按哪种口径）
-        range: plugin.settings.exportRange ?? 'page',
+        // adj873：缺省值读 `types.ts` 的 `DEFAULT_EXPORT_RANGE`（**一处定义**：设置页 / 解析 / 菜单同源）
+        range: plugin.settings.exportRange ?? DEFAULT_EXPORT_RANGE,
         paneModeLabel: MODE_LABEL[paneMode],
       })
       const menu = new Menu()

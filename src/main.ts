@@ -13,7 +13,9 @@ import { registerJpsEmbeds } from './embed'
 // adj752：`.jps` 源码高亮（CM6 扩展，规则来自引擎、配色来自应用）
 import { jpsHighlightExtension } from './jpsHighlight'
 import { IJipuFileView, JPS_EXTENSION, VIEW_TYPE_IJIPU } from './fileView'
-import { createJpsFile, consumeJpsLinkCreate, materializeJpsFile, planJpsLinkCreate, registerJpsFileCreator, unregisterJpsFileCreator, NEW_JPS_TEMPLATE } from './newFile'
+import { createJpsFile, consumeJpsLinkCreate, dirOfPath, materializeJpsFile, planJpsLinkCreate, registerJpsFileCreator, unregisterJpsFileCreator, NEW_JPS_TEMPLATE } from './newFile'
+// adj873：手机端「保存图片到谱面同目录」的**纯逻辑**（谱名 + 重名递增；不碰 obsidian/DOM ⇒ 冒烟可直接跑）
+import { scorePngBase, uniquePngName } from './imageSave'
 import { replaceCodeBlockBody } from './sourceEdit'
 import { canOpenWithDefaultApp, openWithDefaultApp } from './openExternal'
 import { DEFAULT_EMBED_CHANNEL, DEFAULT_EMBED_OPEN_MODE, DEFAULT_EXPORT_RANGE, type EmbedOpenMode, type ExportRangeSetting, type IJipuSettings } from './types'
@@ -1126,6 +1128,83 @@ export default class IJipuPlugin extends Plugin {
   }
 
   /**
+   * adj873（用户 2026-10-11 定稿）：**手机端「保存图片」** —— 把 PNG 写进**谱面所在目录**。
+   *
+   * ## 为什么手机上是"保存"而不是"复制"
+   * 手机宿主 WebView **写不了剪贴板图片**（没有 `ClipboardItem` / `navigator.clipboard.write`
+   * ⇒ `copyPngBytesToClipboard` 必抛错 ✗）⇒ 手机上这一项改存文件，**桌面端保持复制不变**。
+   *
+   * ## 与「复制为图片」同一套取图路径（一处口径，不另写）
+   * `render.svg` 探活取页宽 → `resolveRangeBox`（导出范围照常生效）→ `render.png`（带 crop，
+   * 应用侧只 `applyRangeToSvg`）→ 插件补 **pHYs（DPI = 72 × scale）** —— 存下来的图与粘贴出去的
+   * 是同一张（Word / 微信按 pHYs 认 DPI，不会当成 96 DPI 的巨图）。
+   *
+   * ## 存到哪（用户要求，取不到就退回库根）
+   * · **`.jps` 文件视图 / `![[x.jps]]` 嵌入** ⇒ 该文件所在目录（`pane.targetPath` = 谱面文件路径）；
+   * · **```jps 代码块** ⇒ **当前笔记所在目录**（代码块没有自己的文件，用宿主笔记的目录）；
+   * · 取不到 ⇒ **库根**。
+   * 文件名 = `<谱名>.png`；重名 ⇒ `<谱名>-2.png`、`-3`…（`uniquePngName`，**绝不静默覆盖** ✗）。
+   *
+   * 多页谱只**保存第 1 页**并如实说明（与剪贴板那条同一取舍：一次只出一张）。
+   */
+  async saveScoreImage(
+    source: string,
+    scale: number,
+    pane?: { box: RangeBox | null; mode: 'page' | 'full' | 'score'; targetPath?: string },
+  ): Promise<void> {
+    if (this.appRpc === null) {
+      new Notice('iJipu：嵌入版通道不可用（请先打开一次嵌入版 iJipu，再保存图片）', 8000)
+      return
+    }
+    try {
+      // 探活 + 取页宽（范围要用页面尺寸；这一步与「导出 PNG」「复制为图片」同一套路）
+      const probe = await this.appRpc.request<{ svgs: string[] }>('render.svg', { source }, 4000)
+      const ranged = this.resolveRangeBox(source, probe.svgs, pane)
+      if (ranged.error !== undefined) {
+        new Notice(`iJipu：保存图片失败 —— ${ranged.error}`, 8000)
+        return
+      }
+      const params: Record<string, unknown> = { source, scale }
+      if (ranged.box !== null) params.crop = ranged.box
+      const res = await this.appRpc.request<{ pngs: string[] }>('render.png', params)
+      const first = res.pngs[0]
+      if (first === undefined) {
+        new Notice('iJipu：保存图片失败 —— 应用没有返回图片')
+        return
+      }
+      const b64 = first.split(',')[1] ?? ''
+      const bytes = Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0))
+      const dpi = dpiForScale(scale)
+      const withDpi = insertPngPhys(bytes, dpi)
+
+      // —— 落点：目录 = 参考路径的父目录（取不到 = 库根）；文件名 = `<谱名>.png`（重名递增，不覆盖） ——
+      const dir = dirOfPath(pane?.targetPath ?? '')
+      const folder = dir === '' ? this.app.vault.getRoot() : this.app.vault.getAbstractFileByPath(dir)
+      const names = folder instanceof TFolder ? folder.children.map((c) => c.name) : []
+      const name = uniquePngName(names, scorePngBase(pane?.targetPath))
+      const path = dir === '' ? name : `${dir}/${name}`
+      /**
+       * `vault.createBinary` **本身就不覆盖**（目标已存在会抛错）—— 递增后缀是第一道闸，
+       * 这里是第二道：真撞上了（比如同步/外部工具刚放进来同一个名字）就明确报错，不静默改别人的图 ✗。
+       */
+      if (this.app.vault.getAbstractFileByPath(path) !== null) {
+        new Notice(`iJipu：保存图片失败 —— 同名文件已存在，未覆盖：${path}`, 8000)
+        return
+      }
+      // Obsidian 的 `*Binary` 接口要 `ArrayBuffer`（不是 `Uint8Array` ✗）
+      await this.app.vault.createBinary(path, withDpi.buffer as ArrayBuffer)
+      const pages = res.pngs.length
+      new Notice(
+        pages > 1
+          ? `iJipu：图片已保存到 ${path}（${scale}×，${dpi} DPI；这份谱共 ${pages} 页，只保存第 1 页）`
+          : `iJipu：图片已保存到 ${path}（${scale}×，${dpi} DPI）`,
+      )
+    } catch (e) {
+      new Notice(`iJipu：保存图片失败 —— ${e instanceof Error ? e.message : String(e)}`, 8000)
+    }
+  }
+
+  /**
    * adj864（T-5「复制」组）：复制**SVG 文本**到剪贴板（菜单入口与命令 `copy-jps-svg` 共用一份实现）。
    *
    * 范围同样生效：`score` 时裁到墨迹 ± 每边 2px（走的还是引擎那一份几何 ✓）。
@@ -1861,6 +1940,11 @@ class IJipuBlock extends MarkdownRenderChild {
       zoomWritten: this.zoomWrittenOfBlock(),
       /** adj870：代码块写死的初始显示模式（`m=p|w|s`）；没写 ⇒ 面板用缺省「谱面」 */
       mode: this.modeOfBlock(),
+      /**
+       * adj873：**宿主笔记的库内路径** —— 手机端「保存图片」把 PNG 写进"谱面所在目录"，
+       * 而代码块**没有自己的文件** ⇒ 用这篇笔记的父目录（与文件视图/嵌入用 `.jps` 自身同口径）。
+       */
+      notePath: this.sourcePath,
     })
   }
 

@@ -47,7 +47,8 @@ export type ScoreToolbarSlot = (typeof SCORE_TOOLBAR_SLOTS)[number]['id']
 export const MENU_ONLY_ACTIONS = [
   'settings',
   'format',
-  // adj864（T-5「复制」组）：复制为图片（1× / **2×默认** / 4×）+ 复制 SVG 文本 + 复制谱面源码
+  // adj864（T-5「复制」组）：图片出口（1× / **2×默认** / 4×）+ 复制 SVG 文本 + 复制谱面源码
+  // adj873：**同一个 id，两端文案不同** —— 桌面「复制为图片」、手机「保存图片」（id 不变 ⇒ 路由表不动）
   'copy-image-1',
   'copy-image-2',
   'copy-image-4',
@@ -136,20 +137,38 @@ export function buildScoreMenu(ctx: ScoreMenuContext): ScoreMenuSection[] {
   if (display.length > 0) sections.push({ title: '显示', items: display })
 
   /**
-   * **复制**（adj864，T-5 定稿）：复制为图片（1× / **2× 默认** / 4×）+ 复制 SVG 文本 + 复制谱面源码。
+   * **图片与文本出口**（adj864，T-5 定稿；**adj873 按平台分派文案**）。
+   *
+   * ## 为什么两端文案不同（adj873，用户 2026-10-11 要求）
+   * 手机上**写不了剪贴板图片**（宿主 WebView 没有 `ClipboardItem` / `navigator.clipboard.write`），
+   * 点了只会得到一句报错 ✗ ⇒ 手机上把这三项改成**保存图片到谱面同目录**（`<谱名>.png`），
+   * **桌面端保持"复制"不变**。文案必须跟着改：手机菜单里**不许**再出现「复制为图片」字样
+   * （否则用户点之前根本不知道会存到哪、也以为能粘出去）。
+   *
+   * ⚠ **动作 id 不变**（仍是 `copy-image-1|2|4`）：路由表/菜单结构不用大改，平台差异只在
+   * 文案（这里）与落点（`scorePane.ts` 的分派 + `main.ts` 的 `saveScoreImage`）两处表达。
    *
    * 为什么默认 2×：页面基准 72 DPI，2× ⇒ **144 DPI** ≈ 常见文档插图清晰度；1× 只够屏幕看、4× 体积翻倍。
    * 图片走**嵌入版通道**（插件没有 canvas）：渲染在应用侧完成，与 GUI 导出**同一套** `svgToCanvas`；
-   * 插件再把 PNG 补上 **pHYs（DPI）** 后写进剪贴板 —— 否则 Word / 微信按 96 DPI 兜底，把谱插成巨图。
+   * 桌面再补 **pHYs（DPI）** 后写剪贴板 —— 否则 Word / 微信按 96 DPI 兜底，把谱插成巨图。
    */
+  const saveOnMobile = ctx.isMobile
+  const imageItem = (id: ScoreMenuActionId, scale: 1 | 2 | 4, dpiNote: string, extra: string): ScoreMenuItem => ({
+    id,
+    label: saveOnMobile ? `保存图片（${scale}×${extra}）` : `复制为图片（${scale}×${extra}）`,
+    title: saveOnMobile
+      ? `保存 PNG 图片到谱面同目录（${scale}× ⇒ ${dpiNote}）`
+      : `复制为 PNG 图片到剪贴板（${scale}× ⇒ ${dpiNote}）`,
+  })
   const copy: ScoreMenuItem[] = [
-    { id: 'copy-image-2', label: '复制为图片（2×，默认）', title: '复制为 PNG 图片到剪贴板（2× ⇒ 144 DPI）' },
-    { id: 'copy-image-1', label: '复制为图片（1×）', title: '复制为 PNG 图片到剪贴板（1× ⇒ 72 DPI，体积最小）' },
-    { id: 'copy-image-4', label: '复制为图片（4×）', title: '复制为 PNG 图片到剪贴板（4× ⇒ 288 DPI，最清晰、体积最大）' },
+    imageItem('copy-image-2', 2, '144 DPI', '，默认'),
+    imageItem('copy-image-1', 1, '72 DPI，体积最小', ''),
+    imageItem('copy-image-4', 4, '288 DPI，最清晰、体积最大', ''),
     { id: 'copy-svg', label: '复制 SVG 文本', title: '复制这一份谱的 SVG 源码文本（矢量，可粘进支持 SVG 的编辑器）' },
     { id: 'copy-source', label: '复制谱面源码', title: '复制 `.jps` 源码文本（发给别人/存档）' },
   ]
-  sections.push({ title: '复制', items: copy })
+  // 组标题也随平台走：手机这组里同时有「保存图片」（图片）与「复制…」（文本）⇒ 叫「复制 / 保存」更准
+  sections.push({ title: saveOnMobile ? '复制 / 保存' : '复制', items: copy })
 
   /**
    * **导出范围**（adj864，T-5 定稿）：跟随视图 / 页面 / 谱面 —— 单选，当前项打勾。
