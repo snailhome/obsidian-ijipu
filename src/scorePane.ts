@@ -1816,8 +1816,8 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
        * （我上一版把它放进 `plugin.register(...)` ✗ —— 那个回调只在**插件卸载**时跑，
        *  面板销毁根本不会触发 ✗，所以完全没生效 ✓）。这里在**真正的 destroy** 里收掉。
        */
-      const tb = liveToolbar()
-      if (tb.parentElement === document.body) tb.remove()
+      // ⚠ 这里用挂载时持有的 `toolbar` 引用（`liveToolbar()` 是内层作用域的，destroy 里看不到）
+      if (toolbar.parentElement === document.body) toolbar.remove()
       container.empty()
     },
   }
