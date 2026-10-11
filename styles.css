@@ -638,6 +638,18 @@
   flex: 0 0 auto;
 }
 /**
+ * adj794f（用户完整报告的决定性数字）：`.ijipu-score[flex=**1 1 auto** height=924 scroll=1053/924 ⬍可滚]`
+ * ⇒ **面板仍在被压缩** ✗（上一版我写的 `.ijipu-file-view > *` 没命中它：面板外面还有一层 wrapper ✓）。
+ * 所以直接点名面板本身 + 它的 SVG 层，**明确不允许收缩**（特异性也更高，不受规则顺序影响）。
+ */
+.ijipu-file-view .ijipu-score,
+.ijipu-file-view .ijipu-svgs {
+  flex: 0 0 auto;
+  height: auto;
+  max-height: none;
+  min-height: 0;
+}
+/**
  * adj794e：再加一道保险 —— 预览态下面板与 SVG 层都**按内容高度**参与布局，
  * 不允许任何一层把面板"压小"（压小之后内容就成了"面板内部的溢出"，不计入父容器可滚高度 ✗）。
  * 只给这两层，**不动 `svg` 本身**（它靠 `width/height` + `viewBox` 维持比例）。
