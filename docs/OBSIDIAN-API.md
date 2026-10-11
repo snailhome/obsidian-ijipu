@@ -92,7 +92,40 @@ const { config, sourceFields } = ijipu.effectiveConfig(jpsSource)
 3. `capabilities` 是**能力探测**（不是版本号）：新能力先 `false`，实现了再 `true`；
 4. `renderFull` 标 experimental：**不保证**跨小版本兼容。
 
-## 六、写在最后（给实现者的约束，来自项目铁律）
+## 六、嵌入版 RPC（方案 B / **B2**，postMessage）
+
+> **什么时候用它**：只有"要用**应用**才有的能力"才走这条通道 ✓（位图/PDF、音色库试听 —— B3 起逐项转真）。
+> 纯 TS 能力（解析 / 格式化 / 校验 / 导出 SVG）**仍然走 §三 的插件 API**（直调引擎，不绕 iframe ✓，手机端也能用 ✓）。
+
+**协议**（插件 ⇄ 嵌入版 iframe）：
+```js
+// 请求（嵌入版 → 插件）
+parent.postMessage({ __ijipuRpcRequest: 1, id: 1, method: 'render.svg',
+                     params: { source: 'V:1.0\nQ: 1 2 3 4', pageConfig: { pageMode: 'score' } } }, '*')
+// 响应（插件 → 该 iframe 窗口，只回给它 ✓）
+{ __ijipuRpc: 1, id: 1, ok: true, result: { svgs: ['<svg …>'] } }
+{ __ijipuRpc: 1, id: 1, ok: false, error: { code: -32601, message: '未知方法：x' } }
+```
+
+| 方法 | 参数 | 结果 |
+|---|---|---|
+| `engine.version` | — | `{ plugin, embedded, engine }`（三处版本，交叉校验用 ✓） |
+| `capabilities` | — | `{ platform, svg, raster, pdf, midi, audio, methods }`（**未实现必须 false** ✓） |
+| `render.svg` | `{ source, pageConfig? }` | `{ svgs: string[] }`（每页一段；复用插件内 `api.renderSvg` ✓，无第二份实现 ✓） |
+
+**错误码（对外承诺）**：`-32001` 未启用 ｜ `-32601` 未知方法 ｜ `-32602` 参数非法 ｜ `-32603` 内部错误 ✓
+
+**安全边界（写死在代码里，机器闸门 `adj808` 守着 ✓）**：
+1. **总开关默认关闭**（`plugin.allowExternalApi = false` ✓，用户裁决 ③）⇒ 关着时一律回 `-32001`；
+2. **来源校验**：`event.source` 必须是"src 含本插件 token 的 iframe"窗口 ✓，否则**直接忽略、不回包**（避免被探测 ✓）；
+3. **方法白名单**：B2 只有上表三个 ✓（新能力做成再放，不许"先通后补" ✗）；
+4. **参数逐项校验**：`source` 必须字符串且 ≤500 000 字符；`pageConfig` 必须对象（不符 ⇒ `-32602`，不做"尽力解析" ✗）；
+5. **路径规则** `isSafeVaultPath()`：只允许 vault 内**相对路径**，禁绝对路径 / 盘符 / `..` / NUL ✓（B3 的 `render.png`、`export.*` 用它 ✓）。
+
+> **开关现状**：B2 阶段是**代码层开关**（默认关 ✓）；设置界面的「开发者：允许外部调用」行在 B2 收尾补 ✓。
+> 临时自测：控制台执行 `app.plugins.plugins['ijipu'].allowExternalApi = true` ✓（重载即回到关闭 ✓）。
+
+## 七、写在最后（给实现者的约束，来自项目铁律）
 
 - **不另算布局/配置**：一律复用引擎与 `resolvePageConfig`（"数值口径同源"，AGENTS §六之二·4）；
 - **不外泄内部对象**：返回值只用普通数据；`renderFull` 是显式逃生舱；

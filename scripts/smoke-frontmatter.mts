@@ -3776,6 +3776,52 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
     `命令 id：${cmdIds.join('、') || '（无）'}`)
 }
 
+/**
+ * ---- adj808（方案 B / B2）：嵌入版 RPC 的**安全边界**必须机器化 ----
+ *
+ * 用户裁决 ③：「RPC 总开关默认关闭 + 只允许 vault 内路径」。
+ * 这两条如果只写在文档里 = 无效约束（AGENTS §六之三·3）⇒ 这里钉死：
+ *  · 白名单只有 B2 的三个方法（其余能力做成再放，不许"先通后补"✗）；
+ *  · **来源校验**必须存在（`ev.source !== win` ⇒ 直接忽略，连错误都不回）；
+ *  · **总开关默认 false**，关着时回 `-32001`；
+ *  · 路径规则：禁绝对路径 / 盘符 / `..` / NUL；
+ *  · 错误码齐全（-32001 / -32601 / -32602 / -32603）；
+ *  · `capabilities` 不许撒谎（未实现的位图/PDF/MIDI/音频必须 false）。
+ */
+{
+  const rpc808 = String(readFileSync('src/embed/rpc.ts', 'utf8'))
+  const main808 = String(readFileSync('src/main.ts', 'utf8'))
+  const methods808 = [...rpc808.matchAll(/'(engine\.version|capabilities|render\.svg)'/g)].map((m) => m[1])
+  check('adj808 B2 安全边界：白名单最小面、来源校验、默认关闭、路径规则、错误码、能力不撒谎',
+    // ① 白名单：恰好这三个（B2 最小面）
+    /export const RPC_METHODS = \['engine\.version', 'capabilities', 'render\.svg'\] as const/.test(rpc808) &&
+      methods808.length >= 3 &&
+      // ② 来源校验（不是我们的 iframe ⇒ 直接 return，不回包）
+      /if \(win === null \|\| ev\.source !== win\) return/.test(rpc808) &&
+      // ③ 总开关默认关：插件侧 false，RPC 侧未启用走 disabled
+      /allowExternalApi = false/.test(main808) &&
+      /if \(!deps\.isEnabled\(\)\) return fail\(RPC_ERROR\.disabled/.test(rpc808) &&
+      // ④ 路径规则：绝对路径/盘符/.. /NUL 全拒
+      /if \(p\.startsWith\('\/'\) \|\| p\.startsWith\('\\\\'\)\) return false/.test(rpc808) &&
+      /if \(\/\^\[a-zA-Z\]:\/\.test\(p\)\) return false/.test(rpc808) &&
+      /if \(p\.includes\('\.\.'\)\) return false/.test(rpc808) &&
+      // ⑤ 错误码齐全
+      /disabled: -32001/.test(rpc808) &&
+      /notFound: -32601/.test(rpc808) &&
+      /invalidParams: -32602/.test(rpc808) &&
+      /internal: -32603/.test(rpc808) &&
+      // ⑥ 能力不撒谎（B2 阶段 raster/pdf/midi/audio 必须 false）
+      /raster: false/.test(rpc808) &&
+      /pdf: false/.test(rpc808) &&
+      /audio: false/.test(rpc808) &&
+      // ⑦ 接进插件：创建 + 在同一条 message 监听里分发
+      /this\.embedRpc = createEmbedRpc\(/.test(main808) &&
+      /this\.embedRpc\?\.handle\(ev\)/.test(main808) &&
+      // 负对照：去掉来源校验 ⇒ 判据为假（证明这条真的在守）
+      !/ev\.source !== win\) return/.test(rpc808.replace('ev.source !== win) return', 'false) return')),
+    `白名单：${[...new Set(methods808)].join('、')}`)
+}
+
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。
 //   实测踩过：一次编辑顺手把它删掉，套件仍以退出码报错，但输出里再也看不到 `N passed, M failed`。
 console.log(`\n${pass} passed, ${fail} failed`)
