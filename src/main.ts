@@ -157,6 +157,11 @@ export default class IJipuPlugin extends Plugin {
   lastEmbedFrameInfo: string | null = null
   /** adj847：向嵌入版服务**实际取回一次 HTML** 的结论（分辨"iframe 里是旧 JS"还是"产物没更新"✓） */
   embedServeInfo: string | null = null
+  /**
+   * adj851：**嵌入版自报家门**的结论（与 `embedServeInfo` **分开存** ✓）——
+   * 上一版两者共用一个字段 ✗ ⇒ 异步取回会把 hello 覆盖掉 ✓（要看的恰好是 hello ✗）⇒ 分开 ✓。
+   */
+  embedHelloInfo: string | null = null
   /** 插件内事件广播（当前用于设置变更 → 打开中的谱面即时重渲染） */
   readonly events = new Events()
   /** 「排版辅助虚线」是否显示（与 iJipu 顶栏「排版」按钮同一个开关；所有面板共享、不落盘） */
@@ -611,7 +616,7 @@ export default class IJipuPlugin extends Plugin {
       const hello = ev.data as { __ijipuAppHello?: number; href?: string } | null
       if (hello !== null && typeof hello === 'object' && hello.__ijipuAppHello === 1) {
         const t = new Date().toLocaleTimeString()
-        this.embedServeInfo = `嵌入版自报家门：**已收到 ✓**（${t}；${String(hello.href ?? '').replace(/^https?:\/\//, '').slice(0, 50)}）`
+        this.embedHelloInfo = `嵌入版自报家门：**已收到 ✓**（${t}；${String(hello.href ?? '').replace(/^https?:\/\//, '').slice(0, 50)}）`
       }
       // adj807（B2）：同一条 window message 监听里再交给嵌入版 RPC（它自己做来源校验与白名单 ✓）
       this.embedRpc?.handle(ev)
@@ -1170,8 +1175,9 @@ export default class IJipuPlugin extends Plugin {
 
     push('')
     push('— 嵌入版服务产物自检（adj847；**若显示"（本次取样后才取回，请再点一次生成并复制）"就再点一次** ✓）—')
+    push(`  ① 自报家门：${this.embedHelloInfo ?? '**未收到 ✗**（桥没执行到安装，或嵌入视图没重开 ⇒ 请关掉嵌入版视图再打开一次，然后重载插件）'}`)
     push(
-      `  ${this.embedServeInfo ?? '（本次取样后才取回，请再点一次「生成并复制」即可看到结果 ✓）'}`,
+      `  ② 服务端产物：${this.embedServeInfo ?? '（本次取样后才取回，请再点一次「生成并复制」即可看到结果 ✓）'}`,
     )
 
     push('')
