@@ -1743,23 +1743,33 @@ toolbar.dataset.ijipuPane = String(paneId)
        * 宽度同理（一个小节也 > 40px ✓）。不满足 ⇒ 当作"量取不可靠"，返回 null
        * ⇒ 走既有的**退回按边距裁剪**分支 ✓，并把原因写进诊断 ✓（比裁成条带好得多 ✗）。
        */
-      const MIN_INK = 6
       /**
-       * ⚠ adj842（用户 2026-10-11 指出）：**上一版的 40px 阈值误伤了正常情况** ✗ ——
-       * 「只一行的曲部」墨迹**高**本来就可能只有 30–40px ✓ ⇒ 被当成"退化"⇒
-       * **退回按边距裁剪 = 整页高** ✗✓✓（正是用户看到的"单行曲部显示为页面高"✓）。
+       * adj843（用户 2026-10-11 给出**数据驱动**的判据 ✓）：
+       * 「**通常音符墨迹高度为最小墨迹盒高度**」✓ —— 即：整块谱面的墨迹盒，**不可能比一个音符的墨迹还矮** ✓。
        *
-       * 现在阈值降到 **6px**：只拦"根本量不到东西"的荒谬值 ✓（0–5px ✓），
-       * 不再对"合法但很短"的谱面动手 ✓。
+       * 于是不再用魔数阈值 ✗（40 误伤短谱、6 又拦不住假值 ✓ 都被实证过）：
+       * **直接量一个音符的墨迹高**（谱面 SVG 里的 `[data-notepos]` 元素 ✓ —— 与引擎的光标联动属性同源 ✓），
+       * 取它的 ~90% 作为下限 ✓（留一点抗锯齿/取整余量 ✓；取不到音符时退回极小值 6 ✓ 不阻断渲染 ✓）。
        *
-       * ⚠ **已知取舍**（必须在下一轮补上 ✓）：原先那个真 bug（`489×27` ✗）是**测量时机过早**造成的 ✓，
-       * 而 6px 闸**拦不住它** ✗ ⇒ 需要用**稳定性**来判别：
-       * 连续两次测量（间隔 ~100ms）**一致**才算可信 ✓ —— 合法短谱是**稳定**的 ✓，
-       * 而"渲染未就绪"的假值是**变化**的 ✓。**这是"测量时机"问题，不该用尺寸阈值去解** ✗
-       * （用尺寸判时机，必然误伤短谱 ✓ —— 本轮就是实证 ✓）。
+       * 这样："合法但很短的谱"（单行 ✓）能过 ✓；"渲染未就绪的假值"（比一个音符还矮 ✗）被拦 ✓。
        */
-      if (b.w < MIN_INK || b.h < MIN_INK) {
-        noteCrop(`墨迹盒几乎为空（${Math.round(b.w)}×${Math.round(b.h)}）⇒ 视为量取失败，退回按边距裁剪`)
+      let minInk = 6
+      let noteInkH = 0
+      try {
+        const noteEl = svgEl.querySelector('[data-notepos]')
+        const box = noteEl === null ? null : (noteEl as SVGGraphicsElement).getBBox()
+        if (box !== null && Number.isFinite(box.height) && box.height > 0) {
+          noteInkH = box.height
+          minInk = Math.max(6, Math.round(noteInkH * 0.9))
+        }
+      } catch {
+        /* 量不到音符就用极小值兜底 ✓（不阻断渲染 ✓） */
+      }
+      if (b.w < minInk || b.h < minInk) {
+        noteCrop(
+          `墨迹盒 ${Math.round(b.w)}×${Math.round(b.h)} 小于"一个音符的墨迹高"（${Math.round(noteInkH)}px 的 90% = ${minInk}px）` +
+            `⇒ 视为量取失败，退回按边距裁剪`,
+        )
         return null
       }
       return b
