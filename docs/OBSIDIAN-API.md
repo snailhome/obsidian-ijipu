@@ -143,8 +143,15 @@ parent.postMessage({ __ijipuRpcRequest: 1, id: 1, method: 'render.svg',
 | 插件 → 应用 | `render.svg` / `render.png` / `export.midi` | ✓ 已实现（`adj809`/`adj810`/`adj811`） |
 | 插件 → 应用 | `playback.play` / `playback.stop` | **未接线** —— 白名单里已留名（`APP_METHODS` ✓），但应用侧要接 audio 播放链路（AudioContext + 音色库 + 当前文档状态 ✓）⇒ 未接之前**不谎报**：`capabilities.audio = false` ✓、应用侧对未实现方法回 `-32000` 并写明原因 ✓ |
 
-> **为什么 `playback.*` 不急着做**：它要读"应用当前打开的谱 + 音色库就绪状态"，
-> 属于**状态耦合**最重的一条 ✓；先保证"渲染类"通道（无状态、可重放 ✓）稳定，再动播放 ✓。
+> **为什么 `playback.*` 不急着做**（2026-10 定位后的**具体**原因，不是拖延 ✓）：
+> 应用侧的播放由 **`src/dialogs/PlaybackDialog.tsx`（React 对话框）** 持有 ——
+> 它带着 `playbackSession.ts`（已调度 job 的单例管理 ✓）、`spessaSynthBackend`（音色库/后端就绪状态 ✓）
+> 与 `docStore` 的播放态（`playbackMs` / 播放轨道 ✓）。要经 RPC 驱动它，实际上等于**驱动一个 UI 对话框**
+> （会弹窗、会改界面状态 ✓）✗。
+> ⇒ **前置条件是先把播放抽成无头模块**（"给一段 .jps 就出声、可停止、不依赖 React" ✓）——
+> 那是一次**真实重构** ✓，不适合塞进"接一根线"里做 ✗。
+> 在此之前：白名单里已留名（`APP_METHODS` ✓），但 `capabilities.audio = false` ✓、
+> 应用侧对未实现方法回 `-32000` 并写明原因 ✓ —— **不谎报** ✓。
 
 ## 七、写在最后（给实现者的约束，来自项目铁律）
 
