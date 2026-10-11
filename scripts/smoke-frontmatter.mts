@@ -3600,6 +3600,31 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       /if \(on\) el\.removeClass\('is-user-hidden'\)/.test(pane792))
 }
 
+/**
+ * ---- adj797：块不在视界里就不显示工具条（用户在嵌入块上看到"凭空多出一条"）----
+ *
+ * 真因：外侧落位是 `fixed` + 按块矩形算坐标 ⇒ 块还没排版/不在视口时矩形是 (0,0,0×0)，
+ * 工具条被摆到 (0,-36) 这类位置 ⇒ 看着就是凭空多出的一条 ✗。
+ * 口径（用户）：**块出现在视界后才显示、没在视界里就不显示**；且离开视界隐藏后、回来要能再显示。
+ */
+{
+  const pane797 = String(readFileSync('src/scorePane.ts', 'utf8'))
+  check('adj797 块不在视界（或还没尺寸）就不摆位置也不显示；回到视界时重新显示',
+    /const containerInViewport = \(\): boolean => \{/.test(pane797) &&
+      /if \(r\.width < 2 \|\| r\.height < 2\) return false/.test(pane797) &&
+      // 落位前先判视口；不在就隐藏
+      /if \(!containerInViewport\(\)\) \{\n        hiddenByViewport = true\n        revealToolbar\(false\)\n        return\n      \}/.test(pane797) &&
+      // 跟随滚动时：离开 ⇒ 隐藏；回来 ⇒ 重新显示
+      /if \(!containerInViewport\(\)\) \{[\s\S]{0,200}?hiddenByViewport = true[\s\S]{0,120}?revealToolbar\(false\)/.test(pane797) &&
+      /if \(hiddenByViewport\) \{\n            hiddenByViewport = false\n            revealToolbar\(true\)\n          \}/.test(pane797) &&
+      // 不能变成"无条件在滚动时弹出"（用户主动收起的状态要保住）
+      /let hiddenByViewport = false/.test(pane797) &&
+      // 负对照：把视口判断那一段摘掉 ⇒ 判据为假
+      !/if \(!containerInViewport\(\)\) \{\n        hiddenByViewport = true/.test(
+        pane797.replace('if (!containerInViewport()) {\n        hiddenByViewport = true', 'if (false) {\n        hiddenByViewport = true'),
+      ))
+}
+
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。
 //   实测踩过：一次编辑顺手把它删掉，套件仍以退出码报错，但输出里再也看不到 `N passed, M failed`。
 console.log(`\n${pass} passed, ${fail} failed`)

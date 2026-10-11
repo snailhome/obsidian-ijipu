@@ -704,6 +704,23 @@ toolbar.dataset.ijipuPane = String(paneId)
      */
     const TOOLBAR_GAP = 2
     /**
+     * adj797：**是否因为"块不在视界里"而隐藏过** —— 用它区分两种情况：
+     *  · 用户主动收起（点预览区）⇒ 滚动回来**不该**自动弹出；
+     *  · 因块离开视界而隐藏 ⇒ 块**回到视界时要重新显示**（用户口径："块出现在视界后才显示"）。
+     */
+    let hiddenByViewport = false
+    /**
+     * adj797：**块是否真的在视口里**（有尺寸、且与视口相交）。
+     * 外侧落位靠它决定"该不该显示"：块还没排版（0×0）或滚出视口时，不该有一条工具条飘在那里 ✗。
+     */
+    const containerInViewport = (): boolean => {
+      const r = container.getBoundingClientRect()
+      if (r.width < 2 || r.height < 2) return false
+      const vw = window.innerWidth || 0
+      const vh = window.innerHeight || 0
+      return r.bottom > 0 && r.top < vh && r.right > 0 && r.left < vw
+    }
+    /**
      * adj793b（用户第五次反馈 + 截图：「能显示了，但**位置不对**：在预览区内部、也没在左上角」）：
      *
      * 这两个现象合起来只有一个解释 —— **`position: fixed` 被祖先"降级"了**：
@@ -723,6 +740,23 @@ toolbar.dataset.ijipuPane = String(paneId)
     const positionOutsideFixed = (el: HTMLElement): void => {
       // adj794f：每次摆到外侧都顺手清一次孤儿（不依赖销毁回调）
       sweepOrphanBodyToolbars()
+      /**
+       * adj797（用户实测）：「嵌入 jps 文件的工具条**在嵌入块还没在视界里就显示了**，
+       * 感觉凭空多出一条；应该**块出现在视界后才显示在块左上角**，没在视界里就不要显示。
+       * 检查一下 jps 代码块是否也有这个问题」。
+       *
+       * 真因：外侧落位是 `fixed` + 按块矩形算坐标 ⇒ 块**还没排版/不在视口**时矩形是 (0,0,0×0)，
+       * 工具条就被摆到 (0,-36) 这种位置 ⇒ 看着就是"凭空多出的一条" ✗。
+       * 修法：**块不在视口（或还没尺寸）就立刻隐藏**、不摆位置；进入视口时再显示。
+       * 代码块与嵌入共用本函数 ⇒ 两处一起修好 ✓。
+       */
+      if (!containerInViewport()) {
+        hiddenByViewport = true
+        revealToolbar(false)
+        return
+      }
+      // 又回到视界里了 ⇒ 重新显示（用户口径：块出现在视界后才显示）
+      if (hiddenByViewport) hiddenByViewport = false
       /**
        * adj793c（用户：坐标已正确、`position=fixed` 已生效，但命中测试仍落到 `div.cm-line` ✗）：
        *
@@ -799,8 +833,22 @@ toolbar.dataset.ijipuPane = String(paneId)
       }, 50)
       if (!followToolbar) {
         followToolbar = (): void => {
-          if (!toolbarShown) return
-          positionOutsideFixed(liveToolbar())
+          /**
+           * adj797：滚动/尺寸变化时按"块是否在视界里"决定显示 —— 离开就隐藏，
+           * 回到视界就重新显示（否则按你的口径："没在视界里就不要显示" ✗ 而回来后又再也不出现 ✗）。
+           */
+          if (!containerInViewport()) {
+            if (toolbarShown) {
+              hiddenByViewport = true
+              revealToolbar(false)
+            }
+            return
+          }
+          if (hiddenByViewport) {
+            hiddenByViewport = false
+            revealToolbar(true)
+          }
+          if (toolbarShown) positionOutsideFixed(liveToolbar())
         }
         window.addEventListener('scroll', followToolbar, true)
         window.addEventListener('resize', followToolbar)
