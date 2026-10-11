@@ -1,4 +1,4 @@
-import { Events, Keymap, MarkdownRenderChild, MarkdownView, Notice, Platform, Plugin, TFolder, TFile, type MarkdownSectionInformation, type WorkspaceLeaf } from 'obsidian'
+import { Events, Keymap, MarkdownRenderChild, MarkdownView, Notice, Platform, Plugin, requestUrl, TFolder, TFile, type MarkdownSectionInformation, type WorkspaceLeaf } from 'obsidian'
 // adj749d：自动格式化（光标离开本行时格式化该行）用**引擎里那份应用自己的**逐行格式化器
 import { formatLine } from '@ijipu/engine'
 // adj774：markdown 笔记里 ```jps 代码块的围栏扫描（着色/错误提示/自动格式化三处共用同一份口径）
@@ -1213,7 +1213,7 @@ export default class IJipuPlugin extends Plugin {
         const frames = Array.from(document.querySelectorAll('iframe'))
         const url = frames.map((f) => f.src).find((s) => /^https?:\/\/(127\.0\.0\.1|localhost)/.test(s)) ?? ''
         if (url === '') return
-        const html = await (await fetch(url)).text()
+        const html = (await requestUrl(url)).text
         this.embedServeInfo =
           `取回 ${html.length} 字符｜含桥关键字(__ijipuAppResponse)=${html.includes('__ijipuAppResponse') ? '是 ✓' : '否 ✗'}` +
           `｜含顶层安装关键字(installObsidianBridge)=${html.includes('installObsidianBridge') ? '是 ✓' : '否（被压缩改名，正常）'}`
