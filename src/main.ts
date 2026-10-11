@@ -31,6 +31,9 @@ import { HQ_LIBRARIES } from './soundbank'
 import { createBankFileStore, type BankFileStore } from './bankFile'
 // @ts-ignore esbuild 以 text loader 把 worklet 内联为字符串（main.js 单文件自包含，无需插件目录单独 worklet）
 import workletCode from '../spessasynth_processor.min.js'
+// adj796：完整诊断报告里要报"构建信息 / 嵌入版版本"，故在此导入（两者都是构建期生成、无运行时开销）
+import { BUILD_STAMP, GIT_COMMIT } from './gen/buildInfo'
+import { WEBAPP_META } from './gen/webappAssets'
 
 /** 插件内事件广播：设置面板保存后触发，打开中的谱面据此即时重渲染 */
 export const SETTINGS_CHANGED = 'settings-changed'
@@ -637,6 +640,104 @@ export default class IJipuPlugin extends Plugin {
     const view = leaf.view as unknown as { toggleSource?: () => void }
     if (typeof view.toggleSource === 'function') view.toggleSource()
     this.app.workspace.revealLeaf(leaf)
+  }
+
+  /**
+   * adj796（用户要求）：「**要有一个相对缜密的诊断方式，不要一直来回交互**，手机反馈诊断并不方便」。
+   *
+   * 所以这里做**一次点、给全信息**的完整报告：环境 + 当前活动面板的**滚动链路** + **工具条实物**
+   * （在 DOM 哪里、内联样式、是否显示、坐标）+ 面板布局（影响滚动的那些计算值）+ 最近两条交互记录。
+   *
+   * 设计原则（都是为了"一轮定位"）：
+   *  · **在同一时刻、对同一棵树取样** —— 不做多次交互，避免"两次快照对不上"；
+   *  · 只输出**可判定的事实**（计算值/坐标/scrollHeight），不写主观描述；
+   *  · 结果整段可复制（诊断页有按钮，且自动进剪贴板）。
+   */
+  buildDiagnosticsReport(): string {
+    const lines: string[] = []
+    const push = (s: string): void => void lines.push(s)
+    const platform = Platform.isDesktopApp ? '桌面' : Platform.isMobileApp ? '手机' : '未知'
+    push('【完整诊断报告】（一次取样；直接粘贴给开发者）')
+    push(`插件 ${this.manifest.version}｜嵌入版 ${WEBAPP_META.appVersion}｜构建 ${BUILD_STAMP} @${GIT_COMMIT}`)
+    push(`平台 ${platform}｜视口 ${window.innerWidth}×${window.innerHeight}｜DPR ${window.devicePixelRatio}`)
+    push(`is-mobile 类 ${document.body.classList.contains('is-mobile') ? '有' : '无'}｜主题 ${document.body.classList.contains('theme-dark') ? 'dark' : 'light'}`)
+
+    /** 取一个元素的"影响滚动/裁剪"的关键计算值 */
+    const factsOf = (el: Element): string => {
+      const cs = window.getComputedStyle(el)
+      const r = el.getBoundingClientRect()
+      const h = el as HTMLElement
+      const name = (el.className || '').split(/\s+/).filter(Boolean).slice(0, 3).join('.') || el.tagName.toLowerCase()
+      return (
+        `${name}[overflowY=${cs.overflowY} touchAction=${cs.touchAction} contain=${cs.contain} transform=${cs.transform === 'none' ? 'none' : 'yes'} ` +
+        `height=${cs.height} flex=${cs.flex} scroll=${h.scrollHeight}/${h.clientHeight} rect=${Math.round(r.left)},${Math.round(r.top)} ${Math.round(r.width)}×${Math.round(r.height)}]`
+      )
+    }
+
+    /** 当前活动的预览容器（优先 `.jps` 文件视图，其次代码块/嵌入里的面板） */
+    const activeContainer =
+      document.querySelector<HTMLElement>('.ijipu-file-view') ??
+      document.querySelector<HTMLElement>('.ijipu-cm-host .ijipu-score') ??
+      document.querySelector<HTMLElement>('.ijipu-embed .ijipu-score') ??
+      document.querySelector<HTMLElement>('.ijipu-score')
+
+    push('')
+    push('— 滚动链路（从预览容器往上）—')
+    if (!activeContainer) {
+      push('（当前页面找不到本插件的预览容器：请先打开一份 `.jps` 或含 ` ```jps ` 的笔记）')
+    } else {
+      let el: HTMLElement | null = activeContainer
+      let depth = 0
+      while (el && depth < 12) {
+        depth += 1
+        push(`  ${factsOf(el)}`)
+        el = el.parentElement
+      }
+      // 明确回答"到底有没有东西可滚、由谁滚"
+      const scrollers: string[] = []
+      let probe: HTMLElement | null = activeContainer
+      let d2 = 0
+      while (probe && d2 < 12) {
+        d2 += 1
+        const cs = window.getComputedStyle(probe)
+        if (/auto|scroll/.test(cs.overflowY) && probe.scrollHeight > probe.clientHeight + 1) {
+          scrollers.push((probe.className || '').split(/\s+/).filter(Boolean).slice(0, 2).join('.') || probe.tagName.toLowerCase())
+        }
+        probe = probe.parentElement
+      }
+      push(`  小结：可滚容器 = ${scrollers.length > 0 ? scrollers.join(' / ') : '（一个都没有 ⇒ 滚动不可能发生）'}`)
+    }
+
+    push('')
+    push('— 工具条实物 —')
+    const bars = Array.from(document.querySelectorAll<HTMLElement>('.ijipu-score-toolbar'))
+    if (bars.length === 0) push('  （DOM 里没有工具条元素）')
+    for (const el of bars) {
+      const cs = window.getComputedStyle(el)
+      const r = el.getBoundingClientRect()
+      const parent = el.parentElement
+      const where = parent === document.body ? 'document.body' : `容器内（父=${(parent?.className || '').split(/\s+/).slice(0, 2).join('.') || parent?.tagName}）`
+      push(
+        `  ${where}｜面板id=${el.dataset.ijipuPane ?? '?'}｜revealed=${el.hasClass('is-revealed') ? 'Y' : 'N'}` +
+          `｜userHidden=${el.hasClass('is-user-hidden') ? 'Y' : 'N'}｜visibility=${cs.visibility} opacity=${cs.opacity} position=${cs.position}` +
+          `｜rect=${Math.round(r.left)},${Math.round(r.top)} ${Math.round(r.width)}×${Math.round(r.height)}｜inline=${el.getAttribute('style') ?? '（无）'}`,
+      )
+    }
+
+    push('')
+    push('— 面板布局 —')
+    const pane = document.querySelector<HTMLElement>('.ijipu-score')
+    if (pane) push(`  ${factsOf(pane)}`)
+    const svgs = document.querySelector<HTMLElement>('.ijipu-svgs')
+    if (svgs) push(`  ${factsOf(svgs)}`)
+
+    push('')
+    push('— 最近交互记录 —')
+    push(`  工具条：${this.lastToolbarInfo ?? '（无）'}`)
+    push(`  点击/滚动：${this.lastToolbarClick ?? '（无）'}`)
+    push(`  裁剪：${this.lastCropInfo ?? '（无）'}`)
+    push(`  嵌入版服务：${this.lastEmbedError ?? '（无错误）'}`)
+    return lines.join('\n')
   }
 
   /**

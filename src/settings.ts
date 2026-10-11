@@ -279,6 +279,31 @@ export class IJipuSettingTab extends PluginSettingTab {
    *  · 仍是"无需操作"的信息，但不再和「说明」里的有用内容混在一起（用户原话："以免干扰其它有用信息"）。
    */
   private renderDiagnostics(host: HTMLElement): void {
+    /**
+     * adj796（用户要求）：「要有一个相对缜密的诊断方式，不要一直来回交互，手机反馈诊断并不方便」
+     * ⇒ 这里放**一个按钮**：一次取样得到"环境 + 滚动链路 + 工具条实物 + 面板布局 + 最近记录"的完整报告，
+     * 且**自动复制**到剪贴板。用户点一次、粘贴一次即可定位（不必逐项截图、不必来回操作）。
+     */
+    new Setting(host)
+      .setName('生成完整诊断报告（推荐）')
+      .setDesc(
+        '一次取样：环境（版本/平台/视口）＋**滚动链路**（谁可滚、谁在裁剪、沿途 overflow/touch-action）\n' +
+          '＋**工具条实物**（在 DOM 哪里、是否显示、坐标、内联样式）＋面板布局＋最近交互记录。\n' +
+          '点下面按钮即**自动复制**到剪贴板，直接粘贴反馈即可。',
+      )
+      .addButton((btn) =>
+        btn
+          .setButtonText('生成并复制')
+          .setCta()
+          .onClick(() => {
+            const text = this.plugin.buildDiagnosticsReport()
+            void navigator.clipboard?.writeText(text).then(
+              () => new Notice(`已复制完整诊断报告（${text.length} 字符），直接粘贴即可`, 4000),
+              () => new Notice('复制失败：请再点一次，或手动选中下方文本复制', 6000),
+            )
+          }),
+      )
+
     new Setting(host)
       .setName('一键复制全部诊断')
       .setDesc('把「构建信息 + 下面所有诊断块」合成一段复制到剪贴板，直接粘贴反馈即可。')

@@ -168,7 +168,19 @@ function svgToDom(svg: string, plugin: IJipuPlugin): DocumentFragment {
 }
 
 /** 挂载一个谱面面板（详见文件头说明） */
+/**
+ * adj794e：**面板自增 id**（模块级）—— 外侧落位时工具条会被移到 `document.body`（adj793c），
+ * 而 `destroy()` 看不到 `paint()` 里那个局部 `toolbar` ⇒ 用 id 在 body 上精确定位并清掉。
+ */
+let paneSeq = 0
+
 export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
+  /**
+   * adj794e：**面板唯一 id** —— 外侧落位时工具条会被挂到 `document.body`（adj793c），
+   * 而 `destroy()` 里看不到内层作用域里创建的工具栏元素（`paint()` 内的局部变量 ✗）⇒
+   * 给每个面板一个 id，标记到工具条上，销毁时按 id 精确清掉（不误伤别的面板）。
+   */
+  const paneId = ++paneSeq
   const { plugin, container } = host
   let stopPlay: (() => void) | null = null
   let rafId = 0
@@ -551,6 +563,8 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     // —— 工具条 ——
     // 注：「谱面自带设置 N 项」不再占工具栏位置 —— 移到「设置」对话框里（见 ConfigDialog）
     const toolbar = container.createDiv({ cls: 'ijipu-score-toolbar' })
+// adj794e：打上面板 id —— 工具条可能被移到 document.body（外侧落位），销毁时据此精确清理
+toolbar.dataset.ijipuPane = String(paneId)
     /**
      * adj724b（用户要求）：**工具条默认隐藏，鼠标移到谱面上才显示**。
      *
@@ -1816,8 +1830,9 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
        * （我上一版把它放进 `plugin.register(...)` ✗ —— 那个回调只在**插件卸载**时跑，
        *  面板销毁根本不会触发 ✗，所以完全没生效 ✓）。这里在**真正的 destroy** 里收掉。
        */
-      // ⚠ 这里用挂载时持有的 `toolbar` 引用（`liveToolbar()` 是内层作用域的，destroy 里看不到）
-      if (toolbar.parentElement === document.body) toolbar.remove()
+      // ⚠ `destroy()` 看不到 `paint()` 内那个局部 `toolbar`（写成 `toolbar` 会解析到浏览器全局 ✗）
+      // ⇒ 按面板 id 在 body 上精确找它并移除（外侧落位时它被挂到 body，见 adj793c/adj794e）
+      document.body.querySelector(`[data-ijipu-pane="${paneId}"]`)?.remove()
       container.empty()
     },
   }
