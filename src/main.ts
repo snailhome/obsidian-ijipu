@@ -1126,6 +1126,31 @@ export default class IJipuPlugin extends Plugin {
     push(`  嵌入版服务：${this.lastEmbedError ?? '（无错误）'}`)
 
     push('')
+    push('— 嵌入版 iframe 候选（用于定位「未在 N 秒内应答」）—')
+    {
+      const frames = Array.from(document.querySelectorAll('iframe'))
+      if (frames.length === 0) push('  （页面里没有 iframe ⇒ 嵌入版确实没打开过）')
+      const chosen = this.embedRpcWindow()
+      for (let i = 0; i < frames.length; i += 1) {
+        const f = frames[i]
+        const src = f.src === '' ? '(空)' : f.src.replace(/^https?:\/\//, '').slice(0, 60)
+        const win = f.contentWindow
+        const same = win !== null && win === chosen ? '**← 插件会发给它**' : ''
+        // 能否读到 iframe 内部（同源才可读；读不到不影响 postMessage ✓，但能佐证托管方式）
+        let probe = '未知'
+        try {
+          const doc = win?.document
+          probe = doc === undefined || doc === null ? '不可读(跨源?)' : `可读,readyState=${doc.readyState}`
+        } catch {
+          probe = '不可读(跨源)'
+        }
+        const visible = f.offsetWidth > 0 && f.offsetHeight > 0 ? '可见' : '隐藏/零尺寸'
+        push(`  #${i + 1} ${visible}｜src=${src}｜contentWindow=${win === null ? '空' : '有'}｜内部=${probe} ${same}`)
+      }
+      push(`  嵌入版服务错误：${this.lastEmbedError ?? '（无错误）'}｜总开关 allowExternalApi=${this.allowExternalApi ? '开' : '关'}`)
+    }
+
+    push('')
     push('— 源码态事件序列（最近 12 条；用于定位"按 Ctrl+P 闪回预览"）—')
     if (this.sourceModeLog.length === 0) push('  （还没记录到事件：先在 jps 代码块源码态按一次 Ctrl+P 再回来）')
     for (const l of this.sourceModeLog) push(`  ${l}`)
