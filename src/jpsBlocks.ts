@@ -32,6 +32,35 @@ export type JpsBlockRange = {
   bodyEnd: number
   /** 正文文本（各正文行用 `\n` 连接；不含围栏行） */
   body: string
+  /**
+   * adj839（用户 2026-10-11 定稿）：**块级缩放参数** `z`（写在 info string，见下 ✓）。
+   *
+   * 用户给的分界（我完全同意 ✓）：
+   *  · **`# jps-config` = 谱面自身设置**（随谱走、由谱面配置对话框生成、用户不必记写法 ✓）；
+   *  · **块级参数 `z=` = 与笔记配合的呈现**（这个块在笔记里怎么摆 ✓）—— 两者职责不重叠 ✓。
+   *
+   * 取值语义：
+   *  · 缺省 / `z=100` ⇒ **100%（自然尺寸）**：1 个 viewBox 单位 = 1 CSS px ✓
+   *    （即"页面视图下的 1px 基准" ✓ ⇒ 音符大小与页面视图**一致** ✓，不再被拉伸放大 ✗）；
+   *  · `z=<数字>` ⇒ 百分比（`z=150` = 150% ✓）；
+   *  · **`z=*`** ⇒ **自适应笔记宽度**（= 本功能上线前的行为 ✓，按容器铺满 ✓）。
+   */
+  zoom: number | 'auto'
+}
+
+/**
+ * 从开栏行的 **info string** 里解析 `z`（adj839 ✓）。
+ * 规则：找 `z=<值>` 形态的独立词 ✓；`*` ⇒ `'auto'` ✓；数字（1–1000）⇒ 该百分比 ✓；
+ * 缺省/非法 ⇒ **100**（自然尺寸 ✓，也是用户定的默认 ✓）。
+ * 纯函数 ✓ ⇒ 可直接断言（见冒烟 `adj839`）。
+ */
+export function zoomOfInfo(infoLine: string): number | 'auto' {
+  const m = /(?:^|\s)z=(\*|\d{1,4})(?=\s|$)/.exec(infoLine)
+  if (m === null) return 100
+  if (m[1] === '*') return 'auto'
+  const n = Number(m[1])
+  if (!Number.isFinite(n) || n < 1 || n > 1000) return 100
+  return n
 }
 
 /** 开栏：≤3 空格缩进 + (` 或 ~)×3 以上 + 可空白 + `jps`（其后可有别的 info 词） */
@@ -72,7 +101,7 @@ export function jpsBlockRanges(source: string): JpsBlockRange[] {
     const bodyStart = fenceStart + 1
     const bodyEnd = fenceEnd === null ? lines.length : fenceEnd - 1
     const bodyLines = bodyStart <= bodyEnd ? lines.slice(bodyStart - 1, bodyEnd) : []
-    out.push({ fenceStart, fenceEnd, bodyStart, bodyEnd, body: bodyLines.join('\n') })
+    out.push({ fenceStart, fenceEnd, bodyStart, bodyEnd, body: bodyLines.join('\n'), zoom: zoomOfInfo(lines[fenceStart - 1]) })
     i = fenceEnd === null ? lines.length : fenceEnd
   }
   return out
