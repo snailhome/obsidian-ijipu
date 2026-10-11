@@ -819,8 +819,14 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       if (target?.closest('a.jp-link')) return
       toolbarShown = !toolbarShown
       revealToolbar(toolbarShown)
-      // 主动收起：打上能压过"移动端常显"那条 CSS 的标记（显示时由 `revealToolbar` 负责摘掉）
-      if (!toolbarShown) liveToolbar().addClass('is-user-hidden')
+      /**
+       * 主动收起：只有**手机端**需要这个标记 —— 它的唯一用途是压过
+       * `.is-mobile .ijipu-score-toolbar { opacity: 1 }` 那条"常显"规则。
+       * 桌面端本来就有 `.ijipu-score-toolbar { opacity: 0 }`（默认隐藏）⇒ **不需要**这个类 ✗；
+       * 而它一旦在桌面端被加上，就会出现"`is-revealed` 在、却 `opacity: 0` 且 `pointer-events: none`"
+       * 的怪状态（用户实测的"编辑模式不显示工具条"诊断正是这个特征 ✗ —— 已按平台收紧，杜绝该状态）。
+       */
+      if (!toolbarShown && Platform.isMobile) liveToolbar().addClass('is-user-hidden')
       plugin.lastToolbarClick =
         `点击预览区 ⇒ ${toolbarShown ? '显示' : '隐藏'}工具条（平台=${Platform.isMobile ? '手机' : '桌面'}；` +
         `命中=${target?.tagName ?? '?'}${target?.className ? '.' + String(target.className).slice(0, 40) : ''}）`
@@ -842,7 +848,8 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       if (!toolbarShown) return
       toolbarShown = false
       revealToolbar(false)
-      liveToolbar().addClass('is-user-hidden')
+      // adj792b：与点击收起同一口径 —— 只有手机端需要这个"压过常显"的标记（桌面端不需要）
+      if (Platform.isMobile) liveToolbar().addClass('is-user-hidden')
     }, 3000)
     plugin.register(() => window.clearTimeout(firstShowTimer))
     /**

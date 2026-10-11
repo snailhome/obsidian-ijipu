@@ -3581,6 +3581,25 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       ))
 }
 
+/**
+ * ---- adj792b：`is-user-hidden`（收起态）**只在手机端**使用 ----
+ *
+ * 它的唯一用途是压过 `.is-mobile .ijipu-score-toolbar { opacity: 1 }` 那条"常显"规则；
+ * 桌面端本来就有默认 `opacity: 0` ⇒ **不需要**。而它一旦在桌面端被加上，就会出现
+ * "`is-revealed` 在、却 `opacity: 0` 且 `pointer-events: none`"的怪状态 ——
+ * 用户实测"编辑模式不显示工具条"的诊断（`显示类=有` + `样式 opacity=0`）正是这个特征 ✗。
+ */
+{
+  const pane792 = String(readFileSync('src/scorePane.ts', 'utf8'))
+  check('adj792b 收起态标记只在手机端使用（桌面端不会出现"有显示类却 opacity:0"的怪状态）',
+    /if \(!toolbarShown && Platform\.isMobile\) liveToolbar\(\)\.addClass\('is-user-hidden'\)/.test(pane792) &&
+      /if \(Platform\.isMobile\) liveToolbar\(\)\.addClass\('is-user-hidden'\)/.test(pane792) &&
+      // 不应再有"无条件加该类"的语句
+      !/\n\s*liveToolbar\(\)\.addClass\('is-user-hidden'\)\n/.test(pane792) &&
+      // 显示时仍要摘掉它（手机端从"收起"回到"显示"）
+      /if \(on\) el\.removeClass\('is-user-hidden'\)/.test(pane792))
+}
+
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。
 //   实测踩过：一次编辑顺手把它删掉，套件仍以退出码报错，但输出里再也看不到 `N passed, M failed`。
 console.log(`\n${pass} passed, ${fail} failed`)
