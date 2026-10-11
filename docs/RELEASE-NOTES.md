@@ -1,69 +1,54 @@
-# 爱记谱 iJipu 0.34.1
+# 爱记谱 iJipu 0.34.2
 
-> **本版是 0.34.0 之后的实测修复批**（PATCH）：把三处预览的**工具条显隐/落位**、
-> **手机端滚动**、**嵌入块编辑**、**诊断方式**这一串"真机才暴露"的问题逐条修掉。
-> 0.34.0 → **0.34.1**。**既有谱面与 `.jps` 语法零改动**。
+> **本版是针对社区审核结果的修复版**（PATCH）：0.34.1 的审核判定 **Failed**，
+> **唯一 Error** 是本插件自己写的一处**内联样式** ✗ —— 本版按审核给的出路改掉，
+> 并把"审核 Error 级规则"落成**自动加载的规范 + 机器闸门**（见下）。
+> 0.34.1 → **0.34.2**。**既有谱面与 `.jps` 语法零改动**；引擎与应用仓库本周期未改动。
 
-## 工具条：显隐与落位（本版主要工作，均由真机实测驱动）
+## 审核 Error：`obsidianmd/no-static-styles-assignment`
 
-- **外侧落位改用 `position: fixed` + 挂到 `document.body`**：此前"浮在块外上方"会被
-  **相邻 CM6 行盖住**（诊断：坐标正确、无裁剪层，但命中测试命中的是 `div.cm-line`）——
-  `z-index`/放开 `overflow` 都不足以跨出祖先的**层叠上下文** ⇒ 移到 body 后彻底摆脱裁剪与层叠约束；
-- **不再预留空带**（推翻 0.34.0 里"块内空带"的做法）：按用户口径，**块与普通块一样排版**、
-  工具条**浮在其它元素之上**（允许遮挡）；
-- **取消"悬停显示"**：改为**点击预览区显/隐**（唯一手动开关），键盘仍可唤醒；
-- **显隐改为"块进视界才显示 + 3 秒倒计时从进视界起算"**（单一状态机 `syncToolbarVisibility()`）：
-  · 块不在视界（或还没尺寸）⇒ 不显示、也不计时；
-  · 块进入视界 ⇒ 显示并从**这一刻**倒计时 3 秒；
-  · 用户点击 ⇒ 手动显/隐，**手动显示后不再自动收起**；
-  · 用 `hiddenByViewport` 区分"因离开视界隐藏"与"用户主动收起"；
-- **手机端"显示后马上又隐藏"/"再也显示不出来"**：触摸会合成鼠标事件 ⇒ 悬停那套自动收起要去掉；
-  并且手机端 CSS 的"常显"规则需要 `is-user-hidden` 才能压过 ⇒ 三处隐藏路径统一补该标记；
-- **搬到 body 的工具条保留上下文标记**（`ijipu-ported-mobile` / `ijipu-ported-embedded`）：
-  否则 `.is-mobile` / `.ijipu-embedded` 两条按祖先匹配的**尺寸规则**失效 ⇒ "点击显示的"与
-  "滚动中的"工具条**按钮大小不一致**；
-- **孤儿工具条清理**：嵌入面板销毁**不走 `destroy()`**（实测）⇒ 改为按"容器是否仍在文档里"判定，
-  并在每次挂载与每次外侧落位时清理（修"工具条卡在原地不消失"）。
+- **现象**：审核报告 **Failed**，Source code → Error 指向
+  `src/scorePane.ts:790 / 793 / 794` —— 那是 0.34.1 新写的"工具条外侧落位"里
+  `el.style.setProperty('position' | 'left' | 'top' | 'bottom' | 'z-index')` ✗。
+- **修法**（按审核原文给的三条出路）：
+  · **定位与层级交给 CSS 类** `.ijipu-score-toolbar.ijipu-ported`
+    （`position: fixed; left: var(--ijipu-port-x); top: var(--ijipu-port-y); bottom: auto; z-index: 40`）；
+  · **动态坐标用 `el.setCssProps({ '--ijipu-port-x': …, '--ijipu-port-y': … })`**
+    —— 这是 Obsidian 认可的动态值写法 ✓；
+  · 收起/搬回容器时 `removeClass('ijipu-ported')` 并清空这两个自定义属性 ✓。
+- **行为不变**：外侧落位、跟随滚动/尺寸变化、进视界显示 + 3 秒倒计时、离开视界隐藏，全部与 0.34.1 一致 ✓。
 
-## 手机端预览滚动
+## 新增：审核 Error 级规则的**规范 + 闸门**（用户要求）
 
-- **不能上下滚**（桌面端正常）：诊断显示 `.ijipu-file-view[overflow=auto ✓ 但 scroll=1020/1020 无溢出]`、
-  而**面板自己被压小**（`flex: 1 1 auto` ⇒ 内容在面板内部溢出、不计入父容器可滚高度）✗
-  ⇒ 面板与 SVG 层显式 **`flex: 0 0 auto`**（按内容高度参与布局）⇒ 父容器得到真实溢出 ⇒ 可滚；
-- 另加 `touch-action: pan-y`（预览容器 + 谱面子树）与移动端惯性滚动；
-- 一并撤销了 0.34.0 里"把滚动交给宿主"的尝试 —— 诊断证明**宿主各层全是 `overflow-y: hidden`**
-  （`workspace-leaf-content` 明明有内容可滚却 `hidden`）⇒ 唯一能滚的就是我们自己那层。
+用户原话：「**这个问题多次出现，请写进 AGENTS，作为一条规则进行规范**」⇒ 已写入 `ijipu/AGENTS.md` **§六之四**，
+按项目"元规则"同时给出 **① 自动加载的规范** 与 **② 机器闸门**：
 
-## 嵌入块与编辑入口
+1. **禁直接写内联样式**（`el.style.x = …`、`el.style.setProperty(…)`、`style.cssText = …`）；
+   只允许 **CSS 类**（首选）/ **`setCssProps`** / **`setCssStyles`**；`removeProperty`（摘属性）未被判，但**赋值**一律禁止；
+   唯一例外是"循环里的动态键"（`for (const [k, v] of Object.entries(style)) el.style.setProperty(k, v)`，
+   键是变量、规则判不了"静态"），新增此类写法必须在注释里写明理由；
+2. **同类 Error/Warning 一览表**（内联样式 / `!important` / `innerHTML` / `console.*` /
+   `import 'node:*'`（静态导入是刻意的，附原因）/ `fetch` / `getSettingDefinitions()` / Build verification）；
+3. **发布前"审核预检"三步**：`smoke` 全绿 → 人工过 Error 行 → 结果记 `docs/ERRORS-LOG.md` 并把能自动化的落成闸门。
 
-- **手机端嵌入 `![[x.jps]]` 的「编辑」点了没反应**：按钮分派在手机端走 `onToggleSource`，
-  而**嵌入宿主没有这个回调** ⇒ 空调用 ✗ ⇒ 改为**回退到 `onEdit`** ⇒ 现在**直达源码编辑**（用户已确认）；
-- 嵌入/代码块的自动格式化、着色、错误提示与 0.34.0 一致（本版未改这部分口径）。
+**机器闸门**：插件 `npm run smoke` 新增 **`adj799`** —— 扫描 `src/**/*.ts`
+（排除 `src/gen/**` 生成物与 `vendor/**`），任何"内联样式赋值"即红灯，并在失败信息里列出**文件:行号**；
+带**负对照**（去掉类那一行即判假）。
 
-## 谱面留白
+## 附：审核其余条目的口径（本版未改，均为已知/刻意的）
 
-- **谱面视图四边 2px 留白**：裁剪分支原来把 viewBox 设成**墨迹紧边界** ⇒ 贴边 ✗
-  ⇒ 裁剪框**四边各外扩 2px**（与"退回按边距裁剪"那一支同口径）。
-
-## 诊断方式（用户要求："不要一直来回交互，手机反馈诊断并不方便"）
-
-- 设置新增**独立「诊断」页签**（不再干扰「说明」里的有用信息），每块**点击即复制（标题 + 内容）**，
-  另有「一键复制全部诊断」；
-- 新增 **「生成完整诊断报告」**：**一次取样**得到
-  「环境（版本/平台/视口/DPR）＋**滚动链路**（沿途 overflow/touch-action/contain/scrollHeight÷clientHeight
-  ＋"可滚容器 = …"小结）＋**工具条实物**（在 DOM 哪里/是否显示/坐标/内联样式/上下文标记）
-  ＋面板布局＋最近交互记录」，**点一次即自动复制**，粘贴即可定位；
-- 工具条落位诊断改为**每次显示都刷新**（原来每个元素只判定一次 ⇒ 贴出来的永远是别的实例、
-  且常是"视口外"的那条 ✗）。
-
-## 引擎同步
-
-- 本版**未改引擎**：`vendor/engine` 与应用引擎仍**逐文件哈希一致**（有闸门）；
-- 嵌入版仍为 **v0.51.2**（`adj733` 闸门断言嵌入版版本 == 应用 `APP_VERSION`）。
+- `import 'node:http'` / `'node:crypto'`（Warning）：**静态导入是刻意的** —— 本插件以 CJS 打包且把
+  `node:*` 列为 external，动态 `import('node:http')` 在渲染进程会退化成浏览器模块请求而**直接失败** ✗
+  （0.34.0 曾因此出现「Failed to fetch dynamically imported module: node:http」）；
+  手机端安全由**调用方**保证：`./embed/server` 只在 `Platform.isDesktopApp` 时被动态加载 ✓。
+- `fetch`（Warning）：已知豁免 —— 音色库下载与嵌入版本地服务（固定端口 47821，仅本机回环）。
+- `!important`：**0 处**（闸门 `adj772`）。
+- Build verification（Warning）：表示"审核方重建产物 ≠ Release 产物"。本仓库按同一提交重建后
+  与 CI 产物**逐字节一致**（0.34.1 实测 `FA4E68F2…`），差异来自重建环境（Node/依赖版本）。
 
 ## 验证
 
-- `npx tsc -noEmit -skipLibCheck` 0 错；`npm run smoke` **383 passed, 0 failed**；`npm run build` 正常；
-- 新增/改写断言（均带**负对照**）：`adj785`、`adj791`、`adj792b`、`adj794b–794g`、`adj797/797b/797c`、
-  `adj798`、`adj796`（完整诊断报告）等；并保留两道防复发闸门（**CSS 结构**、**类名 ↔ CSS 覆盖**）；
-- `node scripts/release-body.mjs` 命中当版 `# 爱记谱 iJipu 0.34.1`。
+- `npx tsc -noEmit -skipLibCheck` 0 错；`npm run smoke` **384 passed, 0 failed**；`npm run build` 正常；
+- `node scripts/release-body.mjs` 命中当版 `# 爱记谱 iJipu 0.34.2`；
+- `vendor/engine` 与应用引擎**逐文件哈希一致**（46 文件，差异 0）；`adj733` 嵌入版版本闸门通过（v0.51.2）；
+- 发布后终验：CI 产物与本地同提交重建**逐字节比对**，并把 CI 产物装进用户库 + `gh attestation verify`。
