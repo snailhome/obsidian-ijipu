@@ -7,7 +7,7 @@
  * 与 `vendor/engine`/`vendor/icons` 同一套路。
  *
  * 来源：ijipu v0.52.1
- * 生成时间：2026-10-11T09:10:58.082Z
+ * 生成时间：2026-10-11T09:23:17.399Z
  * 单文件 HTML：1396.5 KB
  * 精简资产：39 个 / 66.1 KB
  *
@@ -72,7 +72,7 @@ export const WEBAPP_ASSETS: Record<string, WebappAsset> = {
 /** 生成信息（供设置页/关于对话框显示"嵌入版来自哪一版应用"） */
 export const WEBAPP_META = {
   appVersion: "0.52.1",
-  generatedAt: "2026-10-11T09:10:58.082Z",
+  generatedAt: "2026-10-11T09:23:17.399Z",
   htmlBytes: 1430057,
   assetCount: 39,
   assetBytes: 67671,
