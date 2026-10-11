@@ -625,6 +625,18 @@
   touch-action: pan-y;
   -webkit-overflow-scrolling: touch;
 }
+/**
+ * adj794d（用户第二条滚动链路诊断）：本层已是 `overflow:auto` ✓，但它 `scroll=1020/1020` **没有溢出** ✗；
+ * 而**面板自己**是 `1053/924 ⬍可滚` ✗ ⇒ 面板被**压缩**了。
+ * 原因：本层是 `display:flex; flex-direction:column`，子项默认 `flex-shrink: 1` ⇒
+ * 面板被压到容器高度、内容在**面板内部**溢出（面板 `overflow:visible` ⇒ 视觉上画出来，但
+ * **不计入父容器的可滚高度**）⇒ 父容器"没东西可滚" ⇒ 滑不动 ✓✓。
+ * 修法：直接子项**不压缩、按自身高度**参与布局 ⇒ 父容器得到真实溢出 ⇒ 可以滚。
+ * （写成**平铺**规则，不用 CSS 嵌套 —— 结构闸门会把它当"同层第二条规则"误报 ✗。）
+ */
+.ijipu-file-view > * {
+  flex: 0 0 auto;
+}
 .ijipu-file-view.ijipu-file-editing {
   overflow: hidden;
 }

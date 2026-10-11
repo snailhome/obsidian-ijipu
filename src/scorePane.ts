@@ -992,6 +992,18 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     plugin.register(() => {
       // adj785：悬停那两条监听已取消，这里只清理仍在用的监听
       container.removeEventListener('keydown', onKeyDown)
+      /**
+       * adj794d（用户实测）：「嵌入 jps 文件的编辑**可直达源码** ✓，但**工具栏卡在了原地不消失**」✗
+       *
+       * 原因：外侧落位时工具条被挂到 `document.body` 上（adj793c，为了摆脱祖先裁剪/层叠）⇒
+       * 面板一旦被销毁（例如切到源码编辑态、或视图重建），**没人把它收回来** ⇒ 它就留在 body 上 ✗。
+       * 这里在面板清理时兜住：还在 body 上就移回容器（容器已断开时直接移除）。
+       */
+      const el = liveToolbar()
+      if (el.parentElement === document.body) {
+        if (container.isConnected) container.appendChild(el)
+        else el.remove()
+      }
     })
     if (!host.embedded) toolbar.createSpan({ cls: 'ijipu-page-label', text: `${svgs.length} 页` })
     // adj738：工具条这里原来还有一枚「frontmatter 覆盖 N 项」徽标 —— 笔记 frontmatter 层已删除，
