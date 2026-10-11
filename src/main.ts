@@ -1244,8 +1244,9 @@ export default class IJipuPlugin extends Plugin {
          *  · 否 ✗ ⇒ 插件**仍在发旧产物** ⇒ 只需**真正重载插件** ✓（我重建后必须重载 ✓）。
          */
         this.embedServeInfo =
-          `取回 ${html.length} 字符｜含桥关键字(__ijipuAppResponse)=${html.includes('__ijipuAppResponse') ? '是 ✓' : '否 ✗'}` +
-          `｜含**新版独有**标记(Obsidian 桥已安装)=${html.includes('Obsidian 桥已安装') ? '**是 ✓（插件已是新产物）**' : '**否 ✗（插件仍在发旧产物 ⇒ 请重载插件）**'}`
+          `取回 ${html.length} 字符｜桥关键字=$${html.includes('__ijipuAppResponse') ? '是 ✓' : '否 ✗'}` +
+          `｜**新版 ASCII 标记 bridge-installed**=${html.includes('bridge-installed') ? '**是 ✓（服务端已在发新产物）**' : '**否 ✗（服务端仍在发旧产物！）**'}` +
+          `｜html 头部=${html.slice(0, 40).replace(/\s+/g, ' ')}`
       } catch (e) {
         this.embedServeInfo = `取回失败：${e instanceof Error ? e.message : String(e)}`
       }
