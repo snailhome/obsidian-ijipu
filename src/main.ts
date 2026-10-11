@@ -276,6 +276,45 @@ export default class IJipuPlugin extends Plugin {
       },
     })
 
+    /**
+     * adj821（B3 补口）：**导出 MIDI** —— 与「导出 PNG」同构 ✓。
+     * 为什么也走应用通道：应用侧的 `export.midi` 复用同一套 `buildPlaySequence` + `eventsToMidi`
+     * 且**带应用当前的音色/声部设置** ✓；插件内 B1 的 `api` 故意不提供 MIDI（`capabilities.midi=false` ✓），
+     * 以免出现"两条导出路径结果不同" ✗。
+     */
+    this.addCommand({
+      id: 'export-jps-midi',
+      name: '导出当前谱面为 MIDI（需要嵌入版通道）',
+      checkCallback: (checking) => {
+        if (!contextSource()) return false
+        if (!checking) {
+          void (async () => {
+            const c = await contextSourceAsync()
+            if (!c) return
+            if (this.appRpc === null) {
+              new Notice('iJipu：嵌入版通道不可用（请先打开一次嵌入版 iJipu）')
+              return
+            }
+            try {
+              const res = await this.appRpc.request<{ midiBase64: string; bytes: number }>('export.midi', { source: c.source })
+              const bin = atob(res.midiBase64)
+              const bytes = Uint8Array.from(bin, (ch) => ch.charCodeAt(0))
+              const dir = c.file?.parent?.path ?? ''
+              const base = (c.file?.basename ?? 'score').replace(/\.jps$/i, '')
+              const path = dir === '' || dir === '/' ? `${base}.mid` : `${dir}/${base}.mid`
+              const existing = this.app.vault.getAbstractFileByPath(path)
+              if (existing instanceof TFile) await this.app.vault.modifyBinary(existing, bytes.buffer as ArrayBuffer)
+              else await this.app.vault.createBinary(path, bytes.buffer as ArrayBuffer)
+              new Notice(`iJipu：已导出 ${base}.mid（${res.bytes} 字节）`)
+            } catch (e) {
+              new Notice(`iJipu：MIDI 导出失败 —— ${e instanceof Error ? e.message : String(e)}`, 6000)
+            }
+          })()
+        }
+        return true
+      },
+    })
+
     this.addCommand({
       id: 'copy-jps-svg',
       name: '复制当前谱面的 SVG 源码到剪贴板',
