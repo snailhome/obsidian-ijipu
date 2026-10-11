@@ -53,6 +53,22 @@ export type IJipuSettings = Partial<PageConfig> & {
    * 属 **L1 界面/偏好**（与具体谱无关、不随谱走）⇒ 不进 `defs.ts` 的 `DEFS`、不写进谱面源码。
    */
   exportRange?: ExportRangeSetting
+  /**
+   * adj868（用户要求）：**嵌入版通道**总开关（原来叫「开发者：允许嵌入版调用插件能力」）。
+   *
+   * 它不是只给开发者用的东西 —— 它是「嵌入版 iJipu（应用）↔ 插件」**两条** postMessage 通道的总开关：
+   *  · **插件 → 应用**：`render.svg`（探活）、`render.png`、`export.midi`、`playback.play|stop`
+   *    ⇒ **「导出 PNG」「导出 MIDI」「复制为图片」必经**（渲染要用应用里的画布、合成要用应用里的音色库）；
+   *  · **应用 → 插件**：`engine.version`、`capabilities`、`render.svg`
+   *    ⇒ 目前**应用侧没有调用方**（`__ijipuRpcRequest` 在应用仓库 grep 为空），是给将来/第三方留的能力面。
+   *
+   * **默认 false**（安全优先）：这条通道能让"页面里的代码"驱动宿主；打开后仍只认
+   * **本插件自己打开的那个嵌入版窗口**（来源校验，不符就静默忽略）+ 方法白名单 + 参数逐项校验。
+   *
+   * adj868 起由"仅本会话有效"改为**持久化**（L1 界面偏好，存插件 `data.json`）——
+   * 用户要求"别每次重启都要点一次"。关着时**不影响**导出 SVG / 复制 SVG 文本（那两条走插件自己的引擎）。
+   */
+  embedChannel?: boolean
 }
 
 /** 导出范围（见 `IJipuSettings.exportRange`）：跟随视图 / 页面 / 谱面 */
@@ -66,6 +82,14 @@ export type ExportRangeSetting = 'view' | 'page' | 'score'
  * 却看不出是谁改的。跟随视图是**可选**口径，用户明确选了才生效（菜单里一眼能看到当前选的是哪个）。
  */
 export const DEFAULT_EXPORT_RANGE: ExportRangeSetting = 'page'
+
+/**
+ * 嵌入版通道（`IJipuSettings.embedChannel`）的默认值：**关闭**。
+ *
+ * 为什么默认关（沿用当初的裁决 ③）：这条通道能让嵌入版页面里的代码驱动插件做事
+ * ⇒ 「默认安全」优先于「省一次点击」。用户在设置里打开一次后**会记住**（`adj868` 起持久化）。
+ */
+export const DEFAULT_EMBED_CHANNEL = false
 
 /** 打开 `.jps` 的方式（见 `IJipuSettings.embedOpenMode`） */
 export type EmbedOpenMode = 'right' | 'tab' | 'current' | 'defaultApp'

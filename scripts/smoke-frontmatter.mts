@@ -3836,6 +3836,7 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
 {
   const rpc808 = String(readFileSync('src/embed/rpc.ts', 'utf8'))
   const main808 = String(readFileSync('src/main.ts', 'utf8'))
+  const types808 = String(readFileSync('src/types.ts', 'utf8'))
   const methods808 = [...rpc808.matchAll(/'(engine\.version|capabilities|render\.svg)'/g)].map((m) => m[1])
   check('adj808 B2 安全边界：白名单最小面、来源校验、默认关闭、路径规则、错误码、能力不撒谎',
     // ① 白名单：恰好这三个（B2 最小面）
@@ -3843,8 +3844,16 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       methods808.length >= 3 &&
       // ② 来源校验（不是我们的 iframe ⇒ 直接 return，不回包）
       /if \(win === null \|\| ev\.source !== win\) return/.test(rpc808) &&
-      // ③ 总开关默认关：插件侧 false，RPC 侧未启用走 disabled
-      /allowExternalApi = false/.test(main808) &&
+      /**
+       * ③ 总开关默认关。⚠ adj868（用户要求）把开关从"内存字段（重载即关）"改成
+       * **持久化设置 + 访问器** ⇒ 判据同步为"默认值常量 + 类型声明 + 访问器读写设置"，
+       * 并加**负对照**：不许再退回"`allowExternalApi = false` 内存字段"那一版。
+       */
+      /embedChannel\?: boolean/.test(types808) &&
+      /export const DEFAULT_EMBED_CHANNEL = false/.test(types808) &&
+      /get allowExternalApi\(\): boolean \{\s*return this\.settings\.embedChannel \?\? DEFAULT_EMBED_CHANNEL/.test(main808) &&
+      /set allowExternalApi\(v: boolean\) \{\s*this\.settings\.embedChannel = v\s*void this\.saveSettings\(\)/.test(main808) &&
+      !/allowExternalApi = false/.test(main808) &&
       /if \(!deps\.isEnabled\(\)\) return fail\(RPC_ERROR\.disabled/.test(rpc808) &&
       // ④ 路径规则：绝对路径/盘符/.. /NUL 全拒
       /if \(p\.startsWith\('\/'\) \|\| p\.startsWith\('\\\\'\)\) return false/.test(rpc808) &&
@@ -4381,6 +4390,55 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
         !/zoom/i.test(engineRange865) && (appBridge865 === '' || !/zoom/i.test(appBridge865)),
       `slice=${exportSlice865.length} 字符`)
   }
+}
+
+/**
+ * ---- adj868（用户要求「两点建议都做」）：嵌入版通道开关**改名写清两个方向** + **改成记住** ----
+ *
+ * 由来：用户问「插件设置里的开发者选项的意义何在？」——查代码发现它其实是
+ * 「嵌入版应用 ↔ 插件」**两条**通道的总开关，而用户平时用的「导出 PNG / MIDI / 复制为图片」
+ * 走的正是**插件 → 应用**那一条；旧名字「开发者…」+ 旧说明只写了**应用 → 插件**那一半
+ * （而那一半应用侧目前**没有任何调用方**）⇒ 用户会以为与自己无关、失败时也找不到原因。
+ *
+ * 本节钉三件事：① 名字/说明写清两个方向；② 开关**持久化**（不再是重载即关）；
+ * ③ 关闭时的提示语指向**新**的设置名（否则用户按提示找不到那一行）。
+ */
+{
+  const set868 = codeOf(String(readFileSync('src/settings.ts', 'utf8')))
+  const main868 = codeOf(String(readFileSync('src/main.ts', 'utf8')))
+  const types868 = codeOf(String(readFileSync('src/types.ts', 'utf8')))
+  const rpc868 = codeOf(String(readFileSync('src/embed/rpc.ts', 'utf8')))
+  const api868 = existsSync('docs/OBSIDIAN-API.md') ? String(readFileSync('docs/OBSIDIAN-API.md', 'utf8')) : ''
+
+  check('adj868 设置项改名并写清两个方向：插件 → 应用（导出 PNG/MIDI/复制为图片）+ 应用 → 插件（仅供开发与将来）',
+    /\.setName\('嵌入版通道（导出图片 \/ MIDI 需要）'\)/.test(set868) &&
+      /· 插件 → 应用：\*\*导出 PNG \/ 导出 MIDI \/ 复制为图片\*\*/.test(set868) &&
+      /· 应用 → 插件：能力探测与渲染（\*\*目前仅供开发与将来使用\*\*，日常用不到）/.test(set868) &&
+      /本开关\*\*会记住\*\*/.test(set868) &&
+      // 负对照：旧名字与"仅本会话有效 / 重载后自动关闭"那套说法必须消失
+      !/开发者：允许嵌入版调用插件能力/.test(set868) && !/仅本会话有效/.test(set868) &&
+      !/重载后自动关闭/.test(set868) &&
+      !/开发者：允许嵌入版调用插件能力/.test(types868.replace(/原来叫「开发者：允许嵌入版调用插件能力」/g, '')))
+  check('adj868 开关持久化：类型里有 embedChannel（默认 false），插件用访问器读写设置并顺手存盘',
+    /embedChannel\?: boolean/.test(types868) && /export const DEFAULT_EMBED_CHANNEL = false/.test(types868) &&
+      /get allowExternalApi\(\): boolean \{\s*return this\.settings\.embedChannel \?\? DEFAULT_EMBED_CHANNEL\s*\}/.test(main868) &&
+      /set allowExternalApi\(v: boolean\) \{\s*this\.settings\.embedChannel = v\s*void this\.saveSettings\(\)\s*\}/.test(main868) &&
+      // 量的是"真的写进设置"，不是再存一个内存字段
+      /this\.settings\.embedChannel = v/.test(main868))
+  check('adj868 负对照：把 setter 里的存盘去掉 ⇒ 判据为假（又变回"重载即关"）',
+    !/set allowExternalApi\(v: boolean\) \{\s*this\.settings\.embedChannel = v\s*void this\.saveSettings\(\)\s*\}/.test(
+      main868.replace('void this.saveSettings()', ''),
+    ))
+  check('adj868 关闭时的提示语指向**新**设置名（用户按提示能找到那一行）',
+    /嵌入版通道未启用（设置 → iJipu → 嵌入版 → 「嵌入版通道」）/.test(rpc868) &&
+      [...rpc868.matchAll(/嵌入版通道未启用（设置 → iJipu → 嵌入版 → 「嵌入版通道」）/g)].length === 2 &&
+      !/设置 → iJipu → 开发者/.test(rpc868))
+  check('adj868 文档同步：OBSIDIAN-API 写清开关现状（持久化 + 两个方向），旧名与旧说法都不再出现',
+    // ⚠ 负向判据必须**只查"旧说法还在不在"**：本轮就踩了"引用旧说法来解释改名"把自己判红的坑
+    //   ⇒ 文档里不逐字复述旧措辞（口径与 `codeOf` 的做法一致：负向断言先剥掉引用）。
+    api868 === '' ||
+      (/嵌入版通道/.test(api868) && !/开发者/.test(api868) &&
+        !/重载即回到关闭/.test(api868) && !/重载后回到关闭/.test(api868) && !/仅本会话有效/.test(api868)))
 }
 
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。

@@ -116,14 +116,17 @@ parent.postMessage({ __ijipuRpcRequest: 1, id: 1, method: 'render.svg',
 **错误码（对外承诺）**：`-32001` 未启用 ｜ `-32601` 未知方法 ｜ `-32602` 参数非法 ｜ `-32603` 内部错误 ✓
 
 **安全边界（写死在代码里，机器闸门 `adj808` 守着 ✓）**：
-1. **总开关默认关闭**（`plugin.allowExternalApi = false` ✓，用户裁决 ③）⇒ 关着时一律回 `-32001`；
+1. **总开关默认关闭**（`settings.embedChannel`，默认 `false` ✓，用户裁决 ③）⇒ 关着时一律回 `-32001`；
 2. **来源校验**：`event.source` 必须是"src 含本插件 token 的 iframe"窗口 ✓，否则**直接忽略、不回包**（避免被探测 ✓）；
 3. **方法白名单**：B2 只有上表三个 ✓（新能力做成再放，不许"先通后补" ✗）；
 4. **参数逐项校验**：`source` 必须字符串且 ≤500 000 字符；`pageConfig` 必须对象（不符 ⇒ `-32602`，不做"尽力解析" ✗）；
 5. **路径规则** `isSafeVaultPath()`：只允许 vault 内**相对路径**，禁绝对路径 / 盘符 / `..` / NUL ✓（B3 的 `render.png`、`export.*` 用它 ✓）。
 
-> **开关现状**：B2 阶段是**代码层开关**（默认关 ✓）；设置界面的「开发者：允许外部调用」行在 B2 收尾补 ✓。
-> 临时自测：控制台执行 `app.plugins.plugins['ijipu'].allowExternalApi = true` ✓（重载即回到关闭 ✓）。
+> **开关现状（adj868 起）**：设置里的那一行已改名为「**嵌入版通道（导出图片 / MIDI 需要）**」，
+> 并**持久化**（存插件 `data.json`：打开一次即长期有效，不必每次重启再点）。
+> **它是两条通道的总开关**：**插件 → 应用**（`render.png` / `export.midi` / `playback.*`，
+> 即「导出 PNG / MIDI / 复制为图片」必经）与**应用 → 插件**（上表三个方法，目前应用侧**没有调用方**）。
+> 临时自测：控制台执行 `app.plugins.plugins['ijipu'].allowExternalApi = true` ✓（访问器，会顺手存盘）。
 
 ## 六之三、协议冻结（方案 B / **B4**）
 
@@ -140,7 +143,7 @@ parent.postMessage({ __ijipuRpcRequest: 1, id: 1, method: 'render.svg',
 | 通道 | 方法 | 状态 |
 |---|---|---|
 | 应用 → 插件 | `engine.version` / `capabilities` / `render.svg` | ✓ 已实现（`adj807`） |
-| 插件 → 应用 | `render.svg` / `render.png` / `export.midi` | ✓ 已实现（`adj809`/`adj810`/`adj811`），且插件侧**三种导出都有命令**：复制 SVG 源码 / **导出 SVG 文件** / **导出 PNG**（`adj821` 起还有 **导出 MIDI** ✓）——后两者需先在设置里打开「开发者：允许嵌入版调用插件能力」并打开过一次嵌入版 ✓ |
+| 插件 → 应用 | `render.svg` / `render.png` / `export.midi` | ✓ 已实现（`adj809`/`adj810`/`adj811`），且插件侧**三种导出都有命令**：复制 SVG 源码 / **导出 SVG 文件** / **导出 PNG**（`adj821` 起还有 **导出 MIDI** ✓）——后两者需先在设置里打开「**嵌入版通道（导出图片 / MIDI 需要）**」并打开过一次嵌入版 ✓ |
 | 插件 → 应用 | `playback.play` / `playback.stop` | **未接线** —— 白名单里已留名（`APP_METHODS` ✓），但应用侧要接 audio 播放链路（AudioContext + 音色库 + 当前文档状态 ✓）⇒ 未接之前**不谎报**：`capabilities.audio = false` ✓、应用侧对未实现方法回 `-32000` 并写明原因 ✓ |
 
 > **为什么 `playback.*` 不急着做**（2026-10 定位后的**具体**原因，不是拖延 ✓）：

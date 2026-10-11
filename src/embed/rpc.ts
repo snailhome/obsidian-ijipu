@@ -82,7 +82,7 @@ export function createEmbedRpc(deps: Deps): EmbedRpc {
     const method = String(data.method ?? '')
     const fail = (code: number, message: string): void => reply(win, { id, ok: false, error: { code, message } })
     // ② 总开关（默认关）
-    if (!deps.isEnabled()) return fail(RPC_ERROR.disabled, '嵌入版 RPC 未启用（设置 → iJipu → 开发者）')
+    if (!deps.isEnabled()) return fail(RPC_ERROR.disabled, '嵌入版通道未启用（设置 → iJipu → 嵌入版 → 「嵌入版通道」）')
     // ③ 白名单
     if (!(RPC_METHODS as readonly string[]).includes(method)) return fail(RPC_ERROR.notFound, `未知方法：${method}`)
     try {
@@ -189,7 +189,7 @@ export function createAppRequester(deps: Pick<Deps, 'isEnabled' | 'getIframeWind
   const request = <T = unknown>(method: string, params: Record<string, unknown> = {}, timeoutMs = 10_000): Promise<T> =>
     new Promise<T>((resolve, reject) => {
       if (!deps.isEnabled()) {
-        reject(new Error('嵌入版通道未启用（设置 → iJipu → 开发者）'))
+        reject(new Error('嵌入版通道未启用（设置 → iJipu → 嵌入版 → 「嵌入版通道」）'))
         return
       }
       const win = deps.getIframeWindow()

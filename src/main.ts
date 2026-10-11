@@ -16,7 +16,7 @@ import { IJipuFileView, JPS_EXTENSION, VIEW_TYPE_IJIPU } from './fileView'
 import { createJpsFile, consumeJpsLinkCreate, materializeJpsFile, planJpsLinkCreate, registerJpsFileCreator, unregisterJpsFileCreator, NEW_JPS_TEMPLATE } from './newFile'
 import { replaceCodeBlockBody } from './sourceEdit'
 import { canOpenWithDefaultApp, openWithDefaultApp } from './openExternal'
-import { DEFAULT_EMBED_OPEN_MODE, DEFAULT_EXPORT_RANGE, type EmbedOpenMode, type ExportRangeSetting, type IJipuSettings } from './types'
+import { DEFAULT_EMBED_CHANNEL, DEFAULT_EMBED_OPEN_MODE, DEFAULT_EXPORT_RANGE, type EmbedOpenMode, type ExportRangeSetting, type IJipuSettings } from './types'
 import { IJipuBridge } from './embed/bridge'
 import { embedEditLeavesObsidian, planEmbedTarget } from './embed/openPlan'
 /**
@@ -77,11 +77,25 @@ export default class IJipuPlugin extends Plugin {
    */
   api!: IjipuApi
   /**
-   * adj807（方案 B / **B2**）：嵌入版 RPC 的**总开关** —— 用户裁决 ③「**默认关闭**」✓。
-   * 打开后才接受嵌入版 iframe 的 `postMessage` 请求（方法白名单见 `src/embed/rpc.ts` ✓）。
-   * 设置界面里的开关在下一轮补 UI；现在可用控制台/后续设置项打开，**默认是关** ✓。
+   * adj807/adj868（方案 B / **B2**）：**嵌入版通道总开关** —— 用户裁决 ③「**默认关闭**」。
+   *
+   * adj868（用户要求）改了**两处**：
+   *  ① **持久化**：原来是一个内存字段（重载即回到关闭，用户每次重启都要重新点开），
+   *     现在读写 `settings.embedChannel`（L1 界面偏好，存插件 `data.json`）；
+   *  ② 名字/说明改了（设置里叫「**嵌入版通道（导出图片 / MIDI 需要）**」）——
+   *     因为它不只管"应用 → 插件"，**插件 → 应用**那条（导出 PNG / MIDI / 复制为图片）也被它管着，
+   *     旧名字「开发者…」会让用户以为与自己无关。
+   *
+   * 这里刻意保留 `allowExternalApi` 这个**属性名**：两处 `isEnabled`、诊断行、设置页开关都直接用它，
+   * 改成访问器后这些调用点**一行都不用动**（写入时顺手存盘）。
    */
-  allowExternalApi = false
+  get allowExternalApi(): boolean {
+    return this.settings.embedChannel ?? DEFAULT_EMBED_CHANNEL
+  }
+  set allowExternalApi(v: boolean) {
+    this.settings.embedChannel = v
+    void this.saveSettings()
+  }
   /**
    * adj835（用户报 ③）：**源码态事件序列记录器** —— 用来定位
    * 「在 ` ```jps ` 代码块的源码态按 Ctrl+P（命令面板），块闪回预览；关掉面板又回到源码」✗。
@@ -684,7 +698,7 @@ export default class IJipuPlugin extends Plugin {
     /**
      * adj807（B2）：**嵌入版 RPC**（postMessage）——只做"要用应用才有的能力"的通道 ✓。
      *  · 纯 TS 能力仍在 `api.ts` 直调引擎（不绕 iframe ✓）；
-     *  · 本通道**默认关闭**（`allowExternalApi`），开着时也只认**方法白名单** ✓；
+     *  · 本通道**默认关闭**（`settings.embedChannel`，`adj868` 起持久化），开着时也只认**方法白名单** ✓；
      *  · 来源校验：只接受"src 带本插件 token 的 iframe"那个窗口 ✓（与 `IJipuBridge` 同一口径 ✓）。
      */
     this.embedRpc = createEmbedRpc({
@@ -1415,7 +1429,7 @@ export default class IJipuPlugin extends Plugin {
         const visible = f.offsetWidth > 0 && f.offsetHeight > 0 ? '可见' : '隐藏/零尺寸'
         push(`  #${i + 1} ${visible}｜src=${src}｜contentWindow=${win === null ? '空' : '有'}｜内部=${probe} ${same}`)
       }
-      push(`  嵌入版服务错误：${this.lastEmbedError ?? '（无错误）'}｜总开关 allowExternalApi=${this.allowExternalApi ? '开' : '关'}`)
+      push(`  嵌入版服务错误：${this.lastEmbedError ?? '（无错误）'}｜嵌入版通道（allowExternalApi）=${this.allowExternalApi ? '开' : '关'}`)
     }
 
     push('')
