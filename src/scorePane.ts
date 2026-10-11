@@ -147,14 +147,6 @@ export type ScorePaneHost = {
    */
   filePath?: string
   /**
-   * adj873：**宿主笔记**的库内路径（```jps 代码块才有；文件视图 / 嵌入不传）。
-   *
-   * 为什么面板要知道它：手机端「保存图片」要写进**谱面所在目录** ——
-   * `.jps` 文件视图 / 嵌入用 `filePath` 的父目录，而**代码块没有自己的文件** ⇒ 用宿主笔记的父目录。
-   * 面板不自己算目录（`imageSave.ts` 的纯函数 + `main.ts` 的 `saveScoreImage` 一处落地）。
-   */
-  notePath?: string
-  /**
    * 「应用打开」之前的**落盘钩子**：先把未保存的编辑写进文件，再交给外部应用。
    * 不提供就只在"已经落盘"的状态下打开（嵌入模式的写回是即时的，故嵌入可以不传）。
    */
@@ -1694,12 +1686,6 @@ toolbar.dataset.ijipuPane = String(paneId)
         box: { x: number; y: number; w: number; h: number } | null
         mode: ViewMode
       }
-      /**
-       * adj873：**图片出口的落点** —— 比 `paneRange` 多一位"这份谱在哪"：
-       * `.jps` 文件视图 / 嵌入 ⇒ 谱面文件本身；```jps 代码块 ⇒ 宿主笔记（只取它的目录）。
-       * 手机端「保存图片」用它决定写进哪个目录、叫什么名字；桌面端复制用不到（多传一位无害 ✓）。
-       */
-      const paneImage = { ...paneRange, targetPath: host.filePath ?? host.notePath }
       switch (id) {
         case 'settings':
           cfgBtn?.click()
@@ -1708,19 +1694,24 @@ toolbar.dataset.ijipuPane = String(paneId)
           fmtBtn?.click()
           return
         /**
-         * adj873（用户 2026-10-11 要求）：`copy-image-*` **按平台分派落点**（动作 id 不变）——
-         *  · **手机**：宿主剪贴板写不了图片 ⇒ `saveScoreImage`（存到谱面同目录，`<谱名>.png`）；
-         *  · **桌面**：照旧 `copyScoreImage`（PNG → 剪贴板）。
-         * 这就是"两端同一份菜单模型、只有落点不同"的那条分派（冒烟 `adj873` 正/负对照都盯着它）。
+         * adj874（用户 2026-10-11 定稿）：`copy-image-*` **一律**走 `copyScoreImage`（PNG → 剪贴板），
+         * 不再按平台分派。
+         *
+         * ⚠ 这三项**只在桌面菜单里出现**（`buildScoreMenu` 在 `isMobile` 时不生成图片组）：
+         * 取图必须走**嵌入版 iJipu 应用**，而嵌入版**只在桌面注册**（`main.ts` 的
+         * `if (Platform.isDesktopApp) this.registerView(...)`；`embed.ts` 的 `getEmbedUrl` 在手机
+         * 直接 `return null`）⇒ 手机上点它必然失败，于是**手机端根本不暴露这个入口**。
+         * `copyScoreImage` 在手机上仍会失败（同一条嵌入版依赖），只是菜单不会再给到它
+         * （adj873 那条"手机端保存到谱面同目录"也要取图 ⇒ 同样必失败，已整条删除）。
          */
         case 'copy-image-1':
-          void (Platform.isMobile ? plugin.saveScoreImage(source, 1, paneImage) : plugin.copyScoreImage(source, 1, paneImage))
+          void plugin.copyScoreImage(source, 1, paneRange)
           return
         case 'copy-image-2':
-          void (Platform.isMobile ? plugin.saveScoreImage(source, 2, paneImage) : plugin.copyScoreImage(source, 2, paneImage))
+          void plugin.copyScoreImage(source, 2, paneRange)
           return
         case 'copy-image-4':
-          void (Platform.isMobile ? plugin.saveScoreImage(source, 4, paneImage) : plugin.copyScoreImage(source, 4, paneImage))
+          void plugin.copyScoreImage(source, 4, paneRange)
           return
         case 'copy-svg':
           void plugin.copyScoreSvg(source, paneRange)

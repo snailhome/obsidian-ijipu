@@ -31,32 +31,35 @@ buildScoreMenu(ctx)   // src/scoreMenu.ts —— 纯数据，零 obsidian/DOM �
   ⇒ 三处共用一个 `Menu` 即天然满足，**不引入第二套渲染**。
 - 「只进菜单、不进工具条」的动作登记在 `MENU_ONLY_ACTIONS`：
   `settings`（设置/页面设置）· `format`（格式化源码）·
-  **`copy-image-1/2/4`（图片出口，2× 默认：桌面「复制为图片」/ 手机「保存图片」，同一批 id；`adj873`）·
+  **`copy-image-1/2/4`（图片出口，2× 默认：「复制为图片」；**只有桌面端生成**，`adj874`）·
   `copy-svg`（复制 SVG 文本）· `copy-source`（复制谱面源码）**·
   **`range-view/page/score`（导出范围：跟随视图 / 页面 / 谱面，单选打勾）**·
   `app-open`（在应用中打开，仅桌面）· `embed-link`（打开谱面文件，仅嵌入模式且"编辑"会离开 Obsidian 时）。
   这些按钮由宿主能力决定建不建，**建在游离容器 `menuOnly` 里**（不挂工具条 DOM），
   菜单项只做**路由**：`id → 对应按钮的 .click()` 或插件方法（复用既有实现，零重复实现）。
 
-### 图片出口：桌面「复制为图片」（`adj864`）/ 手机「保存图片」（`adj873`）
+### 图片出口：**仅桌面**「复制为图片」（`adj864`；`adj874` 收口为手机端不出现）
 
-- 三条图片项 = `copyScoreImage(source, 1|2|4, paneImage)`（**桌面**）/ `saveScoreImage(source, 1|2|4, paneImage)`
-  （**手机**）；面板把**自己手里的**墨迹盒 + 当前显示模式传进去（比插件缓存新鲜）。渲染仍在**嵌入版应用**里做
-  （插件没有 canvas，走既有的 `render.png` 通道），范围盒随 `params.crop` 传过去（应用只 `applyRangeToSvg`，
-  不重算几何）。
+> **口径（用户 2026-10-11 定稿）**：**图片类出口（复制为图片 / 导出 PNG）依赖嵌入版应用，而嵌入版
+> 只在桌面注册 ⇒ 手机端不出现**。手机端可用的出口是「复制 SVG 文本 / 复制谱面源码 / 导出 SVG」，
+> 理由是它们**走插件自己的引擎**（`api.renderSvg` / 纯文本），不经过嵌入版通道。
+
+- 三条图片项 = `copyScoreImage(source, 1|2|4, paneRange)`；面板把**自己手里的**墨迹盒 + 当前显示模式
+  传进去（比插件缓存新鲜）。渲染在**嵌入版应用**里做（插件没有 canvas，走既有的 `render.png` 通道），
+  范围盒随 `params.crop` 传过去（应用只 `applyRangeToSvg`，不重算几何）。
 - 写剪贴板前先补 **pHYs（`engine/png.ts`）**：`DPI = 72 × scale`（2× ⇒ 144 DPI，4× ⇒ 288 DPI）——
-  否则 Word / 微信 / 飞书按 96 DPI 兜底，把 2× 渲染的 A4 谱插成 12 英寸巨图。**保存图片走同一条路**，
-  存下来的字节与粘贴出去的是同一张。
-- **为什么两端不同**（`adj873`，用户 2026-10-11）：手机宿主 WebView **写不了剪贴板图片**
-  （没有 `ClipboardItem` / `navigator.clipboard.write`）⇒ 手机上改成**保存到谱面同目录**，
-  文件名 `<谱名>.png`、重名加 `-2`/`-3`…（`src/imageSave.ts`，**绝不静默覆盖** ✗）。
-  动作 **id 不变**（`copy-image-1|2|4`）⇒ 路由表与菜单结构不动，平台差异只在**文案**
-  （`scoreMenu.ts` 的 `saveOnMobile`）与**落点**（`scorePane.ts` 的分派 + `main.ts` 的 `saveScoreImage`）。
-- **保存到哪个目录**（`paneImage.targetPath = host.filePath ?? host.notePath`）：
-  `.jps` 文件视图 / `![[x.jps]]` 嵌入 ⇒ 该文件所在目录；```jps 代码块 ⇒ **宿主笔记所在目录**；
-  取不到 ⇒ 库根。写完的 `Notice` 里给出**完整库内路径**，多页谱说明"**只保存第 1 页**"。
-- 多页谱在桌面**只复制第 1 页**并如实说明（剪贴板只能放一张图）；剪贴板能力缺失（移动端 WebView 等）
-  **如实报错**，并指向「导出 PNG」命令（会写进 vault）。
+  否则 Word / 微信 / 飞书按 96 DPI 兜底，把 2× 渲染的 A4 谱插成 12 英寸巨图。
+- **为什么手机端整组不生成**：取图这一步必须走**嵌入版 iJipu 应用**，而嵌入版**只在桌面注册**
+  （`src/main.ts` 里 `if (Platform.isDesktopApp) this.registerView(...)`；`embed.ts` 的 `getEmbedUrl`
+  在手机直接 `return null`）⇒ 手机上点图片项**必然失败**，`copyScoreImage` 也只会报"嵌入版通道不可用"。
+  `adj873` 曾试图在手机端改成"保存到谱面同目录"，但取图同样要走嵌入版 ⇒ 真机上一样存不下来，
+  该实现（`saveScoreImage` + `src/imageSave.ts`）已**整条删除**（项目规矩：不留死代码）。
+  ⇒ 手机端菜单里**根本不出现**图片项（也不出现"保存图片"字样），而不是让用户点了才知道不行；
+  要出图请用**桌面端**，或走「导出 PNG」命令（同样需要嵌入版通道）。
+- **动作 id 仍是 `copy-image-1|2|4`**（`scorePane.ts` 的 `switch` 与 `MENU_ONLY_ACTIONS` 都不动）——
+  变的只是"手机端不生成这三项"。
+- 多页谱**只复制第 1 页**并如实说明（剪贴板只能放一张图）；剪贴板能力缺失时**如实报错**，
+  并指向「导出 PNG」命令（会写进 vault）。
 - 图片渲染在应用里做 ⇒ 两边**页面尺寸必须一致**：`resolveRangeBox` 先比对"预览实测的页面尺寸"与
   "嵌入版渲染出的页面尺寸"，不一致就**明确拒绝**（否则墨迹盒落在另一套坐标系、裁出来必错位）。
 
@@ -76,8 +79,8 @@ buildScoreMenu(ctx)   // src/scoreMenu.ts —— 纯数据，零 obsidian/DOM �
    并在 `runScoreMenuAction` 的 `switch` 里加 `case`（**少一个 case 就是"点了没反应"**，冒烟会红灯）；
 3. 需要的能力标志加进 `ScoreMenuContext`（不要直接传 `ScorePaneHost`：模型不认识宿主类型）；
 4. 冒烟 `adj862`（id 路由齐全、菜单项都带标题、游离容器计数）与 `adj864`（复制/范围两组、单选打勾、
-   图片链路的 pHYs 与剪贴板降级）会自动覆盖；**手机/桌面文案不同**或**写库**的项另有 `adj873`
-   （平台分派 + 落点 + 重名递增，均有负对照）；新动作记得同时进 `MENU_ONLY_ACTIONS`（负对照会核对它不在工具条里）。
+   图片链路的 pHYs 与剪贴板降级）会自动覆盖；**平台差异**（手机端不生成图片出口）另有 `adj874`
+   （正/负对照 + 死代码扫描 + 文档同口径）；新动作记得同时进 `MENU_ONLY_ACTIONS`（负对照会核对它不在工具条里）。
 
 ## 三、移动分支（不是"缩小版桌面"）
 
@@ -90,6 +93,7 @@ buildScoreMenu(ctx)   // src/scoreMenu.ts —— 纯数据，零 obsidian/DOM �
 | hover 依赖 | 无（`adj785` 起改为点击切换） | 无 | `hoverHide: false`（两端一致） |
 | 右键菜单 | 有 | **无**（长按被宿主占用） | `contextMenu` 只在桌面注册 `contextmenu` |
 | 「在应用中打开」 | 有 | **菜单里不出现** | `buildScoreMenu` 里按 `isMobile` 过滤 |
+| **图片出口**（复制为图片 / 导出 PNG 同源） | 有 | **菜单里不出现** | `buildScoreMenu` 里按 `isMobile` 整组不生成。**原因**：取图必须走**嵌入版 iJipu 应用**，而嵌入版**只在桌面注册**（`main.ts` 的 `Platform.isDesktopApp` + `embed.ts` 的 `getEmbedUrl` 在手机 `return null`）⇒ 手机上必失败（`adj874`）。手机端可用的是「复制 SVG 文本 / 复制谱面源码 / 导出 SVG」——它们走插件自己的引擎 |
 
 ## 四、图标同源
 

@@ -11,11 +11,14 @@
  * ③ **移动端不是"缩小版桌面"**：触控目标 ≥44px、**不自动收起**（常驻）、不依赖 hover、不依赖右键
  *    —— 由 `toolbarPolicy()` 一处给出，渲染端只**消费**，不再各自 `if (Platform.isMobile)` 散判。
  *
- * ## 三条硬约束（都有冒烟闸门 `adj862` 守着）
+ * ## 四条硬约束（都有冒烟闸门 `adj862` / `adj874` 守着）
  * · `SCORE_TOOLBAR_SLOTS` 是**顺序契约**：`scorePane.ts` 里 `dataset.slot` 的出现顺序必须与它一致
  *   （工具条多一个/少一个/换位置 ⇒ 冒烟红灯，必须**明确**改这份契约而不是悄悄漂）。
  * · 工具条**不再包含** 设置 / 格式化 / 应用打开 / 打开谱面文件（它们是菜单项；见 `MENU_ONLY_ACTIONS`）。
  * · 移动端**没有**「在应用中打开」（嵌入版仅桌面可用，`embed.ts` 的视图注册也只在桌面）。
+ * · 移动端**没有图片出口**（`copy-image-1/2/4` 整组不生成）：取图必须走嵌入版应用，而嵌入版只在桌面
+ *   注册 ⇒ 手机上必失败；手机能用的只有「复制 SVG 文本 / 复制谱面源码」这类**走插件自己引擎**的出口
+ *   （`adj874`，用户 2026-10-11 定稿；详见 `buildScoreMenu` 里那段注释）。
  *
  * ## 移动端 Action Sheet 为什么不自己画
  * Obsidian 的 `Menu` 在手机上**本身就是底部弹出的大行高面板**——`obsidian.asar` 的 app.css 里有
@@ -48,7 +51,8 @@ export const MENU_ONLY_ACTIONS = [
   'settings',
   'format',
   // adj864（T-5「复制」组）：图片出口（1× / **2×默认** / 4×）+ 复制 SVG 文本 + 复制谱面源码
-  // adj873：**同一个 id，两端文案不同** —— 桌面「复制为图片」、手机「保存图片」（id 不变 ⇒ 路由表不动）
+  // adj874：图片出口**只在桌面生成**（依赖嵌入版应用，而嵌入版只在桌面注册 ⇒ 手机端必失败）；
+  //   id 仍然留着：桌面菜单与 `scorePane.ts` 的路由表都按它们分派（手机端菜单里根本不出现这几项）
   'copy-image-1',
   'copy-image-2',
   'copy-image-4',
@@ -137,38 +141,45 @@ export function buildScoreMenu(ctx: ScoreMenuContext): ScoreMenuSection[] {
   if (display.length > 0) sections.push({ title: '显示', items: display })
 
   /**
-   * **图片与文本出口**（adj864，T-5 定稿；**adj873 按平台分派文案**）。
+   * **文本出口**（adj864，T-5 定稿；**adj874 起图片出口只在桌面生成**）。
    *
-   * ## 为什么两端文案不同（adj873，用户 2026-10-11 要求）
-   * 手机上**写不了剪贴板图片**（宿主 WebView 没有 `ClipboardItem` / `navigator.clipboard.write`），
-   * 点了只会得到一句报错 ✗ ⇒ 手机上把这三项改成**保存图片到谱面同目录**（`<谱名>.png`），
-   * **桌面端保持"复制"不变**。文案必须跟着改：手机菜单里**不许**再出现「复制为图片」字样
-   * （否则用户点之前根本不知道会存到哪、也以为能粘出去）。
+   * ## 图片类出口为什么手机端**不出现**（adj874，用户 2026-10-11 定稿）
+   * 取图必须走**嵌入版 iJipu 应用**（插件没有 canvas，只能走既有的 `render.png` 通道），
+   * 而嵌入版**只在桌面注册**（`src/main.ts` 里 `if (Platform.isDesktopApp) this.registerView(...)`；
+   * `embed.ts` 的 `getEmbedUrl` 在手机直接 `return null`）⇒ 手机上点图片项**必然失败**
+   * （`main.ts` 的 `copyScoreImage` 只会报"嵌入版通道不可用"）。
    *
-   * ⚠ **动作 id 不变**（仍是 `copy-image-1|2|4`）：路由表/菜单结构不用大改，平台差异只在
-   * 文案（这里）与落点（`scorePane.ts` 的分派 + `main.ts` 的 `saveScoreImage`）两处表达。
+   * adj873 曾试图在手机端把这三项改成"保存图片到谱面同目录"，但**取图这一步同样要走嵌入版**
+   * ⇒ 手机上一样存不下来；该实现已**整条删除**（项目规矩：不留死代码）。
+   * 所以手机端**根本不生成图片项** —— 菜单里既不出现「复制为图片」，也不出现「保存图片」，
+   * 而不是让用户点一下才知道不行。要出图请用**桌面端**，或走「导出 PNG」命令（同样需要嵌入版通道）。
+   *
+   * ## 手机端**可以**用的出口（都走插件自己的引擎，两端一致）
+   *  · 「复制 SVG 文本」—— `plugin.copyScoreSvg()`，插件侧 `api.renderSvg` 自己渲染（同理「导出 SVG」命令可用）；
+   *  · 「复制谱面源码」—— 纯文本，不涉及任何渲染通道。
    *
    * 为什么默认 2×：页面基准 72 DPI，2× ⇒ **144 DPI** ≈ 常见文档插图清晰度；1× 只够屏幕看、4× 体积翻倍。
    * 图片走**嵌入版通道**（插件没有 canvas）：渲染在应用侧完成，与 GUI 导出**同一套** `svgToCanvas`；
    * 桌面再补 **pHYs（DPI）** 后写剪贴板 —— 否则 Word / 微信按 96 DPI 兜底，把谱插成巨图。
    */
-  const saveOnMobile = ctx.isMobile
-  const imageItem = (id: ScoreMenuActionId, scale: 1 | 2 | 4, dpiNote: string, extra: string): ScoreMenuItem => ({
-    id,
-    label: saveOnMobile ? `保存图片（${scale}×${extra}）` : `复制为图片（${scale}×${extra}）`,
-    title: saveOnMobile
-      ? `保存 PNG 图片到谱面同目录（${scale}× ⇒ ${dpiNote}）`
-      : `复制为 PNG 图片到剪贴板（${scale}× ⇒ ${dpiNote}）`,
-  })
-  const copy: ScoreMenuItem[] = [
-    imageItem('copy-image-2', 2, '144 DPI', '，默认'),
-    imageItem('copy-image-1', 1, '72 DPI，体积最小', ''),
-    imageItem('copy-image-4', 4, '288 DPI，最清晰、体积最大', ''),
+  const copy: ScoreMenuItem[] = []
+  if (!ctx.isMobile) {
+    const imageItem = (id: ScoreMenuActionId, scale: 1 | 2 | 4, dpiNote: string, extra: string): ScoreMenuItem => ({
+      id,
+      label: `复制为图片（${scale}×${extra}）`,
+      title: `复制为 PNG 图片到剪贴板（${scale}× ⇒ ${dpiNote}）`,
+    })
+    copy.push(
+      imageItem('copy-image-2', 2, '144 DPI', '，默认'),
+      imageItem('copy-image-1', 1, '72 DPI，体积最小', ''),
+      imageItem('copy-image-4', 4, '288 DPI，最清晰、体积最大', ''),
+    )
+  }
+  copy.push(
     { id: 'copy-svg', label: '复制 SVG 文本', title: '复制这一份谱的 SVG 源码文本（矢量，可粘进支持 SVG 的编辑器）' },
     { id: 'copy-source', label: '复制谱面源码', title: '复制 `.jps` 源码文本（发给别人/存档）' },
-  ]
-  // 组标题也随平台走：手机这组里同时有「保存图片」（图片）与「复制…」（文本）⇒ 叫「复制 / 保存」更准
-  sections.push({ title: saveOnMobile ? '复制 / 保存' : '复制', items: copy })
+  )
+  sections.push({ title: '复制', items: copy })
 
   /**
    * **导出范围**（adj864，T-5 定稿）：跟随视图 / 页面 / 谱面 —— 单选，当前项打勾。
