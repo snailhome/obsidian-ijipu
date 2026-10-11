@@ -1416,8 +1416,25 @@ console.log('[adj452] playhead blocks follow playVoice / instrument / engine bou
   )
   check(
     '链接建文件：`preventDefault`/`stopPropagation` 在**同步**路径上（先拦后 await，否则会被 Obsidian 抢走）',
-    mainSrcNf.indexOf('evt.preventDefault()') > mainSrcNf.indexOf('planJpsLinkCreate(href') &&
-      mainSrcNf.indexOf('void (async () =>') > mainSrcNf.indexOf('evt.stopPropagation()'),
+    /**
+     * ⚠ 判据必须**限定在这个点击处理器的片段里**再比先后 ✗：
+     * 原来直接对**全文**做 `indexOf` 排序，只要文件别处也出现 `void (async () =>`（我新增的命令就是 ✗），
+     * 首个出现位置就会前移 ⇒ 断言被"隔壁代码"弄红（AGENTS §六之四 同类脆判据，本轮又踩一次）。
+     */
+    (() => {
+      /**
+       * 守的语义 = 标题本身：**先同步拦下（preventDefault / stopPropagation），再 await** ✓。
+       * ⚠ 锚点用**关键调用** `planJpsLinkCreate(href` 取窗口（之前锚 `onLinkClick(` 命中调用处 ✗、
+       * 锚注册处只拿到一行转发 ✗ —— 这类"锚错位置"的脆判据本会话已踩多次，故这里只锚唯一稳定的那处）。
+       */
+      const at = mainSrcNf.indexOf('planJpsLinkCreate(href')
+      if (at < 0) return false
+      const win = mainSrcNf.slice(Math.max(0, at - 800), at + 1200)
+      const iPrevent = win.indexOf('evt.preventDefault()')
+      const iStop = win.indexOf('evt.stopPropagation()')
+      const iAsync = win.indexOf('void (async () =>')
+      return iPrevent >= 0 && iStop >= 0 && iAsync >= 0 && iPrevent < iAsync && iStop < iAsync
+    })(),
     '',
   )
   check(
@@ -3711,6 +3728,52 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       // 负对照：把类的那一行去掉 ⇒ 判据为假
       !/el\.addClass\('ijipu-ported'\)/.test(pane799.replace("el.addClass('ijipu-ported')", '')),
     `越界的内联样式赋值：${styleAssigns.map((s) => `${s.file}:${s.line}`).join('、') || '（无）'}`)
+}
+
+/**
+ * ---- adj800：「方案 B / B1」公开 API + 命令面板命令（用户裁决「B1 开工」）----
+ *
+ * 口径（`docs/CLI-AND-COMMAND-PLAN.md` §B）：**纯 TS 能力留在插件内直调引擎**（不跨 iframe、
+ * 手机端也可用）；位图/PDF/试听留给 B2/B3 的嵌入版 RPC。
+ * 本断言守的是"**对外承诺**"这件事本身：API 冻结且有版本号、能力探测不撒谎、命令确实注册了、
+ * 文档与实现同步（避免文档说能做、代码没做 ✗）。
+ */
+{
+  const api800 = String(readFileSync('src/api.ts', 'utf8'))
+  const main800 = String(readFileSync('src/main.ts', 'utf8'))
+  const doc800 = readFileSync('docs/OBSIDIAN-API.md', 'utf8')
+  const cmdIds = [...main800.matchAll(/id: '((?:format|lint|copy|export|open)[a-z-]*)'/g)].map((m) => m[1])
+  check('adj800 B1：公开 API（冻结 + apiVersion + 能力探测不撒谎）与命令面板命令齐备、文档同步',
+    // ① API 冻结 + 版本号
+    /export const IJIPU_API_VERSION = 1 as const/.test(api800) &&
+      /return Object\.freeze\(api\)/.test(api800) &&
+      /readonly apiVersion: number/.test(api800) &&
+      // ② 能力探测不撒谎：未实现的必须先报 false（B1 只做纯 TS 四项）
+      /parse: true/.test(api800) &&
+      /format: true/.test(api800) &&
+      /lint: true/.test(api800) &&
+      /renderSvg: true/.test(api800) &&
+      /midi: false/.test(api800) &&
+      /rasterExport: false/.test(api800) &&
+      /audioPlayback: false/.test(api800) &&
+      // ③ 配置口径同源（禁止 API 自己算一份）
+      /resolvePageConfig\(source, settings\(\)\)/.test(api800) &&
+      // ④ 命令确实注册（至少 4 条 B1 命令）
+      cmdIds.length >= 4 &&
+      cmdIds.includes('format-jps-block') &&
+      cmdIds.includes('lint-jps') &&
+      cmdIds.includes('copy-jps-svg') &&
+      cmdIds.includes('export-jps-svg') &&
+      // ⑤ 插件实例上真的挂着 api（且用函数取设置 ⇒ 改设置即时生效）
+      /api!: IjipuApi/.test(main800) &&
+      /this\.api = createIjipuApi\(\(\) => this\.settings\)/.test(main800) &&
+      // ⑥ 文档与实现同步：文档必须写明 apiVersion 与四个已实现能力、以及未实现项
+      /apiVersion/.test(doc800) &&
+      /renderSvg/.test(doc800) &&
+      /rasterExport/.test(doc800) &&
+      // 负对照：把 freeze 去掉 ⇒ 判据为假（证明"冻结"这条真的在起作用）
+      !/Object\.freeze\(api\)/.test(api800.replace('Object.freeze(api)', 'api')),
+    `命令 id：${cmdIds.join('、') || '（无）'}`)
 }
 
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。

@@ -1,0 +1,100 @@
+# iJipu 公开 API（Obsidian 插件）—— 方案 B / B1
+
+> 面向：**其它 Obsidian 插件、QuickAdd / Templater / DataviewJS 脚本、你自己的自动化**。
+> 口径文件：`docs/CLI-AND-COMMAND-PLAN.md` §B（分层：纯 TS 能力走本 API；位图/PDF、音色库试听走 B2/B3 的嵌入版 RPC）。
+> 状态：**B1 已实现**（命令面板命令 + 公开 JS API）。
+
+## 一、能用什么（能力矩阵）
+
+| 能力 | 本 API（B1 ✓） | 说明 |
+|---|---|---|
+| 解析 / 校验（错误、告警） | ✓ `lint` | 走引擎 `parseJps` + `splitParseIssues`（与预览区同一份口径） |
+| 规范化源码 | ✓ `format` | 引擎 `formatJps`（与应用编辑器"格式化"逐字一致） |
+| 导出 **SVG** | ✓ `renderSvg` | 每页一段 SVG 字符串；纯字符串，**移动端同样可用** |
+| 生效配置 + 来源 | ✓ `effectiveConfig` | 回答"这个值来自哪一层"（命令行/源内/设置/默认） |
+| 连排版结果一起拿 | ✓ `renderFull`（experimental） | 只在确有需要时用；接口可能变 |
+| 导出 **MIDI** | ✗（`capabilities.midi=false`） | B3：需接播放序列导出（`eventsToMidi` 已就绪，待接线） |
+| 导出 **PNG/JPG/PDF** | ✗（`rasterExport=false`） | B2/B3：需应用侧 canvas/分页 ⇒ 走嵌入版 RPC（隐藏窗口渲染） |
+| **试听 / 播放** | ✗（`audioPlayback=false`） | B3：需 AudioContext + 音色库 ⇒ 嵌入版 RPC |
+
+> **为什么"能做的不放进 RPC"**：纯 TS 能力在插件内**直调引擎**（`vendor/engine`）——无 iframe、无网络、延迟最低，
+> 而且**手机端也能用**（嵌入版仅桌面）✓。
+
+## 二、怎么拿 API 对象
+
+```ts
+// 任何插件 / 脚本里
+const ijipu = (this.app as any).plugins?.plugins?.['ijipu']?.api
+if (!ijipu) return                     // 插件没装/没启用
+if (ijipu.apiVersion !== 1) return     // 版本不符就自行降级（见 §五）
+```
+
+- 对象是 **`Object.freeze` 过**的：调用方改不了它 ✓；
+- `apiVersion`（当前 `1`）**只增不改**：破坏性变化必然 +1 ✓；
+- 先看 `capabilities` 再调（别假设某个能力存在 ✓）。
+
+## 三、方法参考
+
+### `lint(source: string): { ok, errors, warnings }`
+```ts
+const r = ijipu.lint(jpsSource)
+if (!r.ok) {
+  for (const e of r.errors) console.log(e.text)   // 问题清单（含行号，字段由引擎定义）
+}
+```
+- `ok === false` 表示存在**错误**（告警不阻断）；
+- 不抛异常：解析失败如实反映在返回值里 ✓。
+
+### `format(source: string): string`
+```ts
+const fixed = ijipu.format(jpsSource)   // 幂等：format(format(x)) === format(x)
+```
+只做格式化，**不改设置、不写文件** ✓（写文件由你决定 ✓）。
+
+### `renderSvg(source, pageConfig?): { ok, svgs, error?, warnings }`
+```ts
+const r = ijipu.renderSvg(jpsSource)                       // 用插件当前设置 + 源内 # jps-config
+const wide = ijipu.renderSvg(jpsSource, { pageMode: 'full' })  // 临时覆盖若干字段（不落盘）
+if (r.ok) for (const svg of r.svgs) { /* 每页一段 <svg> */ }
+else console.log(r.error)
+```
+- 配置解析走插件自己的 `resolvePageConfig(source, settings)`（与预览区**同一份**，禁止各算一套 ✓）；
+- `pageConfig` 只**覆盖本次调用**（不写回笔记/设置 ✓）。
+
+### `effectiveConfig(source): { config, baseline, sourceFields }`
+```ts
+const { config, sourceFields } = ijipu.effectiveConfig(jpsSource)
+// sourceFields：这份谱**自己写了**哪些字段（即"跟着谱走"的部分）
+```
+用来做"把当前排版**固化进谱面**"之类的动作（配合引擎的 `mergeConfigEdits` / `writeJpsConfig`）✓。
+
+### `renderFull(source, pageConfig?)` —— experimental
+返回 `{ svgs, layout, error?, warnings, errorIssues }`。**请勿修改** `layout`；它可能在后续版本变形。
+
+## 四、命令面板（给人用的一层）
+
+| 命令（命令面板搜索 "iJipu"） | 作用 | 何时可用 |
+|---|---|---|
+| **iJipu：格式化当前谱面源码（光标所在代码块）** | 按应用规范规范化（代码块内替换；`.jps` 文件整份） | 光标在 ` ```jps ` 块内，或打开着 `.jps` |
+| **iJipu：校验当前谱面（错误 / 告警）** | 弹 `Notice` 报数量与第一条 | 同上 |
+| **iJipu：复制当前谱面的 SVG 源码到剪贴板** | 多页以 `<!-- 分页 -->` 连接 | 同上 |
+| **iJipu：导出当前谱面为 SVG 文件（存到同目录）** | 多页写 `名字-1.svg`、`名字-2.svg`… | 同上 |
+| **iJipu：打开爱记谱** | 打开嵌入版应用（原命令） | 桌面端 |
+| **iJipu：格式化当前 .jps 源码（应用规范）** | 原命令（文件视图专用） | `.jps` 文件视图 |
+
+**取源优先级**（决定了"命令对我这份谱做了什么"）：① 打开的 `.jps` 文件视图 → ② 当前编辑器里**光标所在**的
+` ```jps ` 块 → ③ 当前活动文件是 `.jps`（读盘）→ ④ 都没有则命令**置灰**（不做"点了没反应"）。
+
+## 五、兼容与版本策略
+
+1. **`apiVersion` 语义**：属性/方法**只增**；删除或改语义 ⇒ `apiVersion + 1`；
+2. 调用方写法：`if (ijipu.apiVersion !== 1) { /* 用自己的兜底路径 */ }`；
+3. `capabilities` 是**能力探测**（不是版本号）：新能力先 `false`，实现了再 `true`；
+4. `renderFull` 标 experimental：**不保证**跨小版本兼容。
+
+## 六、写在最后（给实现者的约束，来自项目铁律）
+
+- **不另算布局/配置**：一律复用引擎与 `resolvePageConfig`（"数值口径同源"，AGENTS §六之二·4）；
+- **不外泄内部对象**：返回值只用普通数据；`renderFull` 是显式逃生舱；
+- **不做隐式写入**：API 绝不主动改笔记/设置（要写由调用方显式做）；
+- **审核约束**：新增代码同样受 §六之四约束（禁内联样式、`!important`、`innerHTML`、`console.*` 等）。

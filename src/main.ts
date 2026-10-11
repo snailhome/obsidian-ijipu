@@ -3,6 +3,7 @@ import { Events, Keymap, MarkdownRenderChild, MarkdownView, Notice, Platform, Pl
 import { formatLine } from '@ijipu/engine'
 // adj774：markdown 笔记里 ```jps 代码块的围栏扫描（着色/错误提示/自动格式化三处共用同一份口径）
 import { jpsBlockRanges } from './jpsBlocks'
+import { createIjipuApi, type IjipuApi } from './api'
 import { IJipuSettingTab } from './settings'
 import { mountScorePane, type ScorePaneHandle } from './scorePane'
 import { registerJpsEmbeds } from './embed'
@@ -52,6 +53,12 @@ export const GUIDES_CHANGED = 'guides-changed'
  */
 export default class IJipuPlugin extends Plugin {
   settings: IJipuSettings = {}
+  /**
+   * adj800（B1）：**公开调用面**（`Object.freeze` 过、带 `apiVersion`）——
+   * 其它插件/脚本这样用：`app.plugins.plugins['ijipu'].api`（见 `src/api.ts` 顶部说明与
+   * `docs/OBSIDIAN-API.md`）。`onload` 里创建（设置以**函数**形式传入，改动即时生效）。
+   */
+  api!: IjipuApi
   /** 插件内事件广播（当前用于设置变更 → 打开中的谱面即时重渲染） */
   readonly events = new Events()
   /** 「排版辅助虚线」是否显示（与 iJipu 顶栏「排版」按钮同一个开关；所有面板共享、不落盘） */
@@ -87,6 +94,173 @@ export default class IJipuPlugin extends Plugin {
   readonly pendingOpenPaths = new Map<string, string>()
   /** 自增的页签令牌（`WorkspaceLeaf` 没有稳定 id ⇒ 自己发一个，随 ViewState 传给视图） */
   private leafSeq = 0
+
+  /**
+   * adj800（B1）：注册"命令面板能用"的能力（给人用的一层）。
+   *
+   * 取源优先级（**与用户直觉一致**）：
+   *  ① 当前打开的 `.jps` 文件视图 ⇒ 用它（整份谱）；
+   *  ② 否则：当前**编辑器**（含 markdown 笔记）里**光标所在**的 ` ```jps ` 代码块 ⇒ 用它；
+   *  ③ 否则：当前活动文件是 `.jps` ⇒ 读文件；
+   *  ④ 都没有 ⇒ 命令在面板里**置灰**（`checkCallback` 返回 false），不做"点了没反应"✓。
+   *
+   * 约定：命令只做**纯 TS** 的事（格式化/校验/导出 SVG/MIDI）——
+   * 位图与试听留给嵌入版 RPC（B2/B3），避免在两个地方各写一份导出逻辑 ✗。
+   */
+  private registerCommands(): void {
+    /** 取"当前上下文里的谱面源码"；取不到返回 null（命令据此置灰） */
+    const contextSource = (): { source: string; label: string; file: TFile | null; block: { start: number; end: number } | null } | null => {
+      const view = this.app.workspace.getActiveViewOfType(IJipuFileView)
+      if (view) {
+        const source = view.getViewData()
+        if (source.trim() !== '') return { source, label: view.file?.basename ?? '当前 .jps', file: view.file, block: null }
+      }
+      const editor = this.app.workspace.activeEditor?.editor
+      const mdFile = this.app.workspace.getActiveFile()
+      if (editor) {
+        const doc = editor.getValue()
+        const line = editor.getCursor().line
+        const hit = jpsBlockRanges(doc).find((b) => line >= b.fenceStart - 1 && line <= (b.fenceEnd ?? Number.MAX_SAFE_INTEGER))
+        if (hit) {
+          const lines = doc.split('\n')
+          const body = lines.slice(hit.bodyStart - 1, hit.bodyEnd).join('\n')
+          return { source: body, label: `${mdFile?.basename ?? '笔记'} 第 ${hit.fenceStart} 行起`, file: mdFile, block: { start: hit.bodyStart, end: hit.bodyEnd } }
+        }
+      }
+      const file = mdFile
+      if (file && file.extension === 'jps') {
+        const cached = this.app.vault.cachedRead(file)
+        // 用 cachedRead 的同步缓存不可行 ⇒ 这条路径交给异步命令自己读（这里只给"能取到"的信号）
+        void cached
+        return { source: '', label: file.basename, file, block: null }
+      }
+      return null
+    }
+    /** 异步取源（`contextSource` 只做同步判断；`.jps` 文件这条要读盘） */
+    const contextSourceAsync = async (): Promise<{ source: string; label: string; file: TFile | null; block: { start: number; end: number } | null } | null> => {
+      const ctx = contextSource()
+      if (!ctx) return null
+      if (ctx.source === '' && ctx.file) return { ...ctx, source: await this.app.vault.cachedRead(ctx.file) }
+      return ctx
+    }
+
+    this.addCommand({
+      id: 'format-jps-block',
+      name: '格式化当前谱面源码（光标所在代码块）',
+      checkCallback: (checking) => {
+        const ctx = contextSource()
+        if (!ctx) return false
+        if (!checking) {
+          void (async () => {
+            const c = await contextSourceAsync()
+            if (!c) return
+            const fixed = this.api.format(c.source)
+            if (fixed === c.source) {
+              new Notice('iJipu：已经符合规范，无需修改')
+              return
+            }
+            if (c.block) {
+              const editor = this.app.workspace.activeEditor?.editor
+              if (editor) {
+                const lines = editor.getValue().split('\n')
+                const from = { line: c.block.start - 1, ch: 0 }
+                const to = { line: c.block.end - 1, ch: (lines[c.block.end - 1] ?? '').length }
+                editor.replaceRange(fixed, from, to)
+                new Notice('iJipu：已按应用规范格式化该代码块')
+                return
+              }
+            }
+            if (c.file) {
+              await this.app.vault.process(c.file, () => fixed)
+              new Notice('iJipu：已按应用规范格式化该谱面')
+            }
+          })()
+        }
+        return true
+      },
+    })
+
+    this.addCommand({
+      id: 'lint-jps',
+      name: '校验当前谱面（错误 / 告警）',
+      checkCallback: (checking) => {
+        if (!contextSource()) return false
+        if (!checking) {
+          void (async () => {
+            const c = await contextSourceAsync()
+            if (!c) return
+            const r = this.api.lint(c.source)
+            if (r.ok && r.warnings.length === 0) {
+              new Notice(`iJipu：${c.label} 没有发现问题 ✓`)
+              return
+            }
+            const first = (r.errors[0] ?? r.warnings[0]) as { text?: string; line?: number } | undefined
+            const where = first?.line !== undefined ? `第 ${first.line} 行：` : ''
+            new Notice(
+              `iJipu：错误 ${r.errors.length} 个、告警 ${r.warnings.length} 个` +
+                (first ? `｜${where}${String(first.text ?? '').slice(0, 60)}` : ''),
+              6000,
+            )
+          })()
+        }
+        return true
+      },
+    })
+
+    this.addCommand({
+      id: 'copy-jps-svg',
+      name: '复制当前谱面的 SVG 源码到剪贴板',
+      checkCallback: (checking) => {
+        if (!contextSource()) return false
+        if (!checking) {
+          void (async () => {
+            const c = await contextSourceAsync()
+            if (!c) return
+            const r = this.api.renderSvg(c.source)
+            if (!r.ok) {
+              new Notice(`iJipu：无法渲染 —— ${r.error ?? '未知原因'}`)
+              return
+            }
+            await navigator.clipboard.writeText(r.svgs.join('\n<!-- 分页 -->\n'))
+            new Notice(`iJipu：已复制 ${r.svgs.length} 页 SVG 源码到剪贴板`)
+          })()
+        }
+        return true
+      },
+    })
+
+    this.addCommand({
+      id: 'export-jps-svg',
+      name: '导出当前谱面为 SVG 文件（存到同目录）',
+      checkCallback: (checking) => {
+        if (!contextSource()) return false
+        if (!checking) {
+          void (async () => {
+            const c = await contextSourceAsync()
+            if (!c) return
+            const r = this.api.renderSvg(c.source)
+            if (!r.ok) {
+              new Notice(`iJipu：无法渲染 —— ${r.error ?? '未知原因'}`)
+              return
+            }
+            const dir = c.file?.parent?.path ?? ''
+            const base = (c.file?.basename ?? 'score').replace(/\.jps$/i, '')
+            const made: string[] = []
+            for (let i = 0; i < r.svgs.length; i += 1) {
+              const name = r.svgs.length > 1 ? `${base}-${i + 1}.svg` : `${base}.svg`
+              const path = dir === '' || dir === '/' ? name : `${dir}/${name}`
+              const existing = this.app.vault.getAbstractFileByPath(path)
+              if (existing instanceof TFile) await this.app.vault.modify(existing, r.svgs[i])
+              else await this.app.vault.create(path, r.svgs[i])
+              made.push(name)
+            }
+            new Notice(`iJipu：已导出 ${made.join('、')}`)
+          })()
+        }
+        return true
+      },
+    })
+  }
 
   /** 切换排版辅助虚线（显示后可拖动虚线调边距/行距），并通知所有面板重画 */
   toggleGuides(): boolean {
@@ -235,6 +409,19 @@ export default class IJipuPlugin extends Plugin {
       name: '打开爱记谱',
       callback: () => void this.openIjipuApp(),
     })
+    /**
+     * adj800（方案 B 的 **B1**，用户已裁决「B1 开工」）：把插件能力做成
+     * **① 命令面板命令**（给人用）+ **② 公开 JS API**（给别的插件/脚本用）。
+     *
+     * 分层口径（见 `docs/CLI-AND-COMMAND-PLAN.md` §B2）：**纯 TS 能力**留在插件内直调引擎
+     * （`api.ts` ✓ 不跨 iframe、无网络、**手机端也可用** ✓）；需要**应用**的能力（位图/PDF、
+     * 音色库试听）留给 B2/B3 的嵌入版 RPC ✓。
+     *
+     * `api` 挂在插件实例上：`app.plugins.plugins['ijipu'].api`（`Object.freeze` + `apiVersion` ✓）。
+     * 设置用**函数**读取 ⇒ 用户改设置后 API 立刻跟随，不出现"设置变了 API 还是旧的"✓。
+     */
+    this.api = createIjipuApi(() => this.settings)
+    this.registerCommands()
     /**
      * adj746（用户要求：「源码如果能够按我们应用的规范格式化就更好了」）：
      * 命令面板入口（手机上尤其有用——不必去点文件工具条）。
