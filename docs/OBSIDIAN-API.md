@@ -140,7 +140,7 @@ parent.postMessage({ __ijipuRpcRequest: 1, id: 1, method: 'render.svg',
 | 通道 | 方法 | 状态 |
 |---|---|---|
 | 应用 → 插件 | `engine.version` / `capabilities` / `render.svg` | ✓ 已实现（`adj807`） |
-| 插件 → 应用 | `render.svg` / `render.png` / `export.midi` | ✓ 已实现（`adj809`/`adj810`/`adj811`） |
+| 插件 → 应用 | `render.svg` / `render.png` / `export.midi` | ✓ 已实现（`adj809`/`adj810`/`adj811`），且插件侧**三种导出都有命令**：复制 SVG 源码 / **导出 SVG 文件** / **导出 PNG**（`adj821` 起还有 **导出 MIDI** ✓）——后两者需先在设置里打开「开发者：允许嵌入版调用插件能力」并打开过一次嵌入版 ✓ |
 | 插件 → 应用 | `playback.play` / `playback.stop` | **未接线** —— 白名单里已留名（`APP_METHODS` ✓），但应用侧要接 audio 播放链路（AudioContext + 音色库 + 当前文档状态 ✓）⇒ 未接之前**不谎报**：`capabilities.audio = false` ✓、应用侧对未实现方法回 `-32000` 并写明原因 ✓ |
 
 > **为什么 `playback.*` 不急着做**（2026-10 定位后的**具体**原因，不是拖延 ✓）：
