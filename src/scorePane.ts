@@ -652,6 +652,39 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       }
     }
 
+    /**
+     * adj793（用户第四次报「编辑模式不显示工具条」，诊断：位置正确在外侧、无裁剪层、
+     * 但命中测试命中的是 `div.cm-line`）：
+     *
+     * 说明它**被相邻行压在了下面**（CM6 的 `.cm-line` 与我们的块是同级兄弟，而工具条虽然在块外，
+     * 仍属于该块的包含块/堆叠上下文 ⇒ 相邻行后绘制 ⇒ 盖住它 ✗）。前两轮试过 z-index 与放开
+     * `overflow`，都不足以跨过这层关系 ✗。
+     *
+     * 现在改用**绕开这两件事**的做法：外侧落位时用 `position: fixed`，坐标取块的实测矩形 ——
+     * `fixed` 不参与兄弟间的层叠（也不会被祖先 `overflow`/`contain` 裁掉）⇒ 一定画在最上层。
+     * 代价是要跟随滚动/尺寸变化，所以：
+     *  · 显示期间监听 `scroll`/`resize`（passive）实时跟随；收起时摘掉内联坐标与监听；
+     *  · 只在我们自己的面板上做（其它宿主保持原样，避免影响已正常的部分）。
+     */
+    const TOOLBAR_GAP = 2
+    const positionOutsideFixed = (el: HTMLElement): void => {
+      const host = container.getBoundingClientRect()
+      const h = el.getBoundingClientRect().height || 28
+      el.style.setProperty('position', 'fixed')
+      el.style.setProperty('left', `${Math.round(host.left)}px`)
+      el.style.setProperty('top', `${Math.round(host.top - h - TOOLBAR_GAP)}px`)
+      el.style.setProperty('bottom', 'auto')
+      el.style.setProperty('z-index', '30')
+    }
+    const clearOutsideFixed = (el: HTMLElement): void => {
+      el.style.removeProperty('position')
+      el.style.removeProperty('left')
+      el.style.removeProperty('top')
+      el.style.removeProperty('bottom')
+      el.style.removeProperty('z-index')
+    }
+    let followToolbar: (() => void) | null = null
+
     const revealToolbar = (on: boolean): void => {
       const el = liveToolbar()
       // adj777：把"显式状态"与**所有**显隐入口同步（hover / focus / 点击都走这里）——
@@ -661,7 +694,16 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       el.toggleClass('is-revealed', on)
       // adj773：显示时清掉"用户主动收起"的标记（它用来压过"移动端常显"那条 CSS 规则）
       if (on) el.removeClass('is-user-hidden')
-      if (!on) return
+      if (!on) {
+        // adj793：收起时清掉"外侧 fixed"留下的内联坐标，并停止跟随滚动
+        if (followToolbar) {
+          window.removeEventListener('scroll', followToolbar, true)
+          window.removeEventListener('resize', followToolbar)
+          followToolbar = null
+        }
+        clearOutsideFixed(el)
+        return
+      }
       // ② 元素换了 ⇒ 清掉旧的"贴内"痕迹并重新判定；同元素则沿用上次结论
       if (placementEl !== null && placementEl !== el) {
         placementDecided = false
@@ -674,6 +716,19 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
        * 被裁才贴回块内）。工具条现在允许遮挡其它元素（用户明确接受），所以外侧优先即可。
        */
       decidePlacement(el)
+      /**
+       * adj793：外侧落位 ⇒ 用 `position: fixed` 贴到块的实测上方（绕开"被相邻 CM6 行盖住"与裁剪）。
+       * 同时挂上跟随监听（滚动/尺寸变化时重算），收起时由 `revealToolbar(false)` 统一清理。
+       */
+      positionOutsideFixed(el)
+      if (!followToolbar) {
+        followToolbar = (): void => {
+          if (!toolbarShown) return
+          positionOutsideFixed(liveToolbar())
+        }
+        window.addEventListener('scroll', followToolbar, true)
+        window.addEventListener('resize', followToolbar)
+      }
       /**
        * adj792（用户连报两次"编辑模式不显示"，而两次诊断都写着 `视口内=否`、y=1890 ✗）：
        *
