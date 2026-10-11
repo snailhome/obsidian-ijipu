@@ -601,6 +601,18 @@ export default class IJipuPlugin extends Plugin {
     if (Platform.isDesktopApp) this.registerView(VIEW_TYPE_IJIPU_APP, (leaf) => new IJipuAppView(leaf, this))
     this.registerDomEvent(window, 'message', (ev) => {
       void this.bridge.handle(ev)
+      /**
+       * adj850（配套应用侧）：**嵌入版自报家门** —— 应用把桥装好后会发一条
+       * `{ __ijipuAppHello: 1, href }` ✓。收到就记下来（复用报告里"嵌入版服务产物自检"那段 ✓），
+       * 于是"桥到底有没有在 iframe 里执行"从**推断**变成**看得见** ✓：
+       *  · 已收到 ⇒ 桥在跑 ✓（若仍无应答 ⇒ 是"拒绝/回包被拦"✗）；
+       *  · 未收到 ⇒ 桥**没执行到安装** ✗（我会把安装再前移 ✓）。
+       */
+      const hello = ev.data as { __ijipuAppHello?: number; href?: string } | null
+      if (hello !== null && typeof hello === 'object' && hello.__ijipuAppHello === 1) {
+        const t = new Date().toLocaleTimeString()
+        this.embedServeInfo = `嵌入版自报家门：**已收到 ✓**（${t}；${String(hello.href ?? '').replace(/^https?:\/\//, '').slice(0, 50)}）`
+      }
       // adj807（B2）：同一条 window message 监听里再交给嵌入版 RPC（它自己做来源校验与白名单 ✓）
       this.embedRpc?.handle(ev)
       // adj809（B3）：反方向请求器的**应答**也走这条监听 ✓
