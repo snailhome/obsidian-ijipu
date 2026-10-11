@@ -85,13 +85,26 @@ export default class IJipuPlugin extends Plugin {
   private logSourceModeEvent(name: string): void {
     try {
       const file = this.app.workspace.getActiveFile()?.path ?? '(无)'
-      const widgets = document.querySelectorAll('.ijipu-score').length
-      const pres = document.querySelectorAll('.cm-embed-block pre, .cm-embed-block code').length
-      const mode = widgets > 0 ? '预览' : pres > 0 ? '源码' : '无块'
+      /**
+       * ⚠ adj836（用户 2026-10-11 诊断纠正）：**上一版判据是错的** ✗ ——
+       * 我按"`.cm-embed-block` 里有没有 `pre/code`"判源码态 ✓，实测**永远是 0** ✗
+       * （Live Preview 的源码态就是 `.cm-line` 纯文本，不套 `pre` ✓）；
+       * 而 `widget` 数是**整篇笔记**的 ✓，不能代表"当前这块" ✗。
+       * ⇒ 改成**逐块**判定：每个 `.block-language-jps` 含不含 `.ijipu-score`
+       * （含=该块**预览** ✓，不含=该块**源码** ✓），并报出"预览 n / 源码 m（共 n+m）"✓。
+       */
+      const blocks = Array.from(document.querySelectorAll('.block-language-jps'))
+      let preview = 0
+      let source = 0
+      for (const b of blocks) {
+        if (b.querySelector('.ijipu-score') !== null) preview += 1
+        else source += 1
+      }
+      const mode = blocks.length === 0 ? '无块' : `预览${preview}／源码${source}（共${blocks.length}）`
       const plainLeaf = document.querySelector('.workspace-leaf.ijipu-plain-source') !== null
       const d = new Date()
       const t = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
-      this.sourceModeLog.push(`${t} ${name}｜文件=${file}｜块态=${mode}（widget ${widgets}／pre ${pres}）｜借用编辑器=${plainLeaf ? '是' : '否'}`)
+      this.sourceModeLog.push(`${t} ${name}｜文件=${file}｜块态=${mode}｜借用编辑器=${plainLeaf ? '是' : '否'}`)
       if (this.sourceModeLog.length > 12) this.sourceModeLog.shift()
     } catch {
       /* 诊断失败不影响交互 ✓ */
