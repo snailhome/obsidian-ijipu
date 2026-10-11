@@ -1307,6 +1307,24 @@
    本选择器与那条宿主规则**同特异性**，靠"插件样式在 core 样式之后"生效 —— 这一点由
    `ijipu/scripts/verify-score-crop.mjs` 在真实 Chrome 里**同时加载 app.css 与 styles.css**、
    用 CDP 强制 `:hover` 后实测（`overflow` 值 + 命中测试），不是靠推断。 */
+/**
+ * adj789（用户实测，PC 端代码块 + 诊断）：
+ * 「编辑模式下**不显示工具条**」；诊断显示 `工具条 …@(348,343)｜谱面块 @(348,373)`
+ * （**确实在外侧/上方** ✓），但「命中测试@(556,357)：命中**别的元素**：`div.cm-line.cm-active`」✗
+ *
+ * 真因是**堆叠顺序**：工具条虽然在外侧，但**上面那条 CM6 行画在它之上**（`.cm-line` 与我们的块是
+ * 同级兄弟，而我们的块没有抬高层级 ⇒ 外侧那 28px 被相邻行盖住 ⇒ 看着就是"没显示"）。
+ *
+ * 所以给宿主块一个**定位 + 层级**（只在本插件的块上，不影响别的代码块）：
+ * 它一抬高，连同"溢出到块外的那条工具条"一起画在相邻行之上 ⇒ 外侧落位才真的看得见。
+ * z-index 取 3（高于普通行流、远低于宿主弹层）——不抢弹窗/菜单的层级。
+ */
+.markdown-source-view.mod-cm6 .cm-embed-block.ijipu-cm-host,
+.ijipu-cm-host.ijipu-cm-host {
+  position: relative;
+  z-index: 3;
+}
+
 .markdown-source-view.mod-cm6 .cm-embed-block.ijipu-cm-host:hover {
   overflow: visible;
 }
