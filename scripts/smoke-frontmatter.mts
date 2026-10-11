@@ -3817,8 +3817,23 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       // ⑦ 接进插件：创建 + 在同一条 message 监听里分发
       /this\.embedRpc = createEmbedRpc\(/.test(main808) &&
       /this\.embedRpc\?\.handle\(ev\)/.test(main808) &&
-      // 负对照：去掉来源校验 ⇒ 判据为假（证明这条真的在守）
-      !/ev\.source !== win\) return/.test(rpc808.replace('ev.source !== win) return', 'false) return')),
+      /**
+       * ⑧ adj809（B3 起步）：**反方向**的白名单与超时也必须被守 ——
+       * 入站方法与出站方法是**两组**（`RPC_METHODS` / `APP_METHODS` ✓），
+       * 防止"为了某个功能悄悄放开任意方法" ✗。
+       */
+      /export const APP_METHODS = \['render\.png', 'export\.midi', 'playback\.play', 'playback\.stop'\] as const/.test(rpc808) &&
+      /if \(!\(APP_METHODS as readonly string\[\]\)\.includes\(method\)\)/.test(rpc808) &&
+      /if \(win === null \|\| ev\.source !== win\) return/.test(rpc808.replace('    const win = deps.getIframeWindow()\n    if (win === null || ev.source !== win) return\n    const slot', '    const win = deps.getIframeWindow()\n    if (win === null || ev.source !== win) return\n    const slot')) &&
+      // 超时：应用不应答必须 reject（不许无限等待 ✓）
+      /window\.setTimeout\(\(\) => \{/.test(rpc808) &&
+      /pending\.delete\(id\)/.test(rpc808) &&
+      /this\.appRpc = createAppRequester\(/.test(main808) &&
+      /this\.appRpc\?\.handleResponse\(ev\)/.test(main808) &&
+      // 负对照：把**所有**来源校验都去掉 ⇒ 判据为假
+      // ⚠ 必须**全局**替换：B3 之后这段代码出现了两处（入站 + 出站），
+      //   `String.replace(字符串)` 只换第一处 ⇒ 负对照自己会失败 ✗（本会话第 N 次踩这个坑）。
+      !/ev\.source !== win\) return/.test(rpc808.replace(/ev\.source !== win\) return/g, 'false) return')),
     `白名单：${[...new Set(methods808)].join('、')}`)
 }
 
