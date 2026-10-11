@@ -1423,3 +1423,38 @@
     cursor: grab;
   }
 }
+
+/**
+ * adj788（用户要求）：「设置里的所有测试归到一个单独的**诊断**页签…并且不用截图方式反馈，
+ * **允许我点击相关诊断块自动复制诊断块标题和相应信息**，我可以直接贴给你，省得你再 OCR」。
+ *
+ * 诊断块的观感：等宽字体 + 淡底 + hover 高亮 + 明确提示"点击复制"；
+ * 键盘也能触发（`role=button` + Enter/Space，代码里已补）。
+ */
+.ijipu-diag-box {
+  margin-top: 4px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  cursor: pointer;
+}
+.ijipu-diag-box:hover,
+.ijipu-diag-box:focus-visible {
+  background: var(--background-modifier-hover);
+  border-color: var(--interactive-accent);
+}
+.ijipu-diag-body {
+  user-select: text;
+}
+.ijipu-diag-hint {
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-family: var(--font-interface);
+  font-size: var(--font-ui-smaller);
+}

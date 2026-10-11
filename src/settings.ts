@@ -40,8 +40,15 @@ import type IJipuPlugin from './main'
 // adj738：`frontmatterKey` 的转出随"笔记 frontmatter 层"一并删除。
 
 /** 设置页签（adj631：一屏一组，减少滚动；adj724b：只剩两页） */
-export type SettingsTabId = '嵌入版' | '说明'
-export const SETTINGS_TABS: SettingsTabId[] = ['嵌入版', '说明']
+export type SettingsTabId = '嵌入版' | '说明' | '诊断'
+/**
+ * adj788（用户要求）：「将设置里的**所有的测试**归到一个单独的**诊断**页签里，以免干扰其它有用信息，
+ * 并且不用截图方式反馈，**允许我点击相关诊断块自动复制诊断块标题和相应信息**，我可以直接贴给你，
+ * 省得你再 OCR」。
+ *
+ * ⇒ 新增第三个页签「诊断」：所有运行期诊断集中在此，且每块**点击即复制（标题 + 内容）**。
+ */
+export const SETTINGS_TABS: SettingsTabId[] = ['嵌入版', '说明', '诊断']
 
 export class IJipuSettingTab extends PluginSettingTab {
   plugin: IJipuPlugin
@@ -79,6 +86,7 @@ export class IJipuSettingTab extends PluginSettingTab {
       panel.empty()
       // adj724b：只剩两页——排版/音色设置统一在**嵌入版 iJipu**里改（避免两处重复）
       if (this.activeTab === '说明') this.renderAbout(panel)
+    if (this.activeTab === '诊断') this.renderDiagnostics(panel)
       else this.renderEmbed(panel)
     }
     for (const id of SETTINGS_TABS) {
@@ -256,79 +264,109 @@ export class IJipuSettingTab extends PluginSettingTab {
       .setDesc(`构建 ${BUILD_STAMP} @${GIT_COMMIT}（已显示在设置页顶部）`)
 
     /**
-     * adj724b：**「谱面」视图的裁剪实况**（运行期诊断）。
-     * 用户实测"谱面还是有 A4 那么大空白"时，这一行能立刻区分：
-     *  · 显示"按墨迹裁剪 w×h（整页 W×H，高度只剩 N%）" ⇒ 裁剪**已生效**（N 很小说明收得很紧）；
-     *  · 显示"退回按边距裁剪" ⇒ 内容盒没量到（渲染时机问题，会自动补量）；
-     *  · 显示"（还没渲染过谱面）" ⇒ 打开过的谱面还没渲染过。
-     *
-     * adj735（用户问「设置-说明 里的这处是做什么用？没看明白」）：
-     * 定位一句话说清"它是什么、给谁看、要不要操作"，并把运行期记的那条改成
-     * **`HH:MM:SS · 人话`**（见 `scorePane.ts` 的 `noteCrop`）——
-     * 旧文案那种"页面内容包围盒：三次重试都没量到（元素始终不在渲染树里？）"既不友好、
-     * 也没有时间信息，用户看到只会担心"是不是坏了"。
+     * adj788（用户要求）：**运行期诊断全部搬到「诊断」页签**（见 `renderDiagnostics`），
+     * 并且改成**点击即复制（标题 + 内容）**，反馈时可以直接粘贴、不必截图 ⇒ 这里不再放诊断块。
      */
+    this.renderAboutTail(host)
+  }
+
+  /**
+   * adj788：「诊断」页签 —— 所有运行期诊断集中于此，**点击某一块即复制"标题 + 内容"**。
+   *
+   * 设计要点（都是为了让"反馈问题"变便宜）：
+   *  · 每块都是**自描述**的：复制出来的第一行是 `【标题】`，后面跟内容 ⇒ 我拿到就能定位是哪条诊断；
+   *  · 顶部有**一键复制全部**：一次性把构建信息 + 全部诊断贴成一段，省得逐块点；
+   *  · 仍是"无需操作"的信息，但不再和「说明」里的有用内容混在一起（用户原话："以免干扰其它有用信息"）。
+   */
+  private renderDiagnostics(host: HTMLElement): void {
     new Setting(host)
-      .setName('谱面裁剪（诊断信息，无需操作）')
-      .setDesc(
-        '打开谱面时自动记录的一条信息：说明默认的「**谱面**」视图有没有**按墨迹裁掉四周空白**\n' +
-          '（「整页 / 满宽」两个视图不受影响）。看不懂也没关系，它只在排查"谱面周围留白"时有用；\n' +
-          '反馈问题时把它连着构建信息一起截图给我即可。\n\n' +
-          '最近一次：' +
-          (this.plugin.lastCropInfo ?? '（还没打开过谱面）打开任意一份谱，再回到本页即可看到最新一条'),
+      .setName('一键复制全部诊断')
+      .setDesc('把「构建信息 + 下面所有诊断块」合成一段复制到剪贴板，直接粘贴反馈即可。')
+      .addButton((btn) =>
+        btn.setButtonText('复制全部').onClick(() => {
+          const text = this.diagnosticsText()
+          void navigator.clipboard?.writeText(text).then(
+            () => new Notice(`已复制全部诊断（${text.length} 字符）`),
+            () => new Notice('复制失败（可逐块点击复制）'),
+          )
+        }),
       )
 
-    /**
-     * adj740（用户第二次报「预览区左上工具条在**编辑视图**下还是不可见，只能在阅读视图下可见」）：
-     * **工具条显示诊断** —— 与上面那条裁剪诊断同一套路，专治"我看不到真机 DOM"。
-     *
-     * 记录的是**定位真因所需的最小事实集**：宿主是哪一类（实时预览 / 阅读视图）、
-     * 显示类有没有加上去、工具条的最终样式与屏幕坐标、谱面块坐标、以及**裁剪祖先链上每一层发生了什么**。
-     * 复现方式：在编辑视图里把鼠标移到谱面上（触发一次显示），再回到本页截图。
-     */
-    new Setting(host)
-      .setName('预览工具条（诊断信息，无需操作）')
-      .setDesc(
-        '在**编辑视图**里把鼠标移到谱面上（触发一次显示），然后回到本页即可看到最新一条。\n' +
-          '它回答"工具条为什么没显示"：宿主类型、显示类、最终样式（opacity/visibility/position）、\n' +
-          '屏幕坐标，以及从谱面往上每一层**裁剪祖先**是被放开了还是因为是滚动容器而保留。\n\n' +
-          '最近一次：' +
-          (this.plugin.lastToolbarInfo ?? '（还没触发过）把鼠标移到谱面上试试'),
-      )
+    /** 构建信息放在最前 —— 我诊断问题时第一眼就要它 */
+    this.diagBlock(
+      host,
+      '构建信息',
+      `构建 ${BUILD_STAMP} @${GIT_COMMIT}\n插件版本 ${this.plugin.manifest.version}（嵌入版 ${WEBAPP_META.appVersion}）`,
+    )
+    this.diagBlock(
+      host,
+      '谱面裁剪（诊断信息，无需操作）',
+      '打开谱面时自动记录：默认的「**谱面**」视图有没有**按墨迹裁掉四周空白**（「整页 / 满宽」不受影响）。\n' +
+        `最近一次：${this.plugin.lastCropInfo ?? '（还没打开过谱面）打开任意一份谱，再回到本页即可看到最新一条'}`,
+    )
+    this.diagBlock(
+      host,
+      '预览工具条（诊断信息，无需操作）',
+      '回答"工具条显示在哪、为什么那样显示"：宿主类型、显示类、最终样式、屏幕坐标、谱面块坐标，\n' +
+        '以及从谱面往上每一层**裁剪祖先**是被放开了还是因为是滚动容器而保留。\n' +
+        `最近一次：${this.plugin.lastToolbarInfo ?? '（还没触发过）点一下预览区让工具条显示一次，再回到本页'}`,
+    )
+    this.diagBlock(
+      host,
+      '点击预览区显/隐工具条（诊断信息，无需操作）',
+      '回答"插件有没有收到这次点击、命中了哪个元素" —— 用来区分"事件没到"与"状态判断错"。\n' +
+        `最近一次：${this.plugin.lastToolbarClick ?? '（还没触发过）点一下预览区试试'}`,
+    )
+    this.diagBlock(
+      host,
+      '嵌入版本地服务（诊断信息，无需操作）',
+      '嵌入版（工具条的「编辑」用它）依赖插件的**本机 HTTP 服务**。这里记最近一次启动失败的原因。\n' +
+        `最近一次：${this.plugin.lastEmbedError ?? '（无错误）'}\n` +
+        '若显示失败：点一次「编辑」会在页签里给出"重试"按钮；仍不行可重载 Obsidian 释放端口后再试。',
+    )
+  }
 
-    /**
-     * adj777（用户报「点击预览区无显/隐工具条」）：**点击显隐的诊断**。
-     *
-     * 它回答的是"插件有没有收到这次点击"以及"命中了哪个元素" —— 用来区分两种完全不同的原因：
-     * ① 事件根本没到（点击落在谱面 widget 之外/被宿主拦住）；② 事件到了但状态判断不对（这正是上一版的 bug：
-     * 手机端工具条靠 CSS 默认常显、却没有 `is-revealed` 类 ⇒ 第一下点击被当成"显示"、看着毫无变化）。
-     */
-    new Setting(this.containerEl)
-      .setName('点击预览区显/隐工具条（诊断信息，无需操作）')
-      .setDesc(
-        '在预览区**点一下**（会出现/隐藏工具条），然后回到本页看这条记录。\n' +
-          '没记录 ⇒ 插件没收到点击（可反馈给我："点了但这里没记录"）；\n' +
-          '有记录 ⇒ 记录里写明了平台、以及当时命中的元素。\n\n' +
-          '最近一次：' +
-          (this.plugin.lastToolbarClick ?? '（还没触发过）点一下预览区试试'),
+  /**
+   * adj788：渲染一个**可点击复制**的诊断块。
+   *
+   * 复制文本 = `【标题】\n内容`（自描述 ⇒ 我拿到就知道是哪条诊断、哪个版本的产物）。
+   * 同时支持键盘（`role=button` + Enter/Space），否则纯键盘用户点不到。
+   */
+  private diagBlock(host: HTMLElement, title: string, body: string): void {
+    const setting = new Setting(host).setName(title)
+    setting.settingEl.addClass('ijipu-diag')
+    const box = setting.descEl.createDiv({ cls: 'ijipu-diag-box' })
+    box.setAttr('role', 'button')
+    box.setAttr('tabindex', '0')
+    box.setAttr('title', '点击复制（标题 + 内容）')
+    box.createDiv({ cls: 'ijipu-diag-body', text: body })
+    box.createDiv({ cls: 'ijipu-diag-hint', text: '点击此处复制（标题 + 内容），可直接粘贴反馈' })
+    const copy = (): void => {
+      const text = `【${title}】\n${body}`
+      void navigator.clipboard?.writeText(text).then(
+        () => new Notice(`已复制诊断：${title}`),
+        () => new Notice('复制失败（可手动选中文本复制）'),
       )
+    }
+    box.addEventListener('click', copy)
+    box.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return
+      e.preventDefault()
+      copy()
+    })
+  }
 
-    /**
-     * adj775（用户报「点编辑开了页签/右栏，但没有嵌入版显示」）：**嵌入版启动诊断**。
-     *
-     * 为什么必须显示出来：嵌入版要把整页应用放进 iframe，前提是插件的**本机 HTTP 服务**起得来
-     * （固定端口 47821，被占则回退随机端口）。起不来时视图会画出"失败原因 + 重试"，
-     * 但那条提示会随页签关闭而消失 ⇒ 在这里留一份**最近一次失败原因**，用户可以直接贴给我定位。
-     */
-    this.containerEl.createEl('h3', { text: '嵌入版 iJipu（预览工具条的「编辑」用它）' })
-    new Setting(this.containerEl)
-      .setName('嵌入版本地服务（诊断信息，无需操作）')
-      .setDesc(
-        '最近一次启动失败的原因（成功则为「（无错误）」）：\n' +
-          (this.plugin.lastEmbedError ?? '（无错误）') +
-          '\n\n若这里显示失败：点一次「编辑」会在页签里给出"重试"按钮；' +
-          '仍不行可重载 Obsidian 释放端口（47821）后再试。',
-      )
+  /** adj788：「一键复制全部诊断」用的整段文本（构建信息 + 各诊断块，自带标题） */
+  private diagnosticsText(): string {
+    const blocks: Array<[string, string]> = [
+      ['构建信息', `构建 ${BUILD_STAMP} @${GIT_COMMIT}\n插件版本 ${this.plugin.manifest.version}（嵌入版 ${WEBAPP_META.appVersion}）`],
+      ['谱面裁剪（诊断信息，无需操作）', this.plugin.lastCropInfo ?? '（还没打开过谱面）'],
+      ['预览工具条（诊断信息，无需操作）', this.plugin.lastToolbarInfo ?? '（还没触发过）'],
+      ['点击预览区显/隐工具条（诊断信息，无需操作）', this.plugin.lastToolbarClick ?? '（还没触发过）'],
+      ['嵌入版本地服务（诊断信息，无需操作）', this.plugin.lastEmbedError ?? '（无错误）'],
+    ]
+    return blocks.map(([t, b]) => `【${t}】\n${b}`).join('\n\n')
+  }
 
     /**
      * adj736（用户判断）：**取消 frontmatter 这一块**。
@@ -346,6 +384,11 @@ export class IJipuSettingTab extends PluginSettingTab {
      * 所以这里只留一句指引（写在哪、怎么改、多个块怎么办），并撤掉那两个"复制模板"按钮：
      * 它们要求用户先理解"frontmatter 是什么、什么时候用完整模板/最小模板"，对使用者没有价值。
      */
+  /**
+   * adj788：原 `renderAbout` 的**后半段**（与诊断无关的有用信息）——拆出来只是为了让"诊断搬家"这一步
+   * 改动面最小；内容一字未动。
+   */
+  private renderAboutTail(host: HTMLElement): void {
     new Setting(host)
       .setName('谱面设置写在哪里（跟着谱走）')
       .setDesc(

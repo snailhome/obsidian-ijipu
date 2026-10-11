@@ -119,7 +119,7 @@ export class IJipuAppView extends ItemView {
           : '嵌入版未启用（请在「设置 → iJipu → 嵌入版」打开「使用嵌入版 iJipu（完整应用）」）',
       })
       // 失败原因与"怎么再试"都写清楚；重试按钮直接重跑本方法（不必让用户去翻设置）
-      box.createDiv({ cls: 'ijipu-web-hint-sub', text: '可点下面的「重试」；仍不行请看「设置 → iJipu → 说明」里的诊断信息。' })
+      box.createDiv({ cls: 'ijipu-web-hint-sub', text: '可点下面的「重试」；仍不行请看「设置 → iJipu → 诊断」页签（点一下该块即复制）。' })
       const retry = box.createEl('button', { cls: 'ijipu-btn', text: '重试' })
       retry.addEventListener('click', () => {
         contentEl.empty()

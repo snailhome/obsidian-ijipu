@@ -369,8 +369,8 @@ console.log('[3g] adj631 设置面板：多页签 / 收藏音色分类列表 / �
    * 本断言按**新口径**更新（不是放宽）：钉住"只剩这两页、且顺序如此"，
    * 并**反向**钉住那四类排版页签与音色库页签**不再出现**（防止有人又加回来）。
    */
-  check('⑥a 设置面板只剩「嵌入版」「说明」两页（排版/音色统一在嵌入版 iJipu 里改）', 
-    /SETTINGS_TABS: SettingsTabId\[\] = \['嵌入版', '说明'\]/.test(settingsSrc) &&
+  check('⑥a/adj788 设置面板为「嵌入版」「说明」「诊断」三页（排版/音色统一在嵌入版 iJipu 里改；诊断独立成页，以免干扰有用信息）',
+    /SETTINGS_TABS: SettingsTabId\[\] = \['嵌入版', '说明', '诊断'\]/.test(settingsSrc) &&
       /ijipu-settings-tabs/.test(settingsSrc) && /ijipu-settings-tab/.test(cssSrc))
   /**
    * adj724b（用户要求）：**「打开 .jps 的方式」下拉**——四种方式齐全，且**默认是"右侧栏"**。
@@ -3507,6 +3507,55 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       // 负对照：把 focusout 那条守卫摘掉 ⇒ 判据为假（证明它真的在挡"显示后又隐藏"）
       !/addEventListener\('focusout', \(\) => \{[\s\S]{0,160}?if \(touchInteraction\) return/.test(
         pane781.replace(/if \(touchInteraction\) return\n      \/\*\*[\s\S]{0,400}?\*\/\n      if \(!focusInToolbar\(\)\) scheduleHide\(\)/, 'if (!focusInToolbar()) scheduleHide()'),
+      ))
+}
+
+/**
+ * ---- adj788：设置里的**诊断集中到单独「诊断」页签**，且**点击即复制（标题 + 内容）** ----
+ *
+ * 用户原话：「将设置里的所有的测试归到一个单独的**诊断**页签里，以免干扰其它有用信息，
+ * 并且不用截图方式反馈，**允许我点击相关诊断块自动复制诊断块标题和相应信息**，
+ * 我可以直接贴给你，省得你再 OCR」。
+ */
+{
+  const st788 = String(readFileSync('src/settings.ts', 'utf8'))
+  // 取出 renderDiagnostics 的函数体（到下一个同缩进的 `}` 为止）
+  const i788 = st788.indexOf('private renderDiagnostics(')
+  const body788 = i788 < 0 ? '' : st788.slice(i788, st788.indexOf('\n  }', i788) + 4)
+  check('adj788 新增「诊断」页签，且所有运行期诊断都搬进去了（「说明」里不再有诊断块）',
+    /export const SETTINGS_TABS: SettingsTabId\[\] = \['嵌入版', '说明', '诊断'\]/.test(st788) &&
+      /if \(this\.activeTab === '诊断'\) this\.renderDiagnostics\(panel\)/.test(st788) &&
+      body788.length > 400 &&
+      // 五块诊断（构建信息 + 四条运行期诊断）都在诊断页里
+      (body788.match(/this\.diagBlock\(/g) ?? []).length === 5 &&
+      /'谱面裁剪（诊断信息，无需操作）'/.test(body788) &&
+      /'预览工具条（诊断信息，无需操作）'/.test(body788) &&
+      /'点击预览区显/ &&
+      /'嵌入版本地服务（诊断信息，无需操作）'/.test(body788) &&
+      // 「说明」页里不得再出现诊断块（这是本次搬家要保证的）
+      !/'（诊断信息，无需操作）'/.test(
+        st788.slice(st788.indexOf('private renderAbout('), st788.indexOf('private renderDiagnostics(')),
+      ))
+  check('adj788 点击诊断块即复制「标题 + 内容」，并有"一键复制全部"；键盘也能触发',
+    // ⚠ 别用「模板字面量的精确文本」做判据（转义/换行极易写错，本轮就踩了 ✗）——
+    //   改判"语义片段"：拼标题、写剪贴板、提示、可点/可键盘。
+    /【\$\{title\}】/.test(st788) &&
+      /navigator\.clipboard\?\.writeText\(text\)/.test(st788) &&
+      /已复制诊断：\$\{title\}/.test(st788) &&
+      /box\.addEventListener\('click', copy\)/.test(st788) &&
+      /box\.addEventListener\('keydown'/.test(st788) &&
+      /role', 'button'/.test(st788) &&
+      /一键复制全部诊断/.test(st788) &&
+      /private diagnosticsText\(\): string/.test(st788) &&
+      // 复制出来的文本自带标题（自描述 ⇒ 我拿到就知道是哪条诊断）
+      // ⚠ 判据里**不要夹反引号**（正则字面量里夹模板符号极易写坏，本轮又踩了一次 ✗）→ 拆成两段
+      /blocks\.map\(\(\[t, b\]\) =>/.test(st788) &&
+      /【\$\{t\}】/.test(st788) &&
+      // 负对照：把"复制"那些调用全部去掉 ⇒ 判据为假
+      // ⚠ 必须**全局**替换：该调用在源码里出现两处（单块复制 + 一键复制全部），
+      //   `String.replace(字符串)` 只换第一处 ⇒ 负对照会自己失败（本轮第二次踩这个坑 ✗）
+      !/navigator\.clipboard\?\.writeText\(text\)/.test(
+        st788.replace(/navigator\.clipboard\?\.writeText\(text\)/g, ''),
       ))
 }
 

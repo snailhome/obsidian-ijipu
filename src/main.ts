@@ -500,7 +500,7 @@ export default class IJipuPlugin extends Plugin {
           /**
            * ⚠ 这里**不写 `console.error`**（adj776c 自审去掉）：
            * 社区审核对 `console.*` 会报警告，而这条信息已经由 `lastEmbedError` 承载 ——
-           * 它就显示在「设置 → iJipu → 说明 → 嵌入版本地服务（诊断信息）」里，用户能直接看到并贴回来。
+           * 它就显示在「设置 → iJipu → **诊断**」页签的「嵌入版本地服务」一块里（点一下即复制），用户能直接贴回来。
            */
           this.lastEmbedError = msg
           this.embedServerStarting = null
