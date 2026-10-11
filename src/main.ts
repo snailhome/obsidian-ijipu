@@ -68,6 +68,35 @@ export default class IJipuPlugin extends Plugin {
    * 设置界面里的开关在下一轮补 UI；现在可用控制台/后续设置项打开，**默认是关** ✓。
    */
   allowExternalApi = false
+  /**
+   * adj835（用户报 ③）：**源码态事件序列记录器** —— 用来定位
+   * 「在 ` ```jps ` 代码块的源码态按 Ctrl+P（命令面板），块闪回预览；关掉面板又回到源码」✗。
+   *
+   * 记录内容（都是**可判定的事实**，不含主观描述 ✓）：
+   *  · 时间 + 事件名（`window.focus` / `window.blur` / `visibilitychange` / `active-leaf-change` ✓）；
+   *  · 当时**活动文件** ✓；
+   *  · 当时**预览 widget 数**（`.ijipu-score` ✓）与**源码 pre 数**（`.cm-embed-block pre, .cm-embed-block code` ✓）
+   *    —— 前者 >0 = 正在**预览** ✓，后者 >0 且前者 = 0 = 正在**源码** ✓（这就是"闪回"的判据 ✓）；
+   *  · 是否处于 `.jps` 借用编辑器的源码页签（`.workspace-leaf.ijipu-plain-source` ✓）。
+   * 只保留最近 12 条 ✓；结果进「生成完整诊断报告」✓（用户点一下即复制 ✓）。
+   */
+  private sourceModeLog: string[] = []
+
+  private logSourceModeEvent(name: string): void {
+    try {
+      const file = this.app.workspace.getActiveFile()?.path ?? '(无)'
+      const widgets = document.querySelectorAll('.ijipu-score').length
+      const pres = document.querySelectorAll('.cm-embed-block pre, .cm-embed-block code').length
+      const mode = widgets > 0 ? '预览' : pres > 0 ? '源码' : '无块'
+      const plainLeaf = document.querySelector('.workspace-leaf.ijipu-plain-source') !== null
+      const d = new Date()
+      const t = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
+      this.sourceModeLog.push(`${t} ${name}｜文件=${file}｜块态=${mode}（widget ${widgets}／pre ${pres}）｜借用编辑器=${plainLeaf ? '是' : '否'}`)
+      if (this.sourceModeLog.length > 12) this.sourceModeLog.shift()
+    } catch {
+      /* 诊断失败不影响交互 ✓ */
+    }
+  }
   private embedRpc: EmbedRpc | null = null
   /** adj809（B3 起步）：反方向请求器（插件 → 嵌入版，如 render.png） */
   appRpc: AppRequester | null = null
@@ -530,6 +559,17 @@ export default class IJipuPlugin extends Plugin {
       void this.bridge.handle(ev)
       // adj807（B2）：同一条 window message 监听里再交给嵌入版 RPC（它自己做来源校验与白名单 ✓）
       this.embedRpc?.handle(ev)
+    })
+    /**
+     * adj835（③ 专项）：挂上**源码态事件序列**的监听 ✓ ——
+     * 命令面板（Ctrl+P）会夺走焦点 ⇒ 记录 `window.blur/focus` 与 `visibilitychange` ✓，
+     * 再看那一刻"块态"是预览还是源码 ✓ ⇒ 就能判定"闪回"发生在**失焦时**还是**面板关闭时** ✓。
+     * 全部走 `registerDomEvent`（随插件卸载自动摘除 ✓，不留监听 ✗）。
+     */
+    this.registerDomEvent(window, 'focus', () => this.logSourceModeEvent('window.focus'))
+    this.registerDomEvent(window, 'blur', () => this.logSourceModeEvent('window.blur'))
+    this.registerDomEvent(document, 'visibilitychange', () => this.logSourceModeEvent(`visibilitychange(${document.visibilityState})`))
+    this.registerEvent(this.app.workspace.on('active-leaf-change', () => this.logSourceModeEvent('active-leaf-change')))
       this.appRpc?.handleResponse(ev)
     })
     this.addCommand({
@@ -1071,6 +1111,11 @@ export default class IJipuPlugin extends Plugin {
     push(`  点击/滚动：${this.lastToolbarClick ?? '（无）'}`)
     push(`  裁剪：${this.lastCropInfo ?? '（无）'}`)
     push(`  嵌入版服务：${this.lastEmbedError ?? '（无错误）'}`)
+
+    push('')
+    push('— 源码态事件序列（最近 12 条；用于定位"按 Ctrl+P 闪回预览"）—')
+    if (this.sourceModeLog.length === 0) push('  （还没记录到事件：先在 jps 代码块源码态按一次 Ctrl+P 再回来）')
+    for (const l of this.sourceModeLog) push(`  ${l}`)
     return lines.join('\n')
   }
 
