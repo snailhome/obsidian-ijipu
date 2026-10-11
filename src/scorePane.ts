@@ -175,15 +175,20 @@ function svgToDom(svg: string, plugin: IJipuPlugin): DocumentFragment {
 let paneSeq = 0
 /**
  * adj794f（用户完整报告：`document.body` 上残留了**两条**旧工具条，属于已销毁的面板 ✗）：
- * 只靠"销毁时清理自己那一条"还不够（历史版本留下的、或销毁路径被跳过的都可能残留 ✓）。
- * 所以维护一份"**还活着**的面板 id"，并在每次挂载新面板时做一次**孤儿清理**：
- * 把 body 上那些"面板 id 已经不在集合里"的工具条移除 ✓。
+ *
+ * 上一版只在 `destroy()` 里清自己那条 ✗ —— 但报告显示**嵌入面板（`![[x.jps]]`）的销毁并没有走到
+ * `destroy()`** ✗（两条孤儿的容器都已不在文档里 ✓）⇒ 靠"销毁回调"这条路不可靠 ✓。
+ *
+ * 所以改成**以事实为准**：维护 `面板 id → 容器元素`，清理时判断
+ * "该 id 不存在、**或它的容器已经不在文档里**" ⇒ 移除 body 上那条工具条 ✓。
+ * 清理时机也选**一定会发生**的动作：每次挂载新面板、以及每次把工具条摆到外侧时（后者很频繁 ✓）。
  */
-const livePanes = new Set<number>()
+const livePanes = new Map<number, HTMLElement>()
 function sweepOrphanBodyToolbars(): void {
   for (const el of Array.from(document.body.querySelectorAll<HTMLElement>('.ijipu-score-toolbar[data-ijipu-pane]'))) {
     const id = Number(el.dataset.ijipuPane)
-    if (!Number.isFinite(id) || !livePanes.has(id)) el.remove()
+    const owner = Number.isFinite(id) ? livePanes.get(id) : undefined
+    if (!owner || !owner.isConnected) el.remove()
   }
 }
 
@@ -194,10 +199,11 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
    * 给每个面板一个 id，标记到工具条上，销毁时按 id 精确清掉（不误伤别的面板）。
    */
   const paneId = ++paneSeq
-  livePanes.add(paneId)
+  // ⚠ 先把 `container` 解构出来，再登记（否则 TS 报"用在声明之前"）
+  const { plugin, container } = host
+  livePanes.set(paneId, container)
   // adj794f：挂载时顺手清理 body 上的孤儿工具条（历史版本残留/异常销毁路径都会留下它们）
   sweepOrphanBodyToolbars()
-  const { plugin, container } = host
   let stopPlay: (() => void) | null = null
   let rafId = 0
   let rafPending = false
@@ -715,6 +721,8 @@ toolbar.dataset.ijipuPane = String(paneId)
      * ⇒ 该辅助函数已删除（上一版用它算坐标；现在坐标就是视口坐标）。
      */
     const positionOutsideFixed = (el: HTMLElement): void => {
+      // adj794f：每次摆到外侧都顺手清一次孤儿（不依赖销毁回调）
+      sweepOrphanBodyToolbars()
       /**
        * adj793c（用户：坐标已正确、`position=fixed` 已生效，但命中测试仍落到 `div.cm-line` ✗）：
        *
