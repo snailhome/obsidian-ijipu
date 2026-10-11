@@ -125,6 +125,27 @@ parent.postMessage({ __ijipuRpcRequest: 1, id: 1, method: 'render.svg',
 > **开关现状**：B2 阶段是**代码层开关**（默认关 ✓）；设置界面的「开发者：允许外部调用」行在 B2 收尾补 ✓。
 > 临时自测：控制台执行 `app.plugins.plugins['ijipu'].allowExternalApi = true` ✓（重载即回到关闭 ✓）。
 
+## 六之三、协议冻结（方案 B / **B4**）
+
+**协议版本：`1`**（`RPC_PROTOCOL_VERSION`，插件侧 `src/embed/rpc.ts` ✓；`capabilities.protocol` 会回报它 ✓）。
+
+**冻结规则（对外承诺）**：
+1. **方法只增不改**：加方法 ⇒ 直接加进白名单并在 `capabilities.methods` / `appMethods` 里出现 ✓；
+2. **删方法或改语义 ⇒ 版本 +1**，且两边都要在握手时比对 ✓（不一致就**降级到双方都支持的方法** ✓，不要硬失败 ✗）；
+3. **信封字段冻结**：`__ijipuRpcRequest` / `__ijipuRpc` / `__ijipuAppRequest` / `__ijipuAppResponse` / `id` / `ok` / `result` / `error.{code,message}` ✓ —— 改名一律视为破坏性变更 ✓；
+4. **错误码冻结**：`-32001` 未启用 ｜ `-32601` 未知方法 ｜ `-32602` 参数非法 ｜ `-32603` 内部错误 ｜ `-32000` 应用侧不支持 ✓；
+5. 机器闸门：插件冒烟 **`adj808`**（入站边界）与 **`adj810`**（应用侧边界）✓ —— 改坏任一边都会红灯 ✓。
+
+**当前实现状态（诚实清单）**：
+| 通道 | 方法 | 状态 |
+|---|---|---|
+| 应用 → 插件 | `engine.version` / `capabilities` / `render.svg` | ✓ 已实现（`adj807`） |
+| 插件 → 应用 | `render.svg` / `render.png` / `export.midi` | ✓ 已实现（`adj809`/`adj810`/`adj811`） |
+| 插件 → 应用 | `playback.play` / `playback.stop` | **未接线** —— 白名单里已留名（`APP_METHODS` ✓），但应用侧要接 audio 播放链路（AudioContext + 音色库 + 当前文档状态 ✓）⇒ 未接之前**不谎报**：`capabilities.audio = false` ✓、应用侧对未实现方法回 `-32000` 并写明原因 ✓ |
+
+> **为什么 `playback.*` 不急着做**：它要读"应用当前打开的谱 + 音色库就绪状态"，
+> 属于**状态耦合**最重的一条 ✓；先保证"渲染类"通道（无状态、可重放 ✓）稳定，再动播放 ✓。
+
 ## 七、写在最后（给实现者的约束，来自项目铁律）
 
 - **不另算布局/配置**：一律复用引擎与 `resolvePageConfig`（"数值口径同源"，AGENTS §六之二·4）；

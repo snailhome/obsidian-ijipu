@@ -18,6 +18,14 @@
 import { Platform, type App } from 'obsidian'
 import { WEBAPP_META } from '../gen/webappAssets'
 
+/**
+ * adj812（方案 B / **B4 协议冻结**）：协议版本号。
+ *  · 入站（应用→插件）与出站（插件→应用）**共用**这一个版本 ✓；
+ *  · 语义：**方法只增不改**；删除或改语义 ⇒ 版本 +1，且两边都必须在 `capabilities` 里报出来 ✓；
+ *  · 调用方（应用侧）与插件都应在握手时比对，不一致就**降级到双方都支持的方法** ✓。
+ */
+export const RPC_PROTOCOL_VERSION = 1
+
 /** B2 的**最小面**：先只放这三个；其余（png/pdf/midi/playback）留 B3 ✓ */
 export const RPC_METHODS = ['engine.version', 'capabilities', 'render.svg'] as const
 export type RpcMethod = (typeof RPC_METHODS)[number]
@@ -94,6 +102,9 @@ export function createEmbedRpc(deps: Deps): EmbedRpc {
             pdf: false,
             midi: false,
             audio: false,
+            // adj812（B4 冻结）：协议版本 + 两组方法面（调用方据此降级 ✓）
+            protocol: RPC_PROTOCOL_VERSION,
+            appMethods: [...APP_METHODS],
             methods: [...RPC_METHODS],
           },
         })
