@@ -1606,12 +1606,41 @@ toolbar.dataset.ijipuPane = String(paneId)
      * 搬一遍 = 两份实现，必然漂移（本项目已多次复发）。这里只做**路由**：菜单项 id → 对应按钮。
      */
     const runScoreMenuAction = (id: ScoreMenuActionId): void => {
+      /** adj864：面板自己手里的墨迹盒 + 当前显示模式（比插件缓存新鲜，供「跟随视图」与「谱面」范围用） */
+      const paneRange = { box: svgEls[0] ? contentBoxOf(svgEls[0]) : null, mode: paneMode } as {
+        box: { x: number; y: number; w: number; h: number } | null
+        mode: ViewMode
+      }
       switch (id) {
         case 'settings':
           cfgBtn?.click()
           return
         case 'format':
           fmtBtn?.click()
+          return
+        case 'copy-image-1':
+          void plugin.copyScoreImage(source, 1, paneRange)
+          return
+        case 'copy-image-2':
+          void plugin.copyScoreImage(source, 2, paneRange)
+          return
+        case 'copy-image-4':
+          void plugin.copyScoreImage(source, 4, paneRange)
+          return
+        case 'copy-svg':
+          void plugin.copyScoreSvg(source, paneRange)
+          return
+        case 'copy-source':
+          void plugin.copyScoreSource(source)
+          return
+        case 'range-view':
+          plugin.setExportRange('view')
+          return
+        case 'range-page':
+          plugin.setExportRange('page')
+          return
+        case 'range-score':
+          plugin.setExportRange('score')
           return
         case 'app-open':
           appOpenBtn?.click()
@@ -1628,6 +1657,9 @@ toolbar.dataset.ijipuPane = String(paneId)
         hasFormat: fmtBtn !== null,
         hasAppOpen: appOpenBtn !== null,
         embedTitle: embedLinkTitle ?? undefined,
+        // adj864：菜单里能改「导出范围」；"跟随视图"把当前显示模式写实（不点开也知道会按哪种口径）
+        range: plugin.settings.exportRange ?? 'page',
+        paneModeLabel: MODE_LABEL[paneMode],
       })
       const menu = new Menu()
       sections.forEach((sec, i) => {
@@ -1635,7 +1667,11 @@ toolbar.dataset.ijipuPane = String(paneId)
         // 组标题：桌面菜单里是灰字不可点行；手机上就是 Action Sheet 的小标题
         menu.addItem((item) => item.setTitle(sec.title).setIsLabel(true))
         for (const it of sec.items) {
-          menu.addItem((item) => item.setTitle(it.label).onClick(() => runScoreMenuAction(it.id)))
+          menu.addItem((item) => {
+            item.setTitle(it.label).onClick(() => runScoreMenuAction(it.id))
+            // adj864：「导出范围」是单选 ⇒ 当前项打勾（与显示模式/深浅模式那两组同一做法）
+            if (it.checked !== undefined) item.setChecked(it.checked)
+          })
         }
       })
       if (at instanceof HTMLElement) {
@@ -1769,17 +1805,27 @@ toolbar.dataset.ijipuPane = String(paneId)
       return { x, y, w, h }
     }
 
+    /**
+     * adj863/adj864：把**这份谱的实测墨迹盒 + 当前显示模式 + 页面尺寸**报给插件。
+     *
+     * 为什么连**页面尺寸**一起报：导出/复制图片时，渲染是在**嵌入版应用**里做的（插件没有 canvas）——
+     * 而"墨迹盒"是在**本面板的配置**下量的。两边页面设置若不一致（例如应用里选了 A5、插件里是 A4），
+     * 盒就落在**另一套坐标系**里 ⇒ 裁出来的图必然错位 ✗。插件据此**明确拒绝**（`resolveRangeBox`），
+     * 而不是糊里糊涂裁一下 ✗。
+     */
+    function publishInk(svgEl: SVGSVGElement, mode: ViewMode): void {
+      const box = contentBoxOf(svgEl)
+      const orig = svgEl.dataset.origVb ?? svgEl.getAttribute('viewBox') ?? ''
+      const [, , w, h] = orig.split(/[\s,]+/).map(Number)
+      if (box === null || !(w > 0) || !(h > 0)) return
+      plugin.lastInk = { source, box, mode, pageW: w, pageH: h }
+    }
+
     /** 把量到的内容盒写进 dataset（`applyViewBox` 与切模式都读它） */
     function writeContentBox(svgEl: SVGSVGElement, box: { x: number; y: number; w: number; h: number }): void {
       svgEl.dataset.contentBox = `${box.x} ${box.y} ${box.w} ${box.h}`
-      /**
-       * adj863（T-3 定稿）：**同时**把这份实测墨迹盒挂到插件上。
-       *
-       * 为什么：导出/复制走的是**命令**路径（没有面板、没有 DOM 可量），而"导出谱面"= 墨迹 ± 2px
-       * 恰恰需要它 ⇒ 只能读"最近一次实测值"。带上 `source` 是为了**绝不跨谱误用**
-       * （换了文件 ⇒ 视为"没量到" ⇒ 命令**明确报错**，而不是拿别的谱的盒去裁 ✗）。
-       */
-      plugin.lastInk = { source, box }
+      // adj863（T-3 定稿）：**同时**把这份实测墨迹盒挂到插件上（导出/复制走命令路径时只能读它）
+      publishInk(svgEl, paneMode)
     }
 
     /**
@@ -1944,6 +1990,12 @@ toolbar.dataset.ijipuPane = String(paneId)
       modeIconEl.appendChild(modeIcon(next, 15))
       modeWrap.setAttr('title', `显示模式：${MODE_LABEL[next]}（${MODE_HINT[next]}）`)
       for (const svgEl of svgEls) applyViewBox(svgEl, next, cfg)
+      /**
+       * adj864：把"这份谱**最近一次显示的模式**"（连同页面尺寸）再报一次 —— 命令路径没有面板，
+       * 而「跟随视图」这一口径要靠它才知道该按谱面还是按整页（`IJipuPlugin.resolveRangeBox`）。
+       */
+      const first = svgEls[0]
+      if (first) publishInk(first, next)
     }
 
     /** 生成一页的辅助虚线层（可拖拽） */

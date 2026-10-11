@@ -1,4 +1,4 @@
-import type { PageConfig, ExportRange } from '@ijipu/engine'
+import type { PageConfig } from '@ijipu/engine'
 
 /**
  * 插件全局设置：继承 iJipu PageConfig 的渲染项（四组：页面/字体/行距/渲染）。
@@ -43,7 +43,8 @@ export type IJipuSettings = Partial<PageConfig> & {
    * adj863（T-3 定稿）：**导出范围**。
    *
    *  · `page`（**默认**）：导出**页面** —— 整页 + 四周留白（与改动前的行为完全一致 ✓）；
-   *  · `score`：导出**谱面** —— **墨迹包围盒 + 每边 2px**（不保留页宽）。
+   *  · `score`：导出**谱面** —— **墨迹包围盒 + 每边 2px**（不保留页宽）；
+   *  · `view`（adj864）：**跟随视图** —— 谱面模式 ⇒ 按 `score`；整页/满宽 ⇒ 按 `page`。
    *
    * 几何**不在插件里算**：一律走引擎 `rangeBox()`（应用与 CLI 同一份口径 ✓）。墨迹盒只能用真实 DOM
    * 量（面板里量过就把结果挂在插件上，见 `IJipuPlugin.lastInk`）⇒ `score` 范围**量不到就明确报错**，
@@ -51,11 +52,20 @@ export type IJipuSettings = Partial<PageConfig> & {
    *
    * 属 **L1 界面/偏好**（与具体谱无关、不随谱走）⇒ 不进 `defs.ts` 的 `DEFS`、不写进谱面源码。
    */
-  exportRange?: ExportRange
+  exportRange?: ExportRangeSetting
 }
 
-/** 导出范围的默认值：**页面**（保持既有行为；`score` 要用户明确选择） */
-export const DEFAULT_EXPORT_RANGE: ExportRange = 'page'
+/** 导出范围（见 `IJipuSettings.exportRange`）：跟随视图 / 页面 / 谱面 */
+export type ExportRangeSetting = 'view' | 'page' | 'score'
+
+/**
+ * 导出范围的默认值：**页面**（保持既有行为）。
+ *
+ * 为什么不默认 `view`（虽然 T-5 的菜单把「跟随视图」列在第一项）：面板的**初始显示模式就是「谱面」**，
+ * 若默认跟随视图，则"从谱面模式导出"会**静默变成裁过的图** ✗ —— 老用户升级后导出尺寸突变、
+ * 却看不出是谁改的。跟随视图是**可选**口径，用户明确选了才生效（菜单里一眼能看到当前选的是哪个）。
+ */
+export const DEFAULT_EXPORT_RANGE: ExportRangeSetting = 'page'
 
 /** 打开 `.jps` 的方式（见 `IJipuSettings.embedOpenMode`） */
 export type EmbedOpenMode = 'right' | 'tab' | 'current' | 'defaultApp'

@@ -44,7 +44,22 @@ export type ScoreToolbarSlot = (typeof SCORE_TOOLBAR_SLOTS)[number]['id']
  * **只进菜单、不进工具条**的动作（T-5 定稿：工具条 5 位之外的一切入口都走 `⋯ 更多`）。
  * 冒烟用它做**负对照**：菜单模型里必须有这些，工具条槽位里必须没有这些。
  */
-export const MENU_ONLY_ACTIONS = ['settings', 'format', 'app-open', 'embed-link'] as const
+export const MENU_ONLY_ACTIONS = [
+  'settings',
+  'format',
+  // adj864（T-5「复制」组）：复制为图片（1× / **2×默认** / 4×）+ 复制 SVG 文本 + 复制谱面源码
+  'copy-image-1',
+  'copy-image-2',
+  'copy-image-4',
+  'copy-svg',
+  'copy-source',
+  // adj864（T-5「范围」组）：跟随视图 / 页面 / 谱面 —— 决定复制与导出时的画布口径
+  'range-view',
+  'range-page',
+  'range-score',
+  'app-open',
+  'embed-link',
+] as const
 
 /** 菜单动作 id（渲染端按 id 分派到具体按钮的既有处理器） */
 export type ScoreMenuActionId = (typeof MENU_ONLY_ACTIONS)[number]
@@ -56,6 +71,11 @@ export interface ScoreMenuItem {
   label: string
   /** 悬浮说明（桌面菜单里的 tooltip；手机上多数平台不显示，故信息不能只写这里） */
   title: string
+  /**
+   * adj864：打勾（当前生效项）——「导出范围」那一组是**单选**，必须让用户一眼看出现在选的是哪个
+   * （与显示模式/深浅模式那两组菜单同一做法）。
+   */
+  checked?: boolean
 }
 
 /** 菜单分组（组之间渲染成一条分隔线；组标题给移动端 Action Sheet 当小标题用） */
@@ -81,6 +101,16 @@ export interface ScoreMenuContext {
   hasAppOpen: boolean
   /** 嵌入模式下的谱面文件名（有值才给「打开谱面文件」） */
   embedTitle?: string
+  /**
+   * adj864：当前**导出范围**设置（`view` = 跟随视图）——「导出范围」那一组据此打勾。
+   * 取值与插件设置同域（`types.ts` 的 `ExportRangeSetting`），这里用字面量联合避免跨模块耦合。
+   */
+  range: 'view' | 'page' | 'score'
+  /**
+   * adj864：`range === 'view'` 时"视图"当前是什么（'整页' / '满宽' / '谱面'）——
+   * 写进菜单标签「跟随视图（谱面）」，让用户不点开也知道会按哪种口径复制/导出。
+   */
+  paneModeLabel?: string
 }
 
 /**
@@ -104,6 +134,51 @@ export function buildScoreMenu(ctx: ScoreMenuContext): ScoreMenuSection[] {
     })
   }
   if (display.length > 0) sections.push({ title: '显示', items: display })
+
+  /**
+   * **复制**（adj864，T-5 定稿）：复制为图片（1× / **2× 默认** / 4×）+ 复制 SVG 文本 + 复制谱面源码。
+   *
+   * 为什么默认 2×：页面基准 72 DPI，2× ⇒ **144 DPI** ≈ 常见文档插图清晰度；1× 只够屏幕看、4× 体积翻倍。
+   * 图片走**嵌入版通道**（插件没有 canvas）：渲染在应用侧完成，与 GUI 导出**同一套** `svgToCanvas`；
+   * 插件再把 PNG 补上 **pHYs（DPI）** 后写进剪贴板 —— 否则 Word / 微信按 96 DPI 兜底，把谱插成巨图。
+   */
+  const copy: ScoreMenuItem[] = [
+    { id: 'copy-image-2', label: '复制为图片（2×，默认）', title: '复制为 PNG 图片到剪贴板（2× ⇒ 144 DPI）' },
+    { id: 'copy-image-1', label: '复制为图片（1×）', title: '复制为 PNG 图片到剪贴板（1× ⇒ 72 DPI，体积最小）' },
+    { id: 'copy-image-4', label: '复制为图片（4×）', title: '复制为 PNG 图片到剪贴板（4× ⇒ 288 DPI，最清晰、体积最大）' },
+    { id: 'copy-svg', label: '复制 SVG 文本', title: '复制这一份谱的 SVG 源码文本（矢量，可粘进支持 SVG 的编辑器）' },
+    { id: 'copy-source', label: '复制谱面源码', title: '复制 `.jps` 源码文本（发给别人/存档）' },
+  ]
+  sections.push({ title: '复制', items: copy })
+
+  /**
+   * **导出范围**（adj864，T-5 定稿）：跟随视图 / 页面 / 谱面 —— 单选，当前项打勾。
+   *
+   * 与设置页的那一项是**同一个值**（`settings.exportRange`）：这里改、那里也变（反之亦然）。
+   * `view` 的标签把"当前视图是什么"写实（「跟随视图（谱面）」），因为它的含义完全取决于所在面板的显示模式。
+   */
+  const rangeView = ctx.paneModeLabel ? `跟随视图（${ctx.paneModeLabel}）` : '跟随视图'
+  const range: ScoreMenuItem[] = [
+    {
+      id: 'range-view',
+      label: rangeView,
+      title: '按当前显示模式决定画布口径：谱面模式 ⇒ 墨迹 + 每边 2px；整页/满宽 ⇒ 整页',
+      checked: ctx.range === 'view',
+    },
+    {
+      id: 'range-page',
+      label: '页面（整页 + 留白）',
+      title: '导出/复制**整页**（A4 等）+ 四周留白',
+      checked: ctx.range === 'page',
+    },
+    {
+      id: 'range-score',
+      label: '谱面（墨迹 + 每边 2px）',
+      title: '导出/复制**墨迹包围盒 + 每边 2px**（不保留页宽，最小边界）',
+      checked: ctx.range === 'score',
+    },
+  ]
+  sections.push({ title: '导出范围', items: range })
 
   const source: ScoreMenuItem[] = []
   if (ctx.hasFormat) {

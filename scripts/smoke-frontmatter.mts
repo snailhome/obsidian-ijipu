@@ -5,7 +5,7 @@
  * 断言来源：用户反馈「在 frontmatter 里设置像 `ijipu_note_size` 好像没生效」——
  * 覆盖键名写法兼容、值类型转换、未识别键提示、优先级四类。
  */
-import { defaultPageConfig, dragDelta, formatJps, formatLine, instrumentColorMap, layoutScore, parseJps, playheadBaseOf, playheadPosIn, renderScoreToSvg, splitParseIssues, tokenizeJpsLine, JPS_HIGHLIGHT_COLORS, JPS_PLAIN_COLORS, JPS_PROBLEM_COLORS, trackKeysOf, writeJpsConfig, mergeConfigEdits, configCarryover, SCORE_FONT_OPTIONS, buildPlaySequence, GUIDE_LIMITS, GUIDE_LIMITS_EX, SEGMENT_ROW_GAP_DEFAULT, OPTIONAL_CONFIG_FIELDS, defaultConfigForReset, extractJpsConfig, extractLegacyEditorPrefs, nonDefaultConfigKeys, GM_GROUPS, highlightLineModel, jpsBlockMarks, rangeBox, applyRangeToSvg } from '@ijipu/engine'
+import { defaultPageConfig, dragDelta, formatJps, formatLine, instrumentColorMap, layoutScore, parseJps, playheadBaseOf, playheadPosIn, renderScoreToSvg, splitParseIssues, tokenizeJpsLine, JPS_HIGHLIGHT_COLORS, JPS_PLAIN_COLORS, JPS_PROBLEM_COLORS, trackKeysOf, writeJpsConfig, mergeConfigEdits, configCarryover, SCORE_FONT_OPTIONS, buildPlaySequence, GUIDE_LIMITS, GUIDE_LIMITS_EX, SEGMENT_ROW_GAP_DEFAULT, OPTIONAL_CONFIG_FIELDS, defaultConfigForReset, extractJpsConfig, extractLegacyEditorPrefs, nonDefaultConfigKeys, GM_GROUPS, highlightLineModel, jpsBlockMarks, rangeBox, applyRangeToSvg, insertPngPhys, readPngPhys, crc32, dpiForScale } from '@ijipu/engine'
 import type { PageConfig } from '@ijipu/engine'
 import { existsSync, globSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
@@ -3971,20 +3971,28 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
     hasFormat: true,
     hasAppOpen: true,
     embedTitle: '小星星.jps',
+    range: 'page',
   })
   check('adj862 满能力宿主的桌面菜单含 设置 / 格式化 / 在应用中打开 / 打开谱面文件',
     MENU_ONLY_ACTIONS.every((id) => hasScoreMenuItem(menuFull, id)),
     `实际：${scoreMenuIds(menuFull).join('、')}`)
   check('adj862 负对照：宿主没给 writeSource ⇒ 菜单里就没有「设置」',
-    !hasScoreMenuItem(buildScoreMenu({ isMobile: false, hasWriteSource: false, hasFormat: false, hasAppOpen: false }), 'settings'))
-  check('adj862 真实宿主能力：代码块（只有 writeSource）⇒ 菜单恰好只有「设置」一项',
-    scoreMenuIds(buildScoreMenu({ isMobile: false, hasWriteSource: true, hasFormat: false, hasAppOpen: false })).join(',') === 'settings',
-    `实际：${scoreMenuIds(buildScoreMenu({ isMobile: false, hasWriteSource: true, hasFormat: false, hasAppOpen: false })).join('、') || '（空）'}`)
+    !hasScoreMenuItem(buildScoreMenu({ isMobile: false, hasWriteSource: false, hasFormat: false, hasAppOpen: false, range: 'page' }), 'settings'))
+  const codeBlockMenu = buildScoreMenu({ isMobile: false, hasWriteSource: true, hasFormat: false, hasAppOpen: false, range: 'page' })
+  check('adj862/adj864 真实宿主能力：代码块（有 writeSource、无格式化、无文件）⇒ 菜单 = 设置 + 复制组 + 范围组，' +
+    '且**没有**格式化 / 在应用中打开 / 打开谱面文件',
+    hasScoreMenuItem(codeBlockMenu, 'settings') &&
+      !hasScoreMenuItem(codeBlockMenu, 'format') &&
+      !hasScoreMenuItem(codeBlockMenu, 'app-open') &&
+      !hasScoreMenuItem(codeBlockMenu, 'embed-link') &&
+      (['copy-image-1', 'copy-image-2', 'copy-image-4', 'copy-svg', 'copy-source', 'range-view', 'range-page', 'range-score'] as const)
+        .every((id) => hasScoreMenuItem(codeBlockMenu, id)),
+    `实际：${scoreMenuIds(codeBlockMenu).join('、')}`)
   check('adj862 菜单项都带面向用户的标题与说明（不许只给 id：手机 Action Sheet 上 id 看不见）',
     menuFull.every((s) => s.items.every((i) => i.label.length > 0 && i.title.length > 0)))
-  check('adj862 负对照：把「设置」的能力标志关掉后，该组整组消失（不留空标题）',
-    menuFull.length === 3 &&
-      buildScoreMenu({ isMobile: false, hasWriteSource: false, hasFormat: false, hasAppOpen: false }).length === 0)
+  check('adj862/adj864 负对照：把能力标志全关掉 ⇒ 只剩**无条件的两组**（复制 / 导出范围），显示/源码/打开组整组消失（不留空标题）',
+    menuFull.length === 5 &&
+      buildScoreMenu({ isMobile: false, hasWriteSource: false, hasFormat: false, hasAppOpen: false, range: 'page' }).length === 2)
 
   // —— ③ 移动端策略 + 移动端菜单差异 ——
   const pDesk = toolbarPolicy(false)
@@ -3998,9 +4006,9 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
     `手机 autoHide=${pMob.autoHideMs}｜桌面 autoHide=${pDesk.autoHideMs}`)
   check('adj862 右键菜单**仅桌面**（手机没有右键、长按被宿主占用 ⇒ 唯一入口是 ⋯）',
     pDesk.contextMenu === true && pMob.contextMenu === false)
-  check('adj862 移动端菜单里没有「在应用中打开」（嵌入版视图只在桌面注册）',
-    !hasScoreMenuItem(buildScoreMenu({ isMobile: true, hasWriteSource: true, hasAppOpen: true }), 'app-open') &&
-      hasScoreMenuItem(buildScoreMenu({ isMobile: false, hasWriteSource: true, hasAppOpen: true }), 'app-open'))
+  check('adj862/adj864 移动端菜单里没有「在应用中打开」（嵌入版视图只在桌面注册）',
+    !hasScoreMenuItem(buildScoreMenu({ isMobile: true, hasWriteSource: true, hasAppOpen: true, range: 'page' }), 'app-open') &&
+      hasScoreMenuItem(buildScoreMenu({ isMobile: false, hasWriteSource: true, hasAppOpen: true, range: 'page' }), 'app-open'))
 
   // —— ④ scorePane 结构闸门（可数事实；负对照：删掉一处槽位标记即判负）——
   const toolbarBtnCount = [...pane862.matchAll(/toolbar\.createEl\('button'/g)].length
@@ -4089,28 +4097,35 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
     !/const PAD = 2/.test(pane863) && !/box\.w \+ PAD \* 2/.test(pane863) && !/Math\.round\(noteInkH \* 0\.9\)/.test(pane863))
 
   // —— ② 墨迹盒实测后挂到插件上（导出走命令路径，没有 DOM 可量） ——
-  check('adj863 面板量到墨迹盒时**同时挂到插件**（带 `source`，绝不跨谱误用）',
-    /plugin\.lastInk = \{ source, box \}/.test(pane863) &&
-      /lastInk: \{ source: string; box: RangeBox \} \| null = null/.test(main863) &&
+  check('adj863/adj864 面板量到墨迹盒时**挂到插件**（带 `source` 绝不跨谱误用；再带 `mode` 供「跟随视图」、`pageW/H` 供跨环境核对）',
+    /plugin\.lastInk = \{ source, box, mode, pageW: w, pageH: h \}/.test(pane863) &&
+      /function publishInk\(svgEl: SVGSVGElement, mode: ViewMode\): void \{/.test(pane863) &&
+      /publishInk\(svgEl, paneMode\)/.test(pane863) &&
+      /if \(first\) publishInk\(first, next\)/.test(pane863) &&
+      /lastInk: \{ source: string; box: RangeBox; mode: 'page' \| 'full' \| 'score'; pageW: number; pageH: number \} \| null = null/.test(main863) &&
       /this\.lastInk\.source === source/.test(main863))
   check('adj863 负对照：去掉 `source` 比对 ⇒ 判据为假（跨谱误用会拿别的谱的盒去裁）',
     !/this\.lastInk\.source === source/.test(main863.replace('this.lastInk.source === source', 'true')))
 
   // —— ③ 三条出口都按设置裁：SVG 导出 / 复制 SVG / PNG（PNG 把**盒**交给应用侧） ——
-  check('adj863 导出 SVG 与复制 SVG 都走 `applyExportRange`（page = 原样；score = 引擎裁）',
-    /applyExportRange\(source: string, svgs: string\[\]\): \{ svgs: string\[\]; box: RangeBox \| null; error\?: string \}/.test(main863) &&
+  check('adj863 导出 SVG 走 `applyExportRange`（page = 原样；score = 引擎裁）；adj864 复制 SVG 与它**共用**同一实现',
+    /applyExportRange\(\s*source: string,\s*svgs: string\[\],\s*pane\?: \{ box: RangeBox \| null; mode: 'page' \| 'full' \| 'score' \},?\s*\): \{ svgs: string\[\]; box: RangeBox \| null; error\?: string \}/.test(main863) &&
       /const out = rangeBox\(\{/.test(main863) &&
-      /svgs: svgs\.map\(\(s\) => applyRangeToSvg\(s, out\.box\)\)/.test(main863) &&
-      [...main863.matchAll(/const ranged = this\.applyExportRange\(c\.source, r\.svgs\)/g)].length === 2 &&
-      [...main863.matchAll(/if \(ranged\.error !== undefined\) \{/g)].length === 3)
+      /svgs: r\.box === null \? svgs : svgs\.map\(\(s\) => applyRangeToSvg\(s, r\.box as RangeBox\)\)/.test(main863) &&
+      [...main863.matchAll(/const ranged = this\.applyExportRange\(c\.source, r\.svgs\)/g)].length === 1 &&
+      /async copyScoreSvg\(\s*source: string,\s*pane\?: \{ box: RangeBox \| null; mode: 'page' \| 'full' \| 'score' \},?\s*\): Promise<void>/.test(main863) &&
+      /const ranged = this\.applyExportRange\(source, r\.svgs, pane\)/.test(main863) &&
+      [...main863.matchAll(/if \(ranged\.error !== undefined\) \{/g)].length === 4)
   check('adj863 PNG 走应用通道时把**算好的盒**传过去（`params.crop`），应用侧不重算几何',
     /let probeSvgs: string\[\] = \[\]/.test(main863) &&
       /const ranged = this\.applyExportRange\(c\.source, probeSvgs\)/.test(main863) &&
       /if \(ranged\.box !== null\) params\.crop = ranged\.box/.test(main863) &&
       /const res = await this\.appRpc\.request<\{ pngs: string\[\] \}>\('render\.png', params\)/.test(main863))
   check('adj863 负对照：删掉 `params.crop = ranged.box` ⇒ 判据为假（PNG 会悄悄还是整页）',
+    // ⚠ 必须**全局**替换：adj864 起这段代码在 main.ts 里出现了两处（导出 PNG + 复制为图片），
+    //    `String.replace(字符串)` 只换第一处 ⇒ 负对照会自己失败（本仓库已踩过同样的坑，见 adj825）
     !/if \(ranged\.box !== null\) params\.crop = ranged\.box/.test(
-      main863.replace('if (ranged.box !== null) params.crop = ranged.box', ''),
+      main863.replace(/if \(ranged\.box !== null\) params\.crop = ranged\.box/g, ''),
     ))
   check('adj863 "量不到墨迹"时必须**明确报错**（三处都有 Notice + 原因），不静默退回整页',
     [...main863.matchAll(/导出范围「谱面」不可用 —— \$\{ranged\.error\}/g)].length === 3)
@@ -4133,12 +4148,14 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       ))
 
   // —— ⑤ 设置项：L1 界面偏好（进 `types.ts` + 设置页下拉），**不进** `defs.ts` 的 DEFS（那是 L2） ——
-  check('adj863 导出范围是 L1 设置：`types.ts` 声明 + 设置页下拉可选页面/谱面 + 默认「页面」',
-    /exportRange\?: ExportRange/.test(types863) &&
-      /export const DEFAULT_EXPORT_RANGE: ExportRange = 'page'/.test(types863) &&
+  check('adj863/adj864 导出范围是 L1 设置：`types.ts` 声明 + 设置页下拉（跟随视图 / 页面 / 谱面）+ 默认「页面」',
+    /exportRange\?: ExportRangeSetting/.test(types863) &&
+      /export type ExportRangeSetting = 'view' \| 'page' \| 'score'/.test(types863) &&
+      /export const DEFAULT_EXPORT_RANGE: ExportRangeSetting = 'page'/.test(types863) &&
+      /dd\.addOption\('view', '跟随视图（与当前显示模式一致）'\)/.test(settings863) &&
       /dd\.addOption\('page', '导出页面（整页 \+ 留白，默认）'\)/.test(settings863) &&
       /dd\.addOption\('score', '导出谱面（墨迹 \+ 每边 2px）'\)/.test(settings863) &&
-      /this\.plugin\.settings\.exportRange = v === 'score' \? 'score' : 'page'/.test(settings863))
+      /this\.plugin\.settings\.exportRange = v === 'view' \? 'view' : v === 'score' \? 'score' : 'page'/.test(settings863))
   check('adj863 负对照：`exportRange` 不得混进 `defs.ts` 的 DEFS（那是**跟着谱走**的 L2，会把本机偏好写进别人的谱）',
     !/exportRange/.test(defs863))
 
@@ -4150,6 +4167,125 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       rangeBox({ range: 'score', pageW: 595, pageH: 842, ink: { x: 0, y: 0, w: 595, h: 842 } }).ok === false &&
       applyRangeToSvg('<svg width="595" height="842" viewBox="0 0 595 842"></svg>', { x: 1, y: 2, w: 3, h: 4 }) ===
         '<svg width="3" height="4" viewBox="1 2 3 4"></svg>')
+}
+
+/**
+ * ---- adj864（T-5「复制」组 + 「导出范围」组）：复制为图片（含 pHYs DPI）/ SVG / 源码 ----
+ *
+ * 用户口径（T-5 菜单定稿）：`⋯ 更多` 的「复制」组 = 复制为图片（1× / **2×默认** / 4×）、复制 SVG 文本、
+ * 复制谱面源码；「范围」= 跟随视图 / 页面 / 谱面。
+ *
+ * 这一节钉三件事：
+ *  ① **菜单模型**里有这两组、范围组是单选（当前项打勾）、且复制组两端都出现（手机也要能复制）；
+ *  ② **动作真正接上了**：三个图片项分别调 `copyScoreImage(source, 1|2|4, 面板实测盒)`，
+ *     SVG/源码项调对应方法 —— 少一个 `case` 就是"点了没反应"；
+ *  ③ **图片路径**：应用侧渲染（`render.png` + crop）→ 插件补 **pHYs（DPI = 72 × scale）** → 写剪贴板；
+ *     剪贴板能力缺失时**如实报错**（复制类最怕"静默成功"）。
+ */
+{
+  const pane864 = codeOf(String(readFileSync('src/scorePane.ts', 'utf8')))
+  const main864 = codeOf(String(readFileSync('src/main.ts', 'utf8')))
+  const menu864 = codeOf(String(readFileSync('src/scoreMenu.ts', 'utf8')))
+
+  // —— ① 菜单模型：复制组 + 范围组（单选打勾） ——
+  const menuCopy = buildScoreMenu({ isMobile: false, hasWriteSource: true, hasFormat: false, hasAppOpen: false, range: 'view', paneModeLabel: '谱面' })
+  const copyIds = ['copy-image-2', 'copy-image-1', 'copy-image-4', 'copy-svg', 'copy-source'] as const
+  const rangeIds = ['range-view', 'range-page', 'range-score'] as const
+  check('adj864 菜单含「复制」组（图片 2×/1×/4× + SVG 文本 + 源码）与「导出范围」组（跟随视图/页面/谱面）',
+    copyIds.every((id) => hasScoreMenuItem(menuCopy, id)) && rangeIds.every((id) => hasScoreMenuItem(menuCopy, id)) &&
+      menuCopy.some((s) => s.title === '复制') && menuCopy.some((s) => s.title === '导出范围'),
+    `实际：${scoreMenuIds(menuCopy).join('、')}`)
+  const rangeItemsOf = (range: 'view' | 'page' | 'score') => {
+    const m = buildScoreMenu({ isMobile: false, hasWriteSource: true, hasFormat: false, hasAppOpen: false, range, paneModeLabel: '谱面' })
+    const sec = m.find((s) => s.title === '导出范围')
+    return (sec?.items ?? []).filter((i) => i.checked === true).map((i) => i.id)
+  }
+  check('adj864 「导出范围」是**单选**：设置值为 view/page/score 时分别只有对应那一项打勾',
+    rangeItemsOf('view').join(',') === 'range-view' &&
+      rangeItemsOf('page').join(',') === 'range-page' &&
+      rangeItemsOf('score').join(',') === 'range-score',
+    `view=${rangeItemsOf('view')} page=${rangeItemsOf('page')} score=${rangeItemsOf('score')}`)
+  check('adj864 「跟随视图」的标签把当前视图写实（不点开也知道按哪种口径），且复制组在手机上也出现',
+    (menuCopy.find((s) => s.title === '导出范围')?.items[0]?.label ?? '') === '跟随视图（谱面）' &&
+      hasScoreMenuItem(buildScoreMenu({ isMobile: true, hasWriteSource: true, hasFormat: false, hasAppOpen: false, range: 'page' }), 'copy-image-2'))
+  check('adj864 负对照：菜单里**没有**工具条那 5 个槽位（复制/范围都是菜单专属，不许重复入口）',
+    MENU_ONLY_ACTIONS.every((a) => !(SCORE_TOOLBAR_SLOTS.map((s) => s.id) as readonly string[]).includes(a)) &&
+      copyIds.every((id) => (MENU_ONLY_ACTIONS as readonly string[]).includes(id)) &&
+      rangeIds.every((id) => (MENU_ONLY_ACTIONS as readonly string[]).includes(id)))
+
+  // —— ② 动作接上（菜单项 → 插件方法；面板传**自己手里的**墨迹盒，比插件缓存新鲜） ——
+  check('adj864 三个图片项分别调 `copyScoreImage(source, 1|2|4, paneRange)`（面板实测盒 + 当前模式）',
+    /const paneRange = \{ box: svgEls\[0\] \? contentBoxOf\(svgEls\[0\]\) : null, mode: paneMode \}/.test(pane864) &&
+      /case 'copy-image-1':\s*void plugin\.copyScoreImage\(source, 1, paneRange\)/.test(pane864) &&
+      /case 'copy-image-2':\s*void plugin\.copyScoreImage\(source, 2, paneRange\)/.test(pane864) &&
+      /case 'copy-image-4':\s*void plugin\.copyScoreImage\(source, 4, paneRange\)/.test(pane864) &&
+      /case 'copy-svg':\s*void plugin\.copyScoreSvg\(source, paneRange\)/.test(pane864) &&
+      /case 'copy-source':\s*void plugin\.copyScoreSource\(source\)/.test(pane864) &&
+      /case 'range-view':\s*plugin\.setExportRange\('view'\)/.test(pane864) &&
+      /case 'range-page':\s*plugin\.setExportRange\('page'\)/.test(pane864) &&
+      /case 'range-score':\s*plugin\.setExportRange\('score'\)/.test(pane864))
+  check('adj864 菜单把当前范围与"视图写实"传给模型（`range` + `paneModeLabel`），单选项打勾走 `setChecked`',
+    /range: plugin\.settings\.exportRange \?\? 'page',/.test(pane864) &&
+      /paneModeLabel: MODE_LABEL\[paneMode\],/.test(pane864) &&
+      /if \(it\.checked !== undefined\) item\.setChecked\(it\.checked\)/.test(pane864) &&
+      /checked: ctx\.range === 'view',/.test(menu864) &&
+      /checked: ctx\.range === 'page',/.test(menu864) &&
+      /checked: ctx\.range === 'score',/.test(menu864))
+  check('adj864 负对照：删掉 `case \'copy-image-2\'` 那一支 ⇒ 判据为假（菜单项会变成"点了没反应"）',
+    !/case 'copy-image-2':\s*void plugin\.copyScoreImage\(source, 2, paneRange\)/.test(
+      pane864.replace("case 'copy-image-2':\n          void plugin.copyScoreImage(source, 2, paneRange)", ''),
+    ))
+
+  // —— ③ 图片路径：应用渲染 → 插件补 pHYs → 剪贴板；失败如实说 ——
+  check('adj864 `copyScoreImage`：探活取页宽 → `resolveRangeBox(pane)` → `render.png`（带 crop）→ 补 pHYs → 写剪贴板',
+    /async copyScoreImage\(\s*source: string,\s*scale: number,\s*pane\?: \{ box: RangeBox \| null; mode: 'page' \| 'full' \| 'score' \},?\s*\): Promise<void>/.test(main864) &&
+      /await this\.appRpc\.request<\{ svgs: string\[\] \}>\('render\.svg', \{ source \}, 4000\)/.test(main864) &&
+      /const ranged = this\.resolveRangeBox\(source, probe\.svgs, pane\)/.test(main864) &&
+      /await this\.appRpc\.request<\{ pngs: string\[\] \}>\('render\.png', params\)/.test(main864) &&
+      /const withDpi = insertPngPhys\(bytes, dpi\)/.test(main864) &&
+      /await copyPngBytesToClipboard\(withDpi\)/.test(main864))
+  check('adj864 DPI = 72 × scale（2× ⇒ 144）；多页谱**只复制第 1 页**并如实说明（不假装复制了全部）',
+    /const dpi = dpiForScale\(scale\)/.test(main864) &&
+      /已复制第 1 页图片（\$\{scale\}×，\$\{dpi\} DPI；这份谱共 \$\{pages\} 页/.test(main864) &&
+      /已复制图片（\$\{scale\}×，\$\{dpi\} DPI）/.test(main864))
+  check('adj864 剪贴板能力缺失时**如实报错**（ClipboardItem / navigator.clipboard.write 都要查）',
+    /typeof ClipboardItem === 'undefined' \|\| navigator\.clipboard\?\.write === undefined/.test(main864) &&
+      /throw new Error\('当前环境不支持写入剪贴板图片（可改用「导出 PNG」命令，会存到谱面同目录）'\)/.test(main864) &&
+      /new ClipboardItem\(\{ 'image\/png': blob \}\)/.test(main864))
+  check('adj864 负对照：不补 pHYs（直接用 `bytes` 写剪贴板）⇒ 判据为假 —— 那正是"粘进 Word 变巨图"的由来',
+    !/await copyPngBytesToClipboard\(withDpi\)/.test(
+      main864.replace('await copyPngBytesToClipboard(withDpi)', 'await copyPngBytesToClipboard(bytes)'),
+    ))
+  check('adj864 「跟随视图」的解析：面板有模式用面板的、否则用"这份谱最近一次显示的模式"（命令路径）',
+    /const effective: 'page' \| 'score' =\s*setting === 'view' \? \(\(pane\?\.mode \?\? cached\?\.mode\) === 'score' \? 'score' : 'page'\) : setting/.test(main864) &&
+      /const ink = pane !== undefined \? pane\.box : \(cached\?\.box \?\? null\)/.test(main864))
+  check('adj864 跨环境核对：预览与嵌入版**页面尺寸不一致**时明确拒绝（墨迹盒会落在另一套坐标系 ⇒ 裁出来必错位）',
+    /Math\.abs\(cached\.pageW - page\[2\]\) > 1 \|\| Math\.abs\(cached\.pageH - page\[3\]\) > 1/.test(main864) &&
+      /预览与嵌入版的页面尺寸不一致/.test(main864) &&
+      !/Math\.abs\(cached\.pageW - page\[2\]\) > 1/.test(main864.replace('Math.abs(cached.pageW - page[2]) > 1', 'false')))
+
+  // —— ④ 复制 SVG / 源码：与命令共用实现；范围同样生效 ——
+  check('adj864 复制 SVG 文本与命令 `copy-jps-svg` **共用一份实现**（含范围裁剪），复制源码走剪贴板文本',
+    /async copyScoreSvg\(/.test(main864) && /await this\.copyScoreSvg\(c\.source\)/.test(main864) &&
+      /async copyScoreSource\(source: string\): Promise<void>/.test(main864) &&
+      /await navigator\.clipboard\.writeText\(source\)/.test(main864) &&
+      /setExportRange\(range: ExportRangeSetting\): void \{/.test(main864) &&
+      /void this\.saveSettings\(\)/.test(main864))
+
+  // —— ⑤ vendor 引擎里的 pHYs 工具（防止同步漏掉新文件） ——
+  const png864Hex =
+    '89504e470d0a1a0a' +
+    '0000000d49484452000000010000000108060000001f15c489' +
+    '0000000a49444154789c63000100000500010d0a2db4' +
+    '0000000049454e44ae426082'
+  const png864 = Uint8Array.from((png864Hex.match(/../g) ?? []).map((h) => Number.parseInt(h, 16)))
+  const withDpi864 = insertPngPhys(png864, dpiForScale(2))
+  check('adj864 vendor 引擎 `png.ts`：CRC32 已知向量 + pHYs 插入/读回 + 幂等（DPI=72×scale）',
+    crc32(new TextEncoder().encode('123456789')) === 0xcbf43926 &&
+      dpiForScale(2) === 144 && readPngPhys(png864) === null && readPngPhys(withDpi864) === 144 &&
+      withDpi864.length === png864.length + 21 &&
+      insertPngPhys(withDpi864, 144).every((b, i) => b === withDpi864[i]) &&
+      readPngPhys(insertPngPhys(insertPngPhys(png864, 72), 288)) === 288)
 }
 
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。

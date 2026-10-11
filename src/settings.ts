@@ -298,15 +298,17 @@ export class IJipuSettingTab extends PluginSettingTab {
     new Setting(host)
       .setName('导出范围（导出 / 复制时的画布口径）')
       .setDesc(
-        '「导出页面」= 整页 + 四周留白（默认）；「导出谱面」= **墨迹包围盒 + 每边 2px**（不保留页宽）。\n' +
+        '「导出页面」= 整页 + 四周留白（默认）；「导出谱面」= **墨迹包围盒 + 每边 2px**（不保留页宽）；' +
+          '「跟随视图」= 谱面模式按前者、整页/满宽按整页（与 `⋯ 更多 → 导出范围` 是同一个值）。\n' +
           '选「导出谱面」时，需要先在预览里显示过这份谱（面板会实测墨迹盒）；量不到时会明确报错而不是猜一个尺寸。',
       )
       .addDropdown((dd) => {
+        dd.addOption('view', '跟随视图（与当前显示模式一致）')
         dd.addOption('page', '导出页面（整页 + 留白，默认）')
         dd.addOption('score', '导出谱面（墨迹 + 每边 2px）')
         dd.setValue(this.plugin.settings.exportRange ?? DEFAULT_EXPORT_RANGE)
         dd.onChange((v) => {
-          this.plugin.settings.exportRange = v === 'score' ? 'score' : 'page'
+          this.plugin.settings.exportRange = v === 'view' ? 'view' : v === 'score' ? 'score' : 'page'
           void this.plugin.saveSettings({ from: 'settingsTab' })
         })
       })

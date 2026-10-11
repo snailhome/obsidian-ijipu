@@ -1,6 +1,6 @@
 import { Events, Keymap, MarkdownRenderChild, MarkdownView, Notice, Platform, Plugin, requestUrl, TFolder, TFile, type MarkdownSectionInformation, type WorkspaceLeaf } from 'obsidian'
 // adj749d：自动格式化（光标离开本行时格式化该行）用**引擎里那份应用自己的**逐行格式化器
-import { formatLine, applyRangeToSvg, rangeBox, readViewBoxOf, RANGE_PAD_DEFAULT, type RangeBox } from '@ijipu/engine'
+import { formatLine, applyRangeToSvg, rangeBox, readViewBoxOf, insertPngPhys, dpiForScale, RANGE_PAD_DEFAULT, type RangeBox } from '@ijipu/engine'
 // adj774：markdown 笔记里 ```jps 代码块的围栏扫描（着色/错误提示/自动格式化三处共用同一份口径）
 import { jpsBlockRanges } from './jpsBlocks'
 import { createIjipuApi, type IjipuApi } from './api'
@@ -16,7 +16,7 @@ import { IJipuFileView, JPS_EXTENSION, VIEW_TYPE_IJIPU } from './fileView'
 import { createJpsFile, consumeJpsLinkCreate, materializeJpsFile, planJpsLinkCreate, registerJpsFileCreator, unregisterJpsFileCreator, NEW_JPS_TEMPLATE } from './newFile'
 import { replaceCodeBlockBody } from './sourceEdit'
 import { canOpenWithDefaultApp, openWithDefaultApp } from './openExternal'
-import { DEFAULT_EMBED_OPEN_MODE, DEFAULT_EXPORT_RANGE, type EmbedOpenMode, type IJipuSettings } from './types'
+import { DEFAULT_EMBED_OPEN_MODE, DEFAULT_EXPORT_RANGE, type EmbedOpenMode, type ExportRangeSetting, type IJipuSettings } from './types'
 import { IJipuBridge } from './embed/bridge'
 import { embedEditLeavesObsidian, planEmbedTarget } from './embed/openPlan'
 /**
@@ -43,6 +43,20 @@ import { WEBAPP_META } from './gen/webappAssets'
 export const SETTINGS_CHANGED = 'settings-changed'
 /** 插件内事件广播：「排版辅助虚线」开关变化（所有面板同步） */
 export const GUIDES_CHANGED = 'guides-changed'
+
+/**
+ * adj864：把 PNG 字节写进系统剪贴板（只能走 `navigator.clipboard.write` + `ClipboardItem`）。
+ *
+ * 失败情形必须**如实报错**（移动端 WebView、老宿主、权限被拒都可能没有这个 API）——
+ * 复制类操作最容易"静默失败"：用户以为复制好了，粘出来却是空的 ✗。
+ */
+async function copyPngBytesToClipboard(bytes: Uint8Array): Promise<void> {
+  if (typeof ClipboardItem === 'undefined' || navigator.clipboard?.write === undefined) {
+    throw new Error('当前环境不支持写入剪贴板图片（可改用「导出 PNG」命令，会存到谱面同目录）')
+  }
+  const blob = new Blob([bytes as unknown as BlobPart], { type: 'image/png' })
+  await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+}
 
 /**
  * obsidian-ijipu —— 在 Obsidian 笔记里用 ```jps 代码块渲染可视化简谱并可试听。
@@ -435,19 +449,8 @@ export default class IJipuPlugin extends Plugin {
           void (async () => {
             const c = await contextSourceAsync()
             if (!c) return
-            const r = this.api.renderSvg(c.source)
-            if (!r.ok) {
-              new Notice(`iJipu：无法渲染 —— ${r.error ?? '未知原因'}`)
-              return
-            }
-            // adj863（T-3）：按「导出范围」设置裁画布（page = 原样；score = 墨迹 ± 每边 2px）
-            const ranged = this.applyExportRange(c.source, r.svgs)
-            if (ranged.error !== undefined) {
-              new Notice(`iJipu：导出范围「谱面」不可用 —— ${ranged.error}`, 8000)
-              return
-            }
-            await navigator.clipboard.writeText(ranged.svgs.join('\n<!-- 分页 -->\n'))
-            new Notice(`iJipu：已复制 ${ranged.svgs.length} 页 SVG 源码到剪贴板`)
+            // adj864：与「⋯ 更多 → 复制 SVG 文本」**同一份实现**（含导出范围裁剪）
+            await this.copyScoreSvg(c.source)
           })()
         }
         return true
@@ -987,23 +990,49 @@ export default class IJipuPlugin extends Plugin {
    * 为什么存在插件上：导出/复制走的是**命令**路径（没有面板、没有 DOM 可量），而"导出谱面"
    * 恰恰需要**实测墨迹** ⇒ 只能读"最近一次实测值"。`source` 是**必须**的：换了文件就视为"没量到"，
    * 命令会**明确报错**，绝不拿别的谱的盒去裁 ✗（`E-2026-*` 那类"导出成一条横带"就是这么来的）。
+   * `mode`（adj864）供「跟随视图」用：命令路径没有面板，只能按"这份谱最近是以哪种模式显示的"推断。
+   * `pageW/pageH`（adj864）用于**跨环境一致性核对**：图片渲染在嵌入版应用里做，若两边页面设置不同，
+   * 墨迹盒就落在另一套坐标系里 ⇒ 必须**明确拒绝**（见 `resolveRangeBox`），而不是裁出一张错位的图 ✗。
    */
-  lastInk: { source: string; box: RangeBox } | null = null
+  lastInk: { source: string; box: RangeBox; mode: 'page' | 'full' | 'score'; pageW: number; pageH: number } | null = null
 
   /**
-   * adj863：按**导出范围**设置把渲染产物的画布口径裁到所选范围。
+   * adj863/adj864：解析本次导出/复制的**范围盒**。
    *
-   *  · `page`（默认）⇒ **原样返回**（逐字不动，与改动前完全一致 ✓）；
-   *  · `score` ⇒ 用引擎 `rangeBox()` 算盒（**唯一**口径：墨迹 ± 每边 2px + 退化/近整页闸），
-   *    再走 `applyRangeToSvg()`（**唯一**改写 SVG 外框的地方）。
+   * · 设置为 `page` ⇒ `box: null`（**不做任何裁剪**，与改动前逐字一致）；
+   * · 设置为 `score` ⇒ 用引擎 `rangeBox()` 算盒（墨迹 ± 每边 2px + 两道闸）；
+   * · 设置为 `view`（**跟随视图**）⇒ 面板自己在 `⋯ 更多 → 导出范围` 里选了它时，按**该面板当前模式**
+   *   解析（谱面 ⇒ score，整页/满宽 ⇒ page）；命令路径没有面板 ⇒ 按"这份谱最近一次显示的模式"。
    *
-   * 失败（没量到墨迹 / 量得不可信）⇒ 回 `error`，**由调用方明确报错**（不静默退回整页 ✗）。
+   * `pane` 是**面板路径**专供：它手里有**刚量到的**墨迹盒与当前模式，比插件上那份缓存新鲜
+   * （用户改了谱再立刻复制时，缓存可能已过期 ⇒ 宁可不用）。
    */
-  applyExportRange(source: string, svgs: string[]): { svgs: string[]; box: RangeBox | null; error?: string } {
-    const range = this.settings.exportRange ?? DEFAULT_EXPORT_RANGE
-    if (range !== 'score') return { svgs, box: null }
+  resolveRangeBox(
+    source: string,
+    svgs: string[],
+    pane?: { box: RangeBox | null; mode: 'page' | 'full' | 'score' },
+  ): { box: RangeBox | null; error?: string } {
+    const setting: ExportRangeSetting = this.settings.exportRange ?? DEFAULT_EXPORT_RANGE
+    if (setting === 'page') return { box: null }
+    const cached = this.lastInk !== null && this.lastInk.source === source ? this.lastInk : null
+    const effective: 'page' | 'score' =
+      setting === 'view' ? ((pane?.mode ?? cached?.mode) === 'score' ? 'score' : 'page') : setting
+    if (effective === 'page') return { box: null }
     const page = readViewBoxOf(svgs[0] ?? '')
-    const ink = this.lastInk !== null && this.lastInk.source === source ? this.lastInk.box : null
+    /**
+     * adj864：**跨环境一致性**先在前面 —— 墨迹盒是在**面板的配置**下量的，而图片渲染在**嵌入版应用**里做。
+     * 两边页面设置不同（应用里选了 A5、插件里 A4）⇒ 盒落在另一套坐标系 ⇒ 裁出来必然错位 ✗。
+     * 宁可明确拒绝，也不产出一张"看着像裁过、其实错位"的图。
+     */
+    if (cached !== null && page !== null && (Math.abs(cached.pageW - page[2]) > 1 || Math.abs(cached.pageH - page[3]) > 1)) {
+      return {
+        box: null,
+        error:
+          `预览与嵌入版的页面尺寸不一致（预览 ${Math.round(cached.pageW)}×${Math.round(cached.pageH)}，` +
+          `嵌入版 ${Math.round(page[2])}×${Math.round(page[3])}）—— 请让两边的页面设置一致，或改用「导出页面」范围`,
+      }
+    }
+    const ink = pane !== undefined ? pane.box : (cached?.box ?? null)
     const out = rangeBox({
       range: 'score',
       pageW: page?.[2] ?? 0,
@@ -1011,8 +1040,125 @@ export default class IJipuPlugin extends Plugin {
       ink,
       pad: RANGE_PAD_DEFAULT,
     })
-    if (!out.ok) return { svgs, box: null, error: out.reason ?? '量不到墨迹盒' }
-    return { svgs: svgs.map((s) => applyRangeToSvg(s, out.box)), box: out.box }
+    if (!out.ok) return { box: null, error: out.reason ?? '量不到墨迹盒' }
+    return { box: out.box }
+  }
+
+  /**
+   * adj863：按**导出范围**设置把渲染产物的画布口径裁到所选范围（SVG 文本类出口用）。
+   *
+   * 失败（没量到墨迹 / 量得不可信）⇒ 回 `error`，**由调用方明确报错**（不静默退回整页 ✗）。
+   */
+  applyExportRange(
+    source: string,
+    svgs: string[],
+    pane?: { box: RangeBox | null; mode: 'page' | 'full' | 'score' },
+  ): { svgs: string[]; box: RangeBox | null; error?: string } {
+    const r = this.resolveRangeBox(source, svgs, pane)
+    if (r.error !== undefined) return { svgs, box: null, error: r.error }
+    return { svgs: r.box === null ? svgs : svgs.map((s) => applyRangeToSvg(s, r.box as RangeBox)), box: r.box }
+  }
+
+  /**
+   * adj864（T-5「复制」组）：**复制为图片**（PNG → 剪贴板）。
+   *
+   * 三件事：
+   *  ① 渲染在**应用侧**完成（插件没有 canvas）——走既有的 `render.png` 通道，与 GUI 导出**同一套**；
+   *  ② 范围按设置/面板算好，**把盒交给应用**（应用只 `applyRangeToSvg`，不重算几何 ✓）；
+   *  ③ 插件侧补 **pHYs（DPI = 72 × scale）** 再写剪贴板 —— 否则 Word/微信按 96 DPI 兜底，
+   *     把 2× 渲染的 A4 谱插成 12 英寸巨图 ✗（`engine/png.ts`）。
+   *
+   * 多页谱：剪贴板只能放一张 ⇒ **复制第一页**并如实说明（不假装复制了全部 ✗）。
+   */
+  async copyScoreImage(
+    source: string,
+    scale: number,
+    pane?: { box: RangeBox | null; mode: 'page' | 'full' | 'score' },
+  ): Promise<void> {
+    if (this.appRpc === null) {
+      new Notice('iJipu：嵌入版通道不可用（请先打开一次嵌入版 iJipu，再复制图片）', 8000)
+      return
+    }
+    try {
+      // 探活 + 取页宽（范围要用页面尺寸；这一步与「导出 PNG」同一套路）
+      const probe = await this.appRpc.request<{ svgs: string[] }>('render.svg', { source }, 4000)
+      const ranged = this.resolveRangeBox(source, probe.svgs, pane)
+      if (ranged.error !== undefined) {
+        new Notice(`iJipu：复制为图片失败 —— ${ranged.error}`, 8000)
+        return
+      }
+      const params: Record<string, unknown> = { source, scale }
+      if (ranged.box !== null) params.crop = ranged.box
+      const res = await this.appRpc.request<{ pngs: string[] }>('render.png', params)
+      const first = res.pngs[0]
+      if (first === undefined) {
+        new Notice('iJipu：复制为图片失败 —— 应用没有返回图片')
+        return
+      }
+      const b64 = first.split(',')[1] ?? ''
+      const bytes = Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0))
+      const dpi = dpiForScale(scale)
+      const withDpi = insertPngPhys(bytes, dpi)
+      await copyPngBytesToClipboard(withDpi)
+      const pages = res.pngs.length
+      new Notice(
+        pages > 1
+          ? `iJipu：已复制第 1 页图片（${scale}×，${dpi} DPI；这份谱共 ${pages} 页，其余请用「导出 PNG」命令）`
+          : `iJipu：已复制图片（${scale}×，${dpi} DPI）`,
+      )
+    } catch (e) {
+      new Notice(`iJipu：复制为图片失败 —— ${e instanceof Error ? e.message : String(e)}`, 8000)
+    }
+  }
+
+  /**
+   * adj864（T-5「复制」组）：复制**SVG 文本**到剪贴板（菜单入口与命令 `copy-jps-svg` 共用一份实现）。
+   *
+   * 范围同样生效：`score` 时裁到墨迹 ± 每边 2px（走的还是引擎那一份几何 ✓）。
+   */
+  async copyScoreSvg(
+    source: string,
+    pane?: { box: RangeBox | null; mode: 'page' | 'full' | 'score' },
+  ): Promise<void> {
+    const r = this.api.renderSvg(source)
+    if (!r.ok) {
+      new Notice(`iJipu：无法渲染 —— ${r.error ?? '未知原因'}`)
+      return
+    }
+    const ranged = this.applyExportRange(source, r.svgs, pane)
+    if (ranged.error !== undefined) {
+      new Notice(`iJipu：导出范围「谱面」不可用 —— ${ranged.error}`, 8000)
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(ranged.svgs.join('\n<!-- 分页 -->\n'))
+      new Notice(`iJipu：已复制 ${ranged.svgs.length} 页 SVG 源码到剪贴板`)
+    } catch (e) {
+      new Notice(`iJipu：复制失败 —— ${e instanceof Error ? e.message : String(e)}`, 6000)
+    }
+  }
+
+  /** adj864（T-5「复制」组）：复制**谱面源码**文本（`.jps` 原文，便于发给别人/存档） */
+  async copyScoreSource(source: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(source)
+      new Notice(`iJipu：已复制谱面源码（${source.length} 字符）`)
+    } catch (e) {
+      new Notice(`iJipu：复制失败 —— ${e instanceof Error ? e.message : String(e)}`, 6000)
+    }
+  }
+
+  /**
+   * adj864：设置**导出范围**（菜单「导出范围」组 = 设置页那一项，**同一个值**）。
+   *
+   * 为什么菜单里也要能改：用户是在"要复制/导出"的那一刻才关心口径 ⇒ 不该逼他离开谱面去设置页。
+   */
+  setExportRange(range: ExportRangeSetting): void {
+    if (this.settings.exportRange === range) return
+    this.settings.exportRange = range
+    void this.saveSettings()
+    const label = range === 'view' ? '跟随视图' : range === 'score' ? '导出谱面（墨迹 + 每边 2px）' : '导出页面（整页 + 留白）'
+    new Notice(`iJipu：导出范围 = ${label}`)
   }
 
   /**

@@ -74,6 +74,9 @@ export { renderScoreToSvg } from './render'
 // CLI `render --crop` 都消费这一份；墨迹盒由有 DOM 的宿主量好传进来，引擎不瞎估）
 export { rangeBox, applyRangeToSvg, readViewBoxOf, normalizeRangePad, normalizeMinInk, minInkFor, RANGE_PAD_DEFAULT, MIN_INK_FALLBACK, NEAR_PAGE_RATIO } from './render/range'
 export type { ExportRange, RangeBox, RangeRequest, RangeOutcome } from './render/range'
+// adj864：「复制/导出为图片」要写 **pHYs（DPI）**，否则 Word/微信按 96 DPI 兜底、把 2× 的谱插成巨图。
+// 纯字节运算（零 DOM/canvas）⇒ 放引擎，插件（剪贴板）/应用/CLI 共用同一份；CRC32 有已知向量断言守着。
+export { insertPngPhys, readPngPhys, crc32, isPng, dpiForScale, pixelsPerMeterFor } from './png'
 export { buildPlaySequence, inferBpm, countScoreInstrumentSwitches, createBackend, schedulePlay, SynthBackend, SamplerBackend, pitchToFreq, renderSynthNote, INSTRUMENT_OPTIONS, INSTRUMENT_LIB_NAMES, INSTRUMENT_PRESETS, matchInstrument, resolveInstrument, SAMPLER_LIBRARIES, getSamplerLibrary, classifyNetwork, eventsToMidi, pitchToMidiNote, instrumentToProgram, pcmToWav, GmChannelAllocator, GM_MELODIC_CHANNELS, GM_VOICES, GM_GROUPS, gmVoiceProgram, gmVoiceRef } from './playback'
 export { codePosToNoteId, noteIdToCodePos, parseNoteId, buildIndexToPage } from './cursorMap'
 export { computeRowTops, computeRowGuides, dragDelta, clamp, metaAreaH, GUIDE_ITEMS, GUIDE_LIMITS, GUIDE_LIMITS_EX } from './layout/guides'
