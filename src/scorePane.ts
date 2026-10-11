@@ -877,6 +877,42 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       'pointerdown',
       (e) => {
         touchInteraction = e.pointerType === 'touch'
+        /**
+         * adj795（手机端"在谱面图上上下滑 ⇒ 不能滚动"，两轮 CSS 加固都没解决）：
+         * **不再盲改** —— 这里记一条"滚动链路"诊断，用户只要在谱面上碰一下，
+         * 就能看出到底是谁在吃手势 / 有没有东西可滚：
+         *  · 本容器与它最近的**可滚动祖先**的 `scrollHeight/clientHeight`（能不能滚）、
+         *  · 沿途各层的 `overflow` 与 `touch-action`（谁把纵向手势禁掉了）。
+         * 结果挂进「点击预览区显/隐工具条」那块诊断（用户已经在用它、且一键可复制）。
+         */
+        if (e.pointerType === 'touch') {
+          try {
+            const chain: string[] = []
+            let el: HTMLElement | null = container
+            let depth = 0
+            let scroller: HTMLElement | null = null
+            while (el && depth < 12) {
+              depth += 1
+              const cs = window.getComputedStyle(el)
+              const canScroll = el.scrollHeight > el.clientHeight + 1
+              const isScroller = /auto|scroll/.test(cs.overflowY)
+              if (!scroller && isScroller && canScroll) scroller = el
+              const name =
+                (el.className || '').split(/\s+/).filter(Boolean).slice(0, 2).join('.') || el.tagName.toLowerCase()
+              chain.push(
+                `${name}[overflowY=${cs.overflowY} touchAction=${cs.touchAction} scroll=${el.scrollHeight}/${el.clientHeight}${canScroll ? ' ⬍可滚' : ''}]`,
+              )
+              el = el.parentElement
+            }
+            const s = scroller as HTMLElement | null
+            plugin.lastToolbarClick =
+              `[滚动链路] 视口=${window.innerWidth}×${window.innerHeight}｜` +
+              `最近可滚祖先=${s ? `${(s.className || '').split(/\s+/).filter(Boolean).slice(0, 2).join('.') || s.tagName.toLowerCase()}` : '（没找到！）'}｜` +
+              chain.join(' → ')
+          } catch {
+            /* 诊断失败不影响交互 */
+          }
+        }
       },
       true,
     )
