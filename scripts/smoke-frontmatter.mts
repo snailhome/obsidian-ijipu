@@ -3609,19 +3609,23 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
  */
 {
   const pane797 = String(readFileSync('src/scorePane.ts', 'utf8'))
-  check('adj797 块不在视界（或还没尺寸）就不摆位置也不显示；回到视界时重新显示',
+  /**
+   * adj797/adj797b：块不在视界 ⇒ 不显示（并且**在手机端也要打 `is-user-hidden`**，
+   * 否则 `.is-mobile` 那条"常显"规则会继续把它显示出来 ⇒ 用户看到"首进先闪 3 秒" ✗）。
+   * ⚠ 判据写成**语义片段**：不再用"跨多行的间距上限"（我改一次块内注释它就失配 ✗，本轮踩过）。
+   */
+  check('adj797/adj797b 块不在视界（或还没尺寸）就不摆位置也不显示；回到视界时重新显示；手机端要打主动隐藏标记',
     /const containerInViewport = \(\): boolean => \{/.test(pane797) &&
       /if \(r\.width < 2 \|\| r\.height < 2\) return false/.test(pane797) &&
-      // 落位前先判视口；不在就隐藏
-      /if \(!containerInViewport\(\)\) \{\n        hiddenByViewport = true\n        revealToolbar\(false\)\n        return\n      \}/.test(pane797) &&
-      // 跟随滚动时：离开 ⇒ 隐藏；回来 ⇒ 重新显示
-      /if \(!containerInViewport\(\)\) \{[\s\S]{0,200}?hiddenByViewport = true[\s\S]{0,120}?revealToolbar\(false\)/.test(pane797) &&
-      /if \(hiddenByViewport\) \{\n            hiddenByViewport = false\n            revealToolbar\(true\)\n          \}/.test(pane797) &&
-      // 不能变成"无条件在滚动时弹出"（用户主动收起的状态要保住）
+      /const vw = window\.innerWidth \|\| 0/.test(pane797) &&
+      // 两处"因离开视界而隐藏"都要带手机端的主动隐藏标记
+      (pane797.match(/if \(Platform\.isMobile\) liveToolbar\(\)\.addClass\('is-user-hidden'\)/g) ?? []).length >= 3 &&
+      /hiddenByViewport = true/.test(pane797) &&
+      /if \(hiddenByViewport\) \{/.test(pane797) &&
       /let hiddenByViewport = false/.test(pane797) &&
-      // 负对照：把视口判断那一段摘掉 ⇒ 判据为假
-      !/if \(!containerInViewport\(\)\) \{\n        hiddenByViewport = true/.test(
-        pane797.replace('if (!containerInViewport()) {\n        hiddenByViewport = true', 'if (false) {\n        hiddenByViewport = true'),
+      // 负对照：把视口判断摘掉 ⇒ "容器尺寸检查"那条判据为假
+      !/if \(r\.width < 2 \|\| r\.height < 2\) return false/.test(
+        pane797.replace('if (r.width < 2 || r.height < 2) return false', ''),
       ))
 }
 

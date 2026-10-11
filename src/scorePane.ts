@@ -753,6 +753,15 @@ toolbar.dataset.ijipuPane = String(paneId)
       if (!containerInViewport()) {
         hiddenByViewport = true
         revealToolbar(false)
+        /**
+         * adj797b（用户报告的决定性一行：`id=7 … userHidden=**N** visibility=visible opacity=1` ✗）：
+         *
+         * 手机端 CSS 会**强制常显**（`.is-mobile .ijipu-score-toolbar { opacity: 1 }`）⇒
+         * 光调 `revealToolbar(false)`（只摘 `is-revealed`）**挡不住它** ✗ ⇒ 于是"块还没进视界，
+         * 工具条却先显示 3 秒"（3 秒后首开定时器补上 `is-user-hidden` 才消失 ✓✓）。
+         * 所以这里必须**同时**打上"主动隐藏"标记 —— 与点击收起、首开收起同一口径（且只在手机端需要）。
+         */
+        if (Platform.isMobile) liveToolbar().addClass('is-user-hidden')
         return
       }
       // 又回到视界里了 ⇒ 重新显示（用户口径：块出现在视界后才显示）
@@ -851,11 +860,14 @@ toolbar.dataset.ijipuPane = String(paneId)
             if (toolbarShown) {
               hiddenByViewport = true
               revealToolbar(false)
+              // adj797b：手机端还要打"主动隐藏"标记（否则 CSS 常显规则会把它继续显示出来）
+              if (Platform.isMobile) liveToolbar().addClass('is-user-hidden')
             }
             return
           }
           if (hiddenByViewport) {
             hiddenByViewport = false
+            // 回到视界 ⇒ 显示（`revealToolbar(true)` 会摘掉 is-user-hidden）
             revealToolbar(true)
           }
           if (toolbarShown) positionOutsideFixed(liveToolbar())
