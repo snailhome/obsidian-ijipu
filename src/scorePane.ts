@@ -80,6 +80,21 @@ export type ScorePaneHost = {
   /** 嵌入模式：更紧凑（隐藏页数标签等） */
   embedded?: boolean
   /**
+   * adj865（T-5 后续，用户定稿的 `z`）：**块级缩放**。
+   *
+   * 用户口径（`docs/HANDOVER-CLI-AND-COMMAND-API.md` 二之七）：
+   *  · 缺省 / `z=100` ⇒ **100%（自然尺寸）**：1 个 viewBox 单位 = 1 CSS px
+   *    ⇒ 音符大小与页面视图**一致**，不再被拉伸放大；
+   *  · `z=<数字>` ⇒ 百分比（`z=150` = 150%）；
+   *  · **`z=*`** ⇒ **自适应笔记宽度**（= 本功能上线前的行为）。
+   *
+   * 作用域：**只有笔记里的 ```jps 代码块**会传它（`.jps` 文件视图 / `![[x.jps]]` 嵌入不传 ⇒ 行为不变 ✓），
+   * 因为"这个块在笔记里摆多大"是**与笔记配合的呈现**，而 `.jps` 文件视图本身就是整页阅读。
+   *
+   * 只影响**屏显**：导出/复制仍走引擎的「范围」口径（与 `z` 无关 ✓）。
+   */
+  zoom?: number | 'auto'
+  /**
    * 嵌入模式下的谱面名（显示在工具栏**右端**，前置链接图标，点击打开该 .jps）。
    * 插件接管 `![[x.jps]]` 的 `.internal-embed` 后，宿主原本那个"点开文件"的占位块不再出现，
    * 由这里补回入口；容器窄时只留图标（见 styles.css 的 @container 规则）。
@@ -1722,6 +1737,25 @@ toolbar.dataset.ijipuPane = String(paneId)
 
     // —— 逐页插入 SVG + 辅助虚线 ——
     const svgWrap = container.createDiv({ cls: `ijipu-svgs ijipu-mode-${paneMode}` })
+    /**
+     * adj865（用户定稿的块级缩放 `z`）：**只对笔记里的代码块生效**（`host.zoom` 由 `IJipuBlock` 传，
+     * 文件视图 / 嵌入不传 ⇒ 保持既有行为 ✓）。
+     *
+     * 落地方式是**类 + CSS 自定义属性**（社区审核 `no-static-styles-assignment` 禁止直接写内联样式 ✗）：
+     *  · `ijipu-zoom-fixed` ⇒ 宽度 = `--ijipu-zoom-w`（该图的 viewBox 宽 = 自然尺寸）× `--ijipu-zoom-factor`；
+     *  · `ijipu-zoom-fit`（`z=*`）⇒ 宽度 100%（铺满笔记栏宽 = 上线前的行为）；
+     *  · **不传 `zoom`** ⇒ 两个类都不加 ⇒ 走既有的 `.ijipu-mode-* svg { width: 100% }`（文件视图/嵌入不变）。
+     * 基础规则里的 `max-width: 100%` 仍然管用 ⇒ 自然尺寸比栏宽时按比例缩小，不会横向溢出 ✓。
+     */
+    const zoomOfHost = host.zoom
+    if (zoomOfHost !== undefined) {
+      if (zoomOfHost === 'auto') {
+        svgWrap.addClass('ijipu-zoom-fit')
+      } else {
+        svgWrap.addClass('ijipu-zoom-fixed')
+        svgWrap.setCssProps({ '--ijipu-zoom-factor': String(zoomOfHost / 100) })
+      }
+    }
     svgs.forEach((svg, i) => {
       if (svgs.length > 1 && !host.embedded) {
         container.createDiv({ cls: 'ijipu-page-label', text: `第 ${i + 1} / ${svgs.length} 页` })
@@ -1914,6 +1948,15 @@ toolbar.dataset.ijipuPane = String(paneId)
     function applyViewBox(svgEl: SVGSVGElement, mode: ViewMode, c: typeof cfg): void {
       const orig = svgEl.dataset.origVb || svgEl.getAttribute('viewBox') || ''
       svgEl.dataset.origVb = orig
+      /**
+       * adj865：把"这张图的**自然宽度**"（= 当前 viewBox 的宽，单位就是 CSS px）挂到外层元素上。
+       * `z` 的固定尺寸口径消费它：`宽度 = 自然宽 × z/100`（`z=100` ⇒ 正好 1:1，不被放大 ✓）。
+       * 模式/裁剪一变，自然宽就变 ⇒ 每次下发 viewBox 时一并更新（口径同源，不另算 ✗）。
+       */
+      const publishZoomW = (w: number): void => {
+        const wrapEl = svgEl.parentElement
+        if (wrapEl instanceof HTMLElement && w > 0) wrapEl.setCssProps({ '--ijipu-zoom-w': `${w}px` })
+      }
       if (mode === 'score') {
         const [, , w, h] = orig.split(/[\s,]+/).map(Number)
         const b = contentBoxOf(svgEl)
@@ -1940,6 +1983,7 @@ toolbar.dataset.ijipuPane = String(paneId)
         const out = rangeBox({ range: 'score', pageW: w, pageH: h, ink: b, minInk: minInkFor(noteInkH) })
         if (out.ok) {
           svgEl.setAttribute('viewBox', `${out.box.x} ${out.box.y} ${out.box.w} ${out.box.h}`)
+          publishZoomW(out.box.w)
           // 回传给插件，供设置页显示（运行期诊断；见 IJipuPlugin.lastCropInfo 的说明）
           noteCrop(
             `按墨迹裁剪 ${out.box.w.toFixed(0)}×${out.box.h.toFixed(0)}（墨迹 ${Math.round(b?.w ?? 0)}×${Math.round(b?.h ?? 0)}` +
@@ -1956,6 +2000,7 @@ toolbar.dataset.ijipuPane = String(paneId)
           const mr = c.margin_right ?? 0
           const mb = c.margin_bottom ?? 0
           svgEl.setAttribute('viewBox', `${ml} ${mt} ${Math.max(1, w - ml - mr)} ${Math.max(1, h - mt - mb)}`)
+          publishZoomW(Math.max(1, w - ml - mr))
           noteCrop(`退回按边距裁剪 —— ${out.reason ?? '量取不可靠'}`)
           /**
            * adj780（用户实测）：「PC 端 jps 代码块，点排版→调整虚线→再点排版关闭虚线时，
@@ -1978,6 +2023,8 @@ toolbar.dataset.ijipuPane = String(paneId)
         svgEl.removeAttribute('height')
       } else {
         svgEl.setAttribute('viewBox', orig)
+        // adj865：整页/满宽的自然宽 = 页面宽（`z=100` 时按 1px:1px 显示整页）
+        publishZoomW(Number(orig.split(/[\s,]+/)[2]) || 0)
       }
     }
 

@@ -444,6 +444,28 @@
   margin: 0;
 }
 
+/**
+ * adj865（用户定稿的块级缩放 `z`，只对**笔记里的 ```jps 代码块**生效）：
+ *   · `z=100`（缺省）⇒ **1 个 viewBox 单位 = 1 CSS px**（自然尺寸，不再被拉伸放大）；
+ *   · `z=<数字>`   ⇒ 自然尺寸的百分比（`z=50` 就是一半）；
+ *   · `z=*`        ⇒ 铺满笔记栏宽（= 本功能上线前的行为）。
+ *
+ * 口径就是一行乘法：`宽度 = 该图的自然宽 × z/100`。
+ *  · `--ijipu-zoom-w`（该图当前 viewBox 的宽，px）由 `applyViewBox` 随 viewBox 一起下发；
+ *  · `--ijipu-zoom-factor` = z/100，由 `mountScorePane` 按 `host.zoom` 下发；
+ *  · 两者都走 `setCssProps`（社区审核只允许这样传动态值；直接写内联样式会被判 Error ✗）。
+ * 基础规则里的 `max-width: 100%` 仍然生效 ⇒ 自然尺寸超过栏宽时按比例缩小，不会横向溢出。
+ * 特异性（3 个类 + 类型选择器）高于上面 `.ijipu-mode-* .ijipu-page-svg svg`（2 个类）⇒ 稳赢，不必 `!important`。
+ */
+.ijipu-svgs.ijipu-zoom-fixed .ijipu-page-svg > svg {
+  width: calc(var(--ijipu-zoom-w, 100%) * var(--ijipu-zoom-factor, 1));
+  height: auto;
+}
+.ijipu-svgs.ijipu-zoom-fit .ijipu-page-svg > svg {
+  width: 100%;
+  height: auto;
+}
+
 /* 播放色块（SVG 内叠加矩形；填充/描边颜色由 JS 按声部 inline 设置） */
 .ijipu-play-block {
   pointer-events: none;

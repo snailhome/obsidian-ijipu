@@ -2,7 +2,7 @@ import { Events, Keymap, MarkdownRenderChild, MarkdownView, Notice, Platform, Pl
 // adj749d：自动格式化（光标离开本行时格式化该行）用**引擎里那份应用自己的**逐行格式化器
 import { formatLine, applyRangeToSvg, rangeBox, readViewBoxOf, insertPngPhys, dpiForScale, RANGE_PAD_DEFAULT, type RangeBox } from '@ijipu/engine'
 // adj774：markdown 笔记里 ```jps 代码块的围栏扫描（着色/错误提示/自动格式化三处共用同一份口径）
-import { jpsBlockRanges } from './jpsBlocks'
+import { jpsBlockRanges, zoomOfInfo } from './jpsBlocks'
 import { createIjipuApi, type IjipuApi } from './api'
 import { createAppRequester, createEmbedRpc, type AppRequester, type EmbedRpc } from './embed/rpc'
 // adj807（B2）：RPC 的 `render.svg` 允许带 `pageConfig` 覆盖 ⇒ 这里只需要它的**类型**
@@ -1835,7 +1835,30 @@ class IJipuBlock extends MarkdownRenderChild {
        * "切到笔记源码并把光标放进本块"，与平台无关）。
        */
       onEditSource: () => void this.revealSource(),
+      /**
+       * adj865（用户定稿的 `z`）：**块级缩放**从"开栏行的 info string"读（` ```jps z=150 `）。
+       * 只有代码块传它 ⇒ 文件视图 / 嵌入保持既有行为（作用域见 `ScorePaneHost.zoom`）。
+       */
+      zoom: this.zoomOfBlock(),
     })
+  }
+
+  /**
+   * adj865：取本代码块的**块级缩放** `z`（缺省 100 = 自然尺寸；`*` = 自适应栏宽）。
+   *
+   * 为什么读"开栏行"而不是正文：`z` 写在 info string（` ```jps z=150 `）—— 与项目既有分工一致：
+   * **`# jps-config` = 谱面自身设置**（随谱走），**块级 `z=` = 与笔记配合的呈现**（这个块在笔记里怎么摆）。
+   * 解析口径（含非法值/边界）只在 `jpsBlocks.zoomOfInfo` 一处，这里不重写一遍 ✗。
+   *
+   * ⚠ 已知待实测：Obsidian 对"语言名之后的 info string 变化"是否重跑代码块处理器，社区里有争议
+   * （本插件走的是 `registerMarkdownCodeBlockProcessor`，**不是** markdown post-processor，未必受影响）。
+   * 若用户实测"改了 `z=` 不刷新"，修法是监听编辑器变更并重画（本轮不做，先按标准行为实现）。
+   */
+  private zoomOfBlock(): number | 'auto' {
+    const info = this.sectionInfo()
+    if (!info) return 100
+    const fence = info.text.split('\n')[info.lineStart] ?? ''
+    return zoomOfInfo(fence)
   }
 
   /**

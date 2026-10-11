@@ -57,6 +57,9 @@ import { DEFS, changedDefs, getDefault, isDefaultValue } from '../src/defs'
 import { clearVoices, filterVoices, groupVoices, invertVoices, normalizeVoices, selectAllVoices, selectedInGroup, setGroupVoices, toggleVoice, voiceSummary } from '../src/voiceChooser'
 import { resolvePageConfig } from '../src/config'
 import { codeBlockBody, jpsLinkpath, replaceCodeBlockBody } from '../src/sourceEdit'
+// adj865：代码块 info string 里的**块级缩放** `z`（解析口径与扫描器同源；此前的注释写着"见冒烟 adj839"，
+// 但套件里从来没有那一节 ⇒ 现在钉在 adj865 里）
+import { jpsBlockRanges, zoomOfInfo } from '../src/jpsBlocks'
 import { computeGuideLines, cropRectFor, guideLimits, guidePlacement } from '../src/guides'
 // adj724b：「打开 .jps 的方式 → 开在哪里」是**纯函数**，冒烟直接跑它
 // （此前只能对 main.ts 做字符串匹配：脆，且注释里写同样的字都会误判）
@@ -4286,6 +4289,90 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       withDpi864.length === png864.length + 21 &&
       insertPngPhys(withDpi864, 144).every((b, i) => b === withDpi864[i]) &&
       readPngPhys(insertPngPhys(insertPngPhys(png864, 72), 288)) === 288)
+}
+
+/**
+ * ---- adj865（T-5 队列的 `z`）：```jps 的**块级缩放**（`z=100` 自然尺寸 / `z=n` 百分比 / `z=*` 铺满）----
+ *
+ * 用户口径（`docs/HANDOVER-CLI-AND-COMMAND-API.md` 二之七）：
+ *  · **默认 `z=100` ⇒ 1 个 viewBox 单位 = 1 CSS px** —— 单行曲部**不再被拉伸放大**（这是本功能的由来）；
+ *  · `z=<数字>` ⇒ 百分比；`z=*` ⇒ 自适应笔记栏宽（= 上线前的行为）；
+ *  · **只影响屏显**：导出/复制仍走引擎「范围」口径，与 `z` 无关 ✓；
+ *  · **作用域**：只有**笔记里的代码块**传它（文件视图 / 嵌入不传 ⇒ 行为不变）。
+ *
+ * ⚠ 本节顺带补上 `zoomOfInfo` 的断言：`jpsBlocks.ts` 里写着"见冒烟 `adj839`"，但套件里**从来没有**这一节
+ * （本轮实测发现）——纯函数没人守，改坏了不会有人知道。现在钉在这里（解析规则 + 边界 + 词法边界）。
+ */
+{
+  const pane865 = codeOf(String(readFileSync('src/scorePane.ts', 'utf8')))
+  const main865 = codeOf(String(readFileSync('src/main.ts', 'utf8')))
+  const fv865 = codeOf(String(readFileSync('src/fileView.ts', 'utf8')))
+  const em865 = codeOf(String(readFileSync('src/embed.ts', 'utf8')))
+  const css865 = String(readFileSync('styles.css', 'utf8'))
+  const engineRange865 = String(readFileSync('vendor/engine/render/range.ts', 'utf8'))
+  const appBridge865 = existsSync('../ijipu/src/ipc/obsidianBridge.ts')
+    ? String(readFileSync('../ijipu/src/ipc/obsidianBridge.ts', 'utf8'))
+    : ''
+
+  // —— ① 解析规则（补 adj839 的缺口） ——
+  check('adj865 `zoomOfInfo`：缺省/`z=100` ⇒ 100；`z=150` ⇒ 150；`z=*` ⇒ auto；与其它 info 词混写也认',
+    zoomOfInfo('```jps') === 100 && zoomOfInfo('```jps z=100') === 100 && zoomOfInfo('```jps z=150') === 150 &&
+      zoomOfInfo('```jps z=*') === 'auto' && zoomOfInfo('```jps title=x z=80 foo=1') === 80)
+  check('adj865 边界与词法：`z=0`/`z=1001`/`z=abc` 都回默认 100；**`xz=30` 这种不是独立词的不认**',
+    zoomOfInfo('```jps z=0') === 100 && zoomOfInfo('```jps z=1001') === 100 && zoomOfInfo('```jps z=abc') === 100 &&
+      zoomOfInfo('```jps az=150') === 100 && zoomOfInfo('```jps z=1') === 1 && zoomOfInfo('```jps z=1000') === 1000)
+  {
+    const blocks865 = jpsBlockRanges('```jps z=150\nD: C\nQ: 1 2 |\n```\n\n```jps\ntext\n```\n')
+    check('adj865 扫描器把 `z` 带进块信息（第一个块 150、第二个块缺省 100）',
+      blocks865.length === 2 && blocks865[0].zoom === 150 && blocks865[1].zoom === 100,
+      JSON.stringify(blocks865.map((b) => b.zoom)))
+  }
+
+  // —— ② 面板消费 `host.zoom`：类 + CSS 自定义属性（**不写内联样式**，审核要求） ——
+  check('adj865 面板按 `host.zoom` 打类：数字 ⇒ `ijipu-zoom-fixed` + `--ijipu-zoom-factor`；`auto` ⇒ `ijipu-zoom-fit`',
+    /const zoomOfHost = host\.zoom/.test(pane865) &&
+      /if \(zoomOfHost === 'auto'\) \{\s*svgWrap\.addClass\('ijipu-zoom-fit'\)/.test(pane865) &&
+      /svgWrap\.addClass\('ijipu-zoom-fixed'\)/.test(pane865) &&
+      /svgWrap\.setCssProps\(\{ '--ijipu-zoom-factor': String\(zoomOfHost \/ 100\) \}\)/.test(pane865))
+  check('adj865 自然宽随 viewBox 一起下发（`--ijipu-zoom-w`）：分数支用裁剪盒宽、整页/满宽用页面宽',
+    /const publishZoomW = \(w: number\): void => \{/.test(pane865) &&
+      /wrapEl\.setCssProps\(\{ '--ijipu-zoom-w': `\$\{w\}px` \}\)/.test(pane865) &&
+      /publishZoomW\(out\.box\.w\)/.test(pane865) &&
+      /publishZoomW\(Math\.max\(1, w - ml - mr\)\)/.test(pane865) &&
+      // ⚠ 这里刻意**不写一整个大正则**：路径里同时有 `\s`、`/`、`+`、`[` —— 一次性写完极易错位
+      //   （本轮就错了一次：把正则字面量的收尾 `/` 漏在 `+` 与 `)` 之间）。拆成小段更好读也更稳。
+      /publishZoomW\(Number\(orig\.split\(\/\[\\s,\]\+/.test(pane865) &&
+      /\)\[2\]\) \|\| 0\)/.test(pane865))
+  check('adj865 负对照：`z` 下落成**内联样式赋值**（审核 Error `no-static-styles-assignment`）⇒ 判据为假；必须走类 + setCssProps',
+    !/\.style\.width\s*=/.test(pane865) && !/style\.setProperty\('width'/.test(pane865) &&
+      /setCssProps/.test(pane865))
+
+  // —— ③ CSS：一行乘法（自然宽 × z/100），且不靠 `!important` ——
+  check('adj865 样式：`width = 自然宽 × z/100`（calc + 两个自定义属性），`auto` ⇒ 100%，且不用 !important',
+    /\.ijipu-svgs\.ijipu-zoom-fixed \.ijipu-page-svg > svg \{\s*width: calc\(var\(--ijipu-zoom-w, 100%\) \* var\(--ijipu-zoom-factor, 1\)\);/.test(css865) &&
+      /\.ijipu-svgs\.ijipu-zoom-fit \.ijipu-page-svg > svg \{\s*width: 100%;/.test(css865) &&
+      !/calc\(var\(--ijipu-zoom-w[\s\S]{0,120}!important/.test(css865))
+
+  // —— ④ 作用域：只有代码块传 zoom（文件视图 / 嵌入不传 ⇒ 行为不变） ——
+  check('adj865 作用域：`IJipuBlock` 读开栏行 info string 并传 `zoom`；文件视图 / 嵌入**不传** ✓',
+    /zoom: this\.zoomOfBlock\(\),/.test(main865) &&
+      /private zoomOfBlock\(\): number \| 'auto' \{/.test(main865) &&
+      /const fence = info\.text\.split\('\\n'\)\[info\.lineStart\] \?\? ''/.test(main865) &&
+      /return zoomOfInfo\(fence\)/.test(main865) &&
+      !/zoom/.test(fv865) && !/zoom/.test(em865))
+  check('adj865 负对照：把代码块那行 `zoom:` 去掉 ⇒ 判据为假（面板就会退回"撑满容器"的老行为）',
+    !/zoom: this\.zoomOfBlock\(\),/.test(main865.replace('zoom: this.zoomOfBlock(),', '')))
+
+  // —— ⑤ 只影响屏显：导出/复制那条链路里**没有** z（范围口径与它无关） ——
+  {
+    const a865 = main865.indexOf('resolveRangeBox(')
+    const b865 = main865.indexOf('async copyScoreSvg(')
+    const exportSlice865 = a865 >= 0 && b865 > a865 ? main865.slice(a865, b865) : ''
+    check('adj865 负对照：`z` 只影响屏显 —— 范围解析 / 复制为图片那一段里没有 zoom，引擎范围与嵌入版桥也没有',
+      exportSlice865.length > 500 && !/zoom/i.test(exportSlice865) &&
+        !/zoom/i.test(engineRange865) && (appBridge865 === '' || !/zoom/i.test(appBridge865)),
+      `slice=${exportSlice865.length} 字符`)
+  }
 }
 
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。
