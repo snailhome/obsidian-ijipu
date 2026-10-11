@@ -787,11 +787,18 @@ toolbar.dataset.ijipuPane = String(paneId)
       el.toggleClass('ijipu-ported-embedded', container.closest('.ijipu-embedded') !== null)
       const host = container.getBoundingClientRect()
       const h = el.getBoundingClientRect().height || 28
-      el.style.setProperty('position', 'fixed')
-      el.style.setProperty('left', `${Math.round(host.left)}px`)
-      el.style.setProperty('top', `${Math.round(host.top - h - TOOLBAR_GAP)}px`)
-      el.style.setProperty('bottom', 'auto')
-      el.style.setProperty('z-index', '40')
+      /**
+       * adj799（社区审核 **Error**）：`obsidianmd/no-static-styles-assignment` 不允许直接写内联样式 ✗
+       * （我上一版在这里用了 `el.style.setProperty(…)` ×4 ⇒ 审核判 Failed ✓）。
+       * 按规则给的三条出路（CSS 类 / `setCssProps` / `setCssStyles`）改成：
+       *  · **坐标用 CSS 自定义属性**（`setCssProps` 是 Obsidian 认可的动态值写法 ✓）；
+       *  · **定位与层级交给 CSS 类** `.ijipu-ported`（见 styles.css）✓。
+       */
+      el.addClass('ijipu-ported')
+      el.setCssProps({
+        '--ijipu-port-x': `${Math.round(host.left)}px`,
+        '--ijipu-port-y': `${Math.round(host.top - h - TOOLBAR_GAP)}px`,
+      })
     }
     const clearOutsideFixed = (el: HTMLElement): void => {
       // adj793c：挂到 body 的工具栏要**挂回容器**（否则收起后它仍留在 body 上，下次显示会错位/堆积）
@@ -799,11 +806,9 @@ toolbar.dataset.ijipuPane = String(paneId)
       // adj798：搬回来就摘掉"移植上下文"标记（回到容器里，祖先上下文重新生效）
       el.removeClass('ijipu-ported-mobile')
       el.removeClass('ijipu-ported-embedded')
-      el.style.removeProperty('position')
-      el.style.removeProperty('left')
-      el.style.removeProperty('top')
-      el.style.removeProperty('bottom')
-      el.style.removeProperty('z-index')
+      // adj799：同样走类 + 自定义属性（不再碰内联样式 ✗）
+      el.removeClass('ijipu-ported')
+      el.setCssProps({ '--ijipu-port-x': '', '--ijipu-port-y': '' })
     }
     let followToolbar: (() => void) | null = null
 

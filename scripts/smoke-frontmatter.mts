@@ -7,7 +7,7 @@
  */
 import { defaultPageConfig, dragDelta, formatJps, formatLine, instrumentColorMap, layoutScore, parseJps, playheadBaseOf, playheadPosIn, renderScoreToSvg, splitParseIssues, tokenizeJpsLine, JPS_HIGHLIGHT_COLORS, JPS_PLAIN_COLORS, JPS_PROBLEM_COLORS, trackKeysOf, writeJpsConfig, mergeConfigEdits, configCarryover, SCORE_FONT_OPTIONS, buildPlaySequence, GUIDE_LIMITS, GUIDE_LIMITS_EX, SEGMENT_ROW_GAP_DEFAULT, OPTIONAL_CONFIG_FIELDS, defaultConfigForReset, extractJpsConfig, extractLegacyEditorPrefs, nonDefaultConfigKeys, GM_GROUPS, highlightLineModel, jpsBlockMarks } from '@ijipu/engine'
 import type { PageConfig } from '@ijipu/engine'
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, globSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 
 /**
@@ -3658,6 +3658,59 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       !/el\.toggleClass\('ijipu-ported-mobile'/.test(
         pane798.replace("el.toggleClass('ijipu-ported-mobile', Platform.isMobile)", ''),
       ))
+}
+
+/**
+ * ---- adj799：社区审核 **Error** `obsidianmd/no-static-styles-assignment` 的防复发闸门 ----
+ *
+ * 用户贴回的 0.34.1 审核结果：唯一 Error 指向 `src/scorePane.ts:790/793/794` ——
+ * 那是我给"外侧落位"写的 `el.style.setProperty('position'|'left'|'top'|'bottom'|'z-index')` ✗。
+ * 规则给的出路是 **CSS 类 / `setCssProps` / `setCssStyles`** ⇒ 已改为
+ * "`.ijipu-ported` 类 + `setCssProps` 设两个坐标自定义属性" ✓。
+ * 这里钉住：**工具条相关的代码里不得再出现 `el.style.*` 赋值**。
+ */
+{
+  const pane799 = codeOf(String(readFileSync('src/scorePane.ts', 'utf8')))
+  /**
+   * ⚠ **闸门范围是"全插件源码"**（不只工具条）：审核的 `no-static-styles-assignment` 是**逐文件**判的，
+   * 任何一处直接写内联样式都会让当次审核 Failed ✗。
+   * 唯一白名单：**循环里的动态键** `el.style.setProperty(k, v)`（引导线按布局逐条设样式，键是变量，
+   * 规则本身无法判成"静态"；且 0.34.1 的审核未判它 ✗→ 保留）。
+   * ⚠ 判据必须用 `codeOf()`（**去注释**）—— 否则注释里写到 `el.style.setProperty` 就会把判据弄红 ✗
+   * （这一类"注释文本当判据"的自伤本轮又发生了一次，已写进 AGENTS 规则）。
+   */
+  const styleAssigns: Array<{ file: string; line: number; text: string }> = []
+  const allow = /for \(const \[k, v\] of Object\.entries\(style\)\) el\.style\.setProperty\(k, v\)/
+  /**
+   * 用 `globSync` 自取插件源码清单（不引入新的助手函数 —— 上一版我凭空写了个 `pluginSourceFiles()`
+   * 导致冒烟直接 ReferenceError ✗，属于"想当然"的自伤）。
+   */
+  const files799 = globSync('src/**/*.ts', { cwd: process.cwd() })
+    .map((p) => p.replace(/\\/g, '/'))
+    // 排除**生成产物**与第三方：`src/gen/**`（内嵌的应用 bundle/HTML，本身就有内联样式 ✓）、`vendor/**`
+    .filter((p) => !p.startsWith('src/gen/') && !p.startsWith('vendor/'))
+  for (const file of files799) {
+    const lines = codeOf(String(readFileSync(file, 'utf8'))).split('\n')
+    lines.forEach((l, i) => {
+      const hit = /\b\w+\.style\.(setProperty|removeProperty)\b/.test(l) || /\b\w+\.style\.[a-zA-Z]+\s*=/.test(l)
+      if (hit && !allow.test(l.trim()) && !/style\.removeProperty\('max-height'\)/.test(l)) {
+        styleAssigns.push({ file, line: i + 1, text: l.trim().slice(0, 90) })
+      }
+    })
+  }
+  check('adj799 工具条定位走「类 + setCssProps」，不再写内联样式（审核 no-static-styles-assignment）',
+    /el\.addClass\('ijipu-ported'\)/.test(pane799) &&
+      /el\.setCssProps\(\{/.test(pane799) &&
+      /'--ijipu-port-x'/.test(pane799) &&
+      /'--ijipu-port-y'/.test(pane799) &&
+      /el\.removeClass\('ijipu-ported'\)/.test(pane799) &&
+      // CSS 里必须有对应的类规则
+      /\.ijipu-score-toolbar\.ijipu-ported \{\n  position: fixed;/.test(String(readFileSync('styles.css', 'utf8'))) &&
+      // 全插件源码：除白名单外不得有内联样式赋值（审核 Error 级）
+      styleAssigns.length === 0 &&
+      // 负对照：把类的那一行去掉 ⇒ 判据为假
+      !/el\.addClass\('ijipu-ported'\)/.test(pane799.replace("el.addClass('ijipu-ported')", '')),
+    `越界的内联样式赋值：${styleAssigns.map((s) => `${s.file}:${s.line}`).join('、') || '（无）'}`)
 }
 
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。

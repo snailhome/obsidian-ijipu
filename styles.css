@@ -170,6 +170,18 @@
   display: flex;
   --ijipu-ctl-h: var(--touch-size-xs, 30px);
 }
+/**
+ * adj799（社区审核 **Error** `obsidianmd/no-static-styles-assignment`）：
+ * 外侧落位的定位/层级**不再写内联样式** ✗，改为一个类 + 两个 CSS 自定义属性
+ * （坐标由 `setCssProps` 设置 —— 这是 Obsidian 认可的动态值写法 ✓）。
+ */
+.ijipu-score-toolbar.ijipu-ported {
+  position: fixed;
+  left: var(--ijipu-port-x, 0);
+  top: var(--ijipu-port-y, 0);
+  bottom: auto;
+  z-index: 40;
+}
 .ijipu-score-toolbar.ijipu-ported-embedded {
   --ijipu-ctl-h: 21px;
   --ijipu-ctl-w: 32px;
