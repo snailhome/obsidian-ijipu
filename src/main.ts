@@ -77,8 +77,25 @@ export default class IJipuPlugin extends Plugin {
    * 判据：`src` 里带本插件发的 `token=`（与 `IJipuBridge` 的登记口径一致 ✓）。
    */
   private embedRpcWindow(): Window | null {
+    /**
+     * adj830（用户实测：嵌入版已开在**右侧栏**，导出 PNG/MIDI 仍提示「嵌入版未打开」✗）：
+     *
+     * 真因：以前按 `src.includes('token=')` 找 iframe ✗ —— 而 `embed/frame.ts` 建 iframe 时
+     * **URL 里没有 token**（token 是 iframe 加载后由 `bridge.setToken()` 经 postMessage 交过去的 ✓）
+     * ⇒ 永远匹配不到 ⇒ 报"未打开" ✓。
+     *
+     * 改成按**本机服务地址**识别：嵌入版一定是插件自己起的本机 HTTP 服务页面
+     * （`http://127.0.0.1:<port>` 或 `http://localhost:<port>` ✓，见 `embed/server.ts` 的固定端口 47821 ✓）。
+     * 同时保留旧的 token 判据作为兜底 ✓（两条都不命中才算"没打开" ✓）。
+     */
+    const isEmbedIframe = (f: HTMLIFrameElement): boolean => {
+      const src = f.src
+      if (src === '') return false
+      if (src.includes('token=')) return true
+      return /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?\//.test(src)
+    }
     for (const f of Array.from(document.querySelectorAll('iframe'))) {
-      if (f.src.includes('token=') && f.contentWindow !== null) return f.contentWindow
+      if (isEmbedIframe(f) && f.contentWindow !== null) return f.contentWindow
     }
     return null
   }
