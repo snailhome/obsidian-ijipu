@@ -628,6 +628,28 @@
 .ijipu-file-view.ijipu-file-editing {
   overflow: hidden;
 }
+
+/**
+ * adj794b（用户实测补充：「在**谱面图上**滑 ⇒ 不动」）：手势在**谱面子树**里没有被当成滚动 ✗。
+ *
+ * 做两件事：
+ *  ① 谱面子树（容器 / SVG 层 / svg 本身）也显式声明 `touch-action: pan-y` ——
+ *     `touch-action` 是"**沿途各层取交集**"的：只要链上任何一层是 `none`，手势就整条被吃掉 ✗；
+ *  ② **手机端预览态把滚动交给宿主**：我们这层不再自己滚（`height:auto; overflow:visible`），
+ *     让外层（`.view-content` 那一层）滚 —— 它的滚动容器在移动端一定有正确的触摸处理与惯性，
+ *     这是"内层滚动容器在手机 WebView 里点不动/滑不动"的通行解法。
+ * PC 端**不受影响**（只在 `.is-mobile` 下生效；桌面端继续用本容器自己的滚动）。
+ */
+.ijipu-file-view .ijipu-score,
+.ijipu-file-view .ijipu-svgs,
+.ijipu-file-view .ijipu-svgs svg {
+  touch-action: pan-y;
+}
+.is-mobile .ijipu-file-view:not(.ijipu-file-editing) {
+  height: auto;
+  min-height: 100%;
+  overflow: visible;
+}
 /**
  * adj749（用户报，手机端）：「jps 文件预览视图下，会因**外延的工具条**而遮住一半的源码、格式化按钮」
  * —— 谱面浮动工具条浮在块外侧、正好压在文件栏上方（手机端它还常显）。
