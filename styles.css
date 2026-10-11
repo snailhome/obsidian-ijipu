@@ -613,6 +613,17 @@
   min-height: 0;
   overflow: auto;
   padding: 8px 10px;
+  /**
+   * adj794（用户实测）：「手机端打开 jps 文件、**预览模式下页面无法上下滚动**，下面部分看不到；PC 端正常」。
+   *
+   * 本容器本来就是 `height:100% + overflow:auto`（桌面端滚动正常 ✓），所以问题不在"有没有滚动容器"，
+   * 而在**触摸手势有没有被交给它** ✗。这里显式声明两件事：
+   *  · `touch-action: pan-y` —— 明确允许**纵向平移**（若被某层继承成了 `none`/`pan-x`，这一条就把它纠回来）；
+   *  · `-webkit-overflow-scrolling: touch` —— 移动端用惯性滚动（老 WebView 上不加会"手感卡死/滑不动"）。
+   * ⚠ 只加在**预览态**（编辑态 `.ijipu-file-editing` 有自己的键盘感知逻辑，不动它）。
+   */
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
 }
 .ijipu-file-view.ijipu-file-editing {
   overflow: hidden;
