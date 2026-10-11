@@ -4343,6 +4343,14 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       //   （本轮就错了一次：把正则字面量的收尾 `/` 漏在 `+` 与 `)` 之间）。拆成小段更好读也更稳。
       /publishZoomW\(Number\(orig\.split\(\/\[\\s,\]\+/.test(pane865) &&
       /\)\[2\]\) \|\| 0\)/.test(pane865))
+  check('adj865/adj866 负对照：切模式**不得**用 `setAttribute(\'class\')` 重写整个 class —— 那会抹掉 `z` 的缩放类',
+    !/svgWrap\.setAttribute\('class'/.test(pane865) &&
+      /for \(const m of \['page', 'full', 'score'\] as const\) svgWrap\.removeClass\(`ijipu-mode-\$\{m\}`\)/.test(pane865) &&
+      /svgWrap\.addClass\(`ijipu-mode-\$\{next\}`\)/.test(pane865) &&
+      // 负对照：把"按模式类增删"还原成"重写 class"，判据立刻为假
+      !/svgWrap\.addClass\(`ijipu-mode-\$\{next\}`\)/.test(
+        pane865.replace('svgWrap.addClass(`ijipu-mode-${next}`)', "svgWrap.setAttribute('class', `ijipu-svgs ijipu-mode-${next}`)"),
+      ))
   check('adj865 负对照：`z` 下落成**内联样式赋值**（审核 Error `no-static-styles-assignment`）⇒ 判据为假；必须走类 + setCssProps',
     !/\.style\.width\s*=/.test(pane865) && !/style\.setProperty\('width'/.test(pane865) &&
       /setCssProps/.test(pane865))

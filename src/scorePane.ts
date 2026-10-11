@@ -2030,7 +2030,15 @@ toolbar.dataset.ijipuPane = String(paneId)
 
     function setMode(next: ViewMode): void {
       paneMode = next
-      svgWrap.setAttribute('class', `ijipu-svgs ijipu-mode-${next}`)
+      /**
+       * ⚠ adj866（**真机验证抓到的真 bug**）：这里原来是 `setAttribute('class', 'ijipu-svgs ijipu-mode-x')`
+       * —— 它把整个 class 属性**重写**了一遍 ⇒ `adj865` 的块级缩放类（`ijipu-zoom-fixed` /
+       * `ijipu-zoom-fit`，切模式时会被这一句抹掉）**当场丢失** ⇒ `z=100` 退化成"撑满容器"（用户看到的就是
+       * "设了 z 没用"）。源码正则断言抓不到这种"属性被后写覆盖"的顺序问题，只有真机跑一遍才现形
+       * ⇒ 改成**按模式类增删**（`ijipu-svgs` 与缩放类都不动）。
+       */
+      for (const m of ['page', 'full', 'score'] as const) svgWrap.removeClass(`ijipu-mode-${m}`)
+      svgWrap.addClass(`ijipu-mode-${next}`)
       // 按钮上的文字、图标、悬停说明跟着走（图标三种形状见 icons.ts，与菜单项一一对应）
       modeTextEl.setText(MODE_LABEL[next])
       modeIconEl.empty()
