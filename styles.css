@@ -424,20 +424,35 @@
   color: var(--text-muted);
 }
 
-/* 三种显示模式 */
-/* 整页：完整显示一页，宽度撑满 Obsidian 内容区（尽量填充有效范围） */
+/* 三种显示模式（adj871：三种是**真的三种几何** —— 此前三条规则都只是 `width: 100%`
+   ⇒ 用户实测"切换视图预览区没有变化"✗） */
+/**
+ * 整页：整页（含页边距）按 contain 放进**可视区** —— 宽 = 页面框宽 × 拟合系数，
+ * 系数 `--ijipu-page-fit` 由 JS 按"容器可用宽度 W1 + 可见高度 H1"算
+ * （`s = Math.min(W1 / W, H1 / H)`，见 scorePane.ts 的 `publishPageFit`）；
+ * **只在挂载 / 切换模式 / 尺寸变化时算，不跟滚动**（跟滚动会一跳一跳 ✗）。
+ * `--ijipu-zoom-w` = 该页整页框的宽（由 `applyViewBox` 随 viewBox 一起下发）。
+ * 高度由 `height: auto` + viewBox 比例自动得到 ⇒ 显式写宽就够了。
+ */
+.ijipu-mode-page .ijipu-page-svg {
+  /* 整页模式下 SVG 比容器窄（contain 的结果）⇒ 让每页的包装层**收缩到 SVG 的宽度**：
+     辅助虚线层是 `inset: 0` 的绝对定位层，若按容器宽度定位，虚线会整体偏左/偏右 ✗ */
+  width: fit-content;
+  margin: 0 auto;
+}
 .ijipu-mode-page .ijipu-page-svg svg {
-  width: 100%;
+  width: calc(var(--ijipu-zoom-w, 100%) * var(--ijipu-page-fit, 1));
   height: auto;
   margin: 0;
 }
-/* 满宽：撑满 Obsidian 页面宽度 */
+/* 满宽：只有**宽度**进视界（高度超出就滚动）；`z=N` 时宽 = 自然宽 × N/100
+   （见下面 `.ijipu-svgs.ijipu-zoom-fixed` 那条规则，特异性更高、稳赢） */
 .ijipu-mode-full .ijipu-page-svg svg {
   width: 100%;
   height: auto;
   margin: 0;
 }
-/* 谱面：裁掉页边距、只显示内容区，并撑满容器宽（viewBox 由 JS 裁剪） */
+/* 谱面：裁掉页边距、只显示墨迹包围盒（viewBox 由 JS 裁剪），并撑满容器宽 */
 .ijipu-mode-score .ijipu-page-svg svg {
   width: 100%;
   height: auto;
@@ -456,6 +471,11 @@
  *  · 两者都走 `setCssProps`（社区审核只允许这样传动态值；直接写内联样式会被判 Error ✗）。
  * 基础规则里的 `max-width: 100%` 仍然生效 ⇒ 自然尺寸超过栏宽时按比例缩小，不会横向溢出。
  * 特异性（3 个类 + 类型选择器）高于上面 `.ijipu-mode-* .ijipu-page-svg svg`（2 个类）⇒ 稳赢，不必 `!important`。
+ *
+ * ⚠ adj871（`z` 与显示模式的关系，判定**只有一处**：scorePane.ts 的 `publishDisplaySize`）：
+ *  · `m=p`（整页）⇒ **`z` 不生效**（尺寸由"整页进视界"决定 ⇒ 这条规则上的两个类都被摘掉）；
+ *  · `m=w`（满宽）⇒ `z` 未写 / `z=*` 走 `.ijipu-zoom-fit`（铺满容器宽），`z=N` 走 fixed（自然宽 × N/100）；
+ *  · 谱面（缺省）⇒ `z` 未写 = 自然尺寸、`z=*` = 按宽铺满（现状不变）。
  */
 .ijipu-svgs.ijipu-zoom-fixed .ijipu-page-svg > svg {
   width: calc(var(--ijipu-zoom-w, 100%) * var(--ijipu-zoom-factor, 1));

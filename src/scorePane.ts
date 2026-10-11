@@ -41,12 +41,23 @@ import type IJipuPlugin from './main'
 
 type ViewMode = 'page' | 'full' | 'score'
 const MODE_LABEL: Record<ViewMode, string> = { page: '整页', full: '满宽', score: '谱面' }
-/** 三种显示模式的含义（按钮悬停提示用——图标只表意，文字补足准确含义） */
+/**
+ * 三种显示模式的含义（按钮悬停提示用——图标只表意，文字补足准确含义）。
+ *
+ * adj871（用户实测「切换视图预览区没有变化」）：原来这三句话对应的三种模式**几何完全一样**
+ * （三条 CSS 规则都只是 `width: 100%`）⇒ 现在三句话对应**三种真的不同的几何**：
+ *  · 整页 = 整页（含页边距）按 contain 放进**可视区**（宽和高都进视界，上下都看得见）；
+ *  · 满宽 = 只有**宽度**进视界（高度超出就滚动）；
+ *  · 谱面 = 墨迹包围盒 + 每边 2px（默认，`rangeBox` 口径）。
+ */
 const MODE_HINT: Record<ViewMode, string> = {
-  page: '完整一页（含页边距），宽度撑满内容区',
-  full: '谱面撑满笔记宽度（不留页面左右留白）',
-  score: '裁掉页边距、只显示内容区（默认；四周留 2px）',
+  page: '整页放进可视区（含页边距，上下都可见）',
+  full: '只按宽度铺满容器（高度超出就滚动）',
+  score: '只显示墨迹包围盒（每边留 2px，默认）',
 }
+/** adj871：整页拟合的**可见高度下限**（面板再矮也要留出能看的空间）与容器顶边以下的留白（px） */
+const PAGE_FIT_MIN_H = 200
+const PAGE_FIT_GAP = 24
 /**
  * adj725：宿主 widget 容器（**只在实时预览里**有；阅读模式下 `el` 直接是 `.block-language-jps`）。
  * 挂在它上面的 `ijipu-cm-host` 类只为放开悬停时的 `overflow: hidden`（见 styles.css）。
@@ -99,6 +110,16 @@ export type ScorePaneHost = {
    * 只有代码块传它；文件视图 / 嵌入不传 ⇒ 用缺省「谱面」。工具条仍可**会话内临时切换**（参数是落地点、工具条是"看一眼"）。
    */
   mode?: 'page' | 'full' | 'score'
+  /**
+   * adj871（满宽模式的岔路口）：**开栏行里到底写没写 `z=`**。
+   *
+   * 为什么 `zoom` 一个值不够用：`zoomOfInfo()` 对「`z` 未写」「`z=100`」「`z=abc`」**都返回 `100`**
+   * （那是"解析口径只在一处"的代价 ✓），而满宽模式要分两岔（用户 2026-10-11 口径）：
+   *  · `z` 未写 / `z=*` ⇒ **铺满容器宽**（"满宽"的字面意思）；
+   *  · `z=N`（写了具体数字，含 `z=100`）⇒ **固定像素宽** = 自然宽 × N/100。
+   * ⇒ 由宿主多传一位"写没写"，面板**不去猜**（猜就是把解析口径又写一份 ✗）。
+   */
+  zoomWritten?: boolean
   /**
    * 嵌入模式下的谱面名（显示在工具栏**右端**，前置链接图标，点击打开该 .jps）。
    * 插件接管 `![[x.jps]]` 的 `.internal-embed` 后，宿主原本那个"点开文件"的占位块不再出现，
@@ -253,6 +274,17 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
    * 声明在 `paint()` 之外：重画与 `destroy()` 都要能一次性断掉它们（旧 svg 已经被丢弃）。
    */
   const cropObservers = new Set<ResizeObserver>()
+  /**
+   * adj871：**整页模式的尺寸观察器**（容器进渲染树 / 分栏宽度变化 ⇒ 重算一次拟合）。
+   * 与 `cropObservers` 同理声明在 `paint()` 之外：重画与 `destroy()` 都要能干净断掉。
+   */
+  let pageFitObserver: ResizeObserver | null = null
+  /**
+   * adj871：**窗口尺寸变化的落点** —— 指向"当前这一版 `paint()`"里的尺寸重算函数
+   * （`paint()` 每次重建 DOM ⇒ 闭包必须能跨重画指向新的容器与 svg）。
+   * `destroy()` 里置空，免得销毁后还被一次 `resize` 摸到已经丢弃的 DOM。
+   */
+  let recomputeFit: (() => void) | null = null
   /**
    * adj725：挂载时给宿主 widget 容器加的类（`.cm-embed-block`）。
    * 记下来是为了 `destroy()` 时能原样摘掉，不去动别的插件/别的块。
@@ -552,12 +584,25 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     void openUrlExternally(link.getAttribute('data-href') ?? link.getAttribute('href') ?? '')
   })
 
+  /**
+   * adj871：**窗口尺寸变化 ⇒ 重算一次整页拟合**（整页模式要"整页进视界"，视界变了就得重算）。
+   *
+   * ⚠ 这里**只监听 `resize`**：滚动时容器顶边一直在变，跟着滚动实时重算会让页面尺寸
+   * "一跳一跳"（用户明确否掉 ✗）。容器**自身**的尺寸变化（分栏拖动 / 刚进渲染树）另由
+   * `paint()` 末尾挂的 `ResizeObserver` 管 —— 两条路都走同一个落点。
+   */
+  const onWindowResize = (): void => recomputeFit?.()
+  window.addEventListener('resize', onWindowResize)
+
   /** 全量重画（工具条 + 谱面 + 辅助虚线）；拖拽期间按帧节流 */
   const paint = (): void => {
     stopRuntime()
     // adj725b：上一轮挂的补量观察器盯着的是即将被丢弃的 svg ⇒ 先全部断掉
     for (const ro of cropObservers) ro.disconnect()
     cropObservers.clear()
+    // adj871：整页拟合的观察器同理（它盯的是即将被丢弃的 `.ijipu-svgs`）
+    pageFitObserver?.disconnect()
+    pageFitObserver = null
     container.empty()
     container.addClass('ijipu-score')
     /**
@@ -1751,16 +1796,14 @@ toolbar.dataset.ijipuPane = String(paneId)
      *  · `ijipu-zoom-fit`（`z=*`）⇒ 宽度 100%（铺满笔记栏宽 = 上线前的行为）；
      *  · **不传 `zoom`** ⇒ 两个类都不加 ⇒ 走既有的 `.ijipu-mode-* svg { width: 100% }`（文件视图/嵌入不变）。
      * 基础规则里的 `max-width: 100%` 仍然管用 ⇒ 自然尺寸比栏宽时按比例缩小，不会横向溢出 ✓。
+     *
+     * ⚠ adj871：这里原来**当场按 `host.zoom` 打类**，而 `setMode()` 又按模式打一次 ⇒ 两处口径会漂：
+     * `m=p`（整页）本该让 `z` 不生效，但 `ijipu-zoom-fixed` 还在 ⇒ 整页被 z 缩掉 ✗。
+     * 现在**只有一处判定**（`publishDisplaySize`，挂载与切模式走同一条路），这里不再自己判一遍。
      */
     const zoomOfHost = host.zoom
-    if (zoomOfHost !== undefined) {
-      if (zoomOfHost === 'auto') {
-        svgWrap.addClass('ijipu-zoom-fit')
-      } else {
-        svgWrap.addClass('ijipu-zoom-fixed')
-        svgWrap.setCssProps({ '--ijipu-zoom-factor': String(zoomOfHost / 100) })
-      }
-    }
+    /** adj871：`z=` 是否**真的写在开栏行里**（满宽模式靠它区分"未写 ⇒ 铺满"与"`z=100` ⇒ 固定自然宽"） */
+    const zoomWritten = host.zoomWritten === true
     svgs.forEach((svg, i) => {
       if (svgs.length > 1 && !host.embedded) {
         container.createDiv({ cls: 'ijipu-page-label', text: `第 ${i + 1} / ${svgs.length} 页` })
@@ -1782,7 +1825,8 @@ toolbar.dataset.ijipuPane = String(paneId)
        * adj724b：**插入 DOM 后立刻量一次真实内容包围盒**并记在元素上。
        *
        * 为什么要在这一刻量：`getBBox()` 要求元素已在渲染树里（刚 `sanitizeHTMLToDom` 出来的
-       * 游离节点量不到）；而此刻**辅助虚线层还没加**（`addGuideLayer` 在后面），
+       * 游离节点量不到）；而此刻**辅助虚线层还没加**（`addGuideLayer` 已经挪到 `setMode` 之后，
+       * 见 `rebuildGuides` —— 那里才量得到"尺寸定稿后"的真实宽度），
        * 量到的就是纯谱面内容。缓存到 dataset，供 `applyViewBox('score')` 与切模式时复用。
        *
        * ⚠ adj725b：宿主（Obsidian）是**先建 DOM、再挂进文档**，所以我们这一刻常常仍在游离树上
@@ -1794,7 +1838,6 @@ toolbar.dataset.ijipuPane = String(paneId)
       }
       // 不在这里 applyViewBox：此刻还是 'page' 模式（viewBox=整页），套上去纯属多余；
       // 真正的显示模式由下面的 setMode(paneMode) 统一下发（'score' 会用刚量到的内容盒裁剪）。
-      if (plugin.showGuides) addGuideLayer(wrap, svgEl, i, cfg)
     })
 
     /**
@@ -2033,6 +2076,100 @@ toolbar.dataset.ijipuPane = String(paneId)
       }
     }
 
+    /**
+     * adj871：**显示尺寸的唯一落地点** —— 按当前模式 + 代码块参数（`m=` / `z=`）决定
+     * "打哪个缩放类、下发哪个系数"。挂载（`setMode` 在 `paint()` 末尾被调）与切模式都走它
+     * ⇒ 不会出现"某个入口只改了一半"的漂移（adj866 就是这类 bug：切模式把 `z` 的类抹掉）。
+     *
+     * 三种模式的几何（用户 2026-10-11 定稿）：
+     *  · `page` ：整页（含页边距）按 contain 放进可视区 ⇒ **`z` 不生效**（尺寸由"整页进视界"决定，
+     *             见 `publishPageFit`）。这里只把两个缩放类摘掉，让 styles.css 的
+     *             `.ijipu-mode-page` 规则生效（否则 `ijipu-zoom-fixed` 特异性更高、会把整页缩掉 ✗）；
+     *  · `full` ：只有**宽度**进视界 ⇒ 宽 = 容器宽（`z` 未写 / `z=*` / 文件视图与嵌入都没传 `z`）
+     *             或 自然宽 × z/100（`z=N`）；高度超出就靠滚动（`height: auto`）；
+     *  · `score`：现状不变（viewBox 裁到墨迹盒 + 每边 2px；`z` 未写 ⇒ 自然尺寸、`z=*` ⇒ 按宽铺满）。
+     */
+    function publishDisplaySize(mode: ViewMode): void {
+      // 先清两类：切来切去都不留旧类（否则上一模式的类会把新模式的规则压掉 ✗）
+      svgWrap.removeClass('ijipu-zoom-fit')
+      svgWrap.removeClass('ijipu-zoom-fixed')
+      if (mode === 'page') return
+      const zNum = typeof zoomOfHost === 'number' ? zoomOfHost : null
+      if (mode === 'full' && !(zoomWritten && zNum !== null)) {
+        // 满宽 + 没写具体 z ⇒ 铺满容器宽（`z=*` 与未写同族，都是"按宽自适应"）
+        svgWrap.addClass('ijipu-zoom-fit')
+        return
+      }
+      if (zNum !== null) {
+        svgWrap.addClass('ijipu-zoom-fixed')
+        svgWrap.setCssProps({ '--ijipu-zoom-factor': String(zNum / 100) })
+      } else if (zoomOfHost === 'auto') {
+        svgWrap.addClass('ijipu-zoom-fit')
+      }
+      // `host.zoom` 未传（文件视图 / 嵌入）+ 谱面模式 ⇒ 两类都不打：走 `.ijipu-mode-*` 的 width:100%
+    }
+
+    /**
+     * adj871：**整页模式的"整页进视界"拟合**（用户 2026-10-11 定稿）。
+     *
+     * 设可视区 `W1×H1`、页面框 `W×H` ⇒ 缩放系数 `s = Math.min(w1 / w, h1 / h)`，
+     * 于是渲染宽 `W*s`、高 `H*s`（高由 `height: auto` 按 viewBox 比例自动得到 ✓）。
+     *  · `W`/`H` = 该页**整页**框（含页边距）= `data-orig-vb` 的第 3/4 个数；
+     *  · `W1` = 谱面容器（`.ijipu-svgs`）的可用宽度；
+     *  · `H1` = **可见高度** = `window.innerHeight` − 容器顶边 − `PAGE_FIT_GAP`，
+     *         下限钳到 `PAGE_FIT_MIN_H`（面板再矮也要留出能看的空间）。
+     *
+     * ⚠ 重算时机**只有**三个：**挂载** / **切换模式**（都由 `setMode` 调）/ **尺寸变化**
+     * （`window.resize` + 挂在容器上的 `ResizeObserver`，见 `paint()` 末尾）。
+     * **绝不跟滚动实时重算** —— 滚动时容器顶边一直在变，页面尺寸会跟着"一跳一跳"（用户明确否掉 ✗）。
+     *
+     * 只写 `--ijipu-page-fit`（在 styles.css 里乘到 `--ijipu-zoom-w` 上）：
+     * `m=p` 时 `z` 不生效，所以**不复用** `--ijipu-zoom-factor` —— 免得读代码的人以为 `z` 还在起作用。
+     */
+    function publishPageFit(): void {
+      if (paneMode !== 'page') return
+      const w1 = svgWrap.clientWidth
+      const h1 = Math.max(PAGE_FIT_MIN_H, window.innerHeight - svgWrap.getBoundingClientRect().top - PAGE_FIT_GAP)
+      if (!(w1 > 0) || !(h1 > 0)) return // 容器还没进渲染树（宽 0）⇒ 不写，等 ResizeObserver 叫我们
+      for (const svgEl of svgEls) {
+        const wrapEl = svgEl.parentElement
+        if (!(wrapEl instanceof HTMLElement)) continue
+        const vb = (svgEl.dataset.origVb || svgEl.getAttribute('viewBox') || '').split(/[\s,]+/).map(Number)
+        const w = vb[2]
+        const h = vb[3]
+        if (!(w > 0) || !(h > 0)) continue
+        const s = Math.min(w1 / w, h1 / h)
+        if (!(s > 0) || !Number.isFinite(s)) continue
+        wrapEl.setCssProps({ '--ijipu-page-fit': String(s) })
+      }
+    }
+
+    /**
+     * adj871：**重建辅助虚线层**（`paint()` 里尺寸定稿之后一次；尺寸变化后一次）。
+     *
+     * 为什么要重建而不是留原地：虚线的位置是按"SVG **当前实际宽度**"换算出来的百分比
+     * （`guidePlacement` 的 `boxWPx`），而整页模式下这个宽度是**算出来的**（见 `publishPageFit`）
+     * ⇒ 必须在拟合系数落地之后再量一次，否则虚线会整体偏（左右边距线最明显）。
+     */
+    function rebuildGuides(): void {
+      if (!plugin.showGuides) return
+      svgEls.forEach((svgEl, i) => {
+        const wrapEl = svgEl.parentElement
+        if (!(wrapEl instanceof HTMLElement)) return
+        wrapEl.querySelectorAll('.ijipu-guide-layer').forEach((el) => el.remove())
+        addGuideLayer(wrapEl, svgEl, i, cfg)
+      })
+    }
+
+    /**
+     * adj871：**尺寸变化**（`window.resize` / `ResizeObserver`）的唯一落点：
+     * 重算整页拟合 + 重摆辅助虚线。⚠ 它**不监听滚动**（见 `publishPageFit` 的口径）。
+     */
+    function onSizeChanged(): void {
+      publishPageFit()
+      rebuildGuides()
+    }
+
     function setMode(next: ViewMode): void {
       paneMode = next
       /**
@@ -2049,7 +2186,13 @@ toolbar.dataset.ijipuPane = String(paneId)
       modeIconEl.empty()
       modeIconEl.appendChild(modeIcon(next, 15))
       modeWrap.setAttr('title', `显示模式：${MODE_LABEL[next]}（${MODE_HINT[next]}）`)
+      /**
+       * adj871：顺序有讲究 —— ① 先定"打哪个缩放类 + 系数"；② 再逐页下发 viewBox 与自然宽
+       * （整页拟合要用 viewBox 里的**页面框 W×H** ⇒ 必须在 ② 之后）；③ 整页拟合（只对 `page` 有效）。
+       */
+      publishDisplaySize(next)
       for (const svgEl of svgEls) applyViewBox(svgEl, next, cfg)
+      publishPageFit()
       /**
        * adj864：把"这份谱**最近一次显示的模式**"（连同页面尺寸）再报一次 —— 命令路径没有面板，
        * 而「跟随视图」这一口径要靠它才知道该按谱面还是按整页（`IJipuPlugin.resolveRangeBox`）。
@@ -2163,8 +2306,24 @@ toolbar.dataset.ijipuPane = String(paneId)
       })
     }
 
-    // 初始显示模式
+    // 初始显示模式（内部会把缩放类 / 自然宽 / 整页拟合一并下发）
     setMode(paneMode)
+    /**
+     * adj871：辅助虚线层**在尺寸定稿之后**再建 —— 整页模式的宽度是"整页进视界"算出来的
+     * （`setMode` 里已落地），这里量到的才是最终宽度，虚线才不会偏（见 `rebuildGuides`）。
+     */
+    rebuildGuides()
+    /**
+     * adj871：整页拟合的**第二种重算时机** —— 容器尺寸变化（分栏拖动 / 刚进渲染树）。
+     * 挂 `ResizeObserver` 而不是定时器：宿主"先建 DOM 再挂进文档"时，容器宽度从 0 变成真实值的那一瞬
+     * 正是可以算拟合的时刻（与 adj725b 的补量思路同源）。
+     * ⚠ 只观察容器尺寸，**不监听滚动**（滚动重算 ⇒ 页面尺寸一跳一跳，用户明确否掉）。
+     */
+    recomputeFit = onSizeChanged
+    if (typeof ResizeObserver !== 'undefined') {
+      pageFitObserver = new ResizeObserver(() => onSizeChanged())
+      pageFitObserver.observe(svgWrap)
+    }
   }
 
   // 插件设置 / 排版虚线开关变化 → 本面板重画
@@ -2189,6 +2348,11 @@ toolbar.dataset.ijipuPane = String(paneId)
       // adj725b：补量用的观察器要断开，否则会一直盯着已经被丢弃的 svg
       for (const ro of cropObservers) ro.disconnect()
       cropObservers.clear()
+      // adj871：整页拟合的观察器与"窗口尺寸变化"的落点同理（销毁后不许再摸已经丢弃的 DOM）
+      pageFitObserver?.disconnect()
+      pageFitObserver = null
+      recomputeFit = null
+      window.removeEventListener('resize', onWindowResize)
       // adj725：把挂到宿主 widget 容器上的类原样摘掉（那是宿主自己的元素，不留痕）
       hostWidgetEl?.removeClass('ijipu-cm-host')
       hostWidgetEl = null

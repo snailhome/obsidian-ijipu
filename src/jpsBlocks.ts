@@ -119,6 +119,20 @@ export function zoomOfInfo(infoLine: string): number | 'auto' {
   return n
 }
 
+/**
+ * adj871（满宽模式 `m=w` 的岔路口）：**开栏行里到底写没写 `z=`**。
+ *
+ * 为什么不能靠 `zoomOfInfo()` 的返回值判断：「`z` 未写」「`z=100`」「`z=abc`」三种**都返回 `100`**
+ * （那是"解析口径只在一处"的代价 ✓），而满宽模式要分成两岔（用户 2026-10-11 口径）：
+ *  · `z` 未写 / `z=*` ⇒ **铺满容器宽**（"满宽"的字面意思）；
+ *  · `z=N`（写了具体数字，含 `z=100`）⇒ **固定像素宽** = 自然宽 × N/100。
+ * ⇒ 单独给一个只回答"写没写"的函数，**边界常量与 `zoomOfInfo` 同源**（`PARAM_BEFORE`/`PARAM_AFTER`，
+ * 改词法规则只改一处 ✓）；取值形态（`*` 或 1–4 位数字）与 `zoomOfInfo` 一致，不另立一套 ✗。
+ */
+export function zoomWrittenInInfo(infoLine: string): boolean {
+  return new RegExp(`${PARAM_BEFORE}z=(\\*|\\d{1,4})${PARAM_AFTER}`, 'i').test(infoLine)
+}
+
 /** 开栏：≤3 空格缩进 + (` 或 ~)×3 以上 + 可空白 + `jps`（其后可有别的 info 词） */
 const OPEN_RE = /^( {0,3})(`{3,}|~{3,})[ \t]*jps\b[^\n]*$/
 /** 闭栏：≤3 空格缩进 + 同种字符×≥开栏长度 + 其后仅空白（长度在配对时再校验） */

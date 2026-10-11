@@ -2,7 +2,7 @@ import { Events, Keymap, MarkdownRenderChild, MarkdownView, Notice, Platform, Pl
 // adj749d：自动格式化（光标离开本行时格式化该行）用**引擎里那份应用自己的**逐行格式化器
 import { formatLine, applyRangeToSvg, rangeBox, readViewBoxOf, insertPngPhys, dpiForScale, RANGE_PAD_DEFAULT, type RangeBox } from '@ijipu/engine'
 // adj774：markdown 笔记里 ```jps 代码块的围栏扫描（着色/错误提示/自动格式化三处共用同一份口径）
-import { jpsBlockRanges, modeOfInfo, modeParamWarning, zoomOfInfo } from './jpsBlocks'
+import { jpsBlockRanges, modeOfInfo, modeParamWarning, zoomOfInfo, zoomWrittenInInfo } from './jpsBlocks'
 import { createIjipuApi, type IjipuApi } from './api'
 import { createAppRequester, createEmbedRpc, type AppRequester, type EmbedRpc } from './embed/rpc'
 // adj807（B2）：RPC 的 `render.svg` 允许带 `pageConfig` 覆盖 ⇒ 这里只需要它的**类型**
@@ -1854,8 +1854,14 @@ class IJipuBlock extends MarkdownRenderChild {
        * 只有代码块传它 ⇒ 文件视图 / 嵌入保持既有行为（作用域见 `ScorePaneHost.zoom`）。
        */
       zoom: this.zoomOfBlock(),
+      /**
+       * adj871：`z=` 是否**真的写在开栏行里** —— 满宽模式（`m=w`）要区分「`z` 未写 ⇒ 铺满容器宽」
+       * 与「`z=100` ⇒ 固定自然宽」（`zoomOfInfo` 对两者都返回 100，面板从 `zoom` 一个值上分不出来）。
+       */
+      zoomWritten: this.zoomWrittenOfBlock(),
       /** adj870：代码块写死的初始显示模式（`m=p|w|s`）；没写 ⇒ 面板用缺省「谱面」 */
-      mode: this.modeOfBlock(),    })
+      mode: this.modeOfBlock(),
+    })
   }
 
   /**
@@ -1874,6 +1880,20 @@ class IJipuBlock extends MarkdownRenderChild {
     if (!info) return 100
     const fence = info.text.split('\n')[info.lineStart] ?? ''
     return zoomOfInfo(fence)
+  }
+
+  /**
+   * adj871：**开栏行里到底写没写 `z=`**（满宽模式的岔路口）。
+   *
+   * 为什么不复用 `zoomOfBlock()` 的结果：它对「未写」与「`z=100`」都返回 `100`（解析口径只在一处），
+   * 而"满宽 + 未写 z ⇒ 铺满容器宽"与"满宽 + `z=100` ⇒ 固定自然宽"是两种结果 ⇒ 必须多传一位。
+   * 词法口径仍只在 `jpsBlocks.zoomWrittenInInfo` 一处，这里不重写正则 ✗。
+   */
+  private zoomWrittenOfBlock(): boolean {
+    const info = this.sectionInfo()
+    if (!info) return false
+    const fence = info.text.split('\n')[info.lineStart] ?? ''
+    return zoomWrittenInInfo(fence)
   }
 
   /**
@@ -1900,7 +1920,23 @@ class IJipuBlock extends MarkdownRenderChild {
         new Notice(`iJipu：${warn}`)
       }
     }
-    return modeOfInfo(fence)
+    const mode = modeOfInfo(fence)
+    /**
+     * adj871（用户 2026-10-11 口径）：**`m=p` 时 `z=` 不生效** —— 整页模式的尺寸由"整页进视界"决定
+     * （`scorePane` 的 `publishPageFit`），而 `z` 是"自然尺寸的百分比" ⇒ 两者口径冲突。
+     * 不静默：用与 `m=` 同一套**去重机制**提示一次（渲染会反复调用本函数，不许刷屏 ✗）。
+     *
+     * `m=p` + `z=*` **不提示**：`*` 是"按宽自适应"，与"我填了个具体数值却没生效"不是一回事。
+     */
+    const z = zoomOfInfo(fence)
+    if (mode === 'page' && typeof z === 'number' && z !== 100) {
+      const key = `${info.lineStart}:page-ignores-z`
+      if (!this.warnedBlockParams.has(key)) {
+        this.warnedBlockParams.add(key)
+        new Notice('iJipu：`m=p` 时 `z=` 不生效（整页进视界优先）')
+      }
+    }
+    return mode
   }
 
   /**

@@ -59,7 +59,7 @@ import { resolvePageConfig } from '../src/config'
 import { codeBlockBody, jpsLinkpath, replaceCodeBlockBody } from '../src/sourceEdit'
 // adj865：代码块 info string 里的**块级缩放** `z`（解析口径与扫描器同源；此前的注释写着"见冒烟 adj839"，
 // 但套件里从来没有那一节 ⇒ 现在钉在 adj865 里）
-import { jpsBlockRanges, zoomOfInfo } from '../src/jpsBlocks'
+import { jpsBlockRanges, zoomOfInfo, zoomWrittenInInfo } from '../src/jpsBlocks'
 import { computeGuideLines, cropRectFor, guideLimits, guidePlacement } from '../src/guides'
 // adj724b：「打开 .jps 的方式 → 开在哪里」是**纯函数**，冒烟直接跑它
 // （此前只能对 main.ts 做字符串匹配：脆，且注释里写同样的字都会误判）
@@ -4375,6 +4375,86 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       /const PARAM_BEFORE = /.test(jps870) && /const PARAM_AFTER = /.test(jps870) &&
         (jps870.match(/PARAM_BEFORE/g) ?? []).length >= 2 &&
         /new RegExp\(`\$\{PARAM_BEFORE\}m=/.test(jps870) && /new RegExp\(`\$\{PARAM_BEFORE\}z=/.test(jps870))
+
+    /**
+     * ---- adj871（用户实测「切换视图预览区没有变化」）：三种显示模式要**真的三种几何** ----
+     *
+     * 用户 2026-10-11 口径：
+     *  · `page` 整页 = 整页（含页边距）按 contain 放进**可视区**：`s = Math.min(W1 / W, H1 / H)`，
+     *    渲染宽 `W*s`、高 `H*s`（`W1` = 容器可用宽，`H1` = `window.innerHeight − 容器顶边 − 24`，下限 200）；
+     *    **只在挂载 / 切模式 / 尺寸变化时重算**，绝不跟滚动；`m=p` **优先于** `z=`；
+     *  · `full` 满宽 = 只有宽度进视界（`z` 未写 / `z=*` ⇒ 铺满容器宽；`z=N` ⇒ 自然宽 × N/100）；
+     *  · `score` 谱面 = 现状不变（墨迹包围盒 + 每边 2px）。
+     *
+     * ⚠ 负向判据（"不许出现 X"）统一用上面 `codeOf()` 剥过注释的源码 —— 本轮特意确认过：
+     * 那句过时口径与"不监听滚动"都写在注释里，**不过 `codeOf()` 就一定会被自己的注释绊倒** ✗。
+     */
+    {
+      // 同一份已剥注释的面板源码（见上面的 `pane865`）；切片 = **显示尺寸这一整条路径**
+      // （`publishDisplaySize` → `publishPageFit` → `rebuildGuides` → `onSizeChanged`，到 `setMode` 为止）
+      const pane871 = pane865
+      const fitStart871 = pane871.indexOf('function publishDisplaySize')
+      const fitEnd871 = pane871.indexOf('function setMode', fitStart871)
+      const fit871 = fitStart871 >= 0 && fitEnd871 > fitStart871 ? pane871.slice(fitStart871, fitEnd871) : ''
+
+      check('adj871 整页的 fit 公式就在代码里：`Math.min(w1 / w, h1 / h)`（容器宽 + 可见高**都要**用到）',
+        fit871.length > 800 && fit871.length < 6000 &&
+          /Math\.min\(w1 \/ w, h1 \/ h\)/.test(fit871) &&
+          /const w1 = svgWrap\.clientWidth/.test(fit871) &&
+          /Math\.max\(PAGE_FIT_MIN_H, window\.innerHeight - .+ - PAGE_FIT_GAP\)/.test(fit871),
+        `fit=${fit871.length} 字符`)
+      check('adj871 负对照：把整页拟合退化成"只看容器宽"（漏掉可见高）⇒ 上面那条判据为假',
+        (() => {
+          // 就是把用户点名的那条口径做坏：整页只按宽度铺 ⇒ 高度方向进不了视界
+          const blind871 = fit871.replace('Math.min(w1 / w, h1 / h)', 'Math.min(w1 / w)')
+          return blind871 !== fit871 && !/Math\.min\(w1 \/ w, h1 \/ h\)/.test(blind871)
+        })())
+      check('adj871 整页宽度真的由"页面宽 × 拟合系数"决定（CSS 一行乘法），且不用 !important',
+        /\.ijipu-mode-page \.ijipu-page-svg svg \{\s*width: calc\(var\(--ijipu-zoom-w, 100%\) \* var\(--ijipu-page-fit, 1\)\);/.test(css865) &&
+          /--ijipu-page-fit/.test(pane871) &&
+          !/var\(--ijipu-page-fit[\s\S]{0,120}!important/.test(css865))
+      check('adj871 重算时机：整页拟合这条路径上只有尺寸变化（`window resize` + `ResizeObserver`），**没有** scroll 监听',
+        /addEventListener\('resize', onWindowResize\)/.test(pane871) &&
+          /new ResizeObserver\(\(\) => onSizeChanged\(\)\)/.test(pane871) &&
+          fit871.length > 0 && !/scroll/i.test(fit871),
+        `fit=${fit871.length} 字符`)
+      check('adj871 负对照：把 scroll 监听塞进"尺寸变化"这条路径 ⇒ 上面那条判据立刻为假（滚动重算会一跳一跳）',
+        !/scroll/i.test(fit871) &&
+          /scroll/i.test(fit871.replace('function onSizeChanged(): void {',
+            "function onSizeChanged(): void { window.addEventListener('scroll', onSizeChanged)")))
+      check('adj871 `MODE_HINT` 换成真几何：整页=放进可视区（含页边距）/ 满宽=只按宽度铺满 / 谱面=墨迹盒 + 2px',
+        /整页放进可视区/.test(pane871) && /含页边距/.test(pane871) &&
+          /只按宽度铺满/.test(pane871) && /高度超出就滚动/.test(pane871) &&
+          /墨迹包围盒/.test(pane871) && !/宽度撑满内容区/.test(pane871))
+      check('adj871 负对照：把过时口径"宽度撑满内容区"写回 `MODE_HINT` 那一行 ⇒ "不许出现"的判据为假',
+        (() => {
+          // 只改**那一句提示**（用户点名要去掉的话），其余源码原样 ⇒ 判据若为假，说明它真的在守这句话
+          const stale871 = pane871.replace('整页放进可视区（含页边距，上下都可见）', '完整一页（含页边距），宽度撑满内容区')
+          return stale871 !== pane871 && /宽度撑满内容区/.test(stale871) && !/宽度撑满内容区/.test(pane871)
+        })())
+      check('adj871 `m=p` 时 `z` 不生效（面板一处判定）：`page` 模式把两个缩放类都摘掉、且拟合优先于 `z`',
+        /function publishDisplaySize\(mode: ViewMode\): void \{/.test(pane871) &&
+          /svgWrap\.removeClass\('ijipu-zoom-fit'\)/.test(pane871) &&
+          /svgWrap\.removeClass\('ijipu-zoom-fixed'\)/.test(pane871) &&
+          /if \(mode === 'page'\) return/.test(pane871) &&
+          // `z=N` 与"没写 z"在满宽模式下**必须分成两岔**（靠宿主传的 `zoomWritten`）
+          /host\.zoomWritten === true/.test(pane871) &&
+          /mode === 'full' && !\(zoomWritten && zNum !== null\)/.test(pane871))
+      check('adj871 `zoomWrittenInInfo`：`z=` 写没写真能分辨（`z=100`/`z=*` 算写了；未写/认不出算没写）',
+        zoomWrittenInInfo('```jps z=100') === true && zoomWrittenInInfo('```jps z=*') === true &&
+          zoomWrittenInInfo('```jps m=w z=150') === true && zoomWrittenInInfo('```jps m=w,z=50') === true &&
+          zoomWrittenInInfo('```jps m=w') === false && zoomWrittenInInfo('```jps z=abc') === false &&
+          zoomWrittenInInfo('```jps z=10000') === false && zoomWrittenInInfo('```jps m=wz=150') === false)
+      check('adj871 `m=p` + 具体 `z=N`：**提示一次**（`z=*` / `z=100` 不提示）且走 `warnedBlockParams` 去重',
+        /const mode = modeOfInfo\(fence\)/.test(main870) &&
+          /typeof z === 'number' && z !== 100/.test(main870) &&
+          /m=p` 时 `z=` 不生效/.test(main870) &&
+          // 提示必须与"去重"在**同一支**里（`add` 过就跳 ⇒ 渲染反复调用不刷屏）
+          /typeof z === 'number' && z !== 100[\s\S]{0,300}?warnedBlockParams\.add\(key\)/.test(main870))
+      check('adj871 负对照：把 `m=p` + `z=N` 那段提示整段删掉 ⇒ 上面那条判据为假（说明它真的在守这段）',
+        !/typeof z === 'number' && z !== 100[\s\S]{0,300}?warnedBlockParams\.add\(key\)/.test(
+          main870.replace(/typeof z === 'number' && z !== 100[\s\S]{0,300}?warnedBlockParams\.add\(key\)/, '')))
+    }
   }
   {
     const blocks865 = jpsBlockRanges('```jps z=150\nD: C\nQ: 1 2 |\n```\n\n```jps\ntext\n```\n')
@@ -4384,11 +4464,13 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
   }
 
   // —— ② 面板消费 `host.zoom`：类 + CSS 自定义属性（**不写内联样式**，审核要求） ——
-  check('adj865 面板按 `host.zoom` 打类：数字 ⇒ `ijipu-zoom-fixed` + `--ijipu-zoom-factor`；`auto` ⇒ `ijipu-zoom-fit`',
+  // ⚠ adj871：判定从"挂载时打一次 + 切模式再打一次"收拢到**唯一一处** `publishDisplaySize()`（性质不变：
+  // 数字 ⇒ fixed + 系数，`auto` ⇒ fit），所以下面的匹配点跟着挪（仍逐条断言分支与变量名，不放松）。
+  check('adj865/adj871 面板按 `host.zoom` 打类：数字 ⇒ `ijipu-zoom-fixed` + `--ijipu-zoom-factor`；`auto` ⇒ `ijipu-zoom-fit`',
     /const zoomOfHost = host\.zoom/.test(pane865) &&
-      /if \(zoomOfHost === 'auto'\) \{\s*svgWrap\.addClass\('ijipu-zoom-fit'\)/.test(pane865) &&
-      /svgWrap\.addClass\('ijipu-zoom-fixed'\)/.test(pane865) &&
-      /svgWrap\.setCssProps\(\{ '--ijipu-zoom-factor': String\(zoomOfHost \/ 100\) \}\)/.test(pane865))
+      /if \(zNum !== null\) \{\s*svgWrap\.addClass\('ijipu-zoom-fixed'\)/.test(pane865) &&
+      /else if \(zoomOfHost === 'auto'\) \{\s*svgWrap\.addClass\('ijipu-zoom-fit'\)/.test(pane865) &&
+      /svgWrap\.setCssProps\(\{ '--ijipu-zoom-factor': String\(zNum \/ 100\) \}\)/.test(pane865))
   check('adj865 自然宽随 viewBox 一起下发（`--ijipu-zoom-w`）：分数支用裁剪盒宽、整页/满宽用页面宽',
     /const publishZoomW = \(w: number\): void => \{/.test(pane865) &&
       /wrapEl\.setCssProps\(\{ '--ijipu-zoom-w': `\$\{w\}px` \}\)/.test(pane865) &&
