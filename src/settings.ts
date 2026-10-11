@@ -165,6 +165,28 @@ export class IJipuSettingTab extends PluginSettingTab {
    * （那里的键被钉死为 `keyof PageConfig`）。
    */
   private renderEmbed(host: HTMLElement): void {
+    /**
+     * adj813（B2 收尾）：**开发者开关** —— 允许嵌入版（应用）通过 `postMessage` 请求插件能力
+     * （`render.svg` / `render.png` / `export.midi` ✓，协议见 `docs/OBSIDIAN-API.md` §六之二）。
+     *
+     * 为什么**默认关闭**（用户裁决 ③）：这条通道能让"页面里的代码"驱动插件做事 ⇒ 必须由用户显式打开 ✓。
+     * 打开后仍受**方法白名单 + 来源校验 + 参数校验**约束（闸门 `adj808`/`adj810` ✓）。
+     * ⚠ 目前是**会话内开关**（重载回到关闭 ✓）——"默认安全"比"省一次点击"重要 ✓。
+     */
+    new Setting(host)
+      .setName('开发者：允许嵌入版调用插件能力')
+      .setDesc(
+        '打开后，**嵌入版 iJipu**（应用）可通过 postMessage 请插件做：导出 SVG / PNG、导出 MIDI。\n' +
+          '默认关闭 ✓；关闭时一律回「未启用」。仅本会话有效（重载后回到关闭 ✓）。\n' +
+          '安全约束：只接受**本插件自己打开的嵌入版窗口**发来的消息，且方法在**白名单**内。',
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.allowExternalApi).onChange((v) => {
+          this.plugin.allowExternalApi = v
+          new Notice(v ? 'iJipu：嵌入版调用已开启（重载后自动关闭）' : 'iJipu：嵌入版调用已关闭')
+        }),
+      )
+
     new Setting(host)
       .setName('使用嵌入版 iJipu（完整应用）')
       .setDesc(
