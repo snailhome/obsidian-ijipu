@@ -667,12 +667,43 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
      *  · 只在我们自己的面板上做（其它宿主保持原样，避免影响已正常的部分）。
      */
     const TOOLBAR_GAP = 2
+    /**
+     * adj793b（用户第五次反馈 + 截图：「能显示了，但**位置不对**：在预览区内部、也没在左上角」）：
+     *
+     * 这两个现象合起来只有一个解释 —— **`position: fixed` 被祖先"降级"了**：
+     * 只要有祖先带 `transform` / `filter` / `perspective` / `will-change: transform` / `contain: paint…`，
+     * `fixed` 就**以那个祖先为参照系**（不再以视口为准）✗。于是我按**视口**算出来的坐标
+     * （例如 left=348、top=343）会被解释成"**相对块内偏移**" ⇒ 右移 348、下移 343
+     * ⇒ 正好是用户看到的"跑到内部、且不在左上角" ✓✓。
+     *
+     * 修法：先找出**真正的参照系**（最近的"会成为 fixed 包含块"的祖先），再按它算坐标：
+     * `left = 块.left − 参照系.left`、`top = 块.top − 工具条高 − 2 − 参照系.top`。
+     * 同时**下一帧与 50ms 后各重算一次**（首帧布局常未稳定，这也是坐标偏掉的一半原因）。
+     */
+    const fixedContainingBlock = (from: HTMLElement): HTMLElement | null => {
+      let el: HTMLElement | null = from.parentElement
+      while (el) {
+        const cs = window.getComputedStyle(el)
+        const makesCb =
+          cs.transform !== 'none' ||
+          cs.filter !== 'none' ||
+          cs.perspective !== 'none' ||
+          cs.willChange.includes('transform') ||
+          /paint|strict|content/.test(cs.contain) ||
+          cs.position === 'fixed'
+        if (makesCb) return el
+        el = el.parentElement
+      }
+      return null
+    }
     const positionOutsideFixed = (el: HTMLElement): void => {
       const host = container.getBoundingClientRect()
       const h = el.getBoundingClientRect().height || 28
+      const cb = fixedContainingBlock(el)
+      const cbRect = cb ? cb.getBoundingClientRect() : { left: 0, top: 0 }
       el.style.setProperty('position', 'fixed')
-      el.style.setProperty('left', `${Math.round(host.left)}px`)
-      el.style.setProperty('top', `${Math.round(host.top - h - TOOLBAR_GAP)}px`)
+      el.style.setProperty('left', `${Math.round(host.left - cbRect.left)}px`)
+      el.style.setProperty('top', `${Math.round(host.top - cbRect.top - h - TOOLBAR_GAP)}px`)
       el.style.setProperty('bottom', 'auto')
       el.style.setProperty('z-index', '30')
     }
@@ -721,6 +752,13 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
        * 同时挂上跟随监听（滚动/尺寸变化时重算），收起时由 `revealToolbar(false)` 统一清理。
        */
       positionOutsideFixed(el)
+      // 首帧布局常未稳定（字体/换行/CM6 重排）⇒ 下一帧与 50ms 后各重算一次（adj793b）
+      window.requestAnimationFrame(() => {
+        if (toolbarShown) positionOutsideFixed(liveToolbar())
+      })
+      window.setTimeout(() => {
+        if (toolbarShown) positionOutsideFixed(liveToolbar())
+      }, 50)
       if (!followToolbar) {
         followToolbar = (): void => {
           if (!toolbarShown) return
