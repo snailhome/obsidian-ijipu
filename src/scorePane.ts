@@ -674,6 +674,33 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
        * 被裁才贴回块内）。工具条现在允许遮挡其它元素（用户明确接受），所以外侧优先即可。
        */
       decidePlacement(el)
+      /**
+       * adj792（用户连报两次"编辑模式不显示"，而两次诊断都写着 `视口内=否`、y=1890 ✗）：
+       *
+       * 真因是**诊断本身不新鲜** —— `decidePlacement()` 每个元素只判定一次（adj761 防闪动），
+       * 后续每次显示**不再写记录** ⇒ "最近一次"留在**别的实例**（例如滚到很下面的阅读视图面板）上，
+       * 于是你贴给我的永远不是"你正在看的那个块" ✗。
+       *
+       * 现在**每次显示都刷新一条简短记录**：视口内？命中自身？矩形在哪 ——
+       * 这三项就足以判断"它到底有没有画出来、被谁挡/裁"，而且一定是**你刚操作的那个面板**。
+       */
+      try {
+        const r = el.getBoundingClientRect()
+        const vw = window.innerWidth || 0
+        const vh = window.innerHeight || 0
+        const inVp = r.bottom > 0 && r.top < vh && r.right > 0 && r.left < vw && r.width > 0
+        const hit = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2))
+        const selfHit = hit !== null && el.contains(hit)
+        const hitLabel = hit === null ? '（该点无元素）' : `${hit.tagName.toLowerCase()}${hit.className ? '.' + String(hit.className).split(/\s+/).slice(0, 2).join('.') : ''}`
+        noteToolbar(
+          `**本次显示**：视口内=${inVp ? '是' : '否'}｜命中自身=${selfHit ? '是' : `否（该点最上层是 ${hitLabel}）`}｜` +
+            `工具条 ${Math.round(r.width)}×${Math.round(r.height)} @(${Math.round(r.left)},${Math.round(r.top)})`,
+          [],
+          el,
+        )
+      } catch {
+        /* 诊断失败不影响显示 */
+      }
     }
     /**
      * adj753（用户第四轮「工具条还是没有显示」，而诊断显示它 `命中自身 ✓ / opacity=1 / 视口内=是`）：
