@@ -148,7 +148,13 @@ export function createEmbedRpc(deps: Deps): EmbedRpc {
  *  · **按 id 关联 + 超时**（默认 10s）：应用没应答就 reject，绝不无限等待 ✓；
  *  · 只向**我们的 iframe 窗口**发（复用同一个 getter ✓）。
  */
-export const APP_METHODS = ['render.png', 'export.midi', 'playback.play', 'playback.stop'] as const
+/**
+ * adj825（B4 协议一致性）：出站白名单**必须包含**应用侧能处理的方法 ✓ ——
+ * 应用侧 `APP_BRIDGE_METHODS` 是 `render.svg` / `render.png` / `export.midi` ✓，
+ * 而这里原先漏了 `render.svg` ✗ ⇒ 插件**永远发不出这个合法请求**（本地就被拒 ✗）。
+ * 现补上；并加**跨仓一致性闸门**（插件冒烟里断言"应用侧清单 ⊆ 本清单" ✓），防止再漂 ✗。
+ */
+export const APP_METHODS = ['render.svg', 'render.png', 'export.midi', 'playback.play', 'playback.stop'] as const
 
 export type AppResponse =
   | { __ijipuAppResponse: 1; id: number; ok: true; result: unknown }

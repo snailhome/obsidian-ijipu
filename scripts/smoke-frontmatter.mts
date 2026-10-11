@@ -3822,7 +3822,7 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
        * 入站方法与出站方法是**两组**（`RPC_METHODS` / `APP_METHODS` ✓），
        * 防止"为了某个功能悄悄放开任意方法" ✗。
        */
-      /export const APP_METHODS = \['render\.png', 'export\.midi', 'playback\.play', 'playback\.stop'\] as const/.test(rpc808) &&
+      /export const APP_METHODS = \['render\.svg', 'render\.png', 'export\.midi', 'playback\.play', 'playback\.stop'\] as const/.test(rpc808) &&
       /if \(!\(APP_METHODS as readonly string\[\]\)\.includes\(method\)\)/.test(rpc808) &&
       /if \(win === null \|\| ev\.source !== win\) return/.test(rpc808.replace('    const win = deps.getIframeWindow()\n    if (win === null || ev.source !== win) return\n    const slot', '    const win = deps.getIframeWindow()\n    if (win === null || ev.source !== win) return\n    const slot')) &&
       // 超时：应用不应答必须 reject（不许无限等待 ✓）
@@ -3830,7 +3830,19 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       /pending\.delete\(id\)/.test(rpc808) &&
       /this\.appRpc = createAppRequester\(/.test(main808) &&
       /this\.appRpc\?\.handleResponse\(ev\)/.test(main808) &&
-      // 负对照：把**所有**来源校验都去掉 ⇒ 判据为假
+      /**
+       * ⑨ adj825：**跨仓协议一致性** —— 应用侧能处理的方法必须都在插件的出站白名单里 ✓
+       * （本轮就是这里漂了：应用支持 `render.svg`，插件出站清单漏了它 ✗ ⇒ 合法请求发不出去 ✓）。
+       * 只做"应用侧 ⊆ 插件侧"这一条方向：插件**多**列（如尚未实现的 `playback.*` ✓）是允许的 ✓。
+       */
+      (() => {
+        const appFile = '../ijipu/src/ipc/obsidianBridge.ts'
+        if (!existsSync(appFile)) return false
+        const appSrc = String(readFileSync(appFile, 'utf8'))
+        const appList = [...appSrc.matchAll(/'((?:render|export)\.[a-z]+)'/g)].map((m) => m[1])
+        const plugList = [...rpc808.matchAll(/'(render\.[a-z]+|export\.[a-z]+)'/g)].map((m) => m[1])
+        return appList.length > 0 && appList.every((m) => plugList.includes(m))
+      })() &&
       // ⚠ 必须**全局**替换：B3 之后这段代码出现了两处（入站 + 出站），
       //   `String.replace(字符串)` 只换第一处 ⇒ 负对照自己会失败 ✗（本会话第 N 次踩这个坑）。
       !/ev\.source !== win\) return/.test(rpc808.replace(/ev\.source !== win\) return/g, 'false) return')),
