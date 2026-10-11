@@ -99,8 +99,16 @@ export type ScorePaneHost = {
    *  · `z=<数字>` ⇒ 百分比（`z=150` = 150%）；
    *  · **`z=*`** ⇒ **自适应笔记宽度**（= 本功能上线前的行为）。
    *
-   * 作用域：**只有笔记里的 ```jps 代码块**会传它（`.jps` 文件视图 / `![[x.jps]]` 嵌入不传 ⇒ 行为不变 ✓），
-   * 因为"这个块在笔记里摆多大"是**与笔记配合的呈现**，而 `.jps` 文件视图本身就是整页阅读。
+   * 作用域：**只有笔记里的 ```jps 代码块**会传它，因为"这个块在笔记里摆多大"是**与笔记配合的呈现**，
+   * 而 `.jps` 文件视图本身就是整页阅读。
+   *
+   * ⚠ adj872（**"默认值由谁定"必须写死在这里**，不让它继续当隐式巧合）：
+   *  · **代码块**（```jps）：`main.ts` 的 `zoomOfBlock()` ⇒ `jpsBlocks.zoomOfInfo()`
+   *    —— **`z` 未写 ⇒ `100`**（固定自然尺寸，1 个 viewBox 单位 = 1 CSS px）；`z=*` ⇒ `'auto'`；`z=N` ⇒ `N`；
+   *  · **嵌入块（`![[x.jps]]`）/ `.jps` 文件视图**：**本字段根本不传 ⇒ `undefined`** ⇒
+   *    面板**显式**按 `'auto'` 处理（加 `ijipu-zoom-fit`）= **等价 `z=*`**（按宽自适应）。
+   *    此前这一档是"两个缩放分支都不进、靠 styles.css 的 `width: 100%` 兜底"的**三层巧合** ⇒
+   *    任何人动一下 CSS 就会静默改掉嵌入块/文件视图的默认呈现 ✗ ⇒ adj872 起改成显式（见 `publishDisplaySize`）。
    *
    * 只影响**屏显**：导出/复制仍走引擎的「范围」口径（与 `z` 无关 ✓）。
    */
@@ -1801,7 +1809,20 @@ toolbar.dataset.ijipuPane = String(paneId)
      * `m=p`（整页）本该让 `z` 不生效，但 `ijipu-zoom-fixed` 还在 ⇒ 整页被 z 缩掉 ✗。
      * 现在**只有一处判定**（`publishDisplaySize`，挂载与切模式走同一条路），这里不再自己判一遍。
      */
-    const zoomOfHost = host.zoom
+    /**
+     * adj872（**把"嵌入块/文件视图默认 = `z=*`"从隐式变成显式**）：
+     * **`undefined`（嵌入块 `![[x.jps]]` / `.jps` 文件视图）就地折成 `'auto'`** ⇒ 面板一定打
+     * `ijipu-zoom-fit`（按宽自适应）。这一档此前是**三层巧合**：这两个入口不传 `zoom` ⇒
+     * `publishDisplaySize` 两个分支都不进 ⇒ 不加任何 zoom 类 ⇒ 靠 styles.css 的 `width: 100%` 兜底
+     * ⇒ 视觉上等价 `z=*`。**任何人动一下 CSS 就会静默改掉它们的默认呈现** ✗ ⇒ 现在写死成显式事实。
+     *
+     * **"默认值由谁定"只有这两处**（别处不许再定，免得又漂回隐式）：
+     *  · **代码块**（```jps）＝ `main.ts` 的 `zoomOfBlock()` ⇒ `jpsBlocks.zoomOfInfo()`：
+     *    **`z` 未写 ⇒ `100`**（固定自然尺寸，1 个 viewBox 单位 = 1 CSS px）；`z=*` ⇒ `'auto'`；`z=N` ⇒ `N`；
+     *  · **嵌入块 / `.jps` 文件视图** ＝ **`host.zoom === undefined`**（本字段根本不传）⇒ 等价 `z=*`。
+     * `page`（整页）模式下 `z` 不生效（整页尺寸由"整页进视界"决定，见 `publishPageFit`）。
+     */
+    const zoomOfHost: number | 'auto' = host.zoom === undefined ? 'auto' : host.zoom
     /**
      * ⚠ adj871 订正（用户：「`z` 未写保持 `z=100` 的现状」）：面板里**不再需要**区分"z 写没写" ——
      * 未写与 `z=100` 行为一致（固定自然尺寸），只有 `z=*` 才铺满 ⇒ 原来那个局部常量已删（`tsc` 会报未使用 ✓）。
@@ -2088,9 +2109,14 @@ toolbar.dataset.ijipuPane = String(paneId)
      *  · `page` ：整页（含页边距）按 contain 放进可视区 ⇒ **`z` 不生效**（尺寸由"整页进视界"决定，
      *             见 `publishPageFit`）。这里只把两个缩放类摘掉，让 styles.css 的
      *             `.ijipu-mode-page` 规则生效（否则 `ijipu-zoom-fixed` 特异性更高、会把整页缩掉 ✗）；
-     *  · `full` ：只有**宽度**进视界 ⇒ 宽 = 容器宽（`z` 未写 / `z=*` / 文件视图与嵌入都没传 `z`）
-     *             或 自然宽 × z/100（`z=N`）；高度超出就靠滚动（`height: auto`）；
-     *  · `score`：现状不变（viewBox 裁到墨迹盒 + 每边 2px；`z` 未写 ⇒ 自然尺寸、`z=*` ⇒ 按宽铺满）。
+     *  · `full` ：只有**宽度**进视界 ⇒ 宽 = 容器宽（`z=*`；**嵌入块 / 文件视图传 `undefined` ⇒ 已折成
+     *             这一支**）或 自然宽 × z/100（`z=N`，含 `z=100`；**代码块 `z` 未写 ⇒ `100` ⇒ 这一支**）；
+     *             高度超出就靠滚动（`height: auto`）；
+     *  · `score`：现状不变（viewBox 裁到墨迹盒 + 每边 2px；`z=*` / `undefined` ⇒ 按宽铺满、
+     *             `z=N` ⇒ 自然尺寸 × N/100）。
+     *
+     * ⚠ adj872：这里**看不到 `undefined`** —— 它已在 `paint()` 里就地折成 `'auto'`（见那段注释）。
+     * 那不是"漏了一档"，而是**同一个事实只保留一个表示**：嵌入块 / 文件视图 ＝ `undefined` ＝ `z=*`。
      */
     function publishDisplaySize(mode: ViewMode): void {
       // 先清两类：切来切去都不留旧类（否则上一模式的类会把新模式的规则压掉 ✗）
@@ -2115,7 +2141,8 @@ toolbar.dataset.ijipuPane = String(paneId)
       } else if (zoomOfHost === 'auto') {
         svgWrap.addClass('ijipu-zoom-fit')
       }
-      // `host.zoom` 未传（文件视图 / 嵌入）+ 谱面模式 ⇒ 两类都不打：走 `.ijipu-mode-*` 的 width:100%
+      // adj872：`host.zoom` 未传（嵌入块 / `.jps` 文件视图）已在上面折成 `'auto'` ⇒ 一定落到
+      // `ijipu-zoom-fit`；**不再有"两类都不打、靠 `.ijipu-mode-*` 的 `width: 100%` 兜底"这一档**。
     }
 
     /**

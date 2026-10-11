@@ -4460,6 +4460,42 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       check('adj871 负对照：把 `m=p` + `z=N` 那段提示整段删掉 ⇒ 上面那条判据为假（说明它真的在守这段）',
         !/typeof z === 'number' && z !== 100[\s\S]{0,300}?warnedBlockParams\.add\(key\)/.test(
           main870.replace(/typeof z === 'number' && z !== 100[\s\S]{0,300}?warnedBlockParams\.add\(key\)/, '')))
+
+      /**
+       * ---- adj872（把"嵌入块 / `.jps` 文件视图默认 = `z=*`"从**隐式巧合**变成**显式事实**）----
+       *
+       * 由来（此前是**三层巧合**，已确认的事实）：代码块的默认缩放由 `main.ts` 的 `zoomOfBlock()`
+       * 给出（`z` 未写 ⇒ `100` ⇒ 固定自然尺寸）；而**嵌入块 / `.jps` 文件视图不传 `zoom`** ⇒
+       * 面板的 `publishDisplaySize()` 两个分支都不进 ⇒ **不加任何 zoom 类** ⇒ 靠 `styles.css` 的
+       * `width: 100%` 兜底 ⇒ 视觉上等价 `z=*`。**任何人动一下 CSS 就会静默改掉** ✗。
+       *
+       * 判据抽成**一个函数**：正反两条断言用**同一份判据**（负对照不许另写一条更宽松的）。
+       * ⚠ 文档类断言必须读**原文**：`codeOf()` 剥掉注释，而"默认值由谁定"正是写在注释里 ✓。
+       */
+      {
+        const paneRaw872 = String(readFileSync('src/scorePane.ts', 'utf8'))
+        const jpsRaw872 = String(readFileSync('src/jpsBlocks.ts', 'utf8'))
+        const undefIsAuto872 = (src: string): boolean => /host\.zoom === undefined \? 'auto' : host\.zoom/.test(src)
+        check('adj872 面板把"宿主没传 `zoom`"（嵌入块 / `.jps` 文件视图）**显式**当 auto 处理（等价 `z=*`，不再靠 CSS 兜底）',
+          undefIsAuto872(pane865) &&
+            // 折成 `'auto'` 的那一行就是"下发缩放类的唯一落地点"上游的那个常量（不在别处另判一次）
+            /const zoomOfHost: number \| 'auto' = host\.zoom === undefined/.test(pane865) &&
+            // 类型仍是 `number | 'auto'` ⇒ `zNum !== null` 那条固定尺寸分支照旧（没把 `z=100` 一起改掉）
+            /const zNum = typeof zoomOfHost === 'number' \? zoomOfHost : null/.test(pane865),
+          `pane=${pane865.length} 字符`)
+        check('adj872 负对照：把 `undefined` 当 `100` 处理（= 回到"固定自然尺寸"的隐式口径）⇒ 上面那条判据为假',
+          (() => {
+            // 只改那一处折值（其余源码原样）——判据若仍为真，说明它根本没在守"undefined ⇒ auto"
+            const wrong872 = pane865.replace("host.zoom === undefined ? 'auto' : host.zoom", '100')
+            return wrong872 !== pane865 && !undefIsAuto872(wrong872)
+          })())
+        check('adj872 「默认值由谁定」两侧都写清了：面板 = 代码块 `zoomOfBlock()`（`z` 未写 ⇒ 100）/ 嵌入与文件视图 = 不传 ⇒ 等价 `z=*`',
+          /zoomOfBlock/.test(paneRaw872) && /嵌入块/.test(paneRaw872) && /文件视图/.test(paneRaw872) &&
+            /未写 ⇒ `100`/.test(paneRaw872) && /等价 `z=\*`/.test(paneRaw872) &&
+            /zoomOfBlock/.test(jpsRaw872) && /嵌入块/.test(jpsRaw872) && /文件视图/.test(jpsRaw872) &&
+            /publishDisplaySize/.test(jpsRaw872) && /等价 `z=\*`/.test(jpsRaw872) &&
+            /host\.mode === undefined/.test(jpsRaw872))
+      }
     }
   }
   {
@@ -4472,8 +4508,10 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
   // —— ② 面板消费 `host.zoom`：类 + CSS 自定义属性（**不写内联样式**，审核要求） ——
   // ⚠ adj871：判定从"挂载时打一次 + 切模式再打一次"收拢到**唯一一处** `publishDisplaySize()`（性质不变：
   // 数字 ⇒ fixed + 系数，`auto` ⇒ fit），所以下面的匹配点跟着挪（仍逐条断言分支与变量名，不放松）。
+  // ⚠ adj872：那个常量的**声明**多了 `undefined ⇒ 'auto'` 的折值（它自己的两条断言在 adj872 区块里）——
+  // 这里跟着写成新形态，**不放宽**（仍要求它必须喂给 `zNum`）。
   check('adj865/adj871 面板按 `host.zoom` 打类：数字 ⇒ `ijipu-zoom-fixed` + `--ijipu-zoom-factor`；`auto` ⇒ `ijipu-zoom-fit`',
-    /const zoomOfHost = host\.zoom/.test(pane865) &&
+    /const zoomOfHost: number \| 'auto' = host\.zoom === undefined \? 'auto' : host\.zoom/.test(pane865) &&
       /if \(zNum !== null\) \{\s*svgWrap\.addClass\('ijipu-zoom-fixed'\)/.test(pane865) &&
       /else if \(zoomOfHost === 'auto'\) \{\s*svgWrap\.addClass\('ijipu-zoom-fit'\)/.test(pane865) &&
       /svgWrap\.setCssProps\(\{ '--ijipu-zoom-factor': String\(zNum \/ 100\) \}\)/.test(pane865))

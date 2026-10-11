@@ -82,6 +82,9 @@ const PARAM_AFTER = '(?=[\\s,;|]|$)'
  * 正是歧义的来源；而**内部 id 仍叫 `full`**（CSS 类 / `ViewMode` / 按钮 dataset 都是它，
  * 那是代码内部的事，不对外暴露）。写了 `full` ⇒ `modeOfInfo` 返回 `undefined`，
  * 并由 `modeParamWarning()` 给出**明确提示**（不静默退化成「谱面」✗）。
+ *
+ * ⚠ **默认值由谁定**：`m=` 未写 ⇒ 本函数返回 `undefined` ⇒ 面板用缺省「**谱面**」（裁到墨迹）；
+ * **嵌入块（`![[x.jps]]`）/ `.jps` 文件视图根本不传 `mode`**（`host.mode === undefined`）⇒ 同一个缺省。
  */
 export function modeOfInfo(infoLine: string): 'page' | 'full' | 'score' | undefined {
   const m = new RegExp(`${PARAM_BEFORE}m=([A-Za-z]{1,6})${PARAM_AFTER}`, 'i').exec(infoLine)
@@ -110,6 +113,18 @@ export function modeParamWarning(infoLine: string): string | null {
   return `认不出显示模式 \`m=${m[1]}\`，已忽略；可用 \`m=p\`（整页）/ \`m=w\`（满宽）/ \`m=s\`（谱面）`
 }
 
+/**
+ * `z=` 的取值表：`*` ⇒ 自适应栏宽；1–4 位数字 ⇒ 百分比；**未写 / 认不出 ⇒ `100`**（固定自然尺寸，
+ * 1 个 viewBox 单位 = 1 CSS px）。
+ *
+ * ⚠ **"默认值由谁定"写死在这里**（本文件只做**解析**；默认值的归属说清楚，免得日后漂成"三层巧合"）：
+ *  · **代码块**（```jps）＝ 应用侧 `main.ts` 的 `zoomOfBlock()` ⇒ 本函数：**`z` 未写 ⇒ `100`**；
+ *  · **嵌入块（`![[x.jps]]`）/ `.jps` 文件视图** ＝ **根本不走这里**——宿主**不传** `zoom`
+ *    ⇒ `scorePane.publishDisplaySize()` 把 `host.zoom === undefined` **显式**折成 `'auto'`
+ *    ⇒ **等价 `z=*`**（按宽自适应）；
+ *  · 连带：**显示模式的默认值**——代码块 `m=` 未写 ⇒ `modeOfInfo()` 返回 `undefined` ⇒ 面板缺省「谱面」；
+ *    嵌入块 / 文件视图也不传 `mode` ⇒ 同一个缺省（`mode` 的取值表见 `modeOfInfo` 上面那张）。
+ */
 export function zoomOfInfo(infoLine: string): number | 'auto' {
   const m = new RegExp(`${PARAM_BEFORE}z=(\\*|\\d{1,4})${PARAM_AFTER}`, 'i').exec(infoLine)
   if (m === null) return 100
