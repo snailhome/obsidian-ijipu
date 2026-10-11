@@ -559,6 +559,8 @@ export default class IJipuPlugin extends Plugin {
       void this.bridge.handle(ev)
       // adj807（B2）：同一条 window message 监听里再交给嵌入版 RPC（它自己做来源校验与白名单 ✓）
       this.embedRpc?.handle(ev)
+      // adj809（B3）：反方向请求器的**应答**也走这条监听 ✓
+      this.appRpc?.handleResponse(ev)
     })
     /**
      * adj835（③ 专项）：挂上**源码态事件序列**的监听 ✓ ——
@@ -570,8 +572,6 @@ export default class IJipuPlugin extends Plugin {
     this.registerDomEvent(window, 'blur', () => this.logSourceModeEvent('window.blur'))
     this.registerDomEvent(document, 'visibilitychange', () => this.logSourceModeEvent(`visibilitychange(${document.visibilityState})`))
     this.registerEvent(this.app.workspace.on('active-leaf-change', () => this.logSourceModeEvent('active-leaf-change')))
-      this.appRpc?.handleResponse(ev)
-    })
     this.addCommand({
       id: 'open-app',
       name: '打开爱记谱',
