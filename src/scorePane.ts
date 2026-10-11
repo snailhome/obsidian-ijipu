@@ -852,24 +852,8 @@ toolbar.dataset.ijipuPane = String(paneId)
       }, 50)
       if (!followToolbar) {
         followToolbar = (): void => {
-          /**
-           * adj797：滚动/尺寸变化时按"块是否在视界里"决定显示 —— 离开就隐藏，
-           * 回到视界就重新显示（否则按你的口径："没在视界里就不要显示" ✗ 而回来后又再也不出现 ✗）。
-           */
-          if (!containerInViewport()) {
-            if (toolbarShown) {
-              hiddenByViewport = true
-              revealToolbar(false)
-              // adj797b：手机端还要打"主动隐藏"标记（否则 CSS 常显规则会把它继续显示出来）
-              if (Platform.isMobile) liveToolbar().addClass('is-user-hidden')
-            }
-            return
-          }
-          if (hiddenByViewport) {
-            hiddenByViewport = false
-            // 回到视界 ⇒ 显示（`revealToolbar(true)` 会摘掉 is-user-hidden）
-            revealToolbar(true)
-          }
+          // adj797c：滚动/尺寸变化的唯一处理 —— 交给状态机（进视界⇒显示+倒计时；离开⇒隐藏）
+          syncToolbarVisibility()
           if (toolbarShown) positionOutsideFixed(liveToolbar())
         }
         window.addEventListener('scroll', followToolbar, true)
@@ -1079,16 +1063,54 @@ toolbar.dataset.ijipuPane = String(paneId)
      * 或焦点已经进了工具条 —— 那说明他正在用，不该被收走）。
      * 放在这一段（`toolbarShown` 声明之后）是为了避免 TDZ。
      */
-    revealToolbar(true)
-    const firstShowTimer = window.setTimeout(() => {
-      if (focusInToolbar()) return
-      if (!toolbarShown) return
-      toolbarShown = false
-      revealToolbar(false)
-      // adj792b：与点击收起同一口径 —— 只有手机端需要这个"压过常显"的标记（桌面端不需要）
-      if (Platform.isMobile) liveToolbar().addClass('is-user-hidden')
-    }, 3000)
-    plugin.register(() => window.clearTimeout(firstShowTimer))
+    /**
+     * adj797c（用户指出顺序反了）：「应该是**先判断是否有嵌入块/代码块在视界内**，再考虑工具显示 3 秒后隐藏…
+     * 我的操作是在 3 秒隐藏前滚动到显示嵌入块的位置，结果还在显示的工具条**马上消失**了」。
+     *
+     * ⇒ 正确的状态机（**单一入口** `syncToolbarVisibility()`，挂载 / 滚动 / 尺寸变化都走它）：
+     *  · **块不在视界**（或还没尺寸）⇒ 立即隐藏（不显示、也**不开始倒计时**）；
+     *  · **块进入视界** ⇒ 显示，并**从这一刻**开始 3 秒倒计时（进视界前的时间不算 ✗）；
+     *  · 用户**点击** ⇒ 手动显/隐（手动显示后不再自动收起，尊重用户意愿）；
+     *  · 用 `hiddenByViewport` 区分"因离开视界隐藏"（回来要重新显示）与"用户主动收起"（回来不自动弹）。
+     */
+    let autoHideTimer = 0
+    const clearAutoHide = (): void => {
+      if (autoHideTimer !== 0) window.clearTimeout(autoHideTimer)
+      autoHideTimer = 0
+    }
+    const startAutoHide = (): void => {
+      clearAutoHide()
+      autoHideTimer = window.setTimeout(() => {
+        autoHideTimer = 0
+        if (focusInToolbar()) return
+        if (!toolbarShown) return
+        toolbarShown = false
+        revealToolbar(false)
+        // adj792b：只有手机端需要这个"压过常显"的标记（桌面端有默认 opacity:0）
+        if (Platform.isMobile) liveToolbar().addClass('is-user-hidden')
+      }, 3000)
+    }
+    const syncToolbarVisibility = (): void => {
+      if (!containerInViewport()) {
+        if (toolbarShown) {
+          hiddenByViewport = true
+          revealToolbar(false)
+          // adj797b：手机端还要打主动隐藏标记（否则 CSS 常显规则会继续显示它）
+          if (Platform.isMobile) liveToolbar().addClass('is-user-hidden')
+        }
+        clearAutoHide()
+        return
+      }
+      // 块在视界里：若之前因离开视界而隐藏 ⇒ 重新显示，并**从现在**开始 3 秒倒计时
+      if (hiddenByViewport) {
+        hiddenByViewport = false
+        revealToolbar(true)
+        startAutoHide()
+      }
+    }
+    // 挂载时先同步一次状态（块已经可见就显示 + 倒计时；不可见就什么都不做）
+    window.requestAnimationFrame(() => syncToolbarVisibility())
+    plugin.register(clearAutoHide)
     /**
      * adj779（用户实测「手机端代码块：刚进入显示一次，点击后隐藏，**再显示不再显示**」）：
      *

@@ -1825,14 +1825,17 @@ console.log('\n[adj724b] community review: forbidden APIs / styles must stay fix
    * ⇒ 悬停那两条监听（pointermove/pointerleave）**必须已删除**；
    *   改为"首开显示 + 3s 自动收起 + 点击切换 + 键盘可唤醒"。
    */
-  check('adj785 取消悬停驱动显隐；改为「首开显示 → 3 秒自动收起」+ 点击切换 + 键盘可唤醒',
+  check('adj785/adj797c 取消悬停驱动显隐；改为「块进视界才显示 → 3 秒自动收起」+ 点击切换 + 键盘可唤醒',
     !/addEventListener\('pointermove', onPointerMove\)/.test(scorePaneSrc) &&
       !/addEventListener\('pointerleave', onPointerLeave\)/.test(scorePaneSrc) &&
       /addEventListener\('keydown', onKeyDown\)/.test(scorePaneSrc) &&
-      // 首开显式显示一次，并在 3 秒后自动收起（焦点已在工具条里 / 用户已手动切换过则不收）
-      /revealToolbar\(true\)[\s\S]{0,40}?const firstShowTimer = window\.setTimeout\(/.test(scorePaneSrc) &&
+      // adj797c：倒计时从"块进入视界"开始（不是从挂载开始 ✗）—— 由状态机统一驱动
+      /const syncToolbarVisibility = \(\): void => \{/.test(scorePaneSrc) &&
+      /const startAutoHide = \(\): void => \{/.test(scorePaneSrc) &&
+      /window\.requestAnimationFrame\(\(\) => syncToolbarVisibility\(\)\)/.test(scorePaneSrc) &&
       /\}, 3000\)/.test(scorePaneSrc) &&
-      /plugin\.register\(\(\) => window\.clearTimeout\(firstShowTimer\)\)/.test(scorePaneSrc) &&
+      // 显示态与落位判定都在
+      /revealToolbar\(true\)/.test(scorePaneSrc) &&
       /toggleClass\('is-revealed', on\)/.test(scorePaneSrc))
 }
 
@@ -3502,8 +3505,8 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       !/addEventListener\('pointerout'/.test(pane781) &&
       // focusout 仍要看这个标记（手指点开工具条会先失焦）
       /container\.addEventListener\('focusout', \(\) => \{[\s\S]{0,160}?if \(touchInteraction\) return/.test(pane781) &&
-      // 首开 3 秒收起也要看"焦点是否已在工具条内"
-      /const firstShowTimer = window\.setTimeout\(\(\) => \{[\s\S]{0,120}?if \(focusInToolbar\(\)\) return/.test(pane781) &&
+      // 自动收起（3 秒）也要看"焦点是否已在工具条内"（adj797c：改由 startAutoHide 统一处理）
+      /const startAutoHide = \(\): void => \{[\s\S]{0,400}?if \(focusInToolbar\(\)\) return/.test(pane781) &&
       // 负对照：把 focusout 那条守卫摘掉 ⇒ 判据为假（证明它真的在挡"显示后又隐藏"）
       !/addEventListener\('focusout', \(\) => \{[\s\S]{0,160}?if \(touchInteraction\) return/.test(
         pane781.replace(/if \(touchInteraction\) return\n      \/\*\*[\s\S]{0,400}?\*\/\n      if \(!focusInToolbar\(\)\) scheduleHide\(\)/, 'if (!focusInToolbar()) scheduleHide()'),
