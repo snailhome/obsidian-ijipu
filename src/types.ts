@@ -1,4 +1,4 @@
-import type { PageConfig } from '@ijipu/engine'
+import type { PageConfig, ExportRange } from '@ijipu/engine'
 
 /**
  * 插件全局设置：继承 iJipu PageConfig 的渲染项（四组：页面/字体/行距/渲染）。
@@ -39,7 +39,23 @@ export type IJipuSettings = Partial<PageConfig> & {
    * - `defaultApp`：交给**系统默认应用**（桌面端；即"外部编辑"）
    */
   embedOpenMode?: EmbedOpenMode
+  /**
+   * adj863（T-3 定稿）：**导出范围**。
+   *
+   *  · `page`（**默认**）：导出**页面** —— 整页 + 四周留白（与改动前的行为完全一致 ✓）；
+   *  · `score`：导出**谱面** —— **墨迹包围盒 + 每边 2px**（不保留页宽）。
+   *
+   * 几何**不在插件里算**：一律走引擎 `rangeBox()`（应用与 CLI 同一份口径 ✓）。墨迹盒只能用真实 DOM
+   * 量（面板里量过就把结果挂在插件上，见 `IJipuPlugin.lastInk`）⇒ `score` 范围**量不到就明确报错**，
+   * 绝不猜一个盒出来（`E-2026-*` 那类"导出成一条横带"的由来）。
+   *
+   * 属 **L1 界面/偏好**（与具体谱无关、不随谱走）⇒ 不进 `defs.ts` 的 `DEFS`、不写进谱面源码。
+   */
+  exportRange?: ExportRange
 }
+
+/** 导出范围的默认值：**页面**（保持既有行为；`score` 要用户明确选择） */
+export const DEFAULT_EXPORT_RANGE: ExportRange = 'page'
 
 /** 打开 `.jps` 的方式（见 `IJipuSettings.embedOpenMode`） */
 export type EmbedOpenMode = 'right' | 'tab' | 'current' | 'defaultApp'

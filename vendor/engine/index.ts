@@ -70,6 +70,10 @@ export {
 } from './measures'
 export { layoutScore } from './layout'
 export { renderScoreToSvg } from './render'
+// adj863（T-3）：**范围**（整页 / 墨迹 ± 每边 N px）的唯一实现 + SVG 外框改写（插件预览与导出、应用导出、
+// CLI `render --crop` 都消费这一份；墨迹盒由有 DOM 的宿主量好传进来，引擎不瞎估）
+export { rangeBox, applyRangeToSvg, readViewBoxOf, normalizeRangePad, normalizeMinInk, minInkFor, RANGE_PAD_DEFAULT, MIN_INK_FALLBACK, NEAR_PAGE_RATIO } from './render/range'
+export type { ExportRange, RangeBox, RangeRequest, RangeOutcome } from './render/range'
 export { buildPlaySequence, inferBpm, countScoreInstrumentSwitches, createBackend, schedulePlay, SynthBackend, SamplerBackend, pitchToFreq, renderSynthNote, INSTRUMENT_OPTIONS, INSTRUMENT_LIB_NAMES, INSTRUMENT_PRESETS, matchInstrument, resolveInstrument, SAMPLER_LIBRARIES, getSamplerLibrary, classifyNetwork, eventsToMidi, pitchToMidiNote, instrumentToProgram, pcmToWav, GmChannelAllocator, GM_MELODIC_CHANNELS, GM_VOICES, GM_GROUPS, gmVoiceProgram, gmVoiceRef } from './playback'
 export { codePosToNoteId, noteIdToCodePos, parseNoteId, buildIndexToPage } from './cursorMap'
 export { computeRowTops, computeRowGuides, dragDelta, clamp, metaAreaH, GUIDE_ITEMS, GUIDE_LIMITS, GUIDE_LIMITS_EX } from './layout/guides'

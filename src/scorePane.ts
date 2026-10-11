@@ -22,6 +22,9 @@ import { renderScoreFull, playScore, type PlayheadSeg } from './render'
 // adj758（清单 B1）：色块的分组/定位/配色来自 **引擎**（应用与插件共用一份；此处只做绘制）
 // adj764（清单 B6）：时间轴推进用引擎时钟（与应用共用"推进/暂停续播/取消/到点一次"的语义）
 import { createPlaybackClock, instrumentColorMap, playheadBaseOf, playheadPosIn, trackKeysOf, type PlayheadPos } from '@ijipu/engine'
+// adj863（T-3 定稿）：**范围**（整页 / 墨迹 ± 每边 N px）的唯一实现在引擎 —— 谱面视图的墨迹裁剪与
+// 导出/复制的画布口径都消费它（本文件不再自带 `PAD = 2` 或退化闸的第二份副本）
+import { rangeBox, minInkFor, RANGE_PAD_DEFAULT } from '@ijipu/engine'
 
 /** adj764：起播延迟（与应用一致：前 200ms 不计入时间轴，避免"第一拍还没响、色块先动"） */
 const PLAY_START_DELAY_MS = 200
@@ -1769,6 +1772,14 @@ toolbar.dataset.ijipuPane = String(paneId)
     /** 把量到的内容盒写进 dataset（`applyViewBox` 与切模式都读它） */
     function writeContentBox(svgEl: SVGSVGElement, box: { x: number; y: number; w: number; h: number }): void {
       svgEl.dataset.contentBox = `${box.x} ${box.y} ${box.w} ${box.h}`
+      /**
+       * adj863（T-3 定稿）：**同时**把这份实测墨迹盒挂到插件上。
+       *
+       * 为什么：导出/复制走的是**命令**路径（没有面板、没有 DOM 可量），而"导出谱面"= 墨迹 ± 2px
+       * 恰恰需要它 ⇒ 只能读"最近一次实测值"。带上 `source` 是为了**绝不跨谱误用**
+       * （换了文件 ⇒ 视为"没量到" ⇒ 命令**明确报错**，而不是拿别的谱的盒去裁 ✗）。
+       */
+      plugin.lastInk = { source, box }
     }
 
     /**
@@ -1859,87 +1870,47 @@ toolbar.dataset.ijipuPane = String(paneId)
       svgEl.dataset.origVb = orig
       if (mode === 'score') {
         const [, , w, h] = orig.split(/[\s,]+/).map(Number)
-        const box = ((): { x: number; y: number; w: number; h: number } | null => {
-      const b = contentBoxOf(svgEl)
-      if (b === null) return null
-      /**
-       * adj831（用户诊断：`按墨迹裁剪 489×27（整页 595×842，高度只剩 3%）` ✗）：
-       *
-       * 上面那道闸只要求"盒比整页小" ✓ ⇒ **退化盒（又扁又窄）能溜过去** ✗ ——
-       * 一旦如此，谱面视图会被裁成一条 27px 的横带 ✓，而"导出谱面（墨迹 ± N px）"更是直接报废 ✗。
-       *
-       * 判据：**一行谱的真实墨迹也不会只有 27px 高**（数字 + 减时线 + 歌词，最少也在 40px 上下 ✓），
-       * 宽度同理（一个小节也 > 40px ✓）。不满足 ⇒ 当作"量取不可靠"，返回 null
-       * ⇒ 走既有的**退回按边距裁剪**分支 ✓，并把原因写进诊断 ✓（比裁成条带好得多 ✗）。
-       */
-      /**
-       * adj843（用户 2026-10-11 给出**数据驱动**的判据 ✓）：
-       * 「**通常音符墨迹高度为最小墨迹盒高度**」✓ —— 即：整块谱面的墨迹盒，**不可能比一个音符的墨迹还矮** ✓。
-       *
-       * 于是不再用魔数阈值 ✗（40 误伤短谱、6 又拦不住假值 ✓ 都被实证过）：
-       * **直接量一个音符的墨迹高**（谱面 SVG 里的 `[data-notepos]` 元素 ✓ —— 与引擎的光标联动属性同源 ✓），
-       * 取它的 ~90% 作为下限 ✓（留一点抗锯齿/取整余量 ✓；取不到音符时退回极小值 6 ✓ 不阻断渲染 ✓）。
-       *
-       * 这样："合法但很短的谱"（单行 ✓）能过 ✓；"渲染未就绪的假值"（比一个音符还矮 ✗）被拦 ✓。
-       */
-      let minInk = 6
-      let noteInkH = 0
-      try {
-        const noteEl = svgEl.querySelector('[data-notepos]')
-        const box = noteEl === null ? null : (noteEl as SVGGraphicsElement).getBBox()
-        if (box !== null && Number.isFinite(box.height) && box.height > 0) {
-          noteInkH = box.height
-          minInk = Math.max(6, Math.round(noteInkH * 0.9))
-        }
-      } catch {
-        /* 量不到音符就用极小值兜底 ✓（不阻断渲染 ✓） */
-      }
-      if (b.w < minInk || b.h < minInk) {
-        noteCrop(
-          `墨迹盒 ${Math.round(b.w)}×${Math.round(b.h)} 小于"一个音符的墨迹高"（${Math.round(noteInkH)}px 的 90% = ${minInk}px）` +
-            `⇒ 视为量取失败，退回按边距裁剪`,
-        )
-        return null
-      }
-      return b
-    })()
+        const b = contentBoxOf(svgEl)
         /**
-         * adj724b：**量到的盒必须真的比整页小**，否则视为"量取不可靠"退回边距兜底。
-         *
-         * 为什么要这道闸：`getBBox()` 在某些宿主/时机下可能把**整页白底**也算进来
-         * （引擎第一层就是 `<rect data-page-bg width/height=100%>`），
-         * 那时裁剪等于没裁 —— 现象正是"谱面还是有 A4 那么大空白"。
-         * 容差取 2%：真实谱面不可能占满整页（上下各有边距），占满即说明量错了。
+         * adj843（用户 2026-10-11 给出**数据驱动**的判据 ✔）：
+         * 「**通常音符墨迹高度为最小墨迹盒高度**」——整块谱面的墨迹盒**不可能比一个音符的墨迹还矮**。
+         * 所以这里只做一件事：**量一个音符的墨迹高**（`[data-notepos]`，与引擎的光标联动属性同源），
+         * 阈值公式由引擎的 `minInkFor()` 给（取它的 ~90%，取不到音符 ⇒ 兜底极小值，不阻断渲染）。
          */
-        const shrunk = !!box && box.h < h * 0.98 && box.w < w * 0.98
-        if (box && shrunk) {
-          /**
-           * adj786（用户实测）：「之前要求的**谱面视图要在四边预留 2px 留白**，好像没有做到」。
-           *
-           * 原来这里把 viewBox 直接设成**墨迹的紧边界** ⇒ 墨迹贴着容器边缘（CSS 那条
-           * `.ijipu-score { padding: 2px }` 是容器内边距，不是"谱面四周的白"）⇒ 观感上"没有 2px 留白" ✗。
-           * 现在把裁剪框**四边各外扩 2px** ⇒ 谱面四周稳定留出 2px 白边（与"退回按边距裁剪"那一支的口径一致）。
-           */
-          const PAD = 2
-          svgEl.setAttribute(
-            'viewBox',
-            `${box.x - PAD} ${box.y - PAD} ${box.w + PAD * 2} ${box.h + PAD * 2}`,
-          )
+        let noteInkH = 0
+        try {
+          const noteEl = svgEl.querySelector('[data-notepos]')
+          const nb = noteEl === null ? null : (noteEl as SVGGraphicsElement).getBBox()
+          if (nb !== null && Number.isFinite(nb.height) && nb.height > 0) noteInkH = nb.height
+        } catch {
+          /* 量不到音符就用兜底阈值 ✔（不阻断渲染 ✔） */
+        }
+        /**
+         * adj863（T-3 定稿）：**判据与几何全部交给引擎**——`rangeBox()` 一次给出
+         * 「墨迹 ± 每边 N px」+ 退化闸（小于一个音符的墨迹）+ 近整页闸（≥98% 整页 ⇒ 多半把白底量进来了）。
+         * 此前这里的 `PAD = 2` 与两道闸是本文件的**私有副本**，导出那边又写一遍 ⇒ 口径必然漂 ✗
+         * （本项目"数值口径必须同源"的老坑，见 AGENTS §六之二·4）。
+         */
+        const out = rangeBox({ range: 'score', pageW: w, pageH: h, ink: b, minInk: minInkFor(noteInkH) })
+        if (out.ok) {
+          svgEl.setAttribute('viewBox', `${out.box.x} ${out.box.y} ${out.box.w} ${out.box.h}`)
           // 回传给插件，供设置页显示（运行期诊断；见 IJipuPlugin.lastCropInfo 的说明）
           noteCrop(
-            `按墨迹裁剪 ${box.w.toFixed(0)}×${box.h.toFixed(0)}（整页 ${Math.round(w)}×${Math.round(h)}，高度只剩 ${((box.h / h) * 100).toFixed(0)}%）`,
+            `按墨迹裁剪 ${out.box.w.toFixed(0)}×${out.box.h.toFixed(0)}（墨迹 ${Math.round(b?.w ?? 0)}×${Math.round(b?.h ?? 0)}` +
+              ` + 每边 ${RANGE_PAD_DEFAULT}px；整页 ${Math.round(w)}×${Math.round(h)}，高度只剩 ${(((b?.h ?? 0) / h) * 100).toFixed(0)}%）`,
           )
         } else {
+          /**
+           * 判失败 ⇒ **显示端**退回按边距裁剪（比裁成一条横带好得多 ✗）。
+           * ⚠ 导出端**不跟着退**：那里必须**明确报错**（见 `main.ts` 的 `applyExportRange`）——
+           * 用户可以接受"预览先用边距顶着"，但不能接受"我选了导出谱面、结果悄悄给我一张整页"✗。
+           */
           const ml = c.margin_left ?? 0
           const mt = c.margin_top ?? 0
           const mr = c.margin_right ?? 0
           const mb = c.margin_bottom ?? 0
           svgEl.setAttribute('viewBox', `${ml} ${mt} ${Math.max(1, w - ml - mr)} ${Math.max(1, h - mt - mb)}`)
-          noteCrop(
-            box
-              ? `退回按边距裁剪（量到的盒几乎等于整页 ${Math.round(w)}×${Math.round(h)}，判定为量取不可靠）`
-              : `退回按边距裁剪（没量到内容盒；正在等谱面进入渲染树后补量）`,
-          )
+          noteCrop(`退回按边距裁剪 —— ${out.reason ?? '量取不可靠'}`)
           /**
            * adj780（用户实测）：「PC 端 jps 代码块，点排版→调整虚线→再点排版关闭虚线时，
            * **视图回到谱面视图，但墨迹四周空白没被及时消除**」。
@@ -1948,8 +1919,8 @@ toolbar.dataset.ijipuPane = String(paneId)
            * 但实测里这一支恰恰也可能是**量得太早**（渲染/字体还没就绪、或刚切换模式还没重排）⇒
            * 退回"按边距裁剪"且**不再补量** ⇒ 墨迹四周的空白就一直留着 —— 与用户描述完全一致。
            *
-           * 现在**两种情形都补量一次**；用 `cropRetried` 标记把补量限制为"每个渲染出的 svg 至多一次"，
-           * 避免"补量 → 又走这条分支 → 再补量"的自激循环（补量本身会重下 viewBox ✓）。
+           * 现在**两种情形（没量到 / 量得不可信）都补量一次**；用 `cropRetried` 标记把补量限制为
+           * "每个渲染出的 svg 至多一次"，避免"补量 → 又走这条分支 → 再补量"的自激循环（补量本身会重下 viewBox ✔）。
            */
           if (svgEl.dataset.cropRetried !== '1') {
             svgEl.dataset.cropRetried = '1'

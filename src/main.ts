@@ -1,6 +1,6 @@
 import { Events, Keymap, MarkdownRenderChild, MarkdownView, Notice, Platform, Plugin, requestUrl, TFolder, TFile, type MarkdownSectionInformation, type WorkspaceLeaf } from 'obsidian'
 // adj749d：自动格式化（光标离开本行时格式化该行）用**引擎里那份应用自己的**逐行格式化器
-import { formatLine } from '@ijipu/engine'
+import { formatLine, applyRangeToSvg, rangeBox, readViewBoxOf, RANGE_PAD_DEFAULT, type RangeBox } from '@ijipu/engine'
 // adj774：markdown 笔记里 ```jps 代码块的围栏扫描（着色/错误提示/自动格式化三处共用同一份口径）
 import { jpsBlockRanges } from './jpsBlocks'
 import { createIjipuApi, type IjipuApi } from './api'
@@ -16,7 +16,7 @@ import { IJipuFileView, JPS_EXTENSION, VIEW_TYPE_IJIPU } from './fileView'
 import { createJpsFile, consumeJpsLinkCreate, materializeJpsFile, planJpsLinkCreate, registerJpsFileCreator, unregisterJpsFileCreator, NEW_JPS_TEMPLATE } from './newFile'
 import { replaceCodeBlockBody } from './sourceEdit'
 import { canOpenWithDefaultApp, openWithDefaultApp } from './openExternal'
-import { DEFAULT_EMBED_OPEN_MODE, type EmbedOpenMode, type IJipuSettings } from './types'
+import { DEFAULT_EMBED_OPEN_MODE, DEFAULT_EXPORT_RANGE, type EmbedOpenMode, type IJipuSettings } from './types'
 import { IJipuBridge } from './embed/bridge'
 import { embedEditLeavesObsidian, planEmbedTarget } from './embed/openPlan'
 /**
@@ -335,8 +335,10 @@ export default class IJipuPlugin extends Plugin {
                * 若探针通、PNG 不通 ⇒ 是 **PNG 那条链路**的问题（canvas/字体/分页 ✗）。一次就能分清 ✓。
                */
               let ping = '未探'
+              let probeSvgs: string[] = []
               try {
                 const r = await this.appRpc.request<{ svgs: string[] }>('render.svg', { source: c.source }, 4000)
+                probeSvgs = r.svgs
                 ping = `render.svg 探针通了 ✓（${r.svgs.length} 页）`
               } catch (e) {
                 ping = `render.svg 探针也不通 ✗ —— ${e instanceof Error ? e.message : String(e)}`
@@ -344,7 +346,21 @@ export default class IJipuPlugin extends Plugin {
                 this.lastEmbedError = `${new Date().toLocaleTimeString()} · ${ping}`
                 return
               }
-              const res = await this.appRpc.request<{ pngs: string[] }>('render.png', { source: c.source, scale: 2 })
+              /**
+               * adj863（T-3 定稿）：范围 = **谱面** ⇒ 用**刚探测到的**产物算墨迹盒（同一份源码、
+               * 同一套排版 ⇒ 页宽一致），再把**盒**交给应用侧 —— 应用只做 `applyRangeToSvg()`，
+               * **不重算几何** ✗（两边各算一遍必漂；"一处口径"是这条的由来）。
+               */
+              const ranged = this.applyExportRange(c.source, probeSvgs)
+              if (ranged.error !== undefined) {
+                new Notice(`iJipu：导出范围「谱面」不可用 —— ${ranged.error}`, 8000)
+                this.lastEmbedError = `${new Date().toLocaleTimeString()} · 导出谱面范围不可用：${ranged.error}`
+                return
+              }
+              const params: Record<string, unknown> = { source: c.source, scale: 2 }
+              // 只有"导出谱面"才带 crop（整页范围不带 ⇒ 与改动前的请求逐字一致 ✓）
+              if (ranged.box !== null) params.crop = ranged.box
+              const res = await this.appRpc.request<{ pngs: string[] }>('render.png', params)
               const dir = c.file?.parent?.path ?? ''
               const base = (c.file?.basename ?? 'score').replace(/\.jps$/i, '')
               const made: string[] = []
@@ -424,8 +440,14 @@ export default class IJipuPlugin extends Plugin {
               new Notice(`iJipu：无法渲染 —— ${r.error ?? '未知原因'}`)
               return
             }
-            await navigator.clipboard.writeText(r.svgs.join('\n<!-- 分页 -->\n'))
-            new Notice(`iJipu：已复制 ${r.svgs.length} 页 SVG 源码到剪贴板`)
+            // adj863（T-3）：按「导出范围」设置裁画布（page = 原样；score = 墨迹 ± 每边 2px）
+            const ranged = this.applyExportRange(c.source, r.svgs)
+            if (ranged.error !== undefined) {
+              new Notice(`iJipu：导出范围「谱面」不可用 —— ${ranged.error}`, 8000)
+              return
+            }
+            await navigator.clipboard.writeText(ranged.svgs.join('\n<!-- 分页 -->\n'))
+            new Notice(`iJipu：已复制 ${ranged.svgs.length} 页 SVG 源码到剪贴板`)
           })()
         }
         return true
@@ -446,15 +468,21 @@ export default class IJipuPlugin extends Plugin {
               new Notice(`iJipu：无法渲染 —— ${r.error ?? '未知原因'}`)
               return
             }
+            // adj863（T-3）：同上——按设置裁到所选范围
+            const ranged = this.applyExportRange(c.source, r.svgs)
+            if (ranged.error !== undefined) {
+              new Notice(`iJipu：导出范围「谱面」不可用 —— ${ranged.error}`, 8000)
+              return
+            }
             const dir = c.file?.parent?.path ?? ''
             const base = (c.file?.basename ?? 'score').replace(/\.jps$/i, '')
             const made: string[] = []
-            for (let i = 0; i < r.svgs.length; i += 1) {
-              const name = r.svgs.length > 1 ? `${base}-${i + 1}.svg` : `${base}.svg`
+            for (let i = 0; i < ranged.svgs.length; i += 1) {
+              const name = ranged.svgs.length > 1 ? `${base}-${i + 1}.svg` : `${base}.svg`
               const path = dir === '' || dir === '/' ? name : `${dir}/${name}`
               const existing = this.app.vault.getAbstractFileByPath(path)
-              if (existing instanceof TFile) await this.app.vault.modify(existing, r.svgs[i])
-              else await this.app.vault.create(path, r.svgs[i])
+              if (existing instanceof TFile) await this.app.vault.modify(existing, ranged.svgs[i])
+              else await this.app.vault.create(path, ranged.svgs[i])
               made.push(name)
             }
             new Notice(`iJipu：已导出 ${made.join('、')}`)
@@ -952,6 +980,40 @@ export default class IJipuPlugin extends Plugin {
 
   /** adj775：最近一次嵌入版服务启动失败的原因（设置页「说明」里显示，方便用户/我定位） */
   lastEmbedError: string | null = null
+
+  /**
+   * adj863（T-3 定稿）：**最近一次实测到的墨迹盒**（由谱面面板在量到内容包围盒时写入）。
+   *
+   * 为什么存在插件上：导出/复制走的是**命令**路径（没有面板、没有 DOM 可量），而"导出谱面"
+   * 恰恰需要**实测墨迹** ⇒ 只能读"最近一次实测值"。`source` 是**必须**的：换了文件就视为"没量到"，
+   * 命令会**明确报错**，绝不拿别的谱的盒去裁 ✗（`E-2026-*` 那类"导出成一条横带"就是这么来的）。
+   */
+  lastInk: { source: string; box: RangeBox } | null = null
+
+  /**
+   * adj863：按**导出范围**设置把渲染产物的画布口径裁到所选范围。
+   *
+   *  · `page`（默认）⇒ **原样返回**（逐字不动，与改动前完全一致 ✓）；
+   *  · `score` ⇒ 用引擎 `rangeBox()` 算盒（**唯一**口径：墨迹 ± 每边 2px + 退化/近整页闸），
+   *    再走 `applyRangeToSvg()`（**唯一**改写 SVG 外框的地方）。
+   *
+   * 失败（没量到墨迹 / 量得不可信）⇒ 回 `error`，**由调用方明确报错**（不静默退回整页 ✗）。
+   */
+  applyExportRange(source: string, svgs: string[]): { svgs: string[]; box: RangeBox | null; error?: string } {
+    const range = this.settings.exportRange ?? DEFAULT_EXPORT_RANGE
+    if (range !== 'score') return { svgs, box: null }
+    const page = readViewBoxOf(svgs[0] ?? '')
+    const ink = this.lastInk !== null && this.lastInk.source === source ? this.lastInk.box : null
+    const out = rangeBox({
+      range: 'score',
+      pageW: page?.[2] ?? 0,
+      pageH: page?.[3] ?? 0,
+      ink,
+      pad: RANGE_PAD_DEFAULT,
+    })
+    if (!out.ok) return { svgs, box: null, error: out.reason ?? '量不到墨迹盒' }
+    return { svgs: svgs.map((s) => applyRangeToSvg(s, out.box)), box: out.box }
+  }
 
   /**
    * 同步版本的 URL（只读已启动的服务）。

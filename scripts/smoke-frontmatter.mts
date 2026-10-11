@@ -5,7 +5,7 @@
  * 断言来源：用户反馈「在 frontmatter 里设置像 `ijipu_note_size` 好像没生效」——
  * 覆盖键名写法兼容、值类型转换、未识别键提示、优先级四类。
  */
-import { defaultPageConfig, dragDelta, formatJps, formatLine, instrumentColorMap, layoutScore, parseJps, playheadBaseOf, playheadPosIn, renderScoreToSvg, splitParseIssues, tokenizeJpsLine, JPS_HIGHLIGHT_COLORS, JPS_PLAIN_COLORS, JPS_PROBLEM_COLORS, trackKeysOf, writeJpsConfig, mergeConfigEdits, configCarryover, SCORE_FONT_OPTIONS, buildPlaySequence, GUIDE_LIMITS, GUIDE_LIMITS_EX, SEGMENT_ROW_GAP_DEFAULT, OPTIONAL_CONFIG_FIELDS, defaultConfigForReset, extractJpsConfig, extractLegacyEditorPrefs, nonDefaultConfigKeys, GM_GROUPS, highlightLineModel, jpsBlockMarks } from '@ijipu/engine'
+import { defaultPageConfig, dragDelta, formatJps, formatLine, instrumentColorMap, layoutScore, parseJps, playheadBaseOf, playheadPosIn, renderScoreToSvg, splitParseIssues, tokenizeJpsLine, JPS_HIGHLIGHT_COLORS, JPS_PLAIN_COLORS, JPS_PROBLEM_COLORS, trackKeysOf, writeJpsConfig, mergeConfigEdits, configCarryover, SCORE_FONT_OPTIONS, buildPlaySequence, GUIDE_LIMITS, GUIDE_LIMITS_EX, SEGMENT_ROW_GAP_DEFAULT, OPTIONAL_CONFIG_FIELDS, defaultConfigForReset, extractJpsConfig, extractLegacyEditorPrefs, nonDefaultConfigKeys, GM_GROUPS, highlightLineModel, jpsBlockMarks, rangeBox, applyRangeToSvg } from '@ijipu/engine'
 import type { PageConfig } from '@ijipu/engine'
 import { existsSync, globSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
@@ -1767,17 +1767,26 @@ console.log('\n[adj724b] community review: forbidden APIs / styles must stay fix
       /getAttribute\('data-page-bg'\)/.test(scorePaneSrc) &&
       /const box = measureContentBox\(svgEl\)/.test(scorePaneSrc) &&
       /svgEl\.dataset\.contentBox = /.test(scorePaneSrc) &&
-      // adj831：取盒改成"带退化闸的 IIFE" ⇒ 判据同步为"仍会调用 contentBoxOf ✓ 且有退化判据" ✓
-      /const box = \(\(\): \{ x: number; y: number; w: number; h: number \} \| null => \{/.test(scorePaneSrc) &&
       /const b = contentBoxOf\(svgEl\)/.test(scorePaneSrc) &&
-      // adj843：下限改为**数据驱动** —— 量一个音符（`[data-notepos]`）的墨迹高，取其 90% 作下限 ✓
+      // adj843：下限**数据驱动** —— 量一个音符（`[data-notepos]`）的墨迹高，取其 90% 作下限 ✓
       /const noteEl = svgEl\.querySelector\('\[data-notepos\]'\)/.test(scorePaneSrc) &&
-      /minInk = Math\.max\(6, Math\.round\(noteInkH \* 0\.9\)\)/.test(scorePaneSrc))
+      /**
+       * adj863（T-3 定稿）：**判据与几何搬到引擎** —— 本文件只量（缓存盒 + 一个音符的墨迹高），
+       * 阈值公式（`minInkFor`）与"±每边 N px / 退化闸 / 近整页闸"由引擎 `rangeBox()` 一处给出。
+       * 判据同步为"仍在调它"，并加**负对照**：本文件不得再自带那份几何（自带就是两份实现 ⇒ 必漂）。
+       */
+      /minInk: minInkFor\(noteInkH\)/.test(scorePaneSrc) &&
+      /rangeBox\(\{ range: 'score'/.test(scorePaneSrc) &&
+      !/minInk = Math\.max\(6, Math\.round\(noteInkH \* 0\.9\)\)/.test(scorePaneSrc))
   //    ③ 量到的盒**必须真的比整页小**（容差 2%）才用它 —— 防止 `getBBox()` 把整页白底算进来
   //       导致"裁剪等于没裁"（现象正是"谱面还是 A4 那么大空白"）；不满足则退回边距兜底。
-  check('adj724b 裁剪以"实测内容盒"为主路径，且要求它真的比整页小（否则退回边距兜底）',
-    /if \(box && shrunk\) \{[\s\S]{0,900}?\} else \{[\s\S]{0,900}?margin_left/.test(scorePaneSrc) &&
-      /const shrunk = .*box\.h < h \* 0\.98/.test(scorePaneSrc))
+  check('adj724b 裁剪以"实测内容盒"为主路径；不可信时**退回边距兜底**（两道闸由引擎判）',
+    // adj863：判据从"本文件里的 `shrunk` 变量"换成"引擎的 `out.ok`"——性质不变（可信才裁、不可信退边距 + 补量）
+    /if \(out\.ok\) \{[\s\S]{0,900}?\} else \{[\s\S]{0,900}?margin_left/.test(scorePaneSrc) &&
+      /const out = rangeBox\(\{ range: 'score'/.test(scorePaneSrc) &&
+      // 两道闸确实在引擎里（退化闸 + 近整页闸）——否则"退回边距兜底"就没有触发条件了
+      /ink\.w < minInk \|\| ink\.h < minInk/.test(String(readFileSync('vendor/engine/render/range.ts', 'utf8'))) &&
+      /NEAR_PAGE_RATIO/.test(String(readFileSync('vendor/engine/render/range.ts', 'utf8'))))
 
   /**
    * ㉒ ` ```jps ` 代码块是**长期特性**，不得因为"有 .jps 文件了"就把它当过渡用法删掉。
@@ -2160,7 +2169,8 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
         /editor\.setLine\(prevLine, after\)/.test(main751) &&
         /file\.extension !== JPS_EXTENSION/.test(main751) &&
         /hasClass\('ijipu-plain-source'\)/.test(main751) &&
-        /import \{ formatLine \} from '@ijipu\/engine'/.test(main751),
+        // adj863：`formatLine` 的导入行后来又多带了范围相关的符号 ⇒ 判据改成"仍在从引擎导入它"
+        /import \{[^}]*\bformatLine\b[^}]*\} from '@ijipu\/engine'/.test(main751),
       `auto=${/autoFormatLeavingLine/.test(main751)} setLine=${/setLine\(/.test(main751)}`)
   }
 
@@ -4051,6 +4061,95 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
         /moreIcon/.test(pane862),
       hasAppIcon ? '' : '（找不到应用仓库：跳过逐字节比对）')
   }
+}
+
+/**
+ * ---- adj863（T-3 定稿）：**「范围」参数的唯一实现 + 插件三处出口都按它裁** ----
+ *
+ * 口径（用户定名）：**导出页面** = 整页 + 四周留白；**导出谱面** = **墨迹包围盒 + 每边 2px**。
+ * 几何只有一份（引擎 `render/range.ts` 的 `rangeBox`/`applyRangeToSvg`/`minInkFor`），
+ * 插件这侧**只量墨迹、只传参** —— 本节把"插件里不再有第二份几何"这件事机器化。
+ */
+{
+  const pane863 = codeOf(String(readFileSync('src/scorePane.ts', 'utf8')))
+  const main863 = codeOf(String(readFileSync('src/main.ts', 'utf8')))
+  const types863 = codeOf(String(readFileSync('src/types.ts', 'utf8')))
+  const settings863 = codeOf(String(readFileSync('src/settings.ts', 'utf8')))
+  const defs863 = codeOf(String(readFileSync('src/defs.ts', 'utf8')))
+  const bridge863 = existsSync('../ijipu/src/ipc/obsidianBridge.ts')
+    ? codeOf(String(readFileSync('../ijipu/src/ipc/obsidianBridge.ts', 'utf8')))
+    : ''
+
+  // —— ① 引擎是唯一实现：插件里不得再有第二份"±2px / 两道闸" ——
+  check('adj863 谱面视图的墨迹裁剪走**引擎** `rangeBox` + `minInkFor`（阈值公式也不在插件里）',
+    /import \{ rangeBox, minInkFor, RANGE_PAD_DEFAULT \} from '@ijipu\/engine'/.test(pane863) &&
+      /const out = rangeBox\(\{ range: 'score', pageW: w, pageH: h, ink: b, minInk: minInkFor\(noteInkH\) \}\)/.test(pane863) &&
+      /svgEl\.setAttribute\('viewBox', `\$\{out\.box\.x\} \$\{out\.box\.y\} \$\{out\.box\.w\} \$\{out\.box\.h\}`\)/.test(pane863))
+  check('adj863 负对照：插件里**不再有**私有的 `PAD = 2` / `box.w + PAD * 2` 那份几何（有则口径必漂）',
+    !/const PAD = 2/.test(pane863) && !/box\.w \+ PAD \* 2/.test(pane863) && !/Math\.round\(noteInkH \* 0\.9\)/.test(pane863))
+
+  // —— ② 墨迹盒实测后挂到插件上（导出走命令路径，没有 DOM 可量） ——
+  check('adj863 面板量到墨迹盒时**同时挂到插件**（带 `source`，绝不跨谱误用）',
+    /plugin\.lastInk = \{ source, box \}/.test(pane863) &&
+      /lastInk: \{ source: string; box: RangeBox \} \| null = null/.test(main863) &&
+      /this\.lastInk\.source === source/.test(main863))
+  check('adj863 负对照：去掉 `source` 比对 ⇒ 判据为假（跨谱误用会拿别的谱的盒去裁）',
+    !/this\.lastInk\.source === source/.test(main863.replace('this.lastInk.source === source', 'true')))
+
+  // —— ③ 三条出口都按设置裁：SVG 导出 / 复制 SVG / PNG（PNG 把**盒**交给应用侧） ——
+  check('adj863 导出 SVG 与复制 SVG 都走 `applyExportRange`（page = 原样；score = 引擎裁）',
+    /applyExportRange\(source: string, svgs: string\[\]\): \{ svgs: string\[\]; box: RangeBox \| null; error\?: string \}/.test(main863) &&
+      /const out = rangeBox\(\{/.test(main863) &&
+      /svgs: svgs\.map\(\(s\) => applyRangeToSvg\(s, out\.box\)\)/.test(main863) &&
+      [...main863.matchAll(/const ranged = this\.applyExportRange\(c\.source, r\.svgs\)/g)].length === 2 &&
+      [...main863.matchAll(/if \(ranged\.error !== undefined\) \{/g)].length === 3)
+  check('adj863 PNG 走应用通道时把**算好的盒**传过去（`params.crop`），应用侧不重算几何',
+    /let probeSvgs: string\[\] = \[\]/.test(main863) &&
+      /const ranged = this\.applyExportRange\(c\.source, probeSvgs\)/.test(main863) &&
+      /if \(ranged\.box !== null\) params\.crop = ranged\.box/.test(main863) &&
+      /const res = await this\.appRpc\.request<\{ pngs: string\[\] \}>\('render\.png', params\)/.test(main863))
+  check('adj863 负对照：删掉 `params.crop = ranged.box` ⇒ 判据为假（PNG 会悄悄还是整页）',
+    !/if \(ranged\.box !== null\) params\.crop = ranged\.box/.test(
+      main863.replace('if (ranged.box !== null) params.crop = ranged.box', ''),
+    ))
+  check('adj863 "量不到墨迹"时必须**明确报错**（三处都有 Notice + 原因），不静默退回整页',
+    [...main863.matchAll(/导出范围「谱面」不可用 —— \$\{ranged\.error\}/g)].length === 3)
+
+  // —— ④ 应用侧只校验 + 应用（引擎同一份；非法 crop 明确报错） ——
+  check('adj863 应用侧：`parseCrop` 校验四个有限数 + 非法即 `invalidParams` + 用 `applyRangeToSvg` 应用',
+    bridge863.length > 0 &&
+      /function parseCrop\(raw: unknown\): RangeBox \| null \| undefined/.test(bridge863) &&
+      /if \(crop === null\) \{/.test(bridge863) &&
+      /fail\(CODE\.invalidParams, 'params\.crop 必须是 \{x,y,w,h\} 四个有限数，且 w\/h > 0'\)/.test(bridge863) &&
+      /const svgs = crop === undefined \? r\.svgs : r\.svgs\.map\(\(s\) => applyRangeToSvg\(s, crop\)\)/.test(bridge863) &&
+      /import \{ applyRangeToSvg, type RangeBox \} from '@ijipu\/engine'/.test(bridge863) &&
+      // 应用侧**不重算**几何（没有第二份 ±Npx / 阈值）
+      !/const PAD = 2/.test(bridge863),
+    bridge863.length > 0 ? '' : '（找不到应用仓库：跳过跨仓断言）')
+  check('adj863 负对照：应用侧去掉非法 crop 的报错 ⇒ 判据为假（会把非法参数当整页悄悄放过去）',
+    bridge863.length > 0 &&
+      !/fail\(CODE\.invalidParams, 'params\.crop 必须是/.test(
+        bridge863.replace("fail(CODE.invalidParams, 'params.crop 必须是 {x,y,w,h} 四个有限数，且 w/h > 0')", ''),
+      ))
+
+  // —— ⑤ 设置项：L1 界面偏好（进 `types.ts` + 设置页下拉），**不进** `defs.ts` 的 DEFS（那是 L2） ——
+  check('adj863 导出范围是 L1 设置：`types.ts` 声明 + 设置页下拉可选页面/谱面 + 默认「页面」',
+    /exportRange\?: ExportRange/.test(types863) &&
+      /export const DEFAULT_EXPORT_RANGE: ExportRange = 'page'/.test(types863) &&
+      /dd\.addOption\('page', '导出页面（整页 \+ 留白，默认）'\)/.test(settings863) &&
+      /dd\.addOption\('score', '导出谱面（墨迹 \+ 每边 2px）'\)/.test(settings863) &&
+      /this\.plugin\.settings\.exportRange = v === 'score' \? 'score' : 'page'/.test(settings863))
+  check('adj863 负对照：`exportRange` 不得混进 `defs.ts` 的 DEFS（那是**跟着谱走**的 L2，会把本机偏好写进别人的谱）',
+    !/exportRange/.test(defs863))
+
+  // —— ⑥ 引擎那一份规则本身（插件侧再钉一遍最小面，防止 vendor 同步漏掉新文件） ——
+  check('adj863 vendor 引擎里 `rangeBox` 行为正确：墨迹 ± 每边 2px；退化/近整页判失败并给原因',
+    rangeBox({ range: 'score', pageW: 595, pageH: 842, ink: { x: 10, y: 10, w: 100, h: 50 } }).box.w === 104 &&
+      rangeBox({ range: 'score', pageW: 595, pageH: 842, ink: { x: 10, y: 10, w: 100, h: 50 } }).box.h === 54 &&
+      rangeBox({ range: 'score', pageW: 595, pageH: 842, ink: null }).ok === false &&
+      rangeBox({ range: 'score', pageW: 595, pageH: 842, ink: { x: 0, y: 0, w: 595, h: 842 } }).ok === false &&
+      applyRangeToSvg('<svg width="595" height="842" viewBox="0 0 595 842"></svg>', { x: 1, y: 2, w: 3, h: 4 }) ===
+        '<svg width="3" height="4" viewBox="1 2 3 4"></svg>')
 }
 
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。

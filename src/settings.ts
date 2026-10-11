@@ -30,7 +30,7 @@ import jianpuLogoPng from '../vendor/icons/Jianpu.png'
 // adj738：笔记 frontmatter 那一层整体删除（含 `frontmatterKey` 的转出与「复制模板」入口）。
 // adj724b：外链统一走这处（Electron 里 `window.open` 不可靠）
 import { openUrlExternally } from './openExternal'
-import { DEFAULT_EMBED_OPEN_MODE, type EmbedOpenMode } from './types'
+import { DEFAULT_EMBED_OPEN_MODE, DEFAULT_EXPORT_RANGE, type EmbedOpenMode } from './types'
 // adj730：微信赞赏码（与应用「关于」页同一张图；构建期内联成 data URI，不联网）
 import donateQrPng from '../vendor/icons/good.png'
 import type IJipuPlugin from './main'
@@ -284,6 +284,32 @@ export class IJipuSettingTab extends PluginSettingTab {
     new Setting(host)
       .setName('截图/反馈时请附上构建信息')
       .setDesc(`构建 ${BUILD_STAMP} @${GIT_COMMIT}（已显示在设置页顶部）`)
+
+    /**
+     * adj863（T-3 定稿）：**导出范围** —— 导出/复制时的画布口径。
+     *
+     * 两种口径（用户定名）：
+     *  · **导出页面**（默认）：整页 + 四周留白 —— 与改动前完全一致；
+     *  · **导出谱面**：**墨迹包围盒 + 每边 2px**（不保留页宽）。
+     *
+     * 几何一律走引擎 `rangeBox()`（应用与 CLI 同一份 ✓）；`score` 需要"面板实测到的墨迹盒"，
+     * 量不到时命令会**明确报错并说明原因**（不猜、也不静默退回整页 ✗）。
+     */
+    new Setting(host)
+      .setName('导出范围（导出 / 复制时的画布口径）')
+      .setDesc(
+        '「导出页面」= 整页 + 四周留白（默认）；「导出谱面」= **墨迹包围盒 + 每边 2px**（不保留页宽）。\n' +
+          '选「导出谱面」时，需要先在预览里显示过这份谱（面板会实测墨迹盒）；量不到时会明确报错而不是猜一个尺寸。',
+      )
+      .addDropdown((dd) => {
+        dd.addOption('page', '导出页面（整页 + 留白，默认）')
+        dd.addOption('score', '导出谱面（墨迹 + 每边 2px）')
+        dd.setValue(this.plugin.settings.exportRange ?? DEFAULT_EXPORT_RANGE)
+        dd.onChange((v) => {
+          this.plugin.settings.exportRange = v === 'score' ? 'score' : 'page'
+          void this.plugin.saveSettings({ from: 'settingsTab' })
+        })
+      })
 
     /**
      * adj788（用户要求）：**运行期诊断全部搬到「诊断」页签**（见 `renderDiagnostics`），
