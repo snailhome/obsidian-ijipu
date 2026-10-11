@@ -95,6 +95,11 @@ export type ScorePaneHost = {
    */
   zoom?: number | 'auto'
   /**
+   * adj870（用户 2026-10-11）：代码块写死的**初始显示模式**（来自 `m=p|w|s`，见 `jpsBlocks.modeOfInfo`）。
+   * 只有代码块传它；文件视图 / 嵌入不传 ⇒ 用缺省「谱面」。工具条仍可**会话内临时切换**（参数是落地点、工具条是"看一眼"）。
+   */
+  mode?: 'page' | 'full' | 'score'
+  /**
    * 嵌入模式下的谱面名（显示在工具栏**右端**，前置链接图标，点击打开该 .jps）。
    * 插件接管 `![[x.jps]]` 的 `.internal-embed` 后，宿主原本那个"点开文件"的占位块不再出现，
    * 由这里补回入口；容器窄时只留图标（见 styles.css 的 @container 规则）。
@@ -231,7 +236,7 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
   let rafId = 0
   let rafPending = false
   // —— 面板级状态（跨重画保持）——
-  let paneMode: ViewMode = 'score'
+  let paneMode: ViewMode = host.mode ?? 'score'
   let modeBeforeGuides: ViewMode = 'page'
   /** 拖拽中的草稿配置（拖完写回源码后清空） */
   let draft: PageConfig | null = null

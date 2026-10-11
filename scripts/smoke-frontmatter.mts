@@ -87,6 +87,7 @@ import {
   DESKTOP_AUTO_HIDE_MS,
   MENU_ONLY_ACTIONS,
   MOBILE_MIN_TARGET_PX,
+  MOBILE_CTL_H_PX,
   SCORE_TOOLBAR_SLOTS,
   buildScoreMenu,
   hasScoreMenuItem,
@@ -1909,7 +1910,12 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
   // ① 默认"无空白"：谱面块四周只剩 2px（原来是 0.4em ≈ 6.4px 的灰底内边距）
   check('adj725 谱面块四周只留 2px 留白（默认"只显示有墨迹的部分"）',
     /\.ijipu-score\s*\{[^}]*padding:\s*2px/.test(css725nc) && !/\.ijipu-score\s*\{[^}]*padding:\s*0\.4em/.test(css725nc))
-  check('adj725 默认显示模式仍是「谱面」（裁到墨迹）', /let paneMode: ViewMode = 'score'/.test(pane725))
+  /**
+   * adj725 口径 / adj870 扩展：缺省仍是「谱面」（裁到墨迹），只是现在**允许代码块用 `m=` 覆盖初始值** ⇒
+   * `host.mode ?? 'score'`。判据同时要求：① 兜底仍是 `'score'`；② 覆盖来源只能是 `host.mode`（不是随手读别的）。
+   */
+  check('adj725/adj870 默认显示模式仍是「谱面」（裁到墨迹），代码块可用 `m=` 覆盖初始值',
+    /let paneMode: ViewMode = host\.mode \?\? 'score'/.test(pane725))
 
   // ② 工具条浮到**块外侧**正上方、左缘对齐（不再压在谱面上）
   check('adj725 工具条浮在块外侧正上方（bottom: calc(100% + 2px) / left: 0）',
@@ -4009,8 +4015,8 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
   // —— ③ 移动端策略 + 移动端菜单差异 ——
   const pDesk = toolbarPolicy(false)
   const pMob = toolbarPolicy(true)
-  check(`adj862 移动端触控目标 ≥${MOBILE_MIN_TARGET_PX}px（桌面保持样式基线 ${pDesk.minTargetPx}px）`,
-    pMob.minTargetPx === MOBILE_MIN_TARGET_PX && pMob.minTargetPx >= 44 && pDesk.minTargetPx < 44,
+  check(`adj862 移动端触控目标 = ${MOBILE_MIN_TARGET_PX}px 宽（桌面保持样式基线 ${pDesk.minTargetPx}px；用户 2026-10-11 真机定稿）`,
+    pMob.minTargetPx === MOBILE_MIN_TARGET_PX && pMob.minTargetPx >= 32 && pMob.minTargetPx < 44 && pDesk.minTargetPx < 32,
     `手机=${pMob.minTargetPx}｜桌面=${pDesk.minTargetPx}`)
   check('adj862 移动端**常驻**（autoHideMs=0，不自动收起）＋ 两端都不依赖 hover ＋ 点击可切换',
     pMob.autoHideMs === 0 && pDesk.autoHideMs === DESKTOP_AUTO_HIDE_MS &&
@@ -4058,15 +4064,15 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
     /const policy = toolbarPolicy\(Platform\.isMobile\)/.test(pane862) &&
       /if \(policy\.autoHideMs <= 0\) return/.test(pane862))
 
-  // —— ⑤ 样式闸门：移动端 44px（容器内 + 被搬到 body 的那份都要） ——
-  check('adj862 移动端样式：两处 `--ijipu-ctl-h: 44px` + 44px 宽度下限（否则图标态仍 36px 宽）',
-    /\.is-mobile \.ijipu-score-toolbar \{[^}]*--ijipu-ctl-h: 44px/.test(css862) &&
-      /\.ijipu-score-toolbar\.ijipu-ported-mobile \{[^}]*--ijipu-ctl-h: 44px/.test(css862) &&
-      /\.is-mobile \.ijipu-embedded \.ijipu-score-toolbar \{[^}]*--ijipu-ctl-h: 44px/.test(css862) &&
-      /\.is-mobile \.ijipu-score-toolbar \.ijipu-play,[\s\S]{0,400}?min-width: 44px/.test(css862))
-  check('adj862 负对照：把那两处 44px 改回 30px ⇒ 样式判据为假',
-    !/\.is-mobile \.ijipu-score-toolbar \{[^}]*--ijipu-ctl-h: 44px/.test(
-      css862.replace(/(\.is-mobile \.ijipu-score-toolbar \{[^}]*--ijipu-ctl-h: )44px/, '$130px')))
+  // —— ⑤ 样式闸门：移动端 32px 宽 / 28px 高（容器内 + 被搬到 body 的那份都要） ——
+  check(`adj862 移动端样式：两处 \`--ijipu-ctl-h: ${MOBILE_CTL_H_PX}px\` + ${MOBILE_MIN_TARGET_PX}px 宽度下限（否则图标态更宽）`,
+    /\.is-mobile \.ijipu-score-toolbar \{[^}]*--ijipu-ctl-h: 28px/.test(css862) &&
+      /\.ijipu-score-toolbar\.ijipu-ported-mobile \{[^}]*--ijipu-ctl-h: 28px/.test(css862) &&
+      /\.is-mobile \.ijipu-embedded \.ijipu-score-toolbar \{[^}]*--ijipu-ctl-h: 28px/.test(css862) &&
+      /\.is-mobile \.ijipu-score-toolbar \.ijipu-play,[\s\S]{0,400}?min-width: 32px/.test(css862))
+  check('adj862 负对照：把移动端高度改回 44px ⇒ 样式判据为假',
+    !/\.is-mobile \.ijipu-score-toolbar \{[^}]*--ijipu-ctl-h: 28px/.test(
+      css862.replace(/(\.is-mobile \.ijipu-score-toolbar \{[^}]*--ijipu-ctl-h: )28px/, '$144px')))
 
   // —— ⑥ 图标同源（两端同一枚「更多」PNG；应用仓库不在时跳过逐字节比对） ——
   {
@@ -4330,6 +4336,46 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
   check('adj865 边界与词法：`z=0`/`z=1001`/`z=abc` 都回默认 100；**`xz=30` 这种不是独立词的不认**',
     zoomOfInfo('```jps z=0') === 100 && zoomOfInfo('```jps z=1001') === 100 && zoomOfInfo('```jps z=abc') === 100 &&
       zoomOfInfo('```jps az=150') === 100 && zoomOfInfo('```jps z=1') === 1 && zoomOfInfo('```jps z=1000') === 1000)
+
+  /**
+   * adj870（用户追问"不同参数之间用什么分隔"）：**分隔与边界规则**必须是**两个参数共用**的一套 ✓。
+   *
+   * 口径：**空格分隔为主推**；`,` `;` `|` 也容忍（免得用户写了没反应）；顺序任意；键名/取值都大小写不敏感；
+   * **连写不算参数** ✗（`z=150m=p` ⇒ 两个都不认）；字母紧贴也不算 ✗（`az=150`）。
+   */
+  {
+    const jps870 = String(readFileSync('src/jpsBlocks.ts', 'utf8'))
+    const main870 = String(readFileSync('src/main.ts', 'utf8'))
+    check('adj870 参数分隔：空格（主推）/ 逗号 / 分号 / 竖线都认，顺序任意，键名大小写不敏感',
+      zoomOfInfo('```jps m=p z=150') === 150 && zoomOfInfo('```jps z=150 m=p') === 150 &&
+        zoomOfInfo('```jps m=p,z=150') === 150 && zoomOfInfo('```jps m=p;z=150') === 150 &&
+        zoomOfInfo('```jps m=p|z=150') === 150 && zoomOfInfo('```jps M=P Z=150') === 150)
+    check('adj870 负对照：连写 / 字母紧贴**都不算参数**（不许静默变成别的模式或别的缩放）',
+      zoomOfInfo('```jps z=150m=p') === 100 && zoomOfInfo('```jps m=pz=150') === 100 &&
+        zoomOfInfo('```jps m=x') === 100 && zoomOfInfo('```jps z=abc') === 100)
+    /**
+     * adj870（用户 2026-10-11：「以减少歧义的方式来」）：**去掉 `full` 别名** ✓。
+     * `w`/`width` ⇒ 满宽，`p`/`page` ⇒ 整页，`s`/`score` ⇒ 谱面；写 `full` ⇒ 不认（内部 id 仍叫 `full`，
+     * 那是对内的）**但必须给明确提示**，不许静默退化成「谱面」✗。
+     */
+    check('adj870 `m=` 取值表：p/page=整页、w/width=满宽、s/score=谱面；**`full` 不接受**（歧义）',
+      /if \(v === 'w' \|\| v === 'width'\) return 'full'/.test(jps870) &&
+        !/if \(v === 'full'\) return/.test(jps870) &&
+        // ⚠ 负向判据只否定"**映射**成 full"这一形态；`modeParamWarning` 里为了给提示**必须**提到 `v === 'full'`（本轮踩过）
+        /if \(v === 'p' \|\| v === 'page'\) return 'page'/.test(jps870) &&
+        /if \(v === 's' \|\| v === 'score'\) return 'score'/.test(jps870))
+    check('adj870 `m=full` 与认不出的值都**有明确提示**（不静默）——提示里要给出可照抄的写法',
+      /modeParamWarning/.test(jps870) && /有歧义/.test(jps870) && /满宽请写/.test(jps870) &&
+        /认不出显示模式/.test(jps870) && /可用/.test(jps870) && /（整页）/.test(jps870) &&
+        // 插件侧真的会弹：`modeOfBlock` 调 `modeParamWarning` 且**去重**（渲染反复调用不许刷屏）
+        /const warn = modeParamWarning\(fence\)/.test(main870) &&
+        /warnedBlockParams\.has\(key\)/.test(main870) &&
+        /new Notice\(/.test(main870))
+    check('adj870 `m` 与 `z` 共用同一套边界常量（改规则只改一处，不许各写各的正则）',
+      /const PARAM_BEFORE = /.test(jps870) && /const PARAM_AFTER = /.test(jps870) &&
+        (jps870.match(/PARAM_BEFORE/g) ?? []).length >= 2 &&
+        /new RegExp\(`\$\{PARAM_BEFORE\}m=/.test(jps870) && /new RegExp\(`\$\{PARAM_BEFORE\}z=/.test(jps870))
+  }
   {
     const blocks865 = jpsBlockRanges('```jps z=150\nD: C\nQ: 1 2 |\n```\n\n```jps\ntext\n```\n')
     check('adj865 扫描器把 `z` 带进块信息（第一个块 150、第二个块缺省 100）',

@@ -236,8 +236,17 @@ export interface ToolbarPolicy {
 
 /** 桌面：挂载后显示一次，3 秒无操作自动收起（`adj785` 的用户口径） */
 export const DESKTOP_AUTO_HIDE_MS = 3000
-/** 移动端触控目标下限（用户 2026-10-11 口径：≥44px；改动前实际 21–30px ⇒ 手指偏小） */
-export const MOBILE_MIN_TARGET_PX = 44
+/**
+ * 移动端触控目标下限（宽度，px）。
+ *
+ * 口径变迁（都有用户实测依据）：
+ *  · 改动前实际 21–30px ⇒ 用户反馈"手指偏小" ⇒ 提到 44px；
+ *  · 2026-10-11 真机再看 ⇒ 用户反馈"**偏大**"，定为 **32px 宽**（高度另给、比宽度更小 ⇒ `MOBILE_CTL_H_PX`）。
+ * 40 与 44 都不再使用；`styles.css` 的取值由冒烟与这里比对（单一来源）。
+ */
+export const MOBILE_MIN_TARGET_PX = 32
+/** 移动端控件**高度**（用户 2026-10-11："32px 宽，高度也可以更小一些"） */
+export const MOBILE_CTL_H_PX = 28
 /** 桌面控件高度（与 `styles.css` 基础块的 `--ijipu-ctl-h: 24px` 同口径） */
 export const DESKTOP_MIN_TARGET_PX = 24
 

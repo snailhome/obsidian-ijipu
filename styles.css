@@ -153,7 +153,7 @@
    * 此前跟 Obsidian 的 `--touch-size-xs`（30px），工具条 5 个按钮挤在一排时手指容易点错；
    * 宽度下限（图标态的 `--ijipu-ctl-w`）一并给到 44 ⇒ 每个槽位都是 ≥44×44 的触控区。
    */
-  --ijipu-ctl-h: 44px;
+  --ijipu-ctl-h: 28px;
   --ijipu-ctl-w: 44px;
 }
 /* 嵌入形态更紧凑；移动端仍用触控尺寸，免得手指点不到 */
@@ -175,7 +175,7 @@
 .ijipu-score-toolbar.ijipu-ported-mobile {
   display: flex;
   /* adj862：与 `.is-mobile .ijipu-score-toolbar` 同口径（44px —— 两条必须一起改，否则搬出/搬回尺寸不一致） */
-  --ijipu-ctl-h: 44px;
+  --ijipu-ctl-h: 28px;
   --ijipu-ctl-w: 44px;
 }
 /**
@@ -196,12 +196,12 @@
 }
 /* 移动端 + 嵌入：与 `.is-mobile .ijipu-embedded .ijipu-score-toolbar` 同口径（触控尺寸优先） */
 .ijipu-score-toolbar.ijipu-ported-mobile.ijipu-ported-embedded {
-  --ijipu-ctl-h: 44px;
+  --ijipu-ctl-h: 28px;
   --ijipu-ctl-w: 44px;
 }
 .is-mobile .ijipu-embedded .ijipu-score-toolbar {
   /* adj862：移动端**一律** ≥44px（嵌入形态在小屏上同样要用手指点，不能回落到 --touch-size-xxs） */
-  --ijipu-ctl-h: 44px;
+  --ijipu-ctl-h: 28px;
   --ijipu-ctl-w: 44px;
 }
 /* 统一控件高度：选择器带 .ijipu-score-toolbar 前缀，压过主题/移动端对 button 的高度约束 */
@@ -225,7 +225,7 @@
 .is-mobile .ijipu-score-toolbar .ijipu-mode-select-wrap,
 .ijipu-score-toolbar.ijipu-ported-mobile .ijipu-play,
 .ijipu-score-toolbar.ijipu-ported-mobile .ijipu-mode-select-wrap {
-  min-width: 44px;
+  min-width: 32px;
   justify-content: center;
 }
 .ijipu-play {

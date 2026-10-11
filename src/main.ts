@@ -2,7 +2,7 @@ import { Events, Keymap, MarkdownRenderChild, MarkdownView, Notice, Platform, Pl
 // adj749d：自动格式化（光标离开本行时格式化该行）用**引擎里那份应用自己的**逐行格式化器
 import { formatLine, applyRangeToSvg, rangeBox, readViewBoxOf, insertPngPhys, dpiForScale, RANGE_PAD_DEFAULT, type RangeBox } from '@ijipu/engine'
 // adj774：markdown 笔记里 ```jps 代码块的围栏扫描（着色/错误提示/自动格式化三处共用同一份口径）
-import { jpsBlockRanges, zoomOfInfo } from './jpsBlocks'
+import { jpsBlockRanges, modeOfInfo, modeParamWarning, zoomOfInfo } from './jpsBlocks'
 import { createIjipuApi, type IjipuApi } from './api'
 import { createAppRequester, createEmbedRpc, type AppRequester, type EmbedRpc } from './embed/rpc'
 // adj807（B2）：RPC 的 `render.svg` 允许带 `pageConfig` 覆盖 ⇒ 这里只需要它的**类型**
@@ -1854,7 +1854,8 @@ class IJipuBlock extends MarkdownRenderChild {
        * 只有代码块传它 ⇒ 文件视图 / 嵌入保持既有行为（作用域见 `ScorePaneHost.zoom`）。
        */
       zoom: this.zoomOfBlock(),
-    })
+      /** adj870：代码块写死的初始显示模式（`m=p|w|s`）；没写 ⇒ 面板用缺省「谱面」 */
+      mode: this.modeOfBlock(),    })
   }
 
   /**
@@ -1873,6 +1874,33 @@ class IJipuBlock extends MarkdownRenderChild {
     if (!info) return 100
     const fence = info.text.split('\n')[info.lineStart] ?? ''
     return zoomOfInfo(fence)
+  }
+
+  /**
+   * adj870：`m=` 提示去重 —— 渲染会**反复调用** `modeOfBlock()` ⇒ 每个（行号 + 提示内容）只提示一次，
+   * 否则会刷屏（用户要的是"知道写错了"，不是"被弹窗淹没"）。
+   */
+  private warnedBlockParams = new Set<string>()
+
+  /**
+   * adj870：代码块写死的**初始显示模式**（`m=p|w|s` ⇒ 整页/满宽/谱面）。
+   * 没写 ⇒ `undefined` ⇒ 面板用缺省「谱面」（与改动前一致 ✓，不静默改行为）。
+   *
+   * ⚠ `m=full` 这类**有歧义/认不出**的写法：**不静默退化** ✗，而是提示一次该怎么改（见 `modeParamWarning`）。
+   */
+  private modeOfBlock(): 'page' | 'full' | 'score' | undefined {
+    const info = this.sectionInfo()
+    if (!info) return undefined
+    const fence = info.text.split('\n')[info.lineStart] ?? ''
+    const warn = modeParamWarning(fence)
+    if (warn !== null) {
+      const key = `${info.lineStart}:${warn}`
+      if (!this.warnedBlockParams.has(key)) {
+        this.warnedBlockParams.add(key)
+        new Notice(`iJipu：${warn}`)
+      }
+    }
+    return modeOfInfo(fence)
   }
 
   /**
