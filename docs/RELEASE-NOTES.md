@@ -1,54 +1,62 @@
-# 爱记谱 iJipu 0.34.2
+# 爱记谱 iJipu 0.35.0
 
-> **本版是针对社区审核结果的修复版**（PATCH）：0.34.1 的审核判定 **Failed**，
-> **唯一 Error** 是本插件自己写的一处**内联样式** ✗ —— 本版按审核给的出路改掉，
-> 并把"审核 Error 级规则"落成**自动加载的规范 + 机器闸门**（见下）。
-> 0.34.1 → **0.34.2**。**既有谱面与 `.jps` 语法零改动**；引擎与应用仓库本周期未改动。
+> **本版是"对外能力"版本**（MINOR）：新增 **公开 JS API**、**嵌入版 RPC 通道**（含安全边界与协议冻结）、
+> **三种导出命令**（SVG / PNG / MIDI），以及配套的**机器闸门**与文档。
+> 0.34.2 → **0.35.0**。**既有谱面与 `.jps` 语法零改动**；引擎与应用仓库本周期未改引擎代码。
 
-## 审核 Error：`obsidianmd/no-static-styles-assignment`
+## 新增：公开 JS API（任何插件/脚本可用）
 
-- **现象**：审核报告 **Failed**，Source code → Error 指向
-  `src/scorePane.ts:790 / 793 / 794` —— 那是 0.34.1 新写的"工具条外侧落位"里
-  `el.style.setProperty('position' | 'left' | 'top' | 'bottom' | 'z-index')` ✗。
-- **修法**（按审核原文给的三条出路）：
-  · **定位与层级交给 CSS 类** `.ijipu-score-toolbar.ijipu-ported`
-    （`position: fixed; left: var(--ijipu-port-x); top: var(--ijipu-port-y); bottom: auto; z-index: 40`）；
-  · **动态坐标用 `el.setCssProps({ '--ijipu-port-x': …, '--ijipu-port-y': … })`**
-    —— 这是 Obsidian 认可的动态值写法 ✓；
-  · 收起/搬回容器时 `removeClass('ijipu-ported')` 并清空这两个自定义属性 ✓。
-- **行为不变**：外侧落位、跟随滚动/尺寸变化、进视界显示 + 3 秒倒计时、离开视界隐藏，全部与 0.34.1 一致 ✓。
+- 插件实例暴露 **`api`**（`Object.freeze` 过、带 **`apiVersion = 1`**）：
+  `lint(source)` / `format(source)` / `renderSvg(source, pageConfig?)` / `effectiveConfig(source)` / `renderFull(...)`（experimental）；
+- 先看 **`capabilities`** 再调：**未实现的能力一律报 `false`**（不谎报）；
+- 配置口径与预览区**同源**（走插件自己的 `resolvePageConfig` ✓ —— 不许 API 另算一份）；
+- 用法与逐方法说明见 `docs/OBSIDIAN-API.md`；机器闸门 `adj800`。
 
-## 新增：审核 Error 级规则的**规范 + 闸门**（用户要求）
+## 新增：嵌入版 RPC（Obsidian ⇄ 嵌入版 iJipu）
 
-用户原话：「**这个问题多次出现，请写进 AGENTS，作为一条规则进行规范**」⇒ 已写入 `ijipu/AGENTS.md` **§六之四**，
-按项目"元规则"同时给出 **① 自动加载的规范** 与 **② 机器闸门**：
+**两条方向、两组白名单**（协议版本 **1**，信封与错误码已冻结 ✓）：
 
-1. **禁直接写内联样式**（`el.style.x = …`、`el.style.setProperty(…)`、`style.cssText = …`）；
-   只允许 **CSS 类**（首选）/ **`setCssProps`** / **`setCssStyles`**；`removeProperty`（摘属性）未被判，但**赋值**一律禁止；
-   唯一例外是"循环里的动态键"（`for (const [k, v] of Object.entries(style)) el.style.setProperty(k, v)`，
-   键是变量、规则判不了"静态"），新增此类写法必须在注释里写明理由；
-2. **同类 Error/Warning 一览表**（内联样式 / `!important` / `innerHTML` / `console.*` /
-   `import 'node:*'`（静态导入是刻意的，附原因）/ `fetch` / `getSettingDefinitions()` / Build verification）；
-3. **发布前"审核预检"三步**：`smoke` 全绿 → 人工过 Error 行 → 结果记 `docs/ERRORS-LOG.md` 并把能自动化的落成闸门。
+| 方向 | 方法 | 状态 |
+|---|---|---|
+| 应用 → 插件 | `engine.version` / `capabilities` / `render.svg` | ✓ 已实现 |
+| 插件 → 应用 | `render.svg` / `render.png` / `export.midi` | ✓ 已实现（`playback.play/stop` 留名待后续） |
 
-**机器闸门**：插件 `npm run smoke` 新增 **`adj799`** —— 扫描 `src/**/*.ts`
-（排除 `src/gen/**` 生成物与 `vendor/**`），任何"内联样式赋值"即红灯，并在失败信息里列出**文件:行号**；
-带**负对照**（去掉类那一行即判假）。
+**安全边界（写死在代码里，有闸门守）**：
+1. **总开关默认关闭**（设置 → iJipu → 嵌入版 → 「开发者：允许嵌入版调用插件能力」✓；**仅本会话有效** ✓，关闭时一律回「未启用」）；
+2. **来源校验**：只接受"src 含本插件 token 的 iframe"那个窗口发来的消息 ✓，否则**直接忽略、不回包**（避免被探测）；
+3. **方法白名单** + **参数逐项校验**（类型/长度/枚举 ✓，不做"尽力解析"）；
+4. **路径规则**：只允许 vault 内**相对路径**，禁绝对路径 / 盘符 / `..` / NUL；
+5. 错误码 JSON-RPC 风格：`-32001` 未启用 ｜ `-32601` 未知方法 ｜ `-32602` 参数非法 ｜ `-32603` 内部错误 ｜ `-32000` 应用侧不支持。
 
-## 附：审核其余条目的口径（本版未改，均为已知/刻意的）
+**跨仓一致性闸门**：断言「应用侧能处理的方法 ⊆ 插件出站白名单」✓ ——
+本版正是靠它抓出并修掉了一处**真实协议漂移**（应用支持 `render.svg`，插件出站清单漏了它 ⇒ 合法请求发不出去）。
 
-- `import 'node:http'` / `'node:crypto'`（Warning）：**静态导入是刻意的** —— 本插件以 CJS 打包且把
-  `node:*` 列为 external，动态 `import('node:http')` 在渲染进程会退化成浏览器模块请求而**直接失败** ✗
-  （0.34.0 曾因此出现「Failed to fetch dynamically imported module: node:http」）；
-  手机端安全由**调用方**保证：`./embed/server` 只在 `Platform.isDesktopApp` 时被动态加载 ✓。
-- `fetch`（Warning）：已知豁免 —— 音色库下载与嵌入版本地服务（固定端口 47821，仅本机回环）。
-- `!important`：**0 处**（闸门 `adj772`）。
-- Build verification（Warning）：表示"审核方重建产物 ≠ Release 产物"。本仓库按同一提交重建后
-  与 CI 产物**逐字节一致**（0.34.1 实测 `FA4E68F2…`），差异来自重建环境（Node/依赖版本）。
+## 新增：三种导出命令（命令面板搜 "iJipu"）
+
+- **导出当前谱面为 SVG 文件**（存到同目录；多页写 `名字-1.svg`…）✓；
+- **导出当前谱面为 PNG**（走嵌入版通道 ⇒ 复用应用侧 `svgToCanvas`，与 GUI 导出同一套渲染）✓；
+- **导出当前谱面为 MIDI**（走嵌入版通道 ⇒ 与应用导出同一套 `buildPlaySequence` + `eventsToMidi` 与音色/声部设置）✓；
+- 另有原有的「格式化 / 校验 / 复制 SVG 源码 / 打开爱记谱」✓；**取源优先级**：`.jps` 文件视图 → 光标所在代码块 → 活动 `.jps` 文件 → 否则命令置灰 ✓。
+
+## 工具条与排版（延续 0.34.x 的真机修复）
+
+- 工具条显隐状态机（块不在视界不显示、进视界才起 3 秒倒计时、点击手动开关、手动显示后不自动收起）；
+- 外侧落位 `fixed` + 挂 `document.body`（摆脱祖先裁剪/层叠）、移植上下文标记（尺寸一致）、孤儿清理；
+- 手机端预览滚动（面板/SVG 层 `flex: 0 0 auto` + `touch-action: pan-y`）、谱面四边 2px 留白。
+
+## 诊断（延续）
+
+- 设置 → iJipu → **诊断** 页签：每块**点击即复制**、**一键复制全部**；
+- **「生成完整诊断报告」**：一次取样得到「环境 + 滚动链路 + 工具条实物 + 面板布局 + 最近记录」并自动复制。
 
 ## 验证
 
-- `npx tsc -noEmit -skipLibCheck` 0 错；`npm run smoke` **384 passed, 0 failed**；`npm run build` 正常；
-- `node scripts/release-body.mjs` 命中当版 `# 爱记谱 iJipu 0.34.2`；
-- `vendor/engine` 与应用引擎**逐文件哈希一致**（46 文件，差异 0）；`adj733` 嵌入版版本闸门通过（v0.51.2）；
-- 发布后终验：CI 产物与本地同提交重建**逐字节比对**，并把 CI 产物装进用户库 + `gh attestation verify`。
+- `npx tsc -noEmit -skipLibCheck` 0 错；`npm run smoke` **387 passed, 0 failed**（含本版新增 `adj800/807/808/810/812/813/821/822/825`）；
+- `vendor/engine` 与应用引擎逐文件哈希一致 ✓；`adj733` 嵌入版版本闸门通过（v0.51.2）；
+- 发布后终验：CI 产物与本地同提交重建**逐字节比对** → 装进用户库 → `gh attestation verify`。
+
+## 未完成（如实说明）
+
+- **`playback.play/stop` 未接线**：应用侧播放由 `PlaybackDialog`（React，41 KB）持有 ⇒ 前置是"播放无头化"重构；
+  第一步 `src/playback/headless.ts`（应用仓库）已完成 ✓，后续步骤见应用仓库 `docs/HANDOVER-CLI-AND-COMMAND-API.md`；
+  在此之前 `capabilities.audio = false`、未实现方法回 `-32000` 并写明原因（**不谎报**）。
