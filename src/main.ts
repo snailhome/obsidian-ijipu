@@ -120,15 +120,17 @@ export default class IJipuPlugin extends Plugin {
    */
   private embedRpcWindow(): Window | null {
     /**
-     * adj830（用户实测：嵌入版已开在**右侧栏**，导出 PNG/MIDI 仍提示「嵌入版未打开」✗）：
+     * adj844（用户实测：「导出 PNG 仍然没有应答」✗，且嵌入产物里**确实含桥** ✓）：
      *
-     * 真因：以前按 `src.includes('token=')` 找 iframe ✗ —— 而 `embed/frame.ts` 建 iframe 时
-     * **URL 里没有 token**（token 是 iframe 加载后由 `bridge.setToken()` 经 postMessage 交过去的 ✓）
-     * ⇒ 永远匹配不到 ⇒ 报"未打开" ✓。
+     * 最可能的元凶是**选错了 iframe** ✗ —— 页面里可能同时存在多个本机服务 iframe
+     * （右栏一个、别的页签/历史视图一个、甚至已关闭但未回收的一个 ✓），
+     * 而原来的实现取"**第一个**匹配的" ⇒ 可能发给了**隐藏/陈旧**那个 ⇒ 永远等不到应答 ✓。
      *
-     * 改成按**本机服务地址**识别：嵌入版一定是插件自己起的本机 HTTP 服务页面
-     * （`http://127.0.0.1:<port>` 或 `http://localhost:<port>` ✓，见 `embed/server.ts` 的固定端口 47821 ✓）。
-     * 同时保留旧的 token 判据作为兜底 ✓（两条都不命中才算"没打开" ✓）。
+     * 现在的选取顺序（**可见优先** ✓，并把结果记进诊断 ✓）：
+     *  ① 可见（`offsetWidth/Height > 0` ✓）且 `contentWindow` 非空 ✓ 的候选 —— 取**最后一个**
+     *     （后建的通常是当前活动视图 ✓）；
+     *  ② 否则退回任意候选（保持可用的降级 ✓）。
+     * 同时把"选中了哪个 src"记进 `lastEmbedFrameInfo` ✓ ⇒ 下次诊断一眼可判 ✓。
      */
     const isEmbedIframe = (f: HTMLIFrameElement): boolean => {
       const src = f.src
@@ -136,11 +138,23 @@ export default class IJipuPlugin extends Plugin {
       if (src.includes('token=')) return true
       return /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?\//.test(src)
     }
-    for (const f of Array.from(document.querySelectorAll('iframe'))) {
-      if (isEmbedIframe(f) && f.contentWindow !== null) return f.contentWindow
+    const candidates = Array.from(document.querySelectorAll('iframe')).filter(
+      (f) => isEmbedIframe(f) && f.contentWindow !== null,
+    )
+    const visible = candidates.filter((f) => f.offsetWidth > 0 && f.offsetHeight > 0)
+    const pick = visible.length > 0 ? visible[visible.length - 1] : candidates[candidates.length - 1]
+    if (pick === undefined) {
+      this.lastEmbedFrameInfo = `候选 iframe=${candidates.length}｜可见=${visible.length}｜⇒ 没有可用的嵌入版窗口`
+      return null
     }
-    return null
+    this.lastEmbedFrameInfo =
+      `候选 iframe=${candidates.length}｜可见=${visible.length}｜选中=${pick.src.replace(/^https?:\/\//, '').slice(0, 60)}` +
+      `（${visible.length > 0 ? '可见' : '降级：取任意候选'} ✓）`
+    return pick.contentWindow
   }
+
+  /** adj844：最近一次"嵌入版窗口选取"的结论（进诊断报告 ✓） */
+  lastEmbedFrameInfo: string | null = null
   /** 插件内事件广播（当前用于设置变更 → 打开中的谱面即时重渲染） */
   readonly events = new Events()
   /** 「排版辅助虚线」是否显示（与 iJipu 顶栏「排版」按钮同一个开关；所有面板共享、不落盘） */
