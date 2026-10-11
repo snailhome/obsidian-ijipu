@@ -1802,8 +1802,11 @@ toolbar.dataset.ijipuPane = String(paneId)
      * 现在**只有一处判定**（`publishDisplaySize`，挂载与切模式走同一条路），这里不再自己判一遍。
      */
     const zoomOfHost = host.zoom
-    /** adj871：`z=` 是否**真的写在开栏行里**（满宽模式靠它区分"未写 ⇒ 铺满"与"`z=100` ⇒ 固定自然宽"） */
-    const zoomWritten = host.zoomWritten === true
+    /**
+     * ⚠ adj871 订正（用户：「`z` 未写保持 `z=100` 的现状」）：面板里**不再需要**区分"z 写没写" ——
+     * 未写与 `z=100` 行为一致（固定自然尺寸），只有 `z=*` 才铺满 ⇒ 原来那个局部常量已删（`tsc` 会报未使用 ✓）。
+     * `ScorePaneHost.zoomWritten` 仍由 `main.ts` 传着（它只服务于"`m=p` + 具体 `z=N` ⇒ 提示 z 不生效"）。
+     */
     svgs.forEach((svg, i) => {
       if (svgs.length > 1 && !host.embedded) {
         container.createDiv({ cls: 'ijipu-page-label', text: `第 ${i + 1} / ${svgs.length} 页` })
@@ -2095,8 +2098,14 @@ toolbar.dataset.ijipuPane = String(paneId)
       svgWrap.removeClass('ijipu-zoom-fixed')
       if (mode === 'page') return
       const zNum = typeof zoomOfHost === 'number' ? zoomOfHost : null
-      if (mode === 'full' && !(zoomWritten && zNum !== null)) {
-        // 满宽 + 没写具体 z ⇒ 铺满容器宽（`z=*` 与未写同族，都是"按宽自适应"）
+      /**
+       * ⚠ adj871 订正（用户 2026-10-11 明确）：「**`z` 未写保持 `z=100` 的现状**」⇒
+       * 满宽模式下**未写 z 也是固定自然尺寸**（1 单位 = 1px），**只有写 `z=*` 才铺满**。
+       * 所以这里**不能**用 `zoomWritten` 分岔（那是"未写即铺满"的写法，已撤掉）；
+       * `zoomWritten` 现在只服务于"`m=p` + 具体 `z=N` ⇒ 提示 z 不生效"那一条 ✓。
+       */
+      if (mode === 'full' && zoomOfHost === 'auto') {
+        // 满宽 + `z=*` ⇒ 铺满容器宽（高度超出就滚动 ✓）
         svgWrap.addClass('ijipu-zoom-fit')
         return
       }

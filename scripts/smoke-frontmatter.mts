@@ -4437,9 +4437,15 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
           /svgWrap\.removeClass\('ijipu-zoom-fit'\)/.test(pane871) &&
           /svgWrap\.removeClass\('ijipu-zoom-fixed'\)/.test(pane871) &&
           /if \(mode === 'page'\) return/.test(pane871) &&
-          // `z=N` 与"没写 z"在满宽模式下**必须分成两岔**（靠宿主传的 `zoomWritten`）
-          /host\.zoomWritten === true/.test(pane871) &&
-          /mode === 'full' && !\(zoomWritten && zNum !== null\)/.test(pane871))
+          /**
+           * ⚠ adj871 订正（用户明确「**`z` 未写保持 `z=100` 的现状**」）：满宽模式**只认 `z=*`** 才铺满；
+           * 未写 z 与 `z=N` 同族（固定自然尺寸 × N%）⇒ 判据里**不许**再出现"未写即铺满"的 `zoomWritten` 分岔。
+           * `zoomWritten` 仍要传（它只服务于"`m=p` + 具体 `z=N` ⇒ 提示 z 不生效"那一条 ✓）。
+           */
+          /mode === 'full' && zoomOfHost === 'auto'/.test(pane871) &&
+          !/mode === 'full' && !\(zoomWritten && zNum !== null\)/.test(pane871) &&
+          // 面板里**不再**需要局部 `zoomWritten`（未写与 z=100 同族）；类型上的字段留着给 main.ts 的提示用
+          !/const zoomWritten = host\.zoomWritten === true/.test(pane871))
       check('adj871 `zoomWrittenInInfo`：`z=` 写没写真能分辨（`z=100`/`z=*` 算写了；未写/认不出算没写）',
         zoomWrittenInInfo('```jps z=100') === true && zoomWrittenInInfo('```jps z=*') === true &&
           zoomWrittenInInfo('```jps m=w z=150') === true && zoomWrittenInInfo('```jps m=w,z=50') === true &&
