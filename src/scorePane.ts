@@ -1608,8 +1608,19 @@ toolbar.dataset.ijipuPane = String(paneId)
       let y0 = Infinity
       let x1 = -Infinity
       let y1 = -Infinity
-      for (const child of Array.from(svgEl.children)) {
-        const el = child as SVGGraphicsElement
+      /**
+       * adj861：**量"真正画出墨迹的元素"** ✓，而不是顶层子元素 ✗。
+       *
+       * 为什么（用户实测两连击 ✓）：
+       *  · 只用顶层 `svgEl.children` + `getBBox()` ⇒ **不含 transform** ✗ ⇒ 假盒 `489×27` ✗；
+       *  · 加上 `getCTM()` 后 ⇒ 顶层里"整页大小的结构组"（页面分组 ✓）也被算进来 ✗
+       *    ⇒ 盒 ≈ 整页 595×842 ⇒ 被"盒几乎等于整页"的闸判为不可靠 ⇒ **退回按边距裁剪 = 页面** ✗。
+       * ⇒ 正解是**只并集"叶子图形元素"**（text / path / line / rect / circle / ellipse / polyline / polygon / use ✓）
+       *   的**变换后**包围盒 ✓ —— 这就是"墨迹"的定义 ✓（白底 `data-page-bg` 仍显式跳过 ✓）。
+       */
+      for (const el of Array.from(
+        svgEl.querySelectorAll('text, path, line, rect, circle, ellipse, polyline, polygon, use'),
+      ) as SVGGraphicsElement[]) {
         if (el.getAttribute('data-page-bg')) continue // 整页白底：不是"内容"
         if (typeof el.getBBox !== 'function') continue
         let b: DOMRect
@@ -1619,10 +1630,27 @@ toolbar.dataset.ijipuPane = String(paneId)
           continue // 未渲染/不可见元素取不到盒，跳过
         }
         if (!(b.width > 0) && !(b.height > 0)) continue
-        if (b.x < x0) x0 = b.x
-        if (b.y < y0) y0 = b.y
-        if (b.x + b.width > x1) x1 = b.x + b.width
-        if (b.y + b.height > y1) y1 = b.y + b.height
+        /**
+         * adj860（用户诊断：谱面视图仍 `按墨迹裁剪 489×27（高度只剩 3%）` ✗）：
+         * **`getBBox()` 不含元素自身的 transform** ✗ —— 谱面内容多包在 `<g transform="translate/scale">` 里 ✓
+         * ⇒ 直接取子元素 `getBBox()` 得到的是**未变换坐标** ⇒ 就会量出"又扁又窄"的假盒 ✓✓。
+         * 修法：用 `getCTM()` 把盒的**四个角**变换到 **SVG 用户坐标** ✓ 再并集 ✓（纯几何 ✓，不改样式 ✓）。
+         */
+        const m = typeof el.getCTM === 'function' ? el.getCTM() : null
+        const corners: Array<[number, number]> = [
+          [b.x, b.y],
+          [b.x + b.width, b.y],
+          [b.x, b.y + b.height],
+          [b.x + b.width, b.y + b.height],
+        ]
+        for (const [px, py] of corners) {
+          const tx = m === null ? px : m.a * px + m.c * py + m.e
+          const ty = m === null ? py : m.b * px + m.d * py + m.f
+          if (tx < x0) x0 = tx
+          if (ty < y0) y0 = ty
+          if (tx > x1) x1 = tx
+          if (ty > y1) y1 = ty
+        }
       }
       if (!Number.isFinite(x0) || !Number.isFinite(y0) || x1 <= x0 || y1 <= y0) return null
       return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
