@@ -1174,6 +1174,11 @@ export default class IJipuPlugin extends Plugin {
     push(`  嵌入版服务：${this.lastEmbedError ?? '（无错误）'}`)
 
     push('')
+    push('— 插件自身位置（adj855；定位"我更新的目录 ≠ Obsidian 加载的目录"）—')
+    push(`  插件目录 manifest.dir = ${this.manifest.dir ?? '（未知）'}｜id=${this.manifest.id}｜版本=${this.manifest.version}`)
+    push('  （若该目录不是 D:\\蜗居笔记\\悟乐居杂记\\.obsidian\\plugins\\ijipu ⇒ 说明你库里还有副本在被加载 ✓）')
+
+    push('')
     push('— 嵌入版服务产物自检（adj847；**若显示"（本次取样后才取回，请再点一次生成并复制）"就再点一次** ✓）—')
     push(`  ① 自报家门：${this.embedHelloInfo ?? '**未收到 ✗**（桥没执行到安装，或嵌入视图没重开 ⇒ 请关掉嵌入版视图再打开一次，然后重载插件）'}`)
     push(
