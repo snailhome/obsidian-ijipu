@@ -701,19 +701,19 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
     }
   }
 
-  // 数字主体（含 notepos 契约；虚音符 (1) 两侧加小括号，adj23；字号随字号）
+  /**
+   * 数字主体（含 notepos 契约；字号随字号）。
+   *
+   * adj907：**删掉了 `t.ghost`（"虚音符"）那条分支** —— 全仓从来没有生产者（`ghost` 字段只在
+   * `types.ts` 声明、只在这里被读一次），那个"给数字两侧加小括号"的画法**从未执行过**。
+   * 括号紧贴数字的写法在本项目里的语义是**连音线连接点**（`(2)` = 结束前一条连音线 + 起下一条，
+   * 见 `docs/SYNTAX.md` 2.7 与 `E-2026-099`/`E-2026-417`），由布局的画弧与配对负责，
+   * **不需要**在这里额外画括号。
+   */
   const glyph = t.kind === 'rest' ? '0' : t.kind === 'rhythm' ? 'X' : String(t.pitch)
-  if (t.kind === 'note' && t.ghost) {
-    parts.push(
-      `<text x="${x - 5 * s}" y="${y}" font-size="${r1n(13 * s)}" font-family="${font}" fill="#1b1b1b">(</text>`,
-      `<text x="${x}" y="${y}" data-notepos="${nid}" font-size="${size}" font-family="${font}" font-weight="bold" fill="#1b1b1b">${glyph}</text>`,
-      `<text x="${x + digitW + s}" y="${y}" font-size="${r1n(13 * s)}" font-family="${font}" fill="#1b1b1b">)</text>`,
-    )
-  } else {
-    parts.push(
-      `<text x="${x}" y="${y}" data-notepos="${nid}" font-size="${size}" font-family="${font}" font-weight="bold" fill="#1b1b1b">${glyph}</text>`,
-    )
-  }
+  parts.push(
+    `<text x="${x}" y="${y}" data-notepos="${nid}" font-size="${size}" font-family="${font}" font-weight="bold" fill="#1b1b1b">${glyph}</text>`,
+  )
 
   // 附点（adj71）：附点是音符的修饰符——增加前面音符一半时值（1. 总宽 1.5 拍、1/. 0.75 拍，
   // tokenDuration 已按 ×1.5/×1.75 计算，占位宽度随之增半）；

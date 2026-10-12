@@ -126,3 +126,67 @@ export function parseInstrumentRef(raw: string): ParsedVoiceRef {
   if (ci >= 0) instrument = body.slice(ci + 1).trim()
   return { ref: body, instrument, display: display ?? instrument }
 }
+
+/**
+ * adj908：段层伴奏 / 第二声部的**内置兜底音色**（用户规格：可用音色 第 1 = 大钢琴、第 2 = 手风琴）。
+ * 需要跨模块共用（`sequence.ts` 发声、`layout/index.ts` 标注），故从 `sequence.ts` 搬到这里。
+ */
+export const ACCOMP_FALLBACK_INSTRUMENT = '手风琴'
+
+/**
+ * adj908：**某声部没在描述头 `Y:` 里写音色**时该用哪个音色 ref —— 引擎里**唯一**一处口径。
+ *
+ * ## 为什么必须抽成一个纯函数
+ *
+ * 这段逻辑有**两个消费端**，以前各写了一份：
+ *  · `playback/sequence.ts`（实际发声 + 色块配色）；
+ *  · `layout/index.ts`（`showInstrument` 时 `@@` 标注的"默认乐器名"）。
+ * 各写一份的后果是：口径一变就出现「**标注的音色 ≠ 实际演奏的音色**」（本项目已复发过同类问题）。
+ *
+ * ## 口径（adj908，用户 2026-10 确认方向「各声部音色要不同」）
+ *
+ * 用户原话：「未设置音色的情况下，声部之间没有用不同的音色区分开，色块也没有区分」。
+ * 根因是旧口径在 `Y:` 行数不够时给所有声部返回**同一个**默认音色，而色块颜色是
+ * **按音色名去重**分配的（`playhead.ts` 的 `instrumentColorMap`）⇒ 两个声部同色。
+ *
+ *  ① `Y:` 显式写了 → 用它（**谱面为准**，不被启用列表改写）；
+ *  ② 没写（或行数不够）：
+ *     · `voice === 1` → `defaultInstrumentRef`（= 启用音色列表第 1 个）；
+ *     · `voice >= 2` → 启用列表第 `(voice-1) % refs.length` 项 ⇒ 与第 1 声部**不同音色**；
+ *  ③ `enabledInstrumentRefs` **没传**（CLI / 导出等旧调用方）→ 完全保持旧口径
+ *     （回落 `defaultInstrumentRef`），不改变既有行为；
+ *  ④ 传了**空列表** → 没有可区分的音色 ⇒ 回落 `accompInstrumentRef()`（`Y[1]` 否则「手风琴」）；
+ *  ⑤ **边界**：列表**只有 1 项**时无法区分声部，第 2 声部只能与第 1 声部同音色（保持现状，不特殊处理）。
+ */
+export function voiceDefaultInstrumentRef(opts: {
+  /** 声部号（1 起，= 曲行的 `Q1:`/`Q2:` 编号） */
+  voice: number
+  /** 描述头 `Y:` 行（按书写顺序，第 n 行对应第 n 声部） */
+  yInstruments?: readonly string[]
+  /** 第 1 声部的兜底音色（调用方的「启用音色列表第 1 项」） */
+  defaultInstrumentRef?: string
+  /**
+   * 「启用音色列表」**整份**（按可用顺序）。`undefined` = 调用方没给 ⇒ 保持旧口径；
+   * `[]` = 给了但为空 ⇒ 回落 `accompInstrumentRef()`。
+   */
+  enabledInstrumentRefs?: readonly string[]
+}): string {
+  const y = opts.yInstruments?.[opts.voice - 1]
+  if (y !== undefined) return parseInstrumentRef(y).ref
+  const fallback = opts.defaultInstrumentRef?.trim() || ''
+  if (opts.voice <= 1) return fallback
+  const refs = opts.enabledInstrumentRefs
+  if (refs === undefined) return fallback
+  if (refs.length === 0) return accompInstrumentRef(opts.yInstruments)
+  return parseInstrumentRef(refs[(opts.voice - 1) % refs.length]).ref
+}
+
+/**
+ * adj908：段层伴奏 / 第二声部的音色 ref —— 优先脚本第 2 条 `Y:`，否则内置「手风琴」。
+ * （用户规格：「可用音色 第 1 = 大钢琴、第 2 = 手风琴」；第 1 项留给主声部。）
+ */
+export function accompInstrumentRef(yInstruments?: readonly string[]): string {
+  const y1 = yInstruments?.[1]
+  if (y1 !== undefined && y1.trim() !== '') return parseInstrumentRef(y1).ref
+  return ACCOMP_FALLBACK_INSTRUMENT
+}

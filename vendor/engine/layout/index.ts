@@ -34,7 +34,9 @@ import { DIGIT_HEIGHT_RATIO, LAYER_GAP, SLUR_W, octaveTopY, octaveDotY, BRACKET_
 import { splitNoteDur, noteBodyW, augBodyW, dotBodyW, accidentalBodyW, accidentalGeometry, markBodyW, digitSlotW, hxBodyW, graceAtTail, graceSlotLayout, nonDurGap, slideExtraW, braceInkRightOffset, BRACE_LINE_DX } from './spaceLayout'
 import { hairpinEvents, resolveHairpins, type DynEvent, type NoteAnchors } from './hairpins'
 // adj303：乐器名标注需要用 parseInstrumentRef / 库名（@乐器名 / @@ 后下一个音符）
-import { parseInstrumentRef, INSTRUMENT_LIB_NAMES } from '../playback/instruments'
+// adj908：`voiceDefaultInstrumentRef` = "某声部没写 `Y:` 时用哪个音色"的**唯一**口径
+// （播放端 `buildPlaySequence` 与这里的 `showInstrument` 标注共用，避免两边各算一套）
+import { parseInstrumentRef, INSTRUMENT_LIB_NAMES, voiceDefaultInstrumentRef } from '../playback/instruments'
 // adj427：临时段（{bz … } / {dsb … }）叠加层的拍位包络与主旋律跨度（纯函数）
 import {
   computeSegments,
@@ -868,6 +870,12 @@ export function layoutScore(
   config: PageConfig,
   defaultInstrumentRef?: string,
   fontMeta?: LayoutFontMeta,
+  /**
+   * adj908：调用方的「启用音色列表」整份（与 `buildPlaySequence` 的同名参数同源）——
+   * `showInstrument` 标注 `@@` 默认乐器名时，未写 `Y:` 的声部要按它顺延取音色，
+   * 才能与**实际演奏的音色**一致（两处共用 `voiceDefaultInstrumentRef`）。
+   */
+  enabledInstrumentRefs?: string[],
 ): ScoreLayout {
   const accInk = fontMeta?.accidentalInk
   const paper = PAPER_SIZE[config.page]
@@ -4145,15 +4153,23 @@ export function layoutScore(
   // adj354：@@ 的默认乐器名与播放端（buildPlaySequence）一致——有 Y 用该声部 Y 乐器名；
   // 无 Y 用调用方传入 defaultInstrumentRef（试听音色列表第一启用音色）；再空回退『第一音色库第一音色（钢琴）』。
   // 直接用 parseInstrumentRef(...).instrument（纯乐器名），避免 resolveInstrument 只映射固定 6 种、漏掉 GM 音色名。
+  // adj908：**未写 Y 的声部**这一条与播放端**共用同一个纯函数** `voiceDefaultInstrumentRef`
+  // （此前两边各写一份 ⇒ 口径一变就会出现"标注的音色 ≠ 实际演奏的音色"）。
+  // 新口径：voice ≥ 2 且没写 Y 时，取调用方「启用音色列表」第 (voice-1) 项（用户要求"各声部音色要不同"）。
   if (config.showInstrument === true) {
     const yInst = result.header.instruments
-    const globalDefaultName = yInst?.[0]
-      ? parseInstrumentRef(yInst[0]).instrument
-      : defaultInstrumentRef?.trim() || INSTRUMENT_LIB_NAMES.piano
+    const nameOfVoice = (voice: number): string =>
+      parseInstrumentRef(
+        voiceDefaultInstrumentRef({
+          voice,
+          yInstruments: yInst,
+          defaultInstrumentRef,
+          enabledInstrumentRefs,
+        }) || INSTRUMENT_LIB_NAMES.piano,
+      ).instrument
     for (const group of result.groups) {
-      // 该声部默认乐器（按 Y 顺序，无对应 Y 用全局默认）——@@ 恢复名用
-      const gY = yInst?.[group.music.voice - 1]
-      const voiceDefaultName = gY !== undefined ? parseInstrumentRef(gY).instrument : globalDefaultName
+      // 该声部默认乐器（按 Y 顺序；没写 Y 时按启用音色列表顺延、缺省回落全局默认）——@@ 恢复名用
+      const voiceDefaultName = nameOfVoice(group.music.voice)
       let pending: string | null = null
       for (const tk of group.music.tokens) {
         if (tk.kind === 'instrument') {

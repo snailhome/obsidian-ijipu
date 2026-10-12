@@ -31,13 +31,11 @@ import { decodeSegmentNoteId, decodeTpNoteId } from '../layout/segments'
 import { ornamentOf, ornamentPlan, neighborDegree } from './ornaments'
 import { slideOf, slidePlan } from './slides'
 import { midiToPitchName, pitchToMidiNote } from './midi'
-import { parseInstrumentRef } from './instruments'
+import { parseInstrumentRef, accompInstrumentRef, voiceDefaultInstrumentRef } from './instruments'
 // adj905b：**同拍位、同时值、短于 1 拍的上下两层色块取交集对齐**
 // （只调色块显示，播放数据与布局一个字节都不动）
 import { alignSameBeatSegs } from './playhead'
 
-/** adj427：第 2 可用音色的内置默认（用户规格：第 1 = 大钢琴、第 2 = 手风琴） */
-const ACCOMP_FALLBACK_INSTRUMENT = '手风琴'
 /** adj427：伴奏 / 第二声部的力度倍率（用户规格：重叠的伴奏部分用 0.75） */
 const ACCOMP_GAIN = 0.75
 
@@ -447,6 +445,18 @@ export function buildPlaySequence(
   startNoteId?: string | null,
   defaultInstrumentRef?: string,
   instrumentOverride?: string,
+  /**
+   * adj908：调用方的「**启用音色列表**」**整份**（按可用顺序，如应用侧 `uiStore.playbackHqEnabled`
+   * 经 `enabledInstrumentRefs()` 还原出的音色名 ref 数组）。
+   *
+   * 用途：`Y:` 行数不够（没给某声部写音色）时，第 n 声部取第 `(n-1) % refs.length` 项 ——
+   * 用户口径「未设置音色时，声部之间要用不同音色区分」（否则两声部同音色，
+   * 而色块颜色按音色去重分配 ⇒ **两个色块同色**，用户报的正是这个）。
+   *
+   * **可选**：不传（CLI / 导出等旧调用方）⇒ 完全保持旧口径（回落 `defaultInstrumentRef`）；
+   * 传空数组 ⇒ 回落 `accompInstrumentRef()`（`Y[1]` 否则「手风琴」）。
+   */
+  enabledInstrumentRefs?: string[],
 ): PlaySequence {
   // 0. adj88：起始音符定位——双击谱面音符试听时，从该音符（含之后）开始播放；
   //    事件延迟统一减去起点音符的 atMs，使起点音符立即播放
@@ -677,7 +687,7 @@ export function buildPlaySequence(
     }
   }
   // adj301/302：全局默认乐器 = 描述头第一个 Y 乐器（name 与试听音色库一致，无则音色库第一个钢琴）。
-  // 多声部按声部序号对应 Y 行顺序（Q1→Y[0]、Q2→Y[1]…）；声部比 Y 行多时用全局默认。
+  // 多声部按声部序号对应 Y 行顺序（Q1→Y[0]、Q2→Y[1]…）；声部比 Y 行多时按**启用音色列表**顺延（adj908）。
   // @乐器名 覆盖声部默认（全局持续直到 @@），@@ 清除覆盖（回声部默认）
   // adj339：Y 行默认乐器支持 `@库id:乐器名["显示名"]`（parseInstrumentRef 剥库前缀/显示名/可选 @），
   // 缺省仍是旧写法（如 `钢琴` / `@小提琴`），路由交给播放端。
@@ -685,22 +695,42 @@ export function buildPlaySequence(
   // 第一音色」（defaultInstrumentRef）；仍空则回退 ''（播放端路由 → 第一音色库第一音色，钢琴）。
   const yInstruments = result.header.instruments
   const yRef = yInstruments?.[0] ? parseInstrumentRef(yInstruments[0]).ref : ''
-  const defaultInstrument = yRef !== '' ? yRef : defaultInstrumentRef?.trim() || ''
-  const voiceDefaultOf = (voice: number): string => {
-    const y = yInstruments?.[voice - 1]
-    return y !== undefined ? parseInstrumentRef(y).ref : defaultInstrument
-  }
+  /**
+   * adj908：调用方给的「启用音色列表」（可为 `undefined` = 没给；`[]` = 给了但空）。
+   * 每一项都过 `parseInstrumentRef`，与 `Y:` 行同一口径（剥 `@…@` 与显示名、保留库前缀）。
+   */
+  const enabledRefs = enabledInstrumentRefs?.map((r) => parseInstrumentRef(r).ref)
+  // 第 1 声部的兜底：Y[0] > 调用方默认 > 启用列表第 1 项 > ''（播放端路由 → 音色库第一音色）
+  const defaultInstrument = yRef !== '' ? yRef : defaultInstrumentRef?.trim() || enabledRefs?.[0] || ''
+  /**
+   * adj908：**未写 `Y:` 的声部用哪个音色** —— 收敛在 `instruments.ts` 的 `voiceDefaultInstrumentRef`
+   * （`layout/index.ts` 的 `showInstrument` 标注消费**同一个**函数，避免"标注 ≠ 实际演奏"）。
+   *
+   * 新口径（用户 2026-10 确认「各声部音色要不同」）：`Y:` 没写时，voice 1 = 第 1 个可用音色，
+   * voice ≥ 2 = **启用列表第 `(voice-1) % refs.length` 项** ⇒ 与主声部**不同音色**，
+   * 色块随之不同色（`playhead.ts` 的 `instrumentColorMap` 按音色名去重分配颜色）。
+   *
+   * 边界与兼容（写在这里，免得以后被反复"修正"）：
+   *  · **不传** `enabledInstrumentRefs`（CLI / 导出等旧调用方）⇒ 旧口径（回落 `defaultInstrument`）不动；
+   *  · 传**空列表** ⇒ 无可区分音色 ⇒ 回落 `accompInstrumentRef()`（`Y[1]` 否则「手风琴」）；
+   *  · 列表**只有 1 项** ⇒ 无法区分，voice 2 只能与 voice 1 同音色（保持现状）。
+   */
+  const voiceDefaultOf = (voice: number): string =>
+    voiceDefaultInstrumentRef({
+      voice,
+      yInstruments,
+      defaultInstrumentRef: defaultInstrument,
+      enabledInstrumentRefs: enabledRefs,
+    })
   /**
    * adj427：临时段（`{bz … }` / `{dsb … }`）重叠区的**第二声部音色**（用户规格）：
    *  「可用音色 第 1 = 大钢琴、第 2 = 手风琴」——优先取脚本第 2 条 `Y:` 行；
    *  没有第 2 条 `Y:` 就用内置默认「手风琴」。
    *  （第 1 可用音色 = 主声部，走上面的 `voiceDefaultOf`；app 侧默认启用列表首位即「大钢琴」。）
+   *  adj908：实现搬到 `instruments.ts` 的 `accompInstrumentRef`（与 `voiceDefaultInstrumentRef` 同族，
+   *  同为"没写 Y 时用什么音色"的口径），此处只保留调用点。
    */
-  const accompInstrument = (): string => {
-    const y1 = yInstruments?.[1]
-    if (y1 !== undefined && y1.trim() !== '') return parseInstrumentRef(y1).ref
-    return ACCOMP_FALLBACK_INSTRUMENT
-  }
+  const accompInstrument = (): string => accompInstrumentRef(yInstruments)
   /**
    * adj455：「试听音色」**选定具体音色时 → 全篇统一音色**（用户规格，恢复 adj427/adj434 之前的语义）：
    * 主声部、`{bz}`/`{dsb}` 伴奏/第二声部、曲内 `@乐器名@` 显式切换**全部**改用该音色。
@@ -1303,23 +1333,35 @@ export function buildPlaySequence(
    * 每走到一根**小节线**时推进一次；小节自身的音符用"进入该小节时的调号"。
    */
   let curKey = keySemitone
-  // adj88：连音线内相同音高连续音符连奏合并——上一个已发事件的音符索引与音高；
-  // 当前音符若与上一个音高相同、同属某连音线且中间无音符（索引相邻），则时值并入前一事件
-  let lastEventNoteIdx = -1
-  let lastEventPitch: string | null | undefined = undefined
+  /**
+   * adj88：连音线内相同音高连续音符连奏合并——上一个已发事件的音符索引与音高；
+   * 当前音符若与上一个音高相同、同属某连音线且中间无音符（索引相邻），则时值并入前一事件。
+   *
+   * adj907（用户报「连音线音符会演奏两个音，如 `(5---|5)---|`，正确应该是一个 8 拍的 5」）：
+   * 这几份"上一个已发事件"状态**必须按声部隔离**（键 = 当前音符的 `placed.id.voice`）。
+   *
+   * 为什么：多声部单元的 `seq` 是**按小节交替**拼的（`Q1` 第 k 小节 → `Q2` 第 k 小节 → 小节线，
+   * 见下面的组装段）⇒ 一跨小节线，"上一个已发事件"就变成**另一个声部**的成员 ⇒
+   * `sameVoiceAsPrev` 与"索引相邻"双双不成立 ⇒ 连音不合并（实测真谱末句 F4 起奏 3 次）。
+   * 用全局标量时同小节内（`(1 1)`）反而是对的——这正是"只在跨小节线处漏合并"的原因。
+   *
+   * 注：**不用**"往回扫找同声部上一个事件"的替代方案——那是 O(n²)，且与反复/跳跃对齐纠缠。
+   */
+  const lastNoteIdxByVoice = new Map<number, number>()
+  const lastPitchByVoice = new Map<number, string | null | undefined>()
   // adj396：上一个音符的**主音符事件**下标（连音合并要并到主音符上，而非其后追加的倚音事件）
-  let lastMainEvIdx = -1
+  const lastMainEvByVoice = new Map<number, number>()
   /**
    * adj502/503：上一个音符**携带 `playheadSegs` 的事件**下标（色块归属）。
-   * 普通音符 = 主事件（与 `lastMainEvIdx` 相同）；带波音的音符 = **首个波音短音**
+   * 普通音符 = 主事件（与 `lastMainEvByVoice` 相同）；带波音的音符 = **首个波音短音**
    * （波动在开头，色块要与"音符起奏"对齐）⇒ 连音合并追加拍段时要落到这一个上。
    */
-  let lastBlockEvIdx = -1
+  const lastBlockEvByVoice = new Map<number, number>()
   /**
    * adj396/adj504：上一个音符是否带**后倚音**（`3[h5/]` 这种，倚音占尾部）。
    * 只有它会阻止下一个同音合并进来；**前倚音不影响**（合并只延长主音事件，倚音在开头不受影响）。
    */
-  let lastEventHadTailGrace = false
+  const lastHadTailGraceByVoice = new Map<number, boolean>()
   /**
    * adj375：呼吸换气（&hx）——待结算的事件下标。
    * 语义：`&hx` 占**前面音符**总时值（含同音连音/增时线/附点）的 1/4，且最多 1/2 拍，作为呼吸静音：
@@ -1992,10 +2034,19 @@ export function buildPlaySequence(
        * adj503：带**演奏型装饰**（波音/打音/叠音）的音符自己不能被并进前一个（它要重新起奏并奏出辅助音）；
        * adj596：合并只能在**同一声部内**（多声部单元按小节交替后，"上一个已发事件"可能属于另一声部）。
        */
+      /**
+       * adj907：本声部的"上一个已发事件"（键 = 本音符的声部）。
+       * `sameVoiceAsPrev` 保留成一句**断言式守卫**（守住 adj596 的原意）：
+       * 按声部取出来的主事件若不属于本声部，说明键控写错了 —— 这里立刻不成立、不会误并。
+       * ⚠ 下面**取 prev 的两处（主事件 / 色块事件）也必须按本声部取**，否则就是"合并到错误事件上"。
+       */
+      const lastNoteIdx = lastNoteIdxByVoice.get(placed.id.voice) ?? -1
+      const lastMainEvIdx = lastMainEvByVoice.get(placed.id.voice) ?? -1
+      const lastBlockEvIdx = lastBlockEvByVoice.get(placed.id.voice) ?? -1
       const sameVoiceAsPrev =
         lastMainEvIdx >= 0 && events[lastMainEvIdx]?.placed.id.voice === placed.id.voice
       {
-        const prevRanges = lastEventNoteIdx >= 0 ? slurOf.get(lastEventNoteIdx) : undefined
+        const prevRanges = lastNoteIdx >= 0 ? slurOf.get(lastNoteIdx) : undefined
         const curRanges = slurOf.get(curNoteIdx)
         const shareSlur =
           prevRanges !== undefined && curRanges !== undefined && [...prevRanges].some((r) => curRanges.has(r))
@@ -2006,9 +2057,9 @@ export function buildPlaySequence(
          * （演奏顺序相邻，源码顺序不相邻）。这是"跨跳房子接续"的唯一可判据。
          */
         const continuesFromPrev =
-          lastEventNoteIdx >= 0 && contTieStartOf.get(curNoteIdx) === lastEventNoteIdx
+          lastNoteIdx >= 0 && contTieStartOf.get(curNoteIdx) === lastNoteIdx
         if (
-          lastEventNoteIdx >= 0 &&
+          lastNoteIdx >= 0 &&
           sameVoiceAsPrev &&
           /**
            * adj710/adj722：**`{dsb}` 两层都不合并**——合并会吞掉起奏点，让"上下两声部逐音一一对应"失效
@@ -2017,14 +2068,14 @@ export function buildPlaySequence(
            * 翻转后包络外主旋律是**主声部**（`playVoice` 未设），但它同样必须保留每个音的起奏点。
            */
           placed.parentY === undefined &&
-          (continuesFromPrev || (curNoteIdx === lastEventNoteIdx + 1 && shareSlur)) &&
+          (continuesFromPrev || (curNoteIdx === lastNoteIdx + 1 && shareSlur)) &&
           !hasFrontGrace &&
           ornKind === null &&
           slideKind === null &&
-          !lastEventHadTailGrace &&
+          !(lastHadTailGraceByVoice.get(placed.id.voice) ?? false) &&
           lastMainEvIdx >= 0 &&
           pitch !== null &&
-          pitch === lastEventPitch
+          pitch === lastPitchByVoice.get(placed.id.voice)
         ) {
           const prev = events[lastMainEvIdx]
           // 后倚音占这个长音的末尾 ⇒ 长音先奏到"末尾之前"，空出来的那段给后倚音
@@ -2054,9 +2105,10 @@ export function buildPlaySequence(
             }
           }
           // adj157：合并时值；atMs 来自拍时钟（每个 event 独立），不需全局 at 累加
-          lastEventNoteIdx = curNoteIdx
+          // adj907：写回**本声部**的状态（键 = 声部）
+          lastNoteIdxByVoice.set(placed.id.voice, curNoteIdx)
           // 合并进来的那个音带后倚音 ⇒ 末尾已有倚音，再并下一个音会盖住它（同 adj396 的顾虑）
-          lastEventHadTailGrace = hasTailGrace
+          lastHadTailGraceByVoice.set(placed.id.voice, hasTailGrace)
           i++
           continue
         }
@@ -2131,12 +2183,13 @@ export function buildPlaySequence(
           gAt += graceNoteMs
         }
       }
-      lastEventNoteIdx = curNoteIdx
-      lastEventPitch = pitch
-      lastMainEvIdx = mainEvIdx
-      lastBlockEvIdx = blockEvIdx >= 0 ? blockEvIdx : mainEvIdx
+      // adj907：写回**本声部**的"上一已发事件"状态（键 = 声部）——多声部按小节交替时互不串台
+      lastNoteIdxByVoice.set(placed.id.voice, curNoteIdx)
+      lastPitchByVoice.set(placed.id.voice, pitch)
+      lastMainEvByVoice.set(placed.id.voice, mainEvIdx)
+      lastBlockEvByVoice.set(placed.id.voice, blockEvIdx >= 0 ? blockEvIdx : mainEvIdx)
       // adj504/adj629r：只有**后倚音**会阻止下一个音符合并进来（前倚音/波音都不阻止，见上面的说明）
-      lastEventHadTailGrace = gn !== undefined && gn.after && gracePitches.length > 0
+      lastHadTailGraceByVoice.set(placed.id.voice, gn !== undefined && gn.after && gracePitches.length > 0)
       i++
       continue
     }
