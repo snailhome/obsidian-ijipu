@@ -4242,6 +4242,12 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
    * `v=s` 同一份几何（实测 `[42 .. 554.88]` = 墨迹 + 每边 2px ✓）；DOM 量取（`contentBoxOf`）
    * **只作兜底**（它会被"看不见却有盒"的元素污染 ⇒ 实测量到 952 而页宽 595）。
    */
+  check('adj911d 显示端 `pad: 0`（**用户要求试看**：去掉 +2px 留白、正好裁到墨迹；导出/CLI 的 2px 不动）',
+    /rangeBox\(\{ range: 'score', pageW: w, pageH: h, ink: box \?\? undefined, minInk: minInkFor\(noteInkH\), pad: 0 \}\)/.test(pane862))
+  check('adj911d 负对照：把 `pad: 0` 去掉（回到缺省 2px）⇒ 上面那条为假',
+    !/minInk: minInkFor\(noteInkH\), pad: 0 \}\)/.test(
+      pane862.replace('minInk: minInkFor(noteInkH), pad: 0', 'minInk: minInkFor(noteInkH)'),
+    ))
   check('adj911c 谱面裁剪的墨迹**以引擎 `inkBoxOfLayout` 为准**，DOM 量取只作兜底',
     /import \{ rangeBox, minInkFor, RANGE_PAD_DEFAULT, inkBoxOfLayout \} from '@ijipu\/engine'/.test(pane862) &&
       /const engineInk = pageIdx >= 0 && layout\.pages\[pageIdx\] \? inkBoxOfLayout\(layout, pageIdx\) : null/.test(pane862) &&
@@ -4317,7 +4323,7 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
        * 肉眼看不见但 `getBBox()` 照样算）。**±2px 与两道闸仍然全在引擎里** ✓，插件只是把
        * **量到的输入**夹干净（输入卫生，不是自己算几何）✗ 不违反本条口径。
        */
-      /const out = rangeBox\(\{ range: 'score', pageW: w, pageH: h, ink: box \?\? undefined, minInk: minInkFor\(noteInkH\) \}\)/.test(pane863) &&
+      /const out = rangeBox\(\{ range: 'score', pageW: w, pageH: h, ink: box \?\? undefined, minInk: minInkFor\(noteInkH\)[^}]*\}\)/.test(pane863) &&
       /svgEl\.setAttribute\('viewBox', `\$\{out\.box\.x\} \$\{out\.box\.y\} \$\{out\.box\.w\} \$\{out\.box\.h\}`\)/.test(pane863) &&
       /const box = clampToPage\(b\)/.test(pane863))
   check('adj863 负对照：插件里**不再有**私有的 `PAD = 2` / `box.w + PAD * 2` 那份几何（有则口径必漂）',

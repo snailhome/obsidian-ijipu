@@ -2156,7 +2156,12 @@ toolbar.dataset.ijipuPane = String(paneId)
          * 此前这里的 `PAD = 2` 与两道闸是本文件的**私有副本**，导出那边又写一遍 ⇒ 口径必然漂 ✗
          * （本项目"数值口径必须同源"的老坑，见 AGENTS §六之二·4）。
          */
-        const out = rangeBox({ range: 'score', pageW: w, pageH: h, ink: box ?? undefined, minInk: minInkFor(noteInkH) })
+        /**
+         * adj911d（**用户要求试看**）：「这个的效果感觉更好，但应该可以去掉 + 2px 的留白，试下去掉它」——
+         * **显示端**传 `pad: 0`（引擎 `rangeBox` 支持、钳制 [0,64]）⇒ 谱面视图**正好裁到墨迹**、
+         * 四周不留白。**导出 / 复制 / CLI 的 2px 不动**（那是另一套口径，留着便于对比；用户看过效果再定）。
+         */
+        const out = rangeBox({ range: 'score', pageW: w, pageH: h, ink: box ?? undefined, minInk: minInkFor(noteInkH), pad: 0 })
         if (out.ok) {
           svgEl.setAttribute('viewBox', `${out.box.x} ${out.box.y} ${out.box.w} ${out.box.h}`)
           publishZoomW(out.box.w)
@@ -2167,7 +2172,7 @@ toolbar.dataset.ijipuPane = String(paneId)
                 ? `，**原始量到 ${Math.round(b.w)}×${Math.round(b.h)} 已夹进页面**`
                 : '') +
               (svgEl.dataset.outsideInk ? `，已排除页面外元素 ${svgEl.dataset.outsideInk}` : '') +
-              ` + 每边 ${RANGE_PAD_DEFAULT}px；整页 ${Math.round(w)}×${Math.round(h)}，高度只剩 ${(((box?.h ?? 0) / h) * 100).toFixed(0)}%）`,
+              ` + 每边 0px（试验：不留白；导出/复制仍按每边 ${RANGE_PAD_DEFAULT}px）；整页 ${Math.round(w)}×${Math.round(h)}，高度只剩 ${(((box?.h ?? 0) / h) * 100).toFixed(0)}%）`,
           )
         } else {
           /**
