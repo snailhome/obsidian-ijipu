@@ -123,6 +123,97 @@ export function instrumentColorMap(track: PlayheadSegAt[]): Map<string, number> 
   return map
 }
 
+/**
+ * adj905b（用户口径）：**同一拍位、同样时值、且短于 1 拍的上下两层，色块取「交集」对齐**。
+ *
+ * 用户原话：
+ * > 「多声部首先**拍子对齐**，这一步应该是没有问题的；**小于 1 拍的**，如果上下的时值一样
+ * > **右边界最小的那个对齐**，这个就**不会压到下一音符的左边界**的情况；这样处理应该可以解决。」
+ *
+ * ## 为什么取 `min`（交集）而不是 `max`（并集）
+ *
+ * 实测同拍位两层各自的槽是：
+ * ```
+ * 伴奏层 1,   62.4 ~ 91.2
+ * 主旋律 3    56.0 ~ 87.2
+ * ```
+ * 取**并集**（右界取 `max`）会让窄的那层**越出自己的槽** —— 正是 `Z8e` 守着的、
+ * 用户早年报过的「色块盖到后一个音符」。取**交集**则两侧都不越界，两块还完全对齐。
+ *
+ * ## 三条限定（缺一不可）
+ *
+ * - **只处理 < 1 拍的段**：长音（含增时线/附点）右界另有口径（`adj374` 要求盖住末格增时线），
+ *   一起取 min 会盖不住增时线；
+ * - **时值必须相同**（分组键含 `beats`）：上下时值不同时右界本就该不同，硬对齐是错的；
+ * - **必须是不同声部角色**（组内 `playVoice` 至少两种）：同一层的多拍拆分不动。
+ *
+ * ## 为什么在"色块显示层"做
+ *
+ * `playheadSegs` 是**只服务于色块**的数据（音频走 `atMs`/`durationMs`/`pitch`/`instrument`）
+ * ⇒ 调它的水平几何**只影响色块显示**，播放层与布局层**一个字节都不动**
+ * （用户原话：「播放层不变，只是色块显示层有变化」）。
+ */
+type AlignSeg = {
+  pageIndex: number
+  group: number
+  voice: number
+  x: number
+  width: number
+  /** 引擎内部生成时带（`PlayheadSeg`）；色块消费侧（`PlayheadSegAt`）没有也不影响本函数 */
+  beat?: number
+  beats?: number
+  playVoice?: 'accomp' | 'main' | 'second'
+}
+
+export function alignSameBeatSegs(
+  events: readonly { atMs: number; playheadSegs?: AlignSeg[] }[],
+): void {
+  /** 键 = 页|曲行|声部|绝对时间|段内拍位|时值（同键 = 同一拍位、同样时值的段） */
+  const groups = new Map<string, AlignSeg[]>()
+  for (const e of events) {
+    for (const s of e.playheadSegs ?? []) {
+      /**
+       * 限定 ①：只处理**不超过 1 拍**的段。
+       *
+       * ⚠ 最初写的是 `< 1`（照用户"小于 1 拍的"字面），结果**一个都没生效** ——
+       * `{bz}` 那一层与主旋律的段都**正好是 1 拍**。用户举例说"小于 1 拍"说的是**细分音符**那类，
+       * 而对齐的目标本身常常就是 1 拍 ⇒ 取 **`≤ 1`**。
+       * 长音（>1 拍，含增时线/附点）仍不参与：它们的右界另有口径（`adj374` 要盖住末格增时线）。
+       */
+      if (!(typeof s.beats === 'number' && s.beats > 0 && s.beats <= 1)) continue
+      const k = `${s.pageIndex}|${s.group}|${s.voice}|${Math.round(e.atMs)}|${s.beat ?? 0}|${s.beats}`
+      const arr = groups.get(k)
+      if (arr) arr.push(s)
+      else groups.set(k, [s])
+    }
+  }
+  for (const arr of groups.values()) {
+    if (arr.length < 2) continue
+    // 限定 ③：确实是"上下两层"（角色不同）才动；同层多段保持原样
+    const roles = new Set(arr.map((s) => s.playVoice ?? 'main'))
+    if (roles.size < 2) continue
+    /**
+     * 限定 ②：同组内时值已经相同（键含 `beats`）。
+     *
+     * ⚠ **只统一右边界，左边界一律不动** —— 这是用户口径的原话（「**右边界最小的那个对齐**」），
+     * 而且实测也证明必须如此：
+     *  · 左边界是"起始音符"的锚点，`AL6` 明确要求「左端 = 起始音符」；
+     *    `{dsb}` 上层在 141.71、下层的起始音符在 152.90，把上层拉到 152.90 或把下层拉到 141.71
+     *    都会破坏那条断言（我第一版连左边一起取 min，正是这样撞红的）；
+     *  · 用户对左边界的态度是「拍子对齐，这一步应该是没有问题的」—— 即**不要求改左**。
+     *
+     * 取 `min`（最小右缘）而不是 `max`：后者会让窄的那层越出自己的槽（`Z8e` 守着的旧问题）。
+     * 结果：**两层的右边界完全对齐**，左边界各自保持 → 宽度可能仍略有差异，但视觉上的
+     * "一条块的右端"是齐的。
+     */
+    let right = Number.POSITIVE_INFINITY
+    for (const s of arr) right = Math.min(right, s.x + s.width)
+    for (const s of arr) {
+      if (right > s.x) s.width = right - s.x
+    }
+  }
+}
+
 /** 取某拍段的半透明基色（adj432：声部角色优先 → 音色 → 声部序号） */
 export function playheadBaseOf(
   pos: { voice: number; instrument?: string; playVoice?: 'accomp' | 'main' | 'second' },

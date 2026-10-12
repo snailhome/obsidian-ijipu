@@ -32,6 +32,9 @@ import { ornamentOf, ornamentPlan, neighborDegree } from './ornaments'
 import { slideOf, slidePlan } from './slides'
 import { midiToPitchName, pitchToMidiNote } from './midi'
 import { parseInstrumentRef } from './instruments'
+// adj905b：**同拍位、同时值、短于 1 拍的上下两层色块取交集对齐**
+// （只调色块显示，播放数据与布局一个字节都不动）
+import { alignSameBeatSegs } from './playhead'
 
 /** adj427：第 2 可用音色的内置默认（用户规格：第 1 = 大钢琴、第 2 = 手风琴） */
 const ACCOMP_FALLBACK_INSTRUMENT = '手风琴'
@@ -2406,6 +2409,15 @@ export function buildPlaySequence(
    * 先后（段内容在主旋律之前），`adj723f` 的语义不变。
    */
   events.sort((a, b) => a.atMs - b.atMs)
+
+  /**
+   * adj905b（用户口径）：**同一拍位、同样时值、短于 1 拍的上下两层，色块取交集对齐**。
+   *
+   * ⚠ 这一步**只改 `playheadSegs` 的水平几何**（`x` / `width`）—— 它就是**色块专用**的数据；
+   * 音频侧走 `atMs`/`durationMs`/`pitch`/`instrument`，**完全不受影响**，
+   * 布局层的任何量也一个字都没动（用户原话：「播放层不变，只是色块显示层有变化」）。
+   */
+  alignSameBeatSegs(events)
 
   // adj88：从指定音符开始——丢弃起点之前的音符事件，其后 atMs 统一减去起点 atMs
   if (startIdxByPage !== null) {
