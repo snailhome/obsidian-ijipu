@@ -335,9 +335,19 @@ export function computeDebugBounds(
     const lastSg = sg[sg.length - 1]
     const cellL = sg.length > 0 ? sg[0].x : n.x
     const cellR = lastSg ? lastSg.x + lastSg.perBeat * lastSg.beats : n.x + n.width
-    const yTop = n.y - noteSize * 2.2
-    const yMid = n.y
-    const yBottom = n.y + noteSize * 1.6
+    /**
+     * adj905q 修正（用户看图后报）：**虚线长度以音符本体上下各 4px 为限**，
+     * 且 **`yMid` 必须落在音符本体的中间**（左右虚线的分界处）——
+     * 旧实现用 `y − noteSize×2.2 … y + noteSize×1.6`，太长、分界也不在中间（用户截图可见）。
+     *
+     * 音符本体（数字）的竖向范围近似为 `[y − noteSize, y]`（`y` 是数字基线），
+     * 于是上下各留 4px、分界取两者的中点。
+     */
+    const bodyTop = n.y - noteSize
+    const bodyBottom = n.y
+    const yTop = bodyTop - 4
+    const yBottom = bodyBottom + 4
+    const yMid = (yTop + yBottom) / 2
     const push = (x: number, side: 'L' | 'R', kind: DebugBound['kind']): void => {
       out.push({ x, side, kind, yTop, yMid, yBottom, colorIndex: i % 2 })
     }
