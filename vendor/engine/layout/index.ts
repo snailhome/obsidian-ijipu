@@ -5334,16 +5334,45 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
         const dotTotal = sp.dotDur
         const total = bodyDur + augTotal + dotTotal
         const segList: { x: number; perBeat: number; beats: number; el?: 'note' | 'aug' | 'dot' }[] = []
-        let cx = bx0
         if (total > 0) {
-          segList.push({ x: r1(cx), perBeat: r1((w * bodyDur) / total / Math.max(bodyDur, 1e-6)), beats: bodyDur, el: 'note' })
-          cx += (w * bodyDur) / total
-          for (let a = 0; a < sp.augCount; a++) {
-            const aw = (w * sp.augDur) / total
-            segList.push({ x: r1(cx), perBeat: r1(aw / Math.max(sp.augDur, 1e-6)), beats: sp.augDur, el: 'aug' })
-            cx += aw
+          /**
+           * adj905j（用户口径）：**段层音符的"内部"每拍边界也要走拍位栅格**。
+           *
+           * 用户原话：「**插间隙的只针对多声部/伴奏的情况，单声部不在内**，因为多声部/伴奏本就
+           * 考虑到以**最小本体占宽**来计算可用留空（即间隙）了，这个间隙就是为了填充在
+           * 音符块之间以**保证同时值点的音符块左边界对齐**，只是**这一块内容之间没做到/做好**」。
+           *
+           * 改法：内部各分量（音符块 / 每条增时线 / 附点）的 x 一律用**与 `bx0`/`bx1` 同一套**
+           * 的拍位映射 `gridX()` 求出，不再"按渲染宽 `w` 等比切分"——
+           * 等比切分让内部边界落在 `w` 的比例点上，而"同时值点"的 x 由 `mapX` 决定，
+           * 两者不等 ⇒ 内部各拍的左边界对不齐（段层与主旋律、段层自身都对齐不了）。
+           *
+           * ⚠ **只动段层这一处**：单声部的音符内部布局（`layout/index.ts:2383` 一带）**不动** ——
+           * 用户明确"单声部不在内"。
+           */
+          const gridX = (beatAbs: number): number =>
+            xContent0 + (mapX(beatAbs) - segNaturalXStart) * segScale
+          const parts: { beats: number; el: 'note' | 'aug' | 'dot' }[] = [{ beats: bodyDur, el: 'note' }]
+          for (let a = 0; a < sp.augCount; a++) parts.push({ beats: sp.augDur, el: 'aug' })
+          if (sp.dotDur > 0) parts.push({ beats: sp.dotDur, el: 'dot' })
+          let off = 0
+          for (let pi = 0; pi < parts.length; pi++) {
+            const pt = parts[pi]
+            const isLast = pi === parts.length - 1
+            // 首分量用块左缘 `bx0`；其余用拍位栅格。末分量右缘仍取 `bx1`（它可能被钳到段内容右界）
+            const xsRaw = pi === 0 ? bx0 : gridX(envStart + beatAt + off)
+            const xeRaw = isLast ? bx1 : gridX(envStart + beatAt + off + pt.beats)
+            // 映射在段内容之外时会越界/反序 ⇒ 钳回 [bx0, bx1] 且保证非递减
+            const xs = Math.min(Math.max(xsRaw, bx0), bx1)
+            const xe = Math.min(Math.max(xeRaw, xs), bx1)
+            segList.push({
+              x: r1(xs),
+              perBeat: r1((xe - xs) / Math.max(pt.beats, 1e-6)),
+              beats: pt.beats,
+              el: pt.el,
+            })
+            off += pt.beats
           }
-          if (sp.dotDur > 0) segList.push({ x: r1(cx), perBeat: r1(((w * sp.dotDur) / total) / Math.max(sp.dotDur, 1e-6)), beats: sp.dotDur, el: 'dot' })
         }
         page.notes.push({
           id: { page: row.page, voice: group.music.voice, group: gi, index: idBase + seq },
