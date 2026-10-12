@@ -4215,6 +4215,25 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
     return !EDIT_DISMISS_RE.test(patched)
   })())
 
+  /**
+   * adj910（排查用户报的「A4 谱在**谱面视图**下右边空了一块」时发现的**真 bug**）：
+   * **辅助虚线层的盒必须与 SVG 的视框同源**。
+   *
+   * 原来 `addGuideLayer` 自己算一个盒：`cropRectFor(paneMode, …)` —— 它在 `'score'` 时给的是
+   * 「整页裁掉四边距」（`guides.ts`：`x = margin_left`），而 SVG 的 `viewBox` 是引擎 `rangeBox`
+   * 给的**墨迹盒**（实测 `x = 42` vs 边距盒 `x = 50`）⇒ 两个盒原点不同 ⇒ 开「排版」时虚线整体错位 ✗。
+   * 现在改成**直接读 SVG 当前的 `viewBox`**（屏幕上显示的就是它），读不到才退回 `cropRectFor`。
+   */
+  check('adj910 辅助虚线的盒与 SVG 视框**同源**（读 `viewBox`，而不是自己再算一份几何）',
+    /getAttribute\('viewBox'\)[\s\S]{0,260}?cropRectFor\(paneMode/.test(pane862))
+  check('adj910 负对照：把"读 viewBox"那段删掉（退回自己算盒）⇒ 上面那条为假',
+    !/getAttribute\('viewBox'\)[\s\S]{0,260}?cropRectFor\(paneMode/.test(
+      pane862.replace(
+        /const vb = \(svgEl\.getAttribute\('viewBox'\)[\s\S]{0,300}?cropRectFor\(paneMode/,
+        'cropRectFor(paneMode',
+      ),
+    ))
+
   // —— ⑥ 图标同源（两端同一枚「更多」PNG；应用仓库不在时跳过逐字节比对） ——
   {
     const plugIcon = 'vendor/icons/更多.png'

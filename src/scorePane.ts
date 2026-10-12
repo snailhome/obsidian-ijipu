@@ -35,7 +35,7 @@ import { changedDefs, isDefaultValue } from './defs'
 import { layoutIcon, modeIcon, settingsIcon, linkIcon, playIcon, stopIcon, appOpenIcon, formatIcon, editIcon, moreIcon } from './icons'
 import { buildScoreMenu, scoreMenuIds, toolbarPolicy, type ScoreMenuActionId } from './scoreMenu'
 import { canOpenWithDefaultApp, openUrlExternally, openWithDefaultApp } from './openExternal'
-import { computeGuideLines, cropRectFor, guideLimits, guidePlacement, type GuideLine } from './guides'
+import { computeGuideLines, cropRectFor, guideLimits, guidePlacement, type CropRect, type GuideLine } from './guides'
 import { GUIDES_CHANGED, SETTINGS_CHANGED } from './main'
 import type IJipuPlugin from './main'
 // adj873：导出范围的**缺省值**只有一处定义（`types.ts`）——菜单打勾 / 设置页 / 解析都读它
@@ -2288,7 +2288,21 @@ toolbar.dataset.ijipuPane = String(paneId)
       const layer = wrap.createDiv({ cls: 'ijipu-guide-layer' })
       const lines = computeGuideLines(layout, c, pageIndex)
       const boxW = svgEl.getBoundingClientRect().width || page.width
-      const crop = cropRectFor(paneMode, c, page.width, page.height)
+      /**
+       * adj910（用户报「A4 谱在**谱面视图**下右边空了一块」排查时发现）：虚线的**盒必须与 SVG 实际的
+       * 视框一致** —— 原来这里用 `cropRectFor(paneMode, …)` 自己算一个盒，而 `'score'` 时它给的是
+       * 「整页裁掉四边距」（`guides.ts`：`x=margin_left, w=pageW−左右边距`），而 SVG 的视框是
+       * **引擎 `rangeBox` 给的墨迹盒**（上面 `applyViewBox`，实测 `x=42` vs 边距盒 `x=50`）
+       * ⇒ **两个盒原点不同** ⇒ 开「排版」时虚线整体错位 ✗（本项目"数值口径必须同源"的老坑）。
+       *
+       * 修法：**只认事实** —— 直接读 SVG **当前的 `viewBox`** 当盒（它就是屏幕上显示的那个范围），
+       * 读不到（理论上不该发生）才退回 `cropRectFor`。这样"虚线的盒"与"谱面的盒"**构造上就不可能漂** ✓。
+       */
+      const vb = (svgEl.getAttribute('viewBox') ?? '').split(/[\s,]+/).map(Number)
+      const crop: CropRect =
+        vb.length === 4 && vb.every((v) => Number.isFinite(v)) && vb[2] > 0 && vb[3] > 0
+          ? { x: vb[0], y: vb[1], w: vb[2], h: vb[3] }
+          : cropRectFor(paneMode, c, page.width, page.height)
       for (const line of lines) {
         const { style, scale } = guidePlacement(line, crop, page.width, page.height, boxW)
         const el = layer.createDiv({
