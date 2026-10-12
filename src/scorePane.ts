@@ -24,7 +24,7 @@ import { renderScoreFull, playScore, type PlayheadSeg } from './render'
 import { createPlaybackClock, instrumentColorMap, playheadBaseOf, playheadPosIn, trackKeysOf, type PlayheadPos } from '@ijipu/engine'
 // adj863（T-3 定稿）：**范围**（整页 / 墨迹 ± 每边 N px）的唯一实现在引擎 —— 谱面视图的墨迹裁剪与
 // 导出/复制的画布口径都消费它（本文件不再自带 `PAD = 2` 或退化闸的第二份副本）
-import { rangeBox, minInkFor, RANGE_PAD_DEFAULT } from '@ijipu/engine'
+import { rangeBox, minInkFor, RANGE_PAD_DEFAULT, inkBoxOfLayout } from '@ijipu/engine'
 
 /** adj764：起播延迟（与应用一致：前 200ms 不计入时间轴，避免"第一拍还没响、色块先动"） */
 const PLAY_START_DELAY_MS = 200
@@ -2098,7 +2098,21 @@ toolbar.dataset.ijipuPane = String(paneId)
       }
       if (mode === 'score') {
         const [, , w, h] = orig.split(/[\s,]+/).map(Number)
-        const b = contentBoxOf(svgEl)
+        /**
+         * adj911c（**用户实测**：「宽度收缩紧了，但**不是墨迹范围 +2px 的效果**」）：
+         * **墨迹盒以引擎的布局墨迹为准**（`inkBoxOfLayout`）—— CLI `--crop score`、应用导出、
+         * 官网 `v=s` 用的都是它（实测 = `[42 .. 554.88]` ⇒ 正是"墨迹 + 每边 2px" ✓）。
+         *
+         * 为什么不继续用 DOM 量：`measureContentBox` 逐子元素 `getBBox()` 求并集，会被
+         * **"看不见却有盒"的元素**污染（实测某谱量到 952，页宽才 595 ⇒ 夹紧后变成 559 ≈ 整页减边距，
+         * 不是真正的墨迹 ✗；`adj911b` 的"整块在页面外"过滤也拦不住"跨页面边界"的那种）。
+         * 引擎那份来自**布局**（音符/小节线/段层…的几何），与"这份谱有哪些内容"同源 ✓，
+         * 顺带满足 AGENTS「两端共用的规则先落引擎」✓。
+         * DOM 量取**只作兜底**（引擎盒取不到时）；夹紧（`adj911`）仍留作第二道防线。
+         */
+        const pageIdx = svgEls.indexOf(svgEl)
+        const engineInk = pageIdx >= 0 && layout.pages[pageIdx] ? inkBoxOfLayout(layout, pageIdx) : null
+        const b = engineInk ?? contentBoxOf(svgEl)
         /**
          * adj911（**用户实测**：「谱面裁剪 956×754（墨迹 **952**×750 + 每边 2px；整页 595×842）」）：
          * **墨迹盒不可能比整页还宽** —— 量到 952 而页宽只有 595 时，裁剪盒 956 ⇒ 谱面只占左边六成、

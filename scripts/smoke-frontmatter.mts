@@ -1857,7 +1857,7 @@ console.log('\n[adj724b] community review: forbidden APIs / styles must stay fix
       /getAttribute\('data-page-bg'\)/.test(scorePaneSrc) &&
       /const box = measureContentBox\(svgEl\)/.test(scorePaneSrc) &&
       /svgEl\.dataset\.contentBox = /.test(scorePaneSrc) &&
-      /const b = contentBoxOf\(svgEl\)/.test(scorePaneSrc) &&
+      /const b = engineInk \?\? contentBoxOf\(svgEl\)/.test(scorePaneSrc) &&
       // adj843：下限**数据驱动** —— 量一个音符（`[data-notepos]`）的墨迹高，取其 90% 作下限 ✓
       /const noteEl = svgEl\.querySelector\('\[data-notepos\]'\)/.test(scorePaneSrc) &&
       /**
@@ -4236,6 +4236,20 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
    * 但 `getBBox()` 照样算进并集 ⇒ 墨迹盒被撑到 952）。同时把被排除元素的名字记进 `outsideInk`，
    * 让诊断那行**直接点名**元凶。
    */
+  /**
+   * adj911c（**用户实测**：「宽度收缩紧了，但**不是墨迹范围 +2px 的效果**」）：
+   * **墨迹盒以引擎的布局墨迹为准**（`inkBoxOfLayout`）—— 与 CLI `--crop score` / 应用导出 / 官网
+   * `v=s` 同一份几何（实测 `[42 .. 554.88]` = 墨迹 + 每边 2px ✓）；DOM 量取（`contentBoxOf`）
+   * **只作兜底**（它会被"看不见却有盒"的元素污染 ⇒ 实测量到 952 而页宽 595）。
+   */
+  check('adj911c 谱面裁剪的墨迹**以引擎 `inkBoxOfLayout` 为准**，DOM 量取只作兜底',
+    /import \{ rangeBox, minInkFor, RANGE_PAD_DEFAULT, inkBoxOfLayout \} from '@ijipu\/engine'/.test(pane862) &&
+      /const engineInk = pageIdx >= 0 && layout\.pages\[pageIdx\] \? inkBoxOfLayout\(layout, pageIdx\) : null/.test(pane862) &&
+      /const b = engineInk \?\? contentBoxOf\(svgEl\)/.test(pane862))
+  check('adj911c 负对照：把墨迹换回"只用 DOM 量"⇒ 上面那条为假',
+    !/const b = engineInk \?\? contentBoxOf\(svgEl\)/.test(
+      pane862.replace('const b = engineInk ?? contentBoxOf(svgEl)', 'const b = contentBoxOf(svgEl)'),
+    ))
   check('adj911b 量墨迹时**排除完全落在页面外的子元素**（并记下名字供诊断点名）',
     /const outside: string\[\] = \[\]/.test(pane862) &&
       /if \(hasPage && \(b\.x \+ b\.width < 0 \|\| b\.x > pw \|\| b\.y \+ b\.height < 0 \|\| b\.y > ph\)\)/.test(pane862) &&
@@ -4296,7 +4310,7 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
 
   // —— ① 引擎是唯一实现：插件里不得再有第二份"±2px / 两道闸" ——
   check('adj863 谱面视图的墨迹裁剪走**引擎** `rangeBox` + `minInkFor`（阈值公式也不在插件里）',
-    /import \{ rangeBox, minInkFor, RANGE_PAD_DEFAULT \} from '@ijipu\/engine'/.test(pane863) &&
+    /import \{ rangeBox, minInkFor, RANGE_PAD_DEFAULT(?:, inkBoxOfLayout)? \} from '@ijipu\/engine'/.test(pane863) &&
       /**
        * ⚠ adj911 起 `ink` 传的是**夹进页面后的盒**（`box`），不是量到的原值（`b`）——
        * 实测某份谱量到 952（页宽 595）⇒ 裁剪盒 956 ⇒ 右边一大块空白 ✗（元素画到页面外、
