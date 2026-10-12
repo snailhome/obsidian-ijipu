@@ -337,6 +337,12 @@ export interface DebugBound {
   yBottom: number
   /** 相邻音符交替颜色用（音符在本 track 里的序号奇偶） */
   colorIndex: number
+  /**
+   * adj905t：**是否段层音符**（`{bz}`/`{dsb}`/`{tp}`）。
+   * 供消费方按层分组统计 —— 否则"主旋律的拍子线"与"段层的拍子线"会被混在一起，
+   * 读数出现"成对的列"（实测例 1 打印出 `56` 与 `62.5` 相邻，正是两层的同一拍各画了一条）。
+   */
+  isSeg: boolean
 }
 
 export function computeDebugBounds(
@@ -356,7 +362,7 @@ export function computeDebugBounds(
     const yBottom = n.y + 4
     const yMid = (yTop + yBottom) / 2
     const push = (x: number, side: 'L' | 'R', kind: DebugBound['kind']): void => {
-      out.push({ x, side, kind, yTop, yMid, yBottom, colorIndex: i % 2 })
+      out.push({ x, side, kind, yTop, yMid, yBottom, colorIndex: i % 2, isSeg: n.segment !== undefined })
     }
     // ① **本体（墨迹）边界**：无附点/增时线时只到数字槽宽（见 `AGENTS.md` 五·9 的墨迹口径）
     const hasExt = sg.some((s) => s.el === 'aug' || s.el === 'dot')
@@ -383,9 +389,20 @@ export function computeDebugBounds(
       push(s.x + s.perBeat * s.beats, 'R', 'aug')
     })
     // ④ **段层边界**（仅段层音符）
+    /**
+     * adj905u（用户报"调试线读数可疑"，我定量核实后确认是**我做工具的缺陷**）：
+     * 原来这里用 `n.x` / `rightX`，而 `n.x` 是**层落位锚点（数字位）**；
+     * 而主旋律那两组用的是 `segments[].x`（**格**）—— 两者相差实测 **6.4px**
+     * ⇒ 图上"绿线 vs 紫线"的偏移里，有 6.4 是**口径差（固定）**、不是真错位，读数会偏。
+     *
+     * 现改为**与 `note` 同一口径（格）**：左缘 `segments[0].x`、右缘末段右端。
+     * ⇒ 「主旋律的格 vs 段层的格」才是**同口径可比**的。
+     * ⚠ 层落位锚点（`n.x`）**刻意不再单画一条** —— 它就是要与主旋律**数字位**相等
+     * （`adj435`/`AL1`/`O4` 守着的），混在同一张图上比会再次制造假错位。
+     */
     if (n.segment) {
-      push(n.x, 'L', 'segment')
-      push(n.rightX ?? n.x + n.width, 'R', 'segment')
+      push(noteL, 'L', 'segment')
+      push(noteR, 'R', 'segment')
     }
   })
   return out
