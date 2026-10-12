@@ -473,8 +473,8 @@
  * 特异性（3 个类 + 类型选择器）高于上面 `.ijipu-mode-* .ijipu-page-svg svg`（2 个类）⇒ 稳赢，不必 `!important`。
  *
  * ⚠ adj871（`z` 与显示模式的关系，判定**只有一处**：scorePane.ts 的 `publishDisplaySize`）：
- *  · `m=p`（整页）⇒ **`z` 不生效**（尺寸由"整页进视界"决定 ⇒ 这条规则上的两个类都被摘掉）；
- *  · `m=w`（满宽）⇒ `z` 未写 / `z=*` 走 `.ijipu-zoom-fit`（铺满容器宽），`z=N` 走 fixed（自然宽 × N/100）；
+ *  · `v=p`（整页）⇒ **`z` 不生效**（尺寸由"整页进视界"决定 ⇒ 这条规则上的两个类都被摘掉）；
+ *  · `v=w`（满宽）⇒ `z` 未写 / `z=*` 走 `.ijipu-zoom-fit`（铺满容器宽），`z=N` 走 fixed（自然宽 × N/100）；
  *  · 谱面（缺省）⇒ `z` 未写 = 自然尺寸、`z=*` = 按宽铺满（现状不变）。
  */
 .ijipu-svgs.ijipu-zoom-fixed .ijipu-page-svg > svg {

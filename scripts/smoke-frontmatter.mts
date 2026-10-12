@@ -1913,10 +1913,10 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
   check('adj725 谱面块四周只留 2px 留白（默认"只显示有墨迹的部分"）',
     /\.ijipu-score\s*\{[^}]*padding:\s*2px/.test(css725nc) && !/\.ijipu-score\s*\{[^}]*padding:\s*0\.4em/.test(css725nc))
   /**
-   * adj725 口径 / adj870 扩展：缺省仍是「谱面」（裁到墨迹），只是现在**允许代码块用 `m=` 覆盖初始值** ⇒
+   * adj725 口径 / adj870 扩展：缺省仍是「谱面」（裁到墨迹），只是现在**允许代码块用 `v=` 覆盖初始值** ⇒
    * `host.mode ?? 'score'`。判据同时要求：① 兜底仍是 `'score'`；② 覆盖来源只能是 `host.mode`（不是随手读别的）。
    */
-  check('adj725/adj870 默认显示模式仍是「谱面」（裁到墨迹），代码块可用 `m=` 覆盖初始值',
+  check('adj725/adj870 默认显示模式仍是「谱面」（裁到墨迹），代码块可用 `v=` 覆盖初始值',
     /let paneMode: ViewMode = host\.mode \?\? 'score'/.test(pane725))
 
   // ② 工具条浮到**块外侧**正上方、左缘对齐（不再压在谱面上）
@@ -4351,40 +4351,41 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
    * adj870（用户追问"不同参数之间用什么分隔"）：**分隔与边界规则**必须是**两个参数共用**的一套 ✓。
    *
    * 口径：**空格分隔为主推**；`,` `;` `|` 也容忍（免得用户写了没反应）；顺序任意；键名/取值都大小写不敏感；
-   * **连写不算参数** ✗（`z=150m=p` ⇒ 两个都不认）；字母紧贴也不算 ✗（`az=150`）。
+   * **连写不算参数** ✗（`z=150v=p` ⇒ 两个都不认）；字母紧贴也不算 ✗（`az=150`）。
    */
   {
     const jps870 = String(readFileSync('src/jpsBlocks.ts', 'utf8'))
     const main870 = String(readFileSync('src/main.ts', 'utf8'))
     check('adj870 参数分隔：空格（主推）/ 逗号 / 分号 / 竖线都认，顺序任意，键名大小写不敏感',
-      zoomOfInfo('```jps m=p z=150') === 150 && zoomOfInfo('```jps z=150 m=p') === 150 &&
-        zoomOfInfo('```jps m=p,z=150') === 150 && zoomOfInfo('```jps m=p;z=150') === 150 &&
-        zoomOfInfo('```jps m=p|z=150') === 150 && zoomOfInfo('```jps M=P Z=150') === 150)
+      zoomOfInfo('```jps v=p z=150') === 150 && zoomOfInfo('```jps z=150 v=p') === 150 &&
+        zoomOfInfo('```jps v=p,z=150') === 150 && zoomOfInfo('```jps v=p;z=150') === 150 &&
+        zoomOfInfo('```jps v=p|z=150') === 150 && zoomOfInfo('```jps V=P Z=150') === 150)
     check('adj870 负对照：连写 / 字母紧贴**都不算参数**（不许静默变成别的模式或别的缩放）',
-      zoomOfInfo('```jps z=150m=p') === 100 && zoomOfInfo('```jps m=pz=150') === 100 &&
-        zoomOfInfo('```jps m=x') === 100 && zoomOfInfo('```jps z=abc') === 100)
+      zoomOfInfo('```jps z=150v=p') === 100 && zoomOfInfo('```jps v=pz=150') === 100 &&
+        zoomOfInfo('```jps v=x') === 100 && zoomOfInfo('```jps z=abc') === 100)
     /**
      * adj870（用户 2026-10-11：「以减少歧义的方式来」）：**去掉 `full` 别名** ✓。
      * `w`/`width` ⇒ 满宽，`p`/`page` ⇒ 整页，`s`/`score` ⇒ 谱面；写 `full` ⇒ 不认（内部 id 仍叫 `full`，
      * 那是对内的）**但必须给明确提示**，不许静默退化成「谱面」✗。
      */
-    check('adj870 `m=` 取值表：p/page=整页、w/width=满宽、s/score=谱面；**`full` 不接受**（歧义）',
-      /if \(v === 'w' \|\| v === 'width'\) return 'full'/.test(jps870) &&
-        !/if \(v === 'full'\) return/.test(jps870) &&
-        // ⚠ 负向判据只否定"**映射**成 full"这一形态；`modeParamWarning` 里为了给提示**必须**提到 `v === 'full'`（本轮踩过）
-        /if \(v === 'p' \|\| v === 'page'\) return 'page'/.test(jps870) &&
-        /if \(v === 's' \|\| v === 'score'\) return 'score'/.test(jps870))
-    check('adj870 `m=full` 与认不出的值都**有明确提示**（不静默）——提示里要给出可照抄的写法',
+    check('adj870/adj887 `v=` 取值表：p/page=整页、w/width=满宽、s/score=谱面；**`full` 不接受**（歧义）',
+      // adj887：键名由 `m=` 改成 `v=` 之后，源码里的局部变量也从 `v` 改名成 `val`（免得与新键名 `v=` 撞脸）
+      /if \(val === 'w' \|\| val === 'width'\) return 'full'/.test(jps870) &&
+        !/if \(val === 'full'\) return/.test(jps870) &&
+        // ⚠ 负向判据只否定"**映射**成 full"这一形态；`modeParamWarning` 里为了给提示**必须**提到 `val === 'full'`（本轮踩过）
+        /if \(val === 'p' \|\| val === 'page'\) return 'page'/.test(jps870) &&
+        /if \(val === 's' \|\| val === 'score'\) return 'score'/.test(jps870))
+    check('adj870/adj887 `v=full` 与认不出的值都**有明确提示**（不静默）——提示里要给出可照抄的写法',
       /modeParamWarning/.test(jps870) && /有歧义/.test(jps870) && /满宽请写/.test(jps870) &&
         /认不出显示模式/.test(jps870) && /可用/.test(jps870) && /（整页）/.test(jps870) &&
         // 插件侧真的会弹：`modeOfBlock` 调 `modeParamWarning` 且**去重**（渲染反复调用不许刷屏）
         /const warn = modeParamWarning\(fence\)/.test(main870) &&
         /warnedBlockParams\.has\(key\)/.test(main870) &&
         /new Notice\(/.test(main870))
-    check('adj870 `m` 与 `z` 共用同一套边界常量（改规则只改一处，不许各写各的正则）',
+    check('adj870/adj887 `v` 与 `z` 共用同一套边界常量（改规则只改一处，不许各写各的正则）',
       /const PARAM_BEFORE = /.test(jps870) && /const PARAM_AFTER = /.test(jps870) &&
         (jps870.match(/PARAM_BEFORE/g) ?? []).length >= 2 &&
-        /new RegExp\(`\$\{PARAM_BEFORE\}m=/.test(jps870) && /new RegExp\(`\$\{PARAM_BEFORE\}z=/.test(jps870))
+        /new RegExp\(`\$\{PARAM_BEFORE\}v=/.test(jps870) && /new RegExp\(`\$\{PARAM_BEFORE\}z=/.test(jps870))
 
     /**
      * ---- adj871（用户实测「切换视图预览区没有变化」）：三种显示模式要**真的三种几何** ----
@@ -4392,7 +4393,7 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
      * 用户 2026-10-11 口径：
      *  · `page` 整页 = 整页（含页边距）按 contain 放进**可视区**：`s = Math.min(W1 / W, H1 / H)`，
      *    渲染宽 `W*s`、高 `H*s`（`W1` = 容器可用宽，`H1` = `window.innerHeight − 容器顶边 − 24`，下限 200）；
-     *    **只在挂载 / 切模式 / 尺寸变化时重算**，绝不跟滚动；`m=p` **优先于** `z=`；
+     *    **只在挂载 / 切模式 / 尺寸变化时重算**，绝不跟滚动；`v=p` **优先于** `z=`；
      *  · `full` 满宽 = 只有宽度进视界（`z` 未写 / `z=*` ⇒ 铺满容器宽；`z=N` ⇒ 自然宽 × N/100）；
      *  · `score` 谱面 = 现状不变（墨迹包围盒 + 每边 2px）。
      *
@@ -4442,7 +4443,7 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
           const stale871 = pane871.replace('整页放进可视区（含页边距，上下都可见）', '完整一页（含页边距），宽度撑满内容区')
           return stale871 !== pane871 && /宽度撑满内容区/.test(stale871) && !/宽度撑满内容区/.test(pane871)
         })())
-      check('adj871 `m=p` 时 `z` 不生效（面板一处判定）：`page` 模式把两个缩放类都摘掉、且拟合优先于 `z`',
+      check('adj871 `v=p` 时 `z` 不生效（面板一处判定）：`page` 模式把两个缩放类都摘掉、且拟合优先于 `z`',
         /function publishDisplaySize\(mode: ViewMode\): void \{/.test(pane871) &&
           /svgWrap\.removeClass\('ijipu-zoom-fit'\)/.test(pane871) &&
           /svgWrap\.removeClass\('ijipu-zoom-fixed'\)/.test(pane871) &&
@@ -4450,7 +4451,7 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
           /**
            * ⚠ adj871 订正（用户明确「**`z` 未写保持 `z=100` 的现状**」）：满宽模式**只认 `z=*`** 才铺满；
            * 未写 z 与 `z=N` 同族（固定自然尺寸 × N%）⇒ 判据里**不许**再出现"未写即铺满"的 `zoomWritten` 分岔。
-           * `zoomWritten` 仍要传（它只服务于"`m=p` + 具体 `z=N` ⇒ 提示 z 不生效"那一条 ✓）。
+           * `zoomWritten` 仍要传（它只服务于"`v=p` + 具体 `z=N` ⇒ 提示 z 不生效"那一条 ✓）。
            */
           /mode === 'full' && zoomOfHost === 'auto'/.test(pane871) &&
           !/mode === 'full' && !\(zoomWritten && zNum !== null\)/.test(pane871) &&
@@ -4458,16 +4459,16 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
           !/const zoomWritten = host\.zoomWritten === true/.test(pane871))
       check('adj871 `zoomWrittenInInfo`：`z=` 写没写真能分辨（`z=100`/`z=*` 算写了；未写/认不出算没写）',
         zoomWrittenInInfo('```jps z=100') === true && zoomWrittenInInfo('```jps z=*') === true &&
-          zoomWrittenInInfo('```jps m=w z=150') === true && zoomWrittenInInfo('```jps m=w,z=50') === true &&
-          zoomWrittenInInfo('```jps m=w') === false && zoomWrittenInInfo('```jps z=abc') === false &&
-          zoomWrittenInInfo('```jps z=10000') === false && zoomWrittenInInfo('```jps m=wz=150') === false)
-      check('adj871 `m=p` + 具体 `z=N`：**提示一次**（`z=*` / `z=100` 不提示）且走 `warnedBlockParams` 去重',
+          zoomWrittenInInfo('```jps v=w z=150') === true && zoomWrittenInInfo('```jps v=w,z=50') === true &&
+          zoomWrittenInInfo('```jps v=w') === false && zoomWrittenInInfo('```jps z=abc') === false &&
+          zoomWrittenInInfo('```jps z=10000') === false && zoomWrittenInInfo('```jps v=wz=150') === false)
+      check('adj871 `v=p` + 具体 `z=N`：**提示一次**（`z=*` / `z=100` 不提示）且走 `warnedBlockParams` 去重',
         /const mode = modeOfInfo\(fence\)/.test(main870) &&
           /typeof z === 'number' && z !== 100/.test(main870) &&
-          /m=p` 时 `z=` 不生效/.test(main870) &&
+          /v=p` 时 `z=` 不生效/.test(main870) &&
           // 提示必须与"去重"在**同一支**里（`add` 过就跳 ⇒ 渲染反复调用不刷屏）
           /typeof z === 'number' && z !== 100[\s\S]{0,300}?warnedBlockParams\.add\(key\)/.test(main870))
-      check('adj871 负对照：把 `m=p` + `z=N` 那段提示整段删掉 ⇒ 上面那条判据为假（说明它真的在守这段）',
+      check('adj871 负对照：把 `v=p` + `z=N` 那段提示整段删掉 ⇒ 上面那条判据为假（说明它真的在守这段）',
         !/typeof z === 'number' && z !== 100[\s\S]{0,300}?warnedBlockParams\.add\(key\)/.test(
           main870.replace(/typeof z === 'number' && z !== 100[\s\S]{0,300}?warnedBlockParams\.add\(key\)/, '')))
 

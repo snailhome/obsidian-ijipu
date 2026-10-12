@@ -1861,11 +1861,11 @@ class IJipuBlock extends MarkdownRenderChild {
        */
       zoom: this.zoomOfBlock(),
       /**
-       * adj871：`z=` 是否**真的写在开栏行里** —— 满宽模式（`m=w`）要区分「`z` 未写 ⇒ 铺满容器宽」
+       * adj871：`z=` 是否**真的写在开栏行里** —— 满宽模式（`v=w`）要区分「`z` 未写 ⇒ 铺满容器宽」
        * 与「`z=100` ⇒ 固定自然宽」（`zoomOfInfo` 对两者都返回 100，面板从 `zoom` 一个值上分不出来）。
        */
       zoomWritten: this.zoomWrittenOfBlock(),
-      /** adj870：代码块写死的初始显示模式（`m=p|w|s`）；没写 ⇒ 面板用缺省「谱面」 */
+      /** adj870：代码块写死的初始显示模式（`v=p|w|s`）；没写 ⇒ 面板用缺省「谱面」 */
       mode: this.modeOfBlock(),
     })
   }
@@ -1903,16 +1903,16 @@ class IJipuBlock extends MarkdownRenderChild {
   }
 
   /**
-   * adj870：`m=` 提示去重 —— 渲染会**反复调用** `modeOfBlock()` ⇒ 每个（行号 + 提示内容）只提示一次，
+   * adj870：`v=` 提示去重 —— 渲染会**反复调用** `modeOfBlock()` ⇒ 每个（行号 + 提示内容）只提示一次，
    * 否则会刷屏（用户要的是"知道写错了"，不是"被弹窗淹没"）。
    */
   private warnedBlockParams = new Set<string>()
 
   /**
-   * adj870：代码块写死的**初始显示模式**（`m=p|w|s` ⇒ 整页/满宽/谱面）。
+   * adj870：代码块写死的**初始显示模式**（`v=p|w|s` ⇒ 整页/满宽/谱面）。
    * 没写 ⇒ `undefined` ⇒ 面板用缺省「谱面」（与改动前一致 ✓，不静默改行为）。
    *
-   * ⚠ `m=full` 这类**有歧义/认不出**的写法：**不静默退化** ✗，而是提示一次该怎么改（见 `modeParamWarning`）。
+   * ⚠ `v=full` 这类**有歧义/认不出**的写法：**不静默退化** ✗，而是提示一次该怎么改（见 `modeParamWarning`）。
    */
   private modeOfBlock(): 'page' | 'full' | 'score' | undefined {
     const info = this.sectionInfo()
@@ -1928,18 +1928,18 @@ class IJipuBlock extends MarkdownRenderChild {
     }
     const mode = modeOfInfo(fence)
     /**
-     * adj871（用户 2026-10-11 口径）：**`m=p` 时 `z=` 不生效** —— 整页模式的尺寸由"整页进视界"决定
+     * adj871（用户 2026-10-11 口径）：**`v=p` 时 `z=` 不生效** —— 整页模式的尺寸由"整页进视界"决定
      * （`scorePane` 的 `publishPageFit`），而 `z` 是"自然尺寸的百分比" ⇒ 两者口径冲突。
-     * 不静默：用与 `m=` 同一套**去重机制**提示一次（渲染会反复调用本函数，不许刷屏 ✗）。
+     * 不静默：用与 `v=` 同一套**去重机制**提示一次（渲染会反复调用本函数，不许刷屏 ✗）。
      *
-     * `m=p` + `z=*` **不提示**：`*` 是"按宽自适应"，与"我填了个具体数值却没生效"不是一回事。
+     * `v=p` + `z=*` **不提示**：`*` 是"按宽自适应"，与"我填了个具体数值却没生效"不是一回事。
      */
     const z = zoomOfInfo(fence)
     if (mode === 'page' && typeof z === 'number' && z !== 100) {
       const key = `${info.lineStart}:page-ignores-z`
       if (!this.warnedBlockParams.has(key)) {
         this.warnedBlockParams.add(key)
-        new Notice('iJipu：`m=p` 时 `z=` 不生效（整页进视界优先）')
+        new Notice('iJipu：`v=p` 时 `z=` 不生效（整页进视界优先）')
       }
     }
     return mode

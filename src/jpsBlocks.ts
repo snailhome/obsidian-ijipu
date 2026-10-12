@@ -57,20 +57,24 @@ export type JpsBlockRange = {
 /**
  * 代码块参数（语言名后面那串）的**分隔与边界规则**（`adj870`，用户 2026-10-11 追问"参数之间用什么分隔"后定死）：
  *
- * · **主推空格分隔**：```` ```jps m=p z=150 ```` ✓ / ```` ```jps z=150 m=p ```` ✓（顺序任意 ✓）
- * · **容忍** `,` `;` `|` 作分隔（有人习惯写 `m=p,z=150` ⇒ 也认 ✓，免得"写了没反应"）
- * · **键名与取值都大小写不敏感**（`M=S` / `m=SCORE` 都认 ✓）
+ * · **主推空格分隔**：```` ```jps v=p z=150 ```` ✓ / ```` ```jps z=150 v=p ```` ✓（顺序任意 ✓）
+ * · **容忍** `,` `;` `|` 作分隔（有人习惯写 `v=p,z=150` ⇒ 也认 ✓，免得"写了没反应"）
+ * · **键名与取值都大小写不敏感**（`V=S` / `v=SCORE` 都认 ✓）
  * · **重复键：先出现者胜**（`exec` 取第一个匹配 ✓，可预测）
- * · **认不出的键/值一律忽略，不改变行为**（`m=x` ⇒ 当没写 ⇒ 用缺省「谱面」；`z=abc` ⇒ 当没写 ⇒ 100%）✓
- * · **连写不算参数** ✗：`z=150m=p` 两个都不认（否则"粘在一起"会静默变成别的模式）
+ * · **认不出的键/值一律忽略，不改变行为**（`v=x` ⇒ 当没写 ⇒ 用缺省「谱面」；`z=abc` ⇒ 当没写 ⇒ 100%）✓
+ * · **连写不算参数** ✗：`z=150v=p` 两个都不认（否则"粘在一起"会静默变成别的模式）
  *
- * 两个参数（`m` / `z`）共用这一套边界 ⇒ 改规则只改这里一处。
+ * 两个参数（`v` / `z`）共用这一套边界 ⇒ 改规则只改这里一处。
+ *
+ * adj887（用户 2026-10-11）：视图参数的键名由 **`m=` 改名为 `v=`** —— 这三档内部类型本来就叫
+ * `ViewMode`（视图），`m`（mode）语义偏抽象。用户口径是"这个参数才设置的，可以直接改，
+ * 减少代码臃肿" ⇒ **直接替换、不保留 `m=` 兼容**（不留分支、不留迁移提示）。
  */
 const PARAM_BEFORE = '(?:^|[\\s,;|])'
 const PARAM_AFTER = '(?=[\\s,;|]|$)'
 
 /**
- * `m=` 的取值表（`adj870`，用户 2026-10-11 定稿：「以减少歧义的方式来」）：
+ * `v=` 的取值表（`adj870`，用户 2026-10-11 定稿：「以减少歧义的方式来」）：
  *
  * | 写法 | 模式 | 界面文字 |
  * |---|---|---|
@@ -83,34 +87,34 @@ const PARAM_AFTER = '(?=[\\s,;|]|$)'
  * 那是代码内部的事，不对外暴露）。写了 `full` ⇒ `modeOfInfo` 返回 `undefined`，
  * 并由 `modeParamWarning()` 给出**明确提示**（不静默退化成「谱面」✗）。
  *
- * ⚠ **默认值由谁定**：`m=` 未写 ⇒ 本函数返回 `undefined` ⇒ 面板用缺省「**谱面**」（裁到墨迹）；
+ * ⚠ **默认值由谁定**：`v=` 未写 ⇒ 本函数返回 `undefined` ⇒ 面板用缺省「**谱面**」（裁到墨迹）；
  * **嵌入块（`![[x.jps]]`）/ `.jps` 文件视图根本不传 `mode`**（`host.mode === undefined`）⇒ 同一个缺省。
  */
 export function modeOfInfo(infoLine: string): 'page' | 'full' | 'score' | undefined {
-  const m = new RegExp(`${PARAM_BEFORE}m=([A-Za-z]{1,6})${PARAM_AFTER}`, 'i').exec(infoLine)
-  if (m === null) return undefined
-  const v = m[1].toLowerCase()
-  if (v === 'p' || v === 'page') return 'page'
-  if (v === 'w' || v === 'width') return 'full'
-  if (v === 's' || v === 'score') return 'score'
+  const hit = new RegExp(`${PARAM_BEFORE}v=([A-Za-z]{1,6})${PARAM_AFTER}`, 'i').exec(infoLine)
+  if (hit === null) return undefined
+  const val = hit[1].toLowerCase()
+  if (val === 'p' || val === 'page') return 'page'
+  if (val === 'w' || val === 'width') return 'full'
+  if (val === 's' || val === 'score') return 'score'
   return undefined
 }
 
 /**
- * `m=` 写得有问题时给人一句**能照着改**的话（没问题返回 `null`）。
+ * `v=` 写得有问题时给人一句**能照着改**的话（没问题返回 `null`）。
  *
  * 为什么单独一个函数：`modeOfInfo` 只回答"用哪个模式"，"为什么没用上"要说给人听 ——
- * 尤其 `m=full` 这种**有歧义所以拒绝**的情况，静默退化成「谱面」是最坏结果 ✗（用户会以为参数生效了）。
+ * 尤其 `v=full` 这种**有歧义所以拒绝**的情况，静默退化成「谱面」是最坏结果 ✗（用户会以为参数生效了）。
  * 调用方负责**每个代码块只提示一次**（渲染会反复调用）。
  */
 export function modeParamWarning(infoLine: string): string | null {
-  const m = new RegExp(`${PARAM_BEFORE}m=([A-Za-z]{1,6})${PARAM_AFTER}`, 'i').exec(infoLine)
-  if (m === null) return null
-  const v = m[1].toLowerCase()
-  if (v === 'p' || v === 'page' || v === 'w' || v === 'width' || v === 's' || v === 'score') return null
-  if (v === 'full')
-    return '`m=full` 有歧义（既可读作"满宽"也可读作"整页"），已忽略；满宽请写 `m=w`，整页请写 `m=p`'
-  return `认不出显示模式 \`m=${m[1]}\`，已忽略；可用 \`m=p\`（整页）/ \`m=w\`（满宽）/ \`m=s\`（谱面）`
+  const hit = new RegExp(`${PARAM_BEFORE}v=([A-Za-z]{1,6})${PARAM_AFTER}`, 'i').exec(infoLine)
+  if (hit === null) return null
+  const val = hit[1].toLowerCase()
+  if (val === 'p' || val === 'page' || val === 'w' || val === 'width' || val === 's' || val === 'score') return null
+  if (val === 'full')
+    return '`v=full` 有歧义（既可读作"满宽"也可读作"整页"），已忽略；满宽请写 `v=w`，整页请写 `v=p`'
+  return `认不出显示模式 \`v=${hit[1]}\`，已忽略；可用 \`v=p\`（整页）/ \`v=w\`（满宽）/ \`v=s\`（谱面）`
 }
 
 /**
@@ -122,7 +126,7 @@ export function modeParamWarning(infoLine: string): string | null {
  *  · **嵌入块（`![[x.jps]]`）/ `.jps` 文件视图** ＝ **根本不走这里**——宿主**不传** `zoom`
  *    ⇒ `scorePane.publishDisplaySize()` 把 `host.zoom === undefined` **显式**折成 `'auto'`
  *    ⇒ **等价 `z=*`**（按宽自适应）；
- *  · 连带：**显示模式的默认值**——代码块 `m=` 未写 ⇒ `modeOfInfo()` 返回 `undefined` ⇒ 面板缺省「谱面」；
+ *  · 连带：**显示模式的默认值**——代码块 `v=` 未写 ⇒ `modeOfInfo()` 返回 `undefined` ⇒ 面板缺省「谱面」；
  *    嵌入块 / 文件视图也不传 `mode` ⇒ 同一个缺省（`mode` 的取值表见 `modeOfInfo` 上面那张）。
  */
 export function zoomOfInfo(infoLine: string): number | 'auto' {
@@ -135,7 +139,7 @@ export function zoomOfInfo(infoLine: string): number | 'auto' {
 }
 
 /**
- * adj871（满宽模式 `m=w` 的岔路口）：**开栏行里到底写没写 `z=`**。
+ * adj871（满宽模式 `v=w` 的岔路口）：**开栏行里到底写没写 `z=`**。
  *
  * 为什么不能靠 `zoomOfInfo()` 的返回值判断：「`z` 未写」「`z=100`」「`z=abc`」三种**都返回 `100`**
  * （那是"解析口径只在一处"的代价 ✓），而满宽模式要分成两岔（用户 2026-10-11 口径）：

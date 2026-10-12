@@ -116,7 +116,7 @@ export type ScorePaneHost = {
    */
   zoom?: number | 'auto'
   /**
-   * adj870（用户 2026-10-11）：代码块写死的**初始显示模式**（来自 `m=p|w|s`，见 `jpsBlocks.modeOfInfo`）。
+   * adj870（用户 2026-10-11）：代码块写死的**初始显示模式**（来自 `v=p|w|s`，见 `jpsBlocks.modeOfInfo`）。
    * 只有代码块传它；文件视图 / 嵌入不传 ⇒ 用缺省「谱面」。工具条仍可**会话内临时切换**（参数是落地点、工具条是"看一眼"）。
    */
   mode?: 'page' | 'full' | 'score'
@@ -1820,7 +1820,7 @@ toolbar.dataset.ijipuPane = String(paneId)
      * 基础规则里的 `max-width: 100%` 仍然管用 ⇒ 自然尺寸比栏宽时按比例缩小，不会横向溢出 ✓。
      *
      * ⚠ adj871：这里原来**当场按 `host.zoom` 打类**，而 `setMode()` 又按模式打一次 ⇒ 两处口径会漂：
-     * `m=p`（整页）本该让 `z` 不生效，但 `ijipu-zoom-fixed` 还在 ⇒ 整页被 z 缩掉 ✗。
+     * `v=p`（整页）本该让 `z` 不生效，但 `ijipu-zoom-fixed` 还在 ⇒ 整页被 z 缩掉 ✗。
      * 现在**只有一处判定**（`publishDisplaySize`，挂载与切模式走同一条路），这里不再自己判一遍。
      */
     /**
@@ -1840,7 +1840,7 @@ toolbar.dataset.ijipuPane = String(paneId)
     /**
      * ⚠ adj871 订正（用户：「`z` 未写保持 `z=100` 的现状」）：面板里**不再需要**区分"z 写没写" ——
      * 未写与 `z=100` 行为一致（固定自然尺寸），只有 `z=*` 才铺满 ⇒ 原来那个局部常量已删（`tsc` 会报未使用 ✓）。
-     * `ScorePaneHost.zoomWritten` 仍由 `main.ts` 传着（它只服务于"`m=p` + 具体 `z=N` ⇒ 提示 z 不生效"）。
+     * `ScorePaneHost.zoomWritten` 仍由 `main.ts` 传着（它只服务于"`v=p` + 具体 `z=N` ⇒ 提示 z 不生效"）。
      */
     svgs.forEach((svg, i) => {
       if (svgs.length > 1 && !host.embedded) {
@@ -2142,7 +2142,7 @@ toolbar.dataset.ijipuPane = String(paneId)
        * ⚠ adj871 订正（用户 2026-10-11 明确）：「**`z` 未写保持 `z=100` 的现状**」⇒
        * 满宽模式下**未写 z 也是固定自然尺寸**（1 单位 = 1px），**只有写 `z=*` 才铺满**。
        * 所以这里**不能**用 `zoomWritten` 分岔（那是"未写即铺满"的写法，已撤掉）；
-       * `zoomWritten` 现在只服务于"`m=p` + 具体 `z=N` ⇒ 提示 z 不生效"那一条 ✓。
+       * `zoomWritten` 现在只服务于"`v=p` + 具体 `z=N` ⇒ 提示 z 不生效"那一条 ✓。
        */
       if (mode === 'full' && zoomOfHost === 'auto') {
         // 满宽 + `z=*` ⇒ 铺满容器宽（高度超出就滚动 ✓）
@@ -2174,7 +2174,7 @@ toolbar.dataset.ijipuPane = String(paneId)
      * **绝不跟滚动实时重算** —— 滚动时容器顶边一直在变，页面尺寸会跟着"一跳一跳"（用户明确否掉 ✗）。
      *
      * 只写 `--ijipu-page-fit`（在 styles.css 里乘到 `--ijipu-zoom-w` 上）：
-     * `m=p` 时 `z` 不生效，所以**不复用** `--ijipu-zoom-factor` —— 免得读代码的人以为 `z` 还在起作用。
+     * `v=p` 时 `z` 不生效，所以**不复用** `--ijipu-zoom-factor` —— 免得读代码的人以为 `z` 还在起作用。
      */
     function publishPageFit(): void {
       if (paneMode !== 'page') return
