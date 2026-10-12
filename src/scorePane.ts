@@ -699,6 +699,15 @@ toolbar.dataset.ijipuPane = String(paneId)
      */
     const policy = toolbarPolicy(Platform.isMobile)
     /**
+     * adj905y（用户口径：「手机端统一使用只图标」；实测"默认是图标，点击显示后又是带文本，不统一"）：
+     * **把"要不要文字"这个结论打在工具条自己身上** —— 手机端一律只图标（`labelMode: 'hidden'`）。
+     *
+     * 为什么不能只靠 CSS 的 `@container ijipu-score (max-width: 400px)`：工具条**显示时会被搬到
+     * `document.body`**（`adj793c`，为摆脱祖先裁剪与层叠上下文）⇒ 那一刻**容器查询失效** ⇒
+     * 同一条工具条"收起时只图标、点开却带文字" ✗。类跟着元素走，搬出去也照样只图标 ✓。
+     */
+    toolbar.toggleClass('ijipu-icons-only', policy.labelMode === 'hidden')
+    /**
      * adj724b（用户要求）：**工具条默认隐藏，鼠标移到谱面上才显示**。
      *
      * 为什么：Obsidian「导出为 PDF」会把渲染出来的 DOM 一起导出 ⇒ 工具栏（试听/排版/设置/谱面）
@@ -1590,6 +1599,21 @@ toolbar.dataset.ijipuPane = String(paneId)
         eb.appendChild(editIcon(15))
         eb.createSpan({ cls: 'ijipu-btn-label', text: '编辑' })
         eb.addEventListener('click', () => {
+          /**
+           * adj905y（**用户实测**：「点嵌入块工具条上的『编辑』，能打开 `.jps` 并切换源码视图，
+           * 但**工具条没有消除**」）：**「编辑」是"离开这个面板"的动作 ⇒ 点完就把工具条收起来。**
+           *
+           * 为什么必须在**这里**收：显示态下工具条被搬到 `document.body`（`adj793c`），而
+           * "切到源码视图 / 打开 `.jps`"是**换掉页签内容** —— 它既不保证走 `destroy()`
+           * （`adj794e` 已记：嵌入面板常常走不到 `destroy()`），也不会触发下一次挂载
+           * ⇒ 孤儿清理（`sweepOrphanBodyToolbars`）**根本没机会跑** ⇒ 那条工具条就浮在源码视图上 ✗。
+           *
+           * `revealToolbar(false)` 会把它**挂回容器**（`clearOutsideFixed`）：容器随旧页签一起被丢弃
+           * ⇒ 什么都不剩 ✓；手机端再补 `is-user-hidden` —— `.is-mobile` 那条"常显"会压过默认隐藏（adj773）。
+           * ⚠ 先收再派发：万一宿主这次派发抛错或同步换 DOM，工具条也已经收干净了。
+           */
+          revealToolbar(false)
+          if (Platform.isMobile) liveToolbar().addClass('is-user-hidden')
           if (host.onEditSource) {
             host.onEditSource()
             return

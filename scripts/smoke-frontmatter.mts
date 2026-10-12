@@ -4076,6 +4076,61 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
     !/\.is-mobile \.ijipu-score-toolbar \{[^}]*--ijipu-ctl-h: 28px/.test(
       css862.replace(/(\.is-mobile \.ijipu-score-toolbar \{[^}]*--ijipu-ctl-h: )28px/, '$144px')))
 
+  /**
+   * ---- adj905y（**用户实测两条**）----
+   *
+   * ① 「手机端统一使用只图标」：默认（收起态）是图标，**点开之后又带文字** ⇒ 同一条工具条两种样子 ✗。
+   *    根因：文字标签原来只由 `@container ijipu-score (max-width: 400px)` 决定，而工具条显示时被搬到
+   *    `document.body`（`adj793c`）⇒ 容器查询失效。
+   *    修法：结论进 `toolbarPolicy().labelMode`（手机端 `'hidden'`），由渲染端打成
+   *    `.ijipu-icons-only` 类 —— **类跟着元素走**，搬到哪都一致。
+   * ② 「点嵌入块的『编辑』能打开 `.jps` 并切源码视图，但**工具条没有消除**」：
+   *    "编辑"是离开面板的动作，必须在**派发那一刻**就把工具条收掉（参见 `adj794e`：嵌入面板
+   *    常常走不到 `destroy()`，孤儿清理没机会跑）。
+   */
+  check('adj905y 手机端策略：文字标签**一律隐藏**（桌面端仍按容器宽度决定）',
+    pMob.labelMode === 'hidden' && pDesk.labelMode === 'byWidth',
+    `手机=${pMob.labelMode}｜桌面=${pDesk.labelMode}`)
+  check('adj905y 负对照：把手机端策略改成"按宽度" ⇒ 上面那条立刻为假（说明它真在量口径）',
+    toolbarPolicy(true).labelMode !== 'byWidth' &&
+      ({ ...toolbarPolicy(true), labelMode: 'byWidth' as const }).labelMode === 'byWidth')
+  check('adj905y 渲染端把结论打成类（`ijipu-icons-only` 由 `policy.labelMode` 驱动，不是写死）',
+    /toolbar\.toggleClass\('ijipu-icons-only', policy\.labelMode === 'hidden'\)/.test(pane862))
+  check('adj905y 样式闸门：`.ijipu-icons-only` 同时隐藏**按钮标签**与**模式文字**，并让按钮等宽',
+    /\.ijipu-score-toolbar\.ijipu-icons-only \.ijipu-btn-label,\s*\n\.ijipu-score-toolbar\.ijipu-icons-only \.ijipu-mode-text \{\s*\n\s*display: none;/.test(
+      css862,
+    ) &&
+      /\.ijipu-score-toolbar\.ijipu-icons-only \.ijipu-play,[\s\S]{0,200}?width: var\(--ijipu-ctl-w\)/.test(css862))
+  check('adj905y 负对照：`.ijipu-icons-only` 里去掉 `display: none` ⇒ 标签判据为假',
+    !/\.ijipu-score-toolbar\.ijipu-icons-only \.ijipu-btn-label,\s*\n\.ijipu-score-toolbar\.ijipu-icons-only \.ijipu-mode-text \{\s*\n\s*display: none;/.test(
+      css862.replace(
+        /(\.ijipu-btn-label,\s*\n\.ijipu-score-toolbar\.ijipu-icons-only \.ijipu-mode-text \{\s*\n\s*)display: none;/,
+        '$1',
+      ),
+    ))
+  /**
+   * adj905y：「编辑」点下即收工具条 —— 判据与负对照**共用同一个正则**。
+   * ⚠ 负对照必须只删**编辑处理器那一处**的两行：全局 `replace` 会先删掉**别处**同样的两行
+   *   （`adj797b`/`adj792b` 那几处也是这个写法）⇒ 正则照样命中 ⇒ 负对照变成假绿（本轮的教训）。
+   */
+  const EDIT_DISMISS_RE =
+    /eb\.addEventListener\('click', \(\) => \{[\s\S]{0,1200}?revealToolbar\(false\)\s*\n\s*if \(Platform\.isMobile\) liveToolbar\(\)\.addClass\('is-user-hidden'\)[\s\S]{0,200}?if \(host\.onEditSource\)/
+  check('adj905y 「编辑」点下即收起工具条（先收再派发；手机端补 `is-user-hidden`）',
+    EDIT_DISMISS_RE.test(pane862))
+  check('adj905y 负对照：把**编辑处理器里**那两行删掉 ⇒ 上面那条为假（它真的在守这处）', (() => {
+    const at = pane862.indexOf("eb.addEventListener('click', () => {")
+    if (at < 0) return false
+    const patched =
+      pane862.slice(0, at) +
+      pane862
+        .slice(at)
+        .replace(
+          /revealToolbar\(false\)\s*\n\s*if \(Platform\.isMobile\) liveToolbar\(\)\.addClass\('is-user-hidden'\)/,
+          '',
+        )
+    return !EDIT_DISMISS_RE.test(patched)
+  })())
+
   // —— ⑥ 图标同源（两端同一枚「更多」PNG；应用仓库不在时跳过逐字节比对） ——
   {
     const plugIcon = 'vendor/icons/更多.png'

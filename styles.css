@@ -1059,6 +1059,29 @@
     padding: 2px 4px;
   }
 }
+/**
+ * adj905y（用户口径：「**手机端统一使用只图标**」；实测"默认是图标，点击显示后又是带文字，不统一"）：
+ * 手机端**一律**只图标 —— 不再由容器宽度决定。
+ *
+ * 为什么不能只靠上面那条容器查询：工具条**显示时会被搬到 `document.body`**（`adj793c`，
+ * 为摆脱祖先裁剪与层叠上下文）⇒ 那一刻它**不在 `.ijipu-score` 容器里** ⇒ 容器查询失效 ⇒
+ * 同一条工具条"收起时只图标、点开却带文字" ✗。结论由 `toolbarPolicy().labelMode` 给出、
+ * **打在工具条自己身上**（`scorePane.ts` 的 `toolbar.toggleClass('ijipu-icons-only', …)`）
+ * ⇒ 搬到哪里都一致。
+ *
+ * ⚠ 本段与上面 `@container … (max-width: 400px)` **必须一起改**（同一套视觉口径：隐藏标签 +
+ * 隐藏模式文字 + 按钮等宽；本仓库对这种"两条同口径"的写法已有先例，见尺寸那几条）。
+ */
+.ijipu-score-toolbar.ijipu-icons-only .ijipu-btn-label,
+.ijipu-score-toolbar.ijipu-icons-only .ijipu-mode-text {
+  display: none;
+}
+.ijipu-score-toolbar.ijipu-icons-only .ijipu-play,
+.ijipu-score-toolbar.ijipu-icons-only .ijipu-mode-select-wrap {
+  width: var(--ijipu-ctl-w);
+  padding-inline: 0;
+  justify-content: center;
+}
 /* 嵌入/文件视图的紧凑形态：工具条更小、不占垂直空间 */
 .ijipu-embedded .ijipu-score-toolbar {
   margin-bottom: 2px;

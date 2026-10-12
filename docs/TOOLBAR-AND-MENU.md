@@ -89,11 +89,24 @@ buildScoreMenu(ctx)   // src/scoreMenu.ts —— 纯数据，零 obsidian/DOM �
 | 维度 | 桌面 | 移动端 | 落地 |
 |---|---|---|---|
 | 触控目标 | 24px（样式基线） | **≥44px** | `styles.css`：`.is-mobile .ijipu-score-toolbar`、`.ijipu-score-toolbar.ijipu-ported-mobile`（含 `--ijipu-ctl-w: 44px` 与 `min-width: 44px`） |
+| **按钮文字标签** | **按容器宽度**：`.ijipu-score` 窄于 400px 时隐藏（`@container`） | **一律只图标**（用户 2026-10-12 口径：「手机端统一使用只图标」） | 结论来自 `toolbarPolicy().labelMode`（`hidden` / `byWidth`），渲染端打成 `.ijipu-icons-only` 类；样式在 `styles.css`（与那条 `@container` **同一套视觉口径，必须一起改**） |
 | 自动收起 | 3s（`DESKTOP_AUTO_HIDE_MS`） | **常驻**（`autoHideMs = 0`） | `scorePane.ts` 的 `startAutoHide` 首行消费 policy |
 | hover 依赖 | 无（`adj785` 起改为点击切换） | 无 | `hoverHide: false`（两端一致） |
 | 右键菜单 | 有 | **无**（长按被宿主占用） | `contextMenu` 只在桌面注册 `contextmenu` |
 | 「在应用中打开」 | 有 | **菜单里不出现** | `buildScoreMenu` 里按 `isMobile` 过滤 |
 | **图片出口**（复制为图片 / 导出 PNG 同源） | 有 | **菜单里不出现** | `buildScoreMenu` 里按 `isMobile` 整组不生成。**原因**：取图必须走**嵌入版 iJipu 应用**，而嵌入版**只在桌面注册**（`main.ts` 的 `Platform.isDesktopApp` + `embed.ts` 的 `getEmbedUrl` 在手机 `return null`）⇒ 手机上必失败（`adj874`）。手机端可用的是「复制 SVG 文本 / 复制谱面源码 / 导出 SVG」——它们走插件自己的引擎 |
+
+### 两条"动作即收"的硬规则（`adj905y`，用户实测）
+
+1. **点「✎ 编辑」先收工具条、再派发**（`scorePane.ts` 的编辑处理器首两行）。
+   为什么：显示态下工具条被搬到 `document.body`（`adj793c`，为摆脱祖先裁剪/层叠），而"切到源码视图 /
+   打开 `.jps`"是**换掉页签内容** —— 既不保证走 `destroy()`（`adj794e` 已记：嵌入面板常走不到），
+   也不会有下一次挂载 ⇒ 孤儿清理（`sweepOrphanBodyToolbars`）没机会跑 ⇒ 那条工具条就浮在源码视图上 ✗。
+   `revealToolbar(false)` 会把它**挂回容器**（随旧页签一起丢弃）；手机端再补 `is-user-hidden`
+   （`.is-mobile` 那条"常显"会压过默认隐藏）。
+2. **文字标签的结论要随元素走**（`.ijipu-icons-only` 类，而不是只靠容器查询）——
+   同一条工具条不能在"收起时只图标、点开却带文字"。新增按钮时**文字与图标都要建**（`ijipu-btn-label`
+   仍照常创建），由上面那套策略决定看不看得见。
 
 ## 四、图标同源
 

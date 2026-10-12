@@ -262,6 +262,20 @@ export interface ToolbarPolicy {
   toggleOnClick: boolean
   /** 是否提供右键菜单入口（手机没有右键、长按被宿主占用 ⇒ 移动端只靠 `⋯ 更多`） */
   contextMenu: boolean
+  /**
+   * 按钮**文字标签**怎么显示（adj905y，用户口径：「手机端统一使用只图标」）。
+   *
+   *  · `'hidden'` —— **一律只图标**（手机端）：屏幕窄、触控目标就那么大，文字会把工具条挤到换行；
+   *    图标含义由 `title` 与「⋯ 更多」菜单里的文字兜住；
+   *  · `'byWidth'` —— **按容器宽度**（桌面端）：`.ijipu-score` 窄于 400px 时由 `@container` 隐藏文字
+   *    （侧栏 / 分栏里的嵌入也判断正确），宽度够就带文字。
+   *
+   * ⚠ 为什么要有这个字段、而不是只留 CSS：文字标签原来是**纯容器查询**决定的，
+   * 而工具条显示时会被搬到 `document.body`（`adj793c`，为了不被祖先裁剪/盖住）——
+   * 那一刻**容器查询失效** ⇒ 同一条工具条"收起时只图标、点开却带文字"（用户实测 ✗）。
+   * 现在把"这个平台要不要文字"这个**结论**随元素带走（打一个类），与搬不搬出去无关。
+   */
+  labelMode: 'hidden' | 'byWidth'
 }
 
 /** 桌面：挂载后显示一次，3 秒无操作自动收起（`adj785` 的用户口径） */
@@ -288,5 +302,10 @@ export function toolbarPolicy(isMobile: boolean): ToolbarPolicy {
     hoverHide: false,
     toggleOnClick: true,
     contextMenu: !isMobile,
+    /**
+     * adj905y（用户口径）：「手机端统一使用只图标」——手机端**一律**隐藏文字标签（不再看容器宽度）；
+     * 桌面端保持"按宽度"（窄容器才图标化），见 `ToolbarPolicy.labelMode` 的说明。
+     */
+    labelMode: isMobile ? 'hidden' : 'byWidth',
   }
 }
