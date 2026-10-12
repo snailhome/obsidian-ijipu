@@ -277,3 +277,82 @@ export const GUIDE_LIMITS_EX: Record<GuideKeyEx, [number, number]> = {
   // 超过曲长就等于"不显示"，没有实际意义，但设个上限避免误拖出天文数字）。
   barCountInterval: [1, 99],
 }
+
+/**
+ * adj905q（用户提议，规格见 `docs/PREVIEW-DEBUG-BOUNDARIES.md`）：
+ * **预览可视调试的边界虚线几何**（纯函数，只算不画）。
+ *
+ * ## 为什么需要它
+ *
+ * 本轮排查「段层上下对齐」时我**连续五次判断错**，全部源于"**靠推断边界在哪**"。
+ * `AGENTS.md` 六之二·3 的铁律写着"同一个 bug 修到第三次，**换量法**"——
+ * 这个函数就是那个量法：把布局内部的**三套边界**直接摊开，一眼看出谁画在哪。
+ *
+ * ## 三类边界
+ *
+ * - `cell` —— **时值格**（用户原则里的权威几何）：左缘 `segments[0].x`、右缘 `末段.x + perBeat×beats`；
+ * - `ink`  —— **音符本体（墨迹）盒**：左缘 `n.x`、右缘（本实现取末段右缘，无拍段时 `x + width`）；
+ * - `segment` —— **段层**（`{bz}`/`{dsb}`/`{tp}`）音符的格边界（`n.x` / `rightX`）。
+ *
+ * ## 画法（用户口径）
+ *
+ * **左边界只画上半部**（到音符中线 `yMid = n.y`）、**右边界只画下半部**、
+ * **相邻音符交替颜色**（`colorIndex` 取音符序号奇偶）。
+ * `yTop/yBottom` 给渲染端定竖向范围；断线样式与配色由渲染端决定。
+ *
+ * ⚠ 本函数**不改任何布局量**，也不参与布局计算 —— 只供预览层叠加显示。
+ */
+export interface DebugBoundNote {
+  x: number
+  y: number
+  width: number
+  rightX?: number
+  barIndex: number
+  /** 有值 = 段层音符（`{bz}`/`{dsb}`/`{tp}`） */
+  segment?: { type: string; layer: string }
+  segments?: { x: number; perBeat: number; beats: number; el?: string }[]
+}
+
+export interface DebugBound {
+  x: number
+  /** 左边界画上半部、右边界画下半部（用户口径） */
+  side: 'L' | 'R'
+  kind: 'cell' | 'ink' | 'segment'
+  yTop: number
+  yMid: number
+  yBottom: number
+  /** 相邻音符交替颜色用（音符在本 track 里的序号奇偶） */
+  colorIndex: number
+}
+
+export function computeDebugBounds(
+  notes: readonly DebugBoundNote[],
+  noteSize = 18,
+): DebugBound[] {
+  const out: DebugBound[] = []
+  notes.forEach((n, i) => {
+    const sg = n.segments ?? []
+    const lastSg = sg[sg.length - 1]
+    const cellL = sg.length > 0 ? sg[0].x : n.x
+    const cellR = lastSg ? lastSg.x + lastSg.perBeat * lastSg.beats : n.x + n.width
+    const yTop = n.y - noteSize * 2.2
+    const yMid = n.y
+    const yBottom = n.y + noteSize * 1.6
+    const push = (x: number, side: 'L' | 'R', kind: DebugBound['kind']): void => {
+      out.push({ x, side, kind, yTop, yMid, yBottom, colorIndex: i % 2 })
+    }
+    push(cellL, 'L', 'cell')
+    push(cellR, 'R', 'cell')
+    /**
+     * 墨迹盒与时值格**不同**时才另画一条（相同就不重复画）。
+     * ⚠ 注意：本实现的"墨迹右缘"取的也是末段右缘，所以右缘两者恒等、不必重画；
+     * **真正需要独立画的是左缘**（实测 `n.x` 比格左缘右 6.4px —— 数字在元素内居中）。
+     */
+    if (Math.abs(n.x - cellL) > 0.01) push(n.x, 'L', 'ink')
+    if (n.segment) {
+      push(n.x, 'L', 'segment')
+      push(n.rightX ?? n.x + n.width, 'R', 'segment')
+    }
+  })
+  return out
+}
