@@ -560,39 +560,61 @@ export function buildPlaySequence(
     for (const [, notes] of byGroupNotes) {
       const sorted = [...notes].sort((a, b) => a.x - b.x)
       sorted.forEach((n) => {
-        // adj732：右界一律按**墨迹**算（adj722 的方向是对的，但它多带了一项"步进右端"，见下）
-        const segs = n.segments ?? []
-        const lastSeg = segs[segs.length - 1]
-        const inkRight = lastSeg ? lastSeg.x + lastSeg.perBeat * lastSeg.beats : (n.rightX ?? n.x + n.width)
         /**
-         * adj722（用户报「下面声部色块不正确 / 色块跑到后面的音符上」；AGENTS 五·9「区间一律用**墨迹**算」）：
+         * adj905c（用户口径「**本时值的右边界为下一时值的左边界**，但这种情况要扣掉一些
+         * 无时值的元素的占宽」；实测示例谱里「上下音符没有对齐」差 4px）：
          *
-         * 色块右界 = **本音符自己的墨迹右缘**（`rightX`，即 `x + min(占宽, digitSlotW)`；含增时线/附点时取更右者），
-         * **不再**把 `edge`（下一个音符的**块左缘**）算进来——它多含两样东西：
-         *  ① **槽尾留白**（每个音会**右出约 1.0px**）；
-         *  ② **布置网格的间隙**（下层音符的 x 由上层网格决定：`5/` 墨迹到 `140.7`、
-         *     下一个 `6-` 从 `151.5` 起，中间空 **9.7px**）⇒ 色块宽 19.8px、
-         *     **比自己的音符宽出 10.8px、盖到后面那个音符上**（实测数据）。
+         * 实测根因 —— **两层的右界口径不同**：
+         * ```
+         * 段层 ({bz})   width 28.8  ⇒ 右缘 91.2 = 下一个音的 x     ✓ 已是"下一时值左界"
+         * 主旋律        width 24.8  ⇒ 右缘 87.2 = n.rightX(墨迹)   ✗ 少了音符间的 4px 间隙
+         * ```
+         * 于是同拍位上下两块宽度差 4px（用户截图所见）。
          *
-         * 曾经写成 `Math.max(edge, own)`（"至少占满到下一个音符"）⇒ 就是上面这个缺陷；
-         * 现改为**以本音符墨迹为准**（`edge` 只在它更小、且确实需要收窄时不起作用——
-         * 即块永远是"一个音一块"）。
+         * 改法：**非末音**用"下一个同声部音的**格起点** `x`"；**末音**才用 `max(n.x+n.width, n.rightX)`
+         * （末音没有"下一个"，且 `adj374` 要求色块**盖住末格增时线** ⇒ 必须含 `rightX`）。
          *
-         * ---
-         *
-         * ⚠ **adj732（用户再次报「试听色块右边界经常覆盖到下一音符的位置」，应用与插件都有）**：
-         * 上面这条 adj722 的实现里 `own` 多带了一项 **`n.x + n.width`**，而它是**步进/占宽右端**
-         * （本音符到**下一个音符**的推进量），**不是墨迹右端**：
-         *   · `n.width` 实测（4/4，defaultPageConfig）：普通数字 `2` 是 **58.2**（= 到下一个音的 x），
-         *     而它的墨迹右缘 `n.rightX` 只有 **108.2 − 75.1 = 33.1**（= `digitSlotW`）；
-         *   · 于是 `own = max(rightX, x + width, inkRight)` = **x + width** ⇒
-         *     · 等距音符时右界正好落在下一个音的 `x` 上（看着"还算准"，所以一直没被发现）；
-         *     · 一旦下一个音排得更近（如**附点音**：`Q: ( 2 3 | 5. 2 3 …` 里第 2 音 `x=133.2 w=58.2`
-         *       ⇒ `x+width=191.4`，而附点音 `x=177.2`）就**压过去 14.2px** —— 正是用户截图那一段。
-         * 所以这里**去掉 `n.x + n.width`**，并对"下一个同声部音符的墨迹左缘"再夹一次
-         * （布局保证**墨迹不重叠**，见 AGENTS 五·9 ⇒ 夹完既覆盖得到自己的墨迹，又绝不压下一个音）。
+         * ⚠ `nextSameVoiceX` 必须**先**算（原来在 `own` 之后），下面按时间取"下一个同声部音"。
          */
-        const own = Math.max(n.rightX ?? 0, inkRight)
+        /**
+         * "下一个音符"必须按**时间**取，不能按 x 取：和弦音（同一拍上的多个音）的 x 只差零点几像素、
+         * 纵向并排，按 x 取会把"和弦里的兄弟音"当成"下一个音"（实测茉莉花首拍就有 5 个音的 x 相差 0.5px）。
+         * 判据用 `(barIndex, beatPos)`（行内小节序 + 小节内拍位）——同拍即同时。
+         *
+         * adj905c：这里取**格起点 `m.x`**（原来用 `m.inkLeftX ?? m.x` 是墨迹口径）——
+         * 用户口径是"下一**时值**的左边界"，指的就是格起点。
+         */
+        let nextSameVoiceX: number | undefined
+        /**
+         * adj905c：**只认"紧接本音终点的那一个时值"** —— 不能把"更远的音"（后半拍的另一个音、
+         * 跨小节、跨行的音）当成"下一时值"，否则末音会用一个很远/很近的 x，
+         * 末格增时线就盖不住（`adj374` 实测末块右 117.0 < 末格右 124.0）。
+         */
+        const nEndBeat = n.beatPos + (n.duration ?? 0)
+        const isNextBeat = (m: PlacedToken): boolean =>
+          m.barIndex === n.barIndex && Math.abs(m.beatPos - nEndBeat) < 1e-6
+        for (const m of sorted) {
+          if (m === n || m.id.voice !== n.id.voice || !isNextBeat(m)) continue
+          const left = m.x
+          if (nextSameVoiceX === undefined || left < nextSameVoiceX) nextSameVoiceX = left
+        }
+        /**
+         * 右界：
+         *  · **有下一个时值** ⇒ 用它的格起点（= 用户口径"下一时值的左边界"）；
+         *  · **末音**（没有下一个）⇒ 取 `max(步进右端, 末格右端)`——
+         *    ⚠ **"末格右端"必须算进来**：`1---`（1 + 3 个增时线）实测
+         *    `x=75.0 w=56.0 ⇒ 131`、`rightX=131`，而**末格右端 = 142**、第 3 条增时线笔画在 **135**
+         *    ⇒ 只用 `x+width`/`rightX` 会盖不住最后那条增时线（`adj374` v2 实测红）。
+         */
+        const segsOfNote = n.segments ?? []
+        const lastSegOfNote = segsOfNote[segsOfNote.length - 1]
+        const inkRightOfNote = lastSegOfNote
+          ? lastSegOfNote.x + lastSegOfNote.perBeat * lastSegOfNote.beats
+          : (n.rightX ?? n.x + n.width)
+        const own =
+          nextSameVoiceX !== undefined
+            ? nextSameVoiceX
+            : Math.max(n.x + n.width, n.rightX ?? 0, inkRightOfNote)
         /**
          * adj732（用户口径，应用与插件都遵守）：
          * **色块右界不超**（取最左者）——① 小节线**左界**；② **下一个同声部音符的最左墨迹**
@@ -604,18 +626,9 @@ export function buildPlaySequence(
          * 只在"下一个元素比本音墨迹更靠左"（槽宽重叠、倚音/角标左伸）时才真正收住色块。
          */
         /**
-         * "下一个音符"必须按**时间**取，不能按 x 取：和弦音（同一拍上的多个音）的 x 只差零点几像素、
-         * 纵向并排，按 x 取会把"和弦里的兄弟音"当成"下一个音"（实测茉莉花首拍就有 5 个音的 x 相差 0.5px）。
-         * 判据用 `(barIndex, beatPos)`（行内小节序 + 小节内拍位）——同拍即同时。
+         * ⚠ `nextSameVoiceX` 已在上面算好（adj905c 把它提前到 `own` 之前）——
+         * 那里用的是**格起点 `m.x`**，不再重复计算。
          */
-        const laterThan = (m: PlacedToken): boolean =>
-          m.barIndex > n.barIndex || (m.barIndex === n.barIndex && m.beatPos > n.beatPos + 1e-6)
-        let nextSameVoiceX: number | undefined
-        for (const m of sorted) {
-          if (m === n || m.id.voice !== n.id.voice || !laterThan(m)) continue
-          const left = m.inkLeftX ?? m.x
-          if (nextSameVoiceX === undefined || left < nextSameVoiceX) nextSameVoiceX = left
-        }
         let limit = Number.POSITIVE_INFINITY
         for (const br of byGroupBrackets.get(`${n.id.page}|${n.id.group}`) ?? []) {
           // 括号 `x` 是**绘制中心** ⇒ 左缘 = x − width/2（用户口径："不超…独立修饰符"= 不盖住它）
