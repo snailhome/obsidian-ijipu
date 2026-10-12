@@ -929,18 +929,35 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
     }
   }
 
-  // 增时线（"-" 各占一拍的位置，每根在所在拍段占位宽度内居中；
-  // adj35：第 i 条增时线在第 i+1 拍段；adj73：垂直居中于音符数字（数字中心 = 基线-0.4×字号））
+  /**
+   * 增时线（`-`，每条占一拍）。
+   *
+   * adj35：第 i 条增时线在第 i+1 拍段；adj73：垂直居中于音符数字（数字中心 = 基线−0.4×字号）。
+   *
+   * adj905w（**用户口径，看图定标**）：「**增时线在格里也左对齐，与音符一致**」。
+   *
+   * 由来：用户开「预览可视调试」看 `{bz 1, 3, 5, 3,} 3 - - - ||` —— 段层数字落在**格左缘 + off**，
+   * 而增时线画在**拍段居中**（旧式 `beatStart + (pb − digitW)/2`）⇒ 两层看着错开，越往后越明显。
+   * 用户原话：「清楚了，是因为增时线在格里居中对齐导致的，那把增时线都按格里左对齐，与音符一致」。
+   *
+   * 落法：增时线**墨迹左缘 = 该拍格左缘 + `off`**，`off = 数字 x − 本音符第 0 格左缘`
+   * —— 与数字**同源**（不是另算一套）。两条布局路径的自然结果：
+   *  · **空间优先**（应用默认）`off = 0` ⇒ 增时线左缘 = 格左缘 = 段层数字所在列（逐拍重合）；
+   *  · **时值优先** `off ≈ 6.4`（数字在拍槽内居中）⇒ 增时线保持与数字同一偏移。
+   * 无拍段信息时（理论上不该发生）保留旧的"拍段内居中"兜底。
+   */
   const augY = y - size * 0.4
   if (t.augmentCount > 0) {
     const seg0 = note.segments?.[0]
     const pb0 = seg0 ? seg0.perBeat : note.duration > 0 ? note.width / note.duration : digitW
     const segStart0 = seg0 ? seg0.x : x + 6 - Math.min(note.duration, 1) * (pb0 / 2)
+    /** 数字相对**本音符第 0 格**左缘的偏移（`off`）—— 增时线按同一偏移左对齐 */
+    const inCellOff = seg0 ? x - seg0.x : 0
     for (let i = 0; i < t.augmentCount; i++) {
       const seg = note.segments?.[i + 1]
       const beatStart = seg ? seg.x : segStart0 + (1 + i) * pb0
       const pb = seg ? seg.perBeat : pb0
-      const lx = r1n(beatStart + (pb - digitW) / 2)
+      const lx = seg ? r1n(beatStart + inCellOff) : r1n(beatStart + (pb - digitW) / 2)
       // adj73："-" 字符随音符字号；dominant-baseline=central 使字符垂直居中于数字中心；
       // text-anchor=middle 使字符在占位宽（digitW）内居中；adj76：加粗与数字一致
       // adj374：增时线同样带 data-notepos（与数字同一 id）——播放高亮/光标联动能覆盖到增时线，

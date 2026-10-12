@@ -2386,7 +2386,8 @@ export function layoutScore(
             let xCursor = curX + noteElW
             for (let a = 0; a < n.augCount; a++) {
               const augElW = augBodyW(m.noteSize) + extraOf(n.barIdx, n.augDur)
-              // perBeat = 实际每拍宽（段宽 = augElW），使增时线字符在自身时值宽度内居中
+              // perBeat = 实际每拍宽（段宽 = augElW）⇒ 这条增时线的**格** = 该元素自身占宽
+              // （字符本身**不再在格内居中**：`adj905w` 起按"格左缘 + 数字的格内偏移"左对齐）
               segments.push({ x: r1(xCursor), perBeat: r1(augElW / n.augDur), beats: n.augDur, el: 'aug' })
               xCursor += augElW
             }
