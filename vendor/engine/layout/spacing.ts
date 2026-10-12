@@ -307,10 +307,17 @@ export const DESC_RATIO = 0.2
  *    `s = noteScaleOf(note_size)`，有下限、随字号等比，两处不会各写一份而漂移）；
  *  · adj625b（用户要求）：**序号连同方框整体按 3/4 显示** ⇒ 字号 / 框内空隙 / 框线宽一律 ×0.75
  *    （框宽由这三者与数字位数推出，故一并缩）。`BAR_NUMBER_BOTTOM_GAP` 是"离小节线多高"的
- *    **定位**间隙、不属于"序号 + 方框"的尺寸，保持不变。
- * 位置：**小节线底缘下方**（`BOTTOM_GAP` 起）画外框，数字用 `dominant-baseline="central"` 框内居中。
+ *    **定位**间隙、不属于"序号 + 方框"的尺寸，不参与缩放。
+ * 位置：**小节线底缘下方**（`BAR_NUMBER_BOTTOM_GAP` 起）画外框，数字用
+ * `dominant-baseline="central"` 框内居中。
+ *
+ * adj906（**用户定稿口径**）：「小节序号方块应放在小节线正下方，**方框上沿距小节线下端 1px**；
+ * 如果序号遇到临时多声部等与单声部旋律不在同一水平线的，标注在**主声部**的小节线下」。
+ *  ⇒ 间隙由 1.5 改为 **1**（`BAR_NUMBER_BOTTOM_GAP`），"挂在哪条线上"由布局埋点负责：
+ *  `layout/index.ts` 的 `placeVoiceBlock()`（主声部按 `voice === 1` 认）与
+ *  `shiftEnvelopeDown()`（`{dsb}` 把主声部整体下移时，序号跟着一起搬）。
  */
-export const BAR_NUMBER_BOTTOM_GAP = 1.5
+export const BAR_NUMBER_BOTTOM_GAP = 1
 /** adj625b：序号（数字 + 方框）整体缩放比例 */
 export const BAR_NUMBER_SCALE = 0.75
 /** 外框四周内空隙（px；已含 3/4 缩放） */

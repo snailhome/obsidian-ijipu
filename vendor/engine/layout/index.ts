@@ -3400,14 +3400,30 @@ export function layoutScore(
             blockStartX + BAR_PAD - BRACE_CONTENT_GAP - braceInkRightOffset(braceYTop, braceYBottom, m.noteSize),
           )
     // adj625：**块首那个序号**——多声部块的行首小节线同样不画（隐藏小节线），
-    // 序号放在「**大括号与音符之间**」那条空隙里（用户口径），高度按**最上面声部**的小节线底缘算。
+    // 序号放在「**大括号与音符之间**」那条空隙里（用户口径），高度按**主声部**的小节线底缘算。
+    /**
+     * adj906（**用户定稿口径**）：「小节序号方块应放在小节线正下方……如果序号遇到临时多声部等
+     * 与单声部旋律**不在同一水平线**的，标注在**主声部**的小节线下」。
+     *
+     * ⇒ 「主声部」= **`voice === 1`**（`Q:` / `Q1:` 那条主旋律），**不是 `parts[0]`**：
+     * 源码里 `Q2:` 完全可能写在 `Q1:` 前面（多声部块的 parts 按**书写顺序**排），
+     * 那时 `parts[0]` 是第二声部，序号就会挂到第二声部的线上 ✗。
+     * 块内没有 voice 1 时退回**最小声部号**（仍比"盲目取第一个"更接近"主声部"）。
+     */
+    const mainVi = (() => {
+      const i1 = parts.findIndex((p) => p.voice === 1)
+      if (i1 >= 0) return i1
+      let best = 0
+      for (let k = 1; k < parts.length; k++) if ((parts[k]?.voice ?? 1) < (parts[best]?.voice ?? 1)) best = k
+      return best
+    })()
     {
       // 括号双线：左粗线在 braceX、右细线在 braceX + 3 ⇒ 可用空隙是 [braceX+3, blockStartX]，取中点
       const xGap = (braceX + BRACE_LINE_DX + blockStartX) / 2
-      const yBottomTop = r1(voiceYTop[0] + m.noteSize * 1.1 + 4.5 * bs)
+      const yBottomTop = r1(voiceYTop[mainVi] + m.noteSize * 1.1 + 4.5 * bs)
       const fc = ord.findIndex((v) => v !== null)
       if (fc === 0 && isNumberedBar(ord[0])) {
-        pushBarNumber(ord[0] as number, xGap, yBottomTop, parts[0]?.voice ?? 1, parts[0]?.groupIndex ?? 0)
+        pushBarNumber(ord[0] as number, xGap, yBottomTop, parts[mainVi]?.voice ?? 1, parts[mainVi]?.groupIndex ?? 0)
       }
     }
     for (let vi = 0; vi < parts.length; vi++) {
@@ -3420,9 +3436,10 @@ export function layoutScore(
         const seg = p.segs[b]
         if (!seg?.bar) continue
         if (b === 0 && seg.notes.length === 0 && seg.bar.type === '|') continue
-        // adj625：**行中间**的小节序号只埋一次（取最上面声部那条小节线正下方）——
+        // adj625：**行中间**的小节序号只埋一次（取**主声部**那条小节线正下方；adj906 起按
+        // `voice===1` 认主声部，见上面 `mainVi` 的说明）——
         // 这根收尾线正是「下一个算作小节的格」的左侧小节线；块首那格由上面的埋点负责。
-        if (vi === 0) {
+        if (vi === mainVi) {
           const nc = nextCountedSeg(ord, b, numBars)
           if (nc < numBars && isNumberedBar(ord[nc])) {
             pushBarNumber(ord[nc] as number, barX[b], yBottomBar, p.voice, p.groupIndex)
@@ -6193,6 +6210,23 @@ function shiftEnvelopeDown(
         b.yTop = r1(b.yTop + dy)
         b.yBottom = r1(b.yBottom + dy)
       }
+    }
+    /**
+     * adj906（**用户定稿口径**）：「如果序号遇到临时多声部等与单声部旋律**不在同一水平线**的，
+     * **标注在主声部的小节线下**」。
+     *
+     * `{dsb}` 包络把**主旋律**（adj722 起它就是主声部）整体下移 `dy` —— 上面那段已经把它的
+     * **音符**与**小节线**一起搬了，但**小节序号**的 y 是布局时按**行基线**算的
+     * （`placeVoiceBlock`/`placeMusicRow` 用 `voiceYTop`）⇒ 不搬的话方框会停在主声部**上一行**
+     * 的高度上（用户实测截图即此）✗。
+     *
+     * 判据与上面搬小节线**同一套**（`xMin/xMax` 严格内开区间）：只搬**严格落在包络内**、
+     * 且属于本组的序号 —— 包络两端那根线不搬，挂在它下面的序号也不搬（那个序号属于**下一小节**，
+     * 音符在包络外）。
+     */
+    for (const bn of p.barNumbers) {
+      if (bn.group !== gi) continue
+      if (bn.x > xMin + 1e-6 && bn.x < xMax - 1e-6) bn.yBarBottom = r1(bn.yBarBottom + dy)
     }
     /**
      * adj667（用户报「整个乐谱多处连音线向下错位」）：连音线**必须按所属曲行/声部精确筛选**。
