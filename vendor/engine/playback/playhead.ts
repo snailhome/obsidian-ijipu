@@ -90,6 +90,18 @@ export function trackKeysOf(track: PlayheadSegAt[]): Map<string, PlayheadSegAt[]
  * adj427：按**音色**分配调色板序号——不同音色不同颜色，同一音色恒定同色。
  * 分配规则（保证既有观感不回退）：① 先把 voice 1 的音色排到第 1 位
  * （⇒ 单声部仍是红块、多声部 Q1 仍红、Q2 仍蓝）；② 其余按在轨道中出现的先后依次取色。
+ *
+ * ⚠ **adj905（用户实测）：规则 ① 必须排除"段内声部"（带 `playVoice` 的项）**。
+ *
+ * 原来的写法是 `if (t.voice === 1) push(t.instrument)` —— 而 `{bz}` 段的伴奏音符
+ * **`voice` 也是 1**（它跟主旋律同一条曲行，只是临时分出一层）。于是当伴奏音色
+ * 在轨道里**先于主旋律出现**时（首页「铃儿响叮当」正是：`{bz …}` 写在段外主旋律之前），
+ * 「手风琴」会抢走第 0 位（红），把主旋律的「大钢琴」挤到第 1 位 = **蓝**；
+ * 而 `{bz}` 段本身靠 `playVoice === 'accomp'` 取**固定蓝** ⇒
+ * **两块同色**，视觉上连成一片，用户看到的就是「宽度不一致、颜色没区分」。
+ *
+ * 段内声部（`accomp` / `second` / `main`）的颜色由 `segVoiceColor` 固定给出，
+ * **不该参与调色板分配** —— 排除它们，主旋律才能稳稳拿回红色。
  */
 let colorTrackCache: unknown = null
 let colorCache = new Map<string, number>()
@@ -100,8 +112,10 @@ export function instrumentColorMap(track: PlayheadSegAt[]): Map<string, number> 
     const k = inst ?? ''
     if (!order.includes(k)) order.push(k)
   }
-  for (const t of track) if (t.voice === 1) push(t.instrument)
-  for (const t of track) push(t.instrument)
+  /** 段内声部（有 playVoice）有固定色，不参与调色板（adj905） */
+  const isInsideSegment = (t: PlayheadSegAt): boolean => t.playVoice !== undefined
+  for (const t of track) if (t.voice === 1 && !isInsideSegment(t)) push(t.instrument)
+  for (const t of track) if (!isInsideSegment(t)) push(t.instrument)
   const map = new Map<string, number>()
   order.forEach((inst, i) => map.set(inst, i % PLAYHEAD_COLORS.length))
   colorTrackCache = track
