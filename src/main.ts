@@ -8,7 +8,7 @@ import { createAppRequester, createEmbedRpc, type AppRequester, type EmbedRpc } 
 // adj807（B2）：RPC 的 `render.svg` 允许带 `pageConfig` 覆盖 ⇒ 这里只需要它的**类型**
 import type { PageConfig } from '@ijipu/engine'
 import { IJipuSettingTab } from './settings'
-import { mountScorePane, type ScorePaneHandle } from './scorePane'
+import { mountScorePane, sweepOrphanBodyToolbars, type ScorePaneHandle } from './scorePane'
 import { registerJpsEmbeds } from './embed'
 // adj752：`.jps` 源码高亮（CM6 扩展，规则来自引擎、配色来自应用）
 import { jpsHighlightExtension } from './jpsHighlight'
@@ -1298,11 +1298,45 @@ export default class IJipuPlugin extends Plugin {
    * —— 手机端就是"用 Obsidian 编辑器打开源码"（`IJipuView.toggleSource()` 内部按平台分派）。
    */
   async openJpsForSourceEdit(file: TFile): Promise<void> {
-    const leaf = this.app.workspace.getLeaf('tab')
+    /**
+     * adj905z（**用户实测**：「同时这个操作没有进操作历史 ⇒ **无法通过回退返回到刚刚的笔记中**」）：
+     *
+     * 原来开在**新页签**（`getLeaf('tab')`）—— 新页签自己的历史是空的，"返回"没有"上一篇"可回
+     * ⇒ 用户回不到刚才那份笔记 ✗。
+     *
+     * 改成**与"在笔记里点 `[[x.jps]]` 链接"同一条路**：在**当前（主编辑区最近使用的）页签**打开 ——
+     * 这正是 Obsidian 自己的链接语义：**同一页签替换视图 + 该页签的导航历史记下刚才那份笔记**，
+     * 于是"返回"就能回到笔记 ✓。
+     *
+     * ⚠ 页签选择沿用本文件既有的口径（`adj724b` 的教训：`getLeaf(false)` 不一定是主编辑区那个 ——
+     * 当右栏已占着 iJipu 页签时它会优先返回那个）⇒ `getMostRecentLeaf(rootSplit) ?? getLeaf(false)`；
+     * 万一都拿不到（极端布局）退回 `getLeaf('tab')`，至少把文件打开。
+     */
+    const { workspace } = this.app
+    const leaf =
+      workspace.getMostRecentLeaf(workspace.rootSplit) ?? workspace.getLeaf(false) ?? workspace.getLeaf('tab')
     await leaf.openFile(file)
     const view = leaf.view as unknown as { toggleSource?: () => void }
     if (typeof view.toggleSource === 'function') view.toggleSource()
-    this.app.workspace.revealLeaf(leaf)
+    workspace.revealLeaf(leaf)
+    this.sweepToolbarsAfterNavigation()
+  }
+
+  /**
+   * adj905z 之二（**用户口径**）：「手机上嵌入块点编辑的工具条残留问题，可以在打开 jps 文件做一个检查，
+   * 如果有工具条残留，关闭就行，**这样简单又有效**」。
+   *
+   * 这就是那一次检查：**打开 `.jps` 会必然把承载嵌入块的页签换掉** ⇒ 那条工具条（显示时被搬到
+   * `document.body`，见 `adj793c`）的容器此刻**一定已经不在文档里** ⇒
+   * `sweepOrphanBodyToolbars()` 的判据成立、直接移除 ✓ —— 不必跟"视图切换的时序"赛跑。
+   *
+   * 为什么还要"下一帧再清一次"：leaf 的内容替换与 DOM 断连**不一定在同一拍**完成
+   * （Obsidian 内部还要走一轮 view 生命周期），所以**两次都做**：现在一次、下一帧一次。
+   * 这个方法幂等、开销可忽略（只在"打开 .jps"这种低频动作里调用）。
+   */
+  private sweepToolbarsAfterNavigation(): void {
+    sweepOrphanBodyToolbars()
+    window.requestAnimationFrame(() => sweepOrphanBodyToolbars())
   }
 
   /**
@@ -1613,6 +1647,24 @@ export default class IJipuPlugin extends Plugin {
      * 表现为"只展开了右栏/切了页签，应用里没打开文件"（用户实测）。
      */
     const isSameLeaf = sourceLeaf !== null && target === sourceLeaf
+    /**
+     * adj905z（**用户实测**：「这个操作没有进操作历史 ⇒ **无法通过回退返回到刚刚的笔记中**」）：
+     *
+     * 「当前页签」模式（以及从**嵌入块**点「编辑」时的落点）是把**当前那个 leaf 换成嵌入版视图** ——
+     * 而 `setViewState` **只换视图、不进导航历史**（官方 API 里"要不要进历史"由**视图**在
+     * `View.setState(state, result)` 里声明，我们过去没声明）⇒ 用户回不到刚才那份笔记 ✗。
+     *
+     * 修法：换视图之前**先走一次真·打开文件**（`leaf.openFile`）—— 这一趟是标准的文件导航
+     * （与在文件列表 / 笔记里点链接同类），会把"刚才那份视图"记进该 leaf 的历史 ⇒ 之后的"返回"能回去 ✓。
+     * 只在**来源页签不是本 leaf** 时才需要：从 `.jps` 文件视图路由过来时，用户点开那份 `.jps`
+     * 本身就已经进过一次历史（那份笔记在栈里）✓。
+     *
+     * ⚠ 代价：会先渲染一帧 `.jps` 的文件视图再被嵌入版接管（同一份谱，观感可接受）；
+     * 换来的是一条**能返回**的历史记录 —— 用户明确要的就是这个。
+     */
+    if (plan.kind === 'replace-source' && !isSameLeaf && file) {
+      await target.openFile(file)
+    }
     await target.setViewState({ type: VIEW_TYPE_IJIPU_APP, active: true })
     await workspace.revealLeaf(target)
     if (file) {
@@ -1637,6 +1689,12 @@ export default class IJipuPlugin extends Plugin {
     } else if (isSameLeaf) {
       console.info(`[iJipu] 打开方式=${mode}：就地替换来源页签（不关）`)
     }
+    /**
+     * adj905z 之二（**用户口径**）：「可以在打开 jps 文件做一个检查，如果有工具条残留，关闭就行」——
+     * 桌面端这条路径同样会把承载嵌入块的页签换掉/关掉 ⇒ 顺手清一次残留工具条（判据与说明见
+     * `sweepToolbarsAfterNavigation()`）。放在**最后**：那时页签的增删/替换都已经落定。
+     */
+    this.sweepToolbarsAfterNavigation()
   }
 
   /** 释放嵌入版服务（关掉开关 / 卸载插件时） */

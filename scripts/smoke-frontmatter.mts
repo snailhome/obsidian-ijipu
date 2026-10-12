@@ -439,6 +439,90 @@ console.log('[3g] adj631 设置面板：多页签 / 收藏音色分类列表 / �
         /if \(info\.ready\) \{[\s\S]{0,160}?info\.pendingOpen = path/.test(bridgeSrc2))
   }
   /**
+   * ---- adj905z（**用户实测**）：「这个操作没有进操作历史 ⇒ **无法通过回退返回到刚刚的笔记中**」----
+   *
+   * 两条路各有各的坑，都在这台机器上无法真跑 Obsidian ⇒ 用**源码判据**把口径钉住：
+   *  ① 手机端点嵌入块的「编辑」：原来开在**新页签**（历史为空 ⇒ 返回没处可回）。
+   *     改成**在当前（主编辑区最近使用的）页签**打开 —— 与"点 `[[x.jps]]` 链接"同一条路，
+   *     该页签的历史里就有刚才那份笔记 ⇒ 返回能回去。
+   *  ② 桌面端「打开方式 = 当前页签」等"**换视图**"的路径：`setViewState` **只换视图、不进历史**
+   *     （官方 API 里是否进历史由视图在 `View.setState(state, result)` 里声明）⇒ 换之前先走一次
+   *     **真·打开文件**（`leaf.openFile`），那一趟是标准文件导航，会进历史。
+   */
+  {
+    /**
+     * ⚠ 这里**自己读**源码、不借外层的 `mainSrc`：本仓库的 `smoke-frontmatter.mts` 里
+     * `mainSrc` / `cssSrc` 在多个小节块里各有一份（有的还是"剥注释/压空白"过的版本）
+     * —— 我第一版借了外层的，结果拿到的是另一份（正则不匹配 ⇒ `seg` 为空 ⇒
+     * **负对照反而假绿**）。自己读 raw，判据与变量作用域无关。
+     */
+    const main905z = String(readFileSync('src/main.ts', 'utf8'))
+    const editPath = /async openJpsForSourceEdit\(file: TFile\): Promise<void> \{([\s\S]{0,1400}?)\n {2}\}/
+    const seg = editPath.exec(main905z)?.[1] ?? ''
+    /**
+     * ⚠ 顺序判据必须用**剥注释后**的代码：注释里也会出现 `getLeaf('tab')`（我在说明"原来开在新页签"时
+     * 就写了它）——不剥注释的话 `indexOf` 命中的是注释，判据直接假红（本轮实测踩到）。
+     */
+    const segCode = codeOf(seg)
+    check('adj905z 手机端「编辑」在**当前页签**打开 `.jps`（新页签的历史是空的 ⇒ 回不到笔记）',
+      segCode !== '' &&
+        /getMostRecentLeaf\(workspace\.rootSplit\) \?\? workspace\.getLeaf\(false\)/.test(segCode) &&
+        segCode.indexOf('getLeaf(') > segCode.indexOf('getMostRecentLeaf(workspace.rootSplit)'),
+      `segLen=${segCode.length}`)
+    check('adj905z 负对照：把它换回"直接新开页签"（`getLeaf(\'tab\')` 在前）⇒ 上面那条为假',
+      (() => {
+        if (segCode === '') return false
+        const broken = segCode.replace(
+          'workspace.getMostRecentLeaf(workspace.rootSplit) ?? workspace.getLeaf(false)',
+          "workspace.getLeaf('tab')",
+        )
+        return !(
+          /getMostRecentLeaf\(workspace\.rootSplit\) \?\? workspace\.getLeaf\(false\)/.test(broken) &&
+          broken.indexOf('getLeaf(') > broken.indexOf('getMostRecentLeaf(workspace.rootSplit)')
+        )
+      })())
+    check('adj905z 「当前页签」换视图前先走一次真·打开文件（`setViewState` 不进历史）',
+      /plan\.kind === 'replace-source' && !isSameLeaf && file[\s\S]{0,160}?await target\.openFile\(file\)/.test(main905z))
+    check('adj905z 负对照：删掉那句 `await target.openFile(file)` ⇒ 上面那条为假（它真的在守这处）',
+      !/plan\.kind === 'replace-source' && !isSameLeaf && file[\s\S]{0,160}?await target\.openFile\(file\)/.test(
+        main905z.replace(
+          /plan\.kind === 'replace-source' && !isSameLeaf && file\)? \{[\s\S]{0,80}?await target\.openFile\(file\)/,
+          '',
+        ),
+      ))
+
+    /**
+     * adj905z 之二（**用户口径**）：「手机上嵌入块点编辑的工具条残留问题，可以在**打开 jps 文件**做一个检查，
+     * 如果有工具条残留，**关闭就行**，这样简单又有效」。
+     *
+     * 判据（都建立在这条路径**必然**换掉承载嵌入块的页签这一事实上）：
+     *  ① `sweepOrphanBodyToolbars` 必须**导出**（`main.ts` 才调得到）；
+     *  ② `main.ts` 有那个"现在清一次 + 下一帧再清一次"的入口；
+     *  ③ **两条打开路径都要调**（手机端源码编辑 / 桌面端嵌入版）。
+     */
+    const pane905z = String(readFileSync('src/scorePane.ts', 'utf8'))
+    const sweepCall = /sweepToolbarsAfterNavigation\(\)/
+    check('adj905z 之二 残留工具条兜底：`sweepOrphanBodyToolbars` 已导出，且入口是"现在 + 下一帧"各清一次',
+      /export function sweepOrphanBodyToolbars\(\): void \{/.test(pane905z) &&
+        /private sweepToolbarsAfterNavigation\(\): void \{[\s\S]{0,400}?sweepOrphanBodyToolbars\(\)[\s\S]{0,200}?requestAnimationFrame\(\(\) => sweepOrphanBodyToolbars\(\)\)/.test(
+          main905z,
+        ))
+    const editSeg = /async openJpsForSourceEdit[\s\S]{0,1600}?\n {2}\}/.exec(main905z)?.[0] ?? ''
+    const embedSeg = /async openEmbedLeaf[\s\S]{0,6000}?\n {2}\}/.exec(main905z)?.[0] ?? ''
+    check('adj905z 之二 **两条打开路径**（手机端源码编辑 / 桌面端嵌入版）都做这次清理',
+      sweepCall.test(codeOf(editSeg)) && sweepCall.test(codeOf(embedSeg)),
+      `手机端段=${editSeg.length}｜桌面端段=${embedSeg.length}`)
+    check('adj905z 之二 负对照：只留一处调用（删掉手机端那次）⇒ 上面那条为假',
+      (() => {
+        const broken = editSeg.replace(/this\.sweepToolbarsAfterNavigation\(\)/, '')
+        return !(sweepCall.test(codeOf(broken)) && sweepCall.test(codeOf(embedSeg)))
+      })())
+    check('adj905z 之二 负对照：把入口改成"只清一次"（去掉下一帧那次）⇒ 判据为假（它真的在守这个组合）',
+      !/private sweepToolbarsAfterNavigation\(\): void \{[\s\S]{0,400}?sweepOrphanBodyToolbars\(\)[\s\S]{0,200}?requestAnimationFrame\(\(\) => sweepOrphanBodyToolbars\(\)\)/.test(
+        main905z.replace(/window\.requestAnimationFrame\(\(\) => sweepOrphanBodyToolbars\(\)\)/, 'void 0'),
+      ))
+  }
+  /**
    * adj724b：「打开 `.jps` 的方式 → 开在哪里」——**直接跑纯函数**断言全部组合。
    *
    * 为什么改成跑函数：这段规则是用户可见行为，此前只对 `main.ts` 做**字符串匹配**，

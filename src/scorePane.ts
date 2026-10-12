@@ -241,9 +241,15 @@ let paneSeq = 0
  * 所以改成**以事实为准**：维护 `面板 id → 容器元素`，清理时判断
  * "该 id 不存在、**或它的容器已经不在文档里**" ⇒ 移除 body 上那条工具条 ✓。
  * 清理时机也选**一定会发生**的动作：每次挂载新面板、以及每次把工具条摆到外侧时（后者很频繁 ✓）。
+ *
+ * adj905z 之二（**用户口径**：「可以在打开 jps 文件做一个检查，如果有工具条残留，关闭就行，
+ * 这样简单又有效」）：**加一条"打开 `.jps` 时顺手清一次"的兜底** —— 由 `main.ts` 在
+ * `openJpsForSourceEdit()` / `openEmbedLeaf()` 里调用（见那里的说明）。为什么这条最实在：
+ * 那两条路径**必然**会把承载嵌入块的页签换掉 ⇒ 残留工具条的容器这时**一定已经不在了** ⇒
+ * 判据成立、直接移除 ✓；而"点编辑的那一刻"记账那套要跟视图切换的时序赛跑，不如这条稳。
  */
 const livePanes = new Map<number, HTMLElement>()
-function sweepOrphanBodyToolbars(): void {
+export function sweepOrphanBodyToolbars(): void {
   for (const el of Array.from(document.body.querySelectorAll<HTMLElement>('.ijipu-score-toolbar[data-ijipu-pane]'))) {
     const id = Number(el.dataset.ijipuPane)
     const owner = Number.isFinite(id) ? livePanes.get(id) : undefined

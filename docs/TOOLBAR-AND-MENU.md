@@ -104,9 +104,28 @@ buildScoreMenu(ctx)   // src/scoreMenu.ts —— 纯数据，零 obsidian/DOM �
    也不会有下一次挂载 ⇒ 孤儿清理（`sweepOrphanBodyToolbars`）没机会跑 ⇒ 那条工具条就浮在源码视图上 ✗。
    `revealToolbar(false)` 会把它**挂回容器**（随旧页签一起丢弃）；手机端再补 `is-user-hidden`
    （`.is-mobile` 那条"常显"会压过默认隐藏）。
+   **再加一道兜底（`adj905z` 之二，用户口径：「可以在打开 jps 文件做一个检查，如果有工具条残留，
+   关闭就行，这样简单又有效」）**：两条"打开 `.jps`"的路径
+   （`openJpsForSourceEdit` / `openEmbedLeaf`）在**导航落定之后**都调
+   `sweepToolbarsAfterNavigation()` —— 现在清一次 + **下一帧再清一次**。
+   这条比"点的那一刻记账"实在：打开 `.jps` **必然**把承载嵌入块的页签换掉 ⇒ 残留工具条的容器
+   那时**一定已经不在文档里** ⇒ `sweepOrphanBodyToolbars()` 的判据直接成立 ✓
+   （下一帧再清是因为 leaf 内容替换与 DOM 断连不一定在同一拍完成）。
 2. **文字标签的结论要随元素走**（`.ijipu-icons-only` 类，而不是只靠容器查询）——
    同一条工具条不能在"收起时只图标、点开却带文字"。新增按钮时**文字与图标都要建**（`ijipu-btn-label`
    仍照常创建），由上面那套策略决定看不看得见。
+3. **「编辑」跳过去的那一次导航要能"返回"**（`adj905z`，用户实测：「这个操作没有进操作历史 ⇒
+   无法通过回退返回到刚刚的笔记中」）。这是**两条通往同一个坑的路**，都要按下面写：
+   - **手机端**（嵌入块「编辑」⇒ 打开 `.jps` 并进源码）：必须在**当前页签**打开
+     （`openJpsForSourceEdit` 用 `getMostRecentLeaf(rootSplit) ?? getLeaf(false)`，**不要** `getLeaf('tab')`）——
+     这就是"点 `[[x.jps]]` 链接"的语义：**同一页签替换视图 + 导航历史记下刚才那份笔记** ⇒ 返回能回去。
+     ⚠ **新页签的历史是空的**：开在新页签里，用户就没有"上一篇"可回（这正是用户报的现象）。
+   - **桌面端**（「打开 `.jps` 的方式 = 当前页签」，或从嵌入块点「编辑」时的落点）：`setViewState`
+     **只换视图、不进导航历史**（官方 API 里"要不要进历史"由**视图**在 `View.setState(state, result)` 里
+     声明，`ViewStateResult.history`；插件里 `revealSource()` 用的 `{ history: false }` 就是同一个旋钮）。
+     所以换视图**之前**先走一次**真·打开文件**（`await target.openFile(file)`）——那一趟是标准文件导航，
+     会把"刚才那份视图"记进该 leaf 的历史。只在来源页签不是本 leaf 时才需要（从 `.jps` 文件视图路由过来时，
+     用户点开那份 `.jps` 本身已经进过一次历史）。
 
 ## 四、图标同源
 
