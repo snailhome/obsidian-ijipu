@@ -5,6 +5,8 @@
 import type { ScoreLayout } from '../types'
 // adj629f：段层虚线要按「压缩后」的层高取中心
 import { SEGMENT_LAYER_YSCALE } from './spacing'
+// adj905q：本体（墨迹）边界要用「数字槽宽」作上限（`AGENTS.md` 五·9 的墨迹口径）
+import { digitSlotW } from './spaceLayout'
 
 /** 音符数字基线到行顶的偏移（noteSize×1.1，随字号；默认 18） */
 const baselineOffset = (noteSize: number) => noteSize * 1.1
@@ -317,7 +319,19 @@ export interface DebugBound {
   x: number
   /** 左边界画上半部、右边界画下半部（用户口径） */
   side: 'L' | 'R'
-  kind: 'cell' | 'ink' | 'segment'
+  /**
+   * adj905q 修正（用户指出"边界线不够丰富，我原想有**本体边界、音符时值边界、拍子边界**三种"）：
+   * 原来是 `cell / ink / segment` —— 把"音符时值"和"拍子"混成了一个 `cell`，**少了一类**。现分三类：
+   *
+   * - `ink`     —— **本体（墨迹）边界**：数字字形实际占的盒子（`n.x` → `x + min(占宽, digitSlotW)`；
+   *                带附点/增时线才延伸到块右端）；
+   * - `note`    —— **音符时值边界**：本音符**整个时值跨度**（含它自己的增时线/附点）；
+   * - `beat`    —— **拍子边界**：音符**内部每一拍**的左缘（`segments[].x`）；
+   * - `aug`     —— **增时线边界**（用户追加要求：「**增时线也要标出边界**」）：
+   *                每条 `-` 的左缘与右缘；
+   * - `segment` —— **段层**（`{bz}`/`{dsb}`/`{tp}`）音符边界（调试段层对齐时看这条）。
+   */
+  kind: 'ink' | 'note' | 'beat' | 'aug' | 'segment'
   yTop: number
   yMid: number
   yBottom: number
@@ -333,32 +347,42 @@ export function computeDebugBounds(
   notes.forEach((n, i) => {
     const sg = n.segments ?? []
     const lastSg = sg[sg.length - 1]
-    const cellL = sg.length > 0 ? sg[0].x : n.x
-    const cellR = lastSg ? lastSg.x + lastSg.perBeat * lastSg.beats : n.x + n.width
     /**
-     * adj905q 修正（用户看图后报）：**虚线长度以音符本体上下各 4px 为限**，
-     * 且 **`yMid` 必须落在音符本体的中间**（左右虚线的分界处）——
-     * 旧实现用 `y − noteSize×2.2 … y + noteSize×1.6`，太长、分界也不在中间（用户截图可见）。
-     *
-     * 音符本体（数字）的竖向范围近似为 `[y − noteSize, y]`（`y` 是数字基线），
-     * 于是上下各留 4px、分界取两者的中点。
+     * adj905q 修正（用户看图后报）：**长度以音符本体上下各 4px 为限**，
+     * 且 **`yMid` 落在本体竖向中间**（左右虚线的分界处）。
+     * 本体竖向范围近似 `[y − noteSize, y]`（`y` 是数字基线）。
      */
-    const bodyTop = n.y - noteSize
-    const bodyBottom = n.y
-    const yTop = bodyTop - 4
-    const yBottom = bodyBottom + 4
+    const yTop = n.y - noteSize - 4
+    const yBottom = n.y + 4
     const yMid = (yTop + yBottom) / 2
     const push = (x: number, side: 'L' | 'R', kind: DebugBound['kind']): void => {
       out.push({ x, side, kind, yTop, yMid, yBottom, colorIndex: i % 2 })
     }
-    push(cellL, 'L', 'cell')
-    push(cellR, 'R', 'cell')
+    // ① **本体（墨迹）边界**：无附点/增时线时只到数字槽宽（见 `AGENTS.md` 五·9 的墨迹口径）
+    const hasExt = sg.some((s) => s.el === 'aug' || s.el === 'dot')
+    const inkR = hasExt ? (n.rightX ?? n.x + n.width) : n.x + Math.min(n.width, digitSlotW(noteSize))
+    push(n.x, 'L', 'ink')
+    push(inkR, 'R', 'ink')
+    // ② **音符时值边界**：整个时值跨度（首段左缘 → 末段右缘；无拍段时退回 `x/rightX`）
+    const noteL = sg.length > 0 ? sg[0].x : n.x
+    const noteR = lastSg ? lastSg.x + lastSg.perBeat * lastSg.beats : (n.rightX ?? n.x + n.width)
+    push(noteL, 'L', 'note')
+    push(noteR, 'R', 'note')
+    // ③ **拍子边界**：音符内部**每一拍**的左缘
+    for (const s of sg) push(s.x, 'L', 'beat')
     /**
-     * 墨迹盒与时值格**不同**时才另画一条（相同就不重复画）。
-     * ⚠ 注意：本实现的"墨迹右缘"取的也是末段右缘，所以右缘两者恒等、不必重画；
-     * **真正需要独立画的是左缘**（实测 `n.x` 比格左缘右 6.4px —— 数字在元素内居中）。
+     * ④ **增时线边界**（用户追加：「增时线也要标出边界」）：
+     * - `el === 'aug'` 的路径直接可得；
+     * - `el` 缺失的 per-beat 路径：一个音符内**除首段以外**的段就是它的增时线/附点位置
+     *   （该音符时值 > 1 拍时才有多段；首段是数字本体）。
      */
-    if (Math.abs(n.x - cellL) > 0.01) push(n.x, 'L', 'ink')
+    sg.forEach((s, si) => {
+      const isAug = s.el === 'aug' || (s.el === undefined && si > 0)
+      if (!isAug) return
+      push(s.x, 'L', 'aug')
+      push(s.x + s.perBeat * s.beats, 'R', 'aug')
+    })
+    // ④ **段层边界**（仅段层音符）
     if (n.segment) {
       push(n.x, 'L', 'segment')
       push(n.rightX ?? n.x + n.width, 'R', 'segment')
