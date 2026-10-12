@@ -4156,6 +4156,19 @@ export function layoutScore(
     }
   }
 
+  /**
+   * adj673（用户要求）：「`"p:4/4" 6--- ||` 小节线后面的空白过大」——把"独占小节的多拍长音"的
+   * 块撑到小节内容右界（只改块宽/段位，不动 x）。
+   *
+   * adj905v：**这一趟必须排在 `placeSegmentOverlays` 之前**。它虽然"不动 x"，但会**重写
+   * `n.segments`（格列）**，而段层落位（`beatToX`）正是按主旋律的**格列**算的 ——
+   * 排在后面 ⇒ 段层对齐到的是**旧格**，长音被撑开之后整段错位。实测（首页「铃儿响叮当」末小节
+   * `3 - - -` 独占一个小节，空间优先路径）：段层落在 `439.7 / 467.9 / 496.1`，
+   * 而最终格列是 `451.0 / 480.6 / 510.1` ⇒ 末拍差 `14px` ✗。
+   * 它自己的小节线过滤只取**非段层**小节线（`!b.segment`）⇒ 提前跑不影响"小节线已就位"。
+   */
+  fillWholeBarLongNotes(pages, config)
+
   // ---- adj427：临时段（`{bz … }` / `{dsb … }`）叠加层后处理 ----
   // 为什么放在**最后**：段是「叠加」——不占主旋律拍位、不改既有排版结果。
   // 在此一次性把段内容追加到 page.notes / page.barlines / page.segmentBrackets，
@@ -4216,10 +4229,9 @@ export function layoutScore(
   alignLyricsToLowestVoice(pages, config)
 
   /**
-   * adj673（用户要求）：「`"p:4/4" 6--- ||` 小节线后面的空白过大」——把"独占小节的多拍长音"的
-   * 块撑到小节内容右界（只改块宽/段位，不动 x）。放在段层叠加**之后**：此时小节线已全部就位。
+   * adj905v：`fillWholeBarLongNotes` 已**前移**到 `placeSegmentOverlays` 之前 —— 它会重写主旋律的
+   * **格列**，而段层落位正是按格列算的（排在后面必然错位，见那里的实测）。
    */
-  fillWholeBarLongNotes(pages, config)
 
   /**
    * adj672/adj682（用户要求）：「歌词注释也要**不与歌词重叠**」+「**不占音符位**」+
@@ -4494,7 +4506,75 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
       const n = placed[k].note
       // ① 恰好落在音符起点（含浮点容差）→ 精确对齐该音符**数字位置** `n.x`
       if (beat <= s.startBeat + 1e-9) return n.x
-      // ② 音符内部 → 从**该音符数字位置 `n.x`** 线性过渡到 `zoneEnd`。
+      /**
+       * adj905v（**【用户裁定 ①】**：`docs/ALIGNMENT-PRINCIPLES.md` §五之四）：
+       * 「**① 逐拍对齐主旋律的格，拍宽按最大本体宽度为基准**」。
+       *
+       * 实现式：`beatToX(拍) = 主旋律该拍的格 segments[j].x + off`，
+       * 其中 `off = n.x − segments[0].x` = 「**数字在格内的偏移**」。
+       *
+       * 为什么这个写法能同时满足两类不变量：
+       *  · **第 0 拍** ⇒ `segments[0].x + off = n.x` ⇒ 仍等于**数字位**，
+       *    `adj435`/`AL1`/`O4` 守的"上下层数字逐个相等、不许 11px 跳变"**自动满足**；
+       *  · **其余各拍** ⇒ **步进自动等于主旋律的格**（不再被"本音块宽 ÷ 本音时值"摊平）
+       *    ⇒ 逐拍不再累积漂移。
+       *
+       * 修前实测（`DUR_CFG`，例 1 `{bz 1, 3, 5, 3,} 3 - - -`）：主旋律拍列步进 `29`、
+       * 段层拍列步进 `25`（25 = 本音块宽 99.8 ÷ 4，不含拍间隙 `NOTE_GAP`）⇒ 越往后越偏；
+       * 改后段层拍列 `62.5, 91.5, 120.4, 149.4`（步进 `29 / 28.9 / 29`）== 主旋律 ✓。
+       *
+       * 格的**右缘**按原则 §三 取「**下一个格的左缘**」；**末格**取本音符自己的收尾 `zoneEnd`
+       * （与下面那条旧口径同一个点：含增时线/附点/尾倚音，**不含**小节线预留区）——
+       * 这样"段层末小节右端 / 占宽"等既有不变量不被牵动。
+       *
+       * ⚠ 这是**替换**原"在 `[n.x, zoneEnd]` 内按本音时值线性插值"的口径：那条口径把段层锁死在
+       * 本音**块宽**里（块宽不含 `NOTE_GAP`），在「段层时值 ≠ 主旋律时值」时**数学上不可能**
+       * 与"逐拍对齐格"同时成立。只有 `segments` 缺失（理论上不应发生）时才回落到它。
+       */
+      /**
+       * 本音符的**收尾 x**（`zoneEnd`）—— 格映射与兜底插值共用。
+       *
+       * adj444：**右端 = min(下一个音符的 x, 下一个小节线的 x)**。只用 `nextNote.x` 会**跨过小节线**：
+       * 小节线另一侧的音符可能远在 ~35px 之外，使本音符内部的拍位被整体拉宽
+       * （实测 `6, -` 的 `beatToX(+1)` = 261.4 而非 244.9），段层内容随之溢出内容区右缘
+       * ⇒ **末音被钳成 0 宽而丢弃**（用户报 `{bz 8 &zkh @手风琴@ 2'/ 3'/ }` 只显示到 `2'/`）。
+       */
+      const nextBarXOf = (x0: number): number => {
+        let best = Number.POSITIVE_INFINITY
+        for (const a of mainBarAnchors) if (a.x > x0 + 1e-3 && a.x < best) best = a.x
+        return best
+      }
+      const nextNote = k + 1 < cnt ? placed[k + 1].note : null
+      const ownSpanEnd = n.x + n.width
+      /**
+       * adj905i（用户口径「**每个拍子上下是要对齐的**」）：**不能把小节线预留区算成时值**。
+       *
+       * 实测（首页「铃儿响叮当」，`{bz 1, 3, 5, 3, | …}` 对 `3 3 3 - | …`）：
+       *   · 音符 `3` 占 **2 拍**，`x = 119.9`、`width = 49.5`（= 2 × 24.8）⇒ 真实跨度终点 **169.4**；
+       *   · 而旧式 `zoneEnd = min(下个音 186.5, 小节线 175.7) = 175.7` —— **多算了 6.3px**
+       *     （那是小节线自己的预留区，不是这个音的时值宽）。
+       */
+      const zoneEnd = nextNote
+        ? Math.min(ownSpanEnd, nextNote.x, nextBarXOf(n.x))
+        : Math.min(ownSpanEnd, noteRightOf(n))
+      const cells = n.segments ?? []
+      if (cells.length > 0) {
+        const off = n.x - cells[0].x
+        let acc = s.startBeat
+        for (let ci = 0; ci < cells.length; ci++) {
+          const c = cells[ci]
+          const cellEndBeat = acc + c.beats
+          if (beat < cellEndBeat - 1e-9 || ci === cells.length - 1) {
+            // 格右缘 = 下一格左缘（§三）；末格 = 本音收尾。`zoneEnd` 是"数字位"坐标，换算回格坐标
+            const rawRight = ci + 1 < cells.length ? cells[ci + 1].x : zoneEnd - off
+            const right = Math.max(c.x, rawRight) // 退化数据也不许反序
+            const tc = c.beats > 1e-9 ? Math.min(1, Math.max(0, (beat - acc) / c.beats)) : 0
+            return c.x + tc * (right - c.x) + off
+          }
+          acc = cellEndBeat
+        }
+      }
+      // ② 兜底（`segments` 缺失，理论上不应发生）：从**该音符数字位置 `n.x`** 线性过渡到 `zoneEnd`。
       //
       // adj435：两处必须一起改，否则子拍宽忽宽忽窄：
       //  ⓐ **基准用 `n.x` 而非 `n.segments[].x`**——`segments[].x` 是**拍槽左缘**，
@@ -4505,45 +4585,11 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
       //     "下一个音符的数字位置"，若内部端点用 `rightX`（可能比它更靠右 3px），
       //     最后一个子拍就会被算短（实测 5.2px，本应 7.7px）。两端同口径后，
       //     各子拍宽 = `(zoneEnd − n.x) × (子拍时值 / 音符时值)`，均匀且无跳变。
-      // adj444：**本音符的拍区间右端 = min(下一个音符的 x, 下一个小节线的 x)**。
-      // 只用 `nextNote.x` 会**跨过小节线**：小节线另一侧的音符可能远在 ~35px 之外，
-      // 使本音符内部的拍位被整体拉宽（实测 `6, -` 的 beatToX(+1) = 261.4 而非 244.9），
-      // 段层内容随之溢出内容区右缘 ⇒ **末音被钳成 0 宽而丢弃**（用户报
-      // `{bz 8 &zkh @手风琴@ 2'/ 3'/ }` 只显示到 `2'/`、`3'/` 不见了）。
-      const nextBarXOf = (x0: number): number => {
-        let best = Number.POSITIVE_INFINITY
-        for (const a of mainBarAnchors) if (a.x > x0 + 1e-3 && a.x < best) best = a.x
-        return best
-      }
-      const nextNote = k + 1 < cnt ? placed[k + 1].note : null
       // adj441：该拍的**视觉跨度 = 本音数字位置 → 下一个音的数字位置**（"数字到数字"）。
       // 不能取 `min(占位右端, next.x)`：`rightX`（含分配留白）常常**小于**下一个音的 x
       // （实测小 6.9px），此时内部插值止于 `rightX` 而边界取 `next.x` ⇒ **最后一个子拍被算宽**
       // （实测 `1/ 2// 3//` = 11.10 / 5.50 / **12.50**，合计 29.10 但该拍跨度 22.2+6.9）——
       // 用户要求「多声部同一拍的总占宽要一致」，故两端统一口径。
-      /**
-       * adj905i（用户口径「**每个拍子上下是要对齐的**」，实测示例谱「最后一小节拍子没有对齐」）：
-       *
-       * **`zoneEnd` 必须用"本音符自己的步进宽"，不能把小节线预留区算成时值。**
-       *
-       * 实测（首页「铃儿响叮当」，`{bz 1, 3, 5, 3, | …}` 对 `3 3 3 - | …`）：
-       *   · 音符 `3` 在第 1 小节占 **2 拍**，`x = 119.9`、`width = 49.5`（= 2 × 24.8）⇒ 真实跨度终点 **169.4**；
-       *   · 而旧的 `zoneEnd = min(下个音 186.5, 小节线 175.7) = 175.7` —— **多算了 6.3px**
-       *     （那是小节线自己的预留区，不是这个音的时值宽）；
-       *   · 于是 `beatToX(第 3 拍) = 119.9 + 0.5 × 55.8 = **147.8**`，
-       *     而按真实跨度是 `119.9 + 0.5 × 49.5 = **144.65**` ——
-       *     后者与**独立算出的"主旋律第 4 拍格起点 144.7"完全吻合**。
-       *
-       * 后果：段层（`{bz}`）按 `beatToX` 落位到 `147.8`，而主旋律的增时线按拍段画在 `154.7`
-       * ⇒ **同一拍上下差 6.9px**（用户截图所见「最后一小节没对齐」）。
-       *
-       * 保留原有两条约束（adj441「数字到数字」、adj444「不跨小节线」）：两者都只会在
-       * "比自己步进宽更靠左"时起作用，与本次收紧不冲突。
-       */
-      const ownSpanEnd = n.x + n.width
-      const zoneEnd = nextNote
-        ? Math.min(ownSpanEnd, nextNote.x, nextBarXOf(n.x))
-        : Math.min(ownSpanEnd, noteRightOf(n))
       const t = s.beats > 1e-9 ? (beat - s.startBeat) / s.beats : 0
       return n.x + Math.min(1, Math.max(0, t)) * (zoneEnd - n.x)
     }
@@ -5264,33 +5310,18 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
         const naturalX1 = isTp ? mapXEnd(envStart + beatAt + dur) : isLastInSeg ? beatToXEndOf(envStart + beatAt + dur) : beatToX(envStart + beatAt + dur)
         let bx1 = xContent0 + (naturalX1 - segNaturalXStart) * segScale
         /**
-         * adj705（用户报「`1-` 的增时线没有和 `6-` 的增时线对齐」，并确认"做"）：
-         * **段内末音**的拍内相位复用主旋律那一段的拍段骨架，让两层的增时线落在同一列。
+         * adj905v：**撤销 adj705 的"末音相位夹紧"**（用户裁定 ① 之后它既多余、又相冲）。
          *
-         * 根因：段内按"本音块宽均分"摊拍（`1-` 覆盖 2 拍 ⇒ 每拍 13.4px），
-         * 而主旋律按**它自己的**拍段摊（本体 8.1 / 增时段 8.1）⇒ 两层增时线各在各的位置
-         * （实测 `-` 画在 169.3 vs 174.4）。
+         * adj705 当年要解决的是"段内按**本音块宽均分**摊拍、主旋律按**它自己的拍段**摊"
+         * ⇒ 只能给**末音**按"主旋律那一段的相位"重算右缘，好让两层增时线落同一列
+         * （用户报 `1-` 的 `-` 画在 169.3 vs 主旋律 174.4）。
          *
-         * 只改**末音**：普通音的拍宽必须坚持"按段内自己的时值分"（`AJ2/AJ3/AK3` 守的就是这条），
-         * 一旦全改会让段内子拍宽脱离自身时值比例。
+         * 现在**普通音与末音走同一套格列映射**（`beatToX` → 主旋律 `segments[]`）：段内每个音的
+         * 左右缘都落在主旋律的**格**上 ⇒ "增时线对齐"是这套映射的**推论**，不需要另算。
+         * 而那条夹紧用的是"线性相位 × 包络跨度"（与格不同源），实测会把末音**切短**：
+         * `{bz 8 &zkh 2'/ 3'/ } 6, -` 的 `3'/`（0.5 拍）本应到格右缘 `304.3`，夹紧后只到 `294.5`
+         * ⇒ 段层占宽比包络跨度少 `9.8px`（`Y3` 因此红灯）。
          */
-        if (!isTp && isLastInSeg) {
-          let mel: { startBeat: number; beats: number } | null = null
-          for (let k = 0; k < cnt; k++) {
-            const st = spans[k].startBeat
-            if (envStart + beatAt >= st - 1e-9 && envStart + beatAt < st + spans[k].beats - 1e-9) {
-              mel = { startBeat: st, beats: spans[k].beats }
-              break
-            }
-          }
-          if (mel && mel.beats > 1e-6) {
-            /** 末音起点在"主旋律那一段"里的相位；末音终点相位按主旋律该段的结束（= 增时线列起点） */
-            const ph0 = (envStart + beatAt - mel.startBeat) / mel.beats
-            const spanW = (naturalX1 - segNaturalXStart) * segScale
-            const bodyW05 = Math.max(2, spanW * Math.min(1 - ph0, dur / mel.beats))
-            bx1 = bx0 + bodyW05
-          }
-        }
         // 右缘钳制（替谱层钳到**小节线**，不与尾括号挤）
         bx1 = Math.min(bx1, noteClampRight)
         beat += dur
