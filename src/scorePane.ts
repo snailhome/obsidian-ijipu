@@ -2077,6 +2077,29 @@ toolbar.dataset.ijipuPane = String(paneId)
         const [, , w, h] = orig.split(/[\s,]+/).map(Number)
         const b = contentBoxOf(svgEl)
         /**
+         * adj911（**用户实测**：「谱面裁剪 956×754（墨迹 **952**×750 + 每边 2px；整页 595×842）」）：
+         * **墨迹盒不可能比整页还宽** —— 量到 952 而页宽只有 595 时，裁剪盒 956 ⇒ 谱面只占左边六成、
+         * 右边留一大块空白 ✗（页面/满宽不裁剪 ⇒ 正常 ✓，与用户观察一致）。
+         *
+         * 这类"比整页还大"的墨迹，来自**被画到页面之外、肉眼看不见、但 `getBBox()` 照样算**的元素
+         * （顶层 `<path>` 弧线之类；`measureContentBox` 是逐子元素求并集，看不见 ≠ 不算）。
+         *
+         * 这里先做**防御式夹紧**：把墨迹盒夹进页面（各边容差 1px）。正常谱面的墨迹天然在页面内 ⇒
+         * 夹紧对它们**零影响** ✓；而"裁剪盒宽于整页"本身就没有意义，夹掉必然更好 ✓。
+         * ⚠ 这只是止血：**根因（那个越界元素是谁）另查**，见 `measureContentBox` 里记的"最宽子元素"。
+         */
+        const clampToPage = (
+          bx: { x: number; y: number; w: number; h: number } | null,
+        ): { x: number; y: number; w: number; h: number } | null => {
+          if (bx === null) return null
+          const x0 = Math.max(0, Math.min(bx.x, w))
+          const y0 = Math.max(0, Math.min(bx.y, h))
+          const x1 = Math.max(x0, Math.min(bx.x + bx.w, w))
+          const y1 = Math.max(y0, Math.min(bx.y + bx.h, h))
+          return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
+        }
+        const box = clampToPage(b)
+        /**
          * adj843（用户 2026-10-11 给出**数据驱动**的判据 ✔）：
          * 「**通常音符墨迹高度为最小墨迹盒高度**」——整块谱面的墨迹盒**不可能比一个音符的墨迹还矮**。
          * 所以这里只做一件事：**量一个音符的墨迹高**（`[data-notepos]`，与引擎的光标联动属性同源），
@@ -2096,14 +2119,17 @@ toolbar.dataset.ijipuPane = String(paneId)
          * 此前这里的 `PAD = 2` 与两道闸是本文件的**私有副本**，导出那边又写一遍 ⇒ 口径必然漂 ✗
          * （本项目"数值口径必须同源"的老坑，见 AGENTS §六之二·4）。
          */
-        const out = rangeBox({ range: 'score', pageW: w, pageH: h, ink: b, minInk: minInkFor(noteInkH) })
+        const out = rangeBox({ range: 'score', pageW: w, pageH: h, ink: box ?? undefined, minInk: minInkFor(noteInkH) })
         if (out.ok) {
           svgEl.setAttribute('viewBox', `${out.box.x} ${out.box.y} ${out.box.w} ${out.box.h}`)
           publishZoomW(out.box.w)
           // 回传给插件，供设置页显示（运行期诊断；见 IJipuPlugin.lastCropInfo 的说明）
           noteCrop(
-            `按墨迹裁剪 ${out.box.w.toFixed(0)}×${out.box.h.toFixed(0)}（墨迹 ${Math.round(b?.w ?? 0)}×${Math.round(b?.h ?? 0)}` +
-              ` + 每边 ${RANGE_PAD_DEFAULT}px；整页 ${Math.round(w)}×${Math.round(h)}，高度只剩 ${(((b?.h ?? 0) / h) * 100).toFixed(0)}%）`,
+            `按墨迹裁剪 ${out.box.w.toFixed(0)}×${out.box.h.toFixed(0)}（墨迹 ${Math.round(box?.w ?? 0)}×${Math.round(box?.h ?? 0)}` +
+              (b !== null && box !== null && (Math.round(b.w) !== Math.round(box.w) || Math.round(b.h) !== Math.round(box.h))
+                ? `，**原始量到 ${Math.round(b.w)}×${Math.round(b.h)} 已夹进页面**`
+                : '') +
+              ` + 每边 ${RANGE_PAD_DEFAULT}px；整页 ${Math.round(w)}×${Math.round(h)}，高度只剩 ${(((box?.h ?? 0) / h) * 100).toFixed(0)}%）`,
           )
         } else {
           /**

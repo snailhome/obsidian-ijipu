@@ -4224,6 +4224,19 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
    * 给的**墨迹盒**（实测 `x = 42` vs 边距盒 `x = 50`）⇒ 两个盒原点不同 ⇒ 开「排版」时虚线整体错位 ✗。
    * 现在改成**直接读 SVG 当前的 `viewBox`**（屏幕上显示的就是它），读不到才退回 `cropRectFor`。
    */
+  /**
+   * adj911（**用户实测**）：「谱面裁剪 956×754（墨迹 **952**×750 + 每边 2px；整页 595×842）」
+   * —— 墨迹盒比整页还宽 ⇒ 裁剪盒过宽 ⇒ 谱面只占左边、右边一大块空白 ✗
+   * （页面/满宽不裁剪 ⇒ 正常；只有这份谱有 ⇒ 某个元素被画到页面外、`getBBox()` 照样算进来）。
+   * 处置：**防御式夹紧** —— 墨迹盒夹进页面（正常谱面天然在页面内 ⇒ 零影响）。
+   */
+  check('adj911 裁剪前把墨迹盒**夹进页面**（墨迹不可能比整页还宽）',
+    /const clampToPage = \([\s\S]{0,600}?const box = clampToPage\(b\)/.test(pane862) &&
+      /rangeBox\(\{ range: 'score', pageW: w, pageH: h, ink: box \?\? undefined/.test(pane862))
+  check('adj911 负对照：把夹紧结果换回原始墨迹盒（`ink: b`）⇒ 上面那条为假',
+    !/rangeBox\(\{ range: 'score', pageW: w, pageH: h, ink: box \?\? undefined/.test(
+      pane862.replace('ink: box ?? undefined', 'ink: b'),
+    ))
   check('adj910 辅助虚线的盒与 SVG 视框**同源**（读 `viewBox`，而不是自己再算一份几何）',
     /getAttribute\('viewBox'\)[\s\S]{0,260}?cropRectFor\(paneMode/.test(pane862))
   check('adj910 负对照：把"读 viewBox"那段删掉（退回自己算盒）⇒ 上面那条为假',
@@ -4269,8 +4282,15 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
   // —— ① 引擎是唯一实现：插件里不得再有第二份"±2px / 两道闸" ——
   check('adj863 谱面视图的墨迹裁剪走**引擎** `rangeBox` + `minInkFor`（阈值公式也不在插件里）',
     /import \{ rangeBox, minInkFor, RANGE_PAD_DEFAULT \} from '@ijipu\/engine'/.test(pane863) &&
-      /const out = rangeBox\(\{ range: 'score', pageW: w, pageH: h, ink: b, minInk: minInkFor\(noteInkH\) \}\)/.test(pane863) &&
-      /svgEl\.setAttribute\('viewBox', `\$\{out\.box\.x\} \$\{out\.box\.y\} \$\{out\.box\.w\} \$\{out\.box\.h\}`\)/.test(pane863))
+      /**
+       * ⚠ adj911 起 `ink` 传的是**夹进页面后的盒**（`box`），不是量到的原值（`b`）——
+       * 实测某份谱量到 952（页宽 595）⇒ 裁剪盒 956 ⇒ 右边一大块空白 ✗（元素画到页面外、
+       * 肉眼看不见但 `getBBox()` 照样算）。**±2px 与两道闸仍然全在引擎里** ✓，插件只是把
+       * **量到的输入**夹干净（输入卫生，不是自己算几何）✗ 不违反本条口径。
+       */
+      /const out = rangeBox\(\{ range: 'score', pageW: w, pageH: h, ink: box \?\? undefined, minInk: minInkFor\(noteInkH\) \}\)/.test(pane863) &&
+      /svgEl\.setAttribute\('viewBox', `\$\{out\.box\.x\} \$\{out\.box\.y\} \$\{out\.box\.w\} \$\{out\.box\.h\}`\)/.test(pane863) &&
+      /const box = clampToPage\(b\)/.test(pane863))
   check('adj863 负对照：插件里**不再有**私有的 `PAD = 2` / `box.w + PAD * 2` 那份几何（有则口径必漂）',
     !/const PAD = 2/.test(pane863) && !/box\.w \+ PAD \* 2/.test(pane863) && !/Math\.round\(noteInkH \* 0\.9\)/.test(pane863))
 
