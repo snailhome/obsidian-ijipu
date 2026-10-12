@@ -4829,7 +4829,15 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
 
   // —— ④ 口径写进代码注释与文档（供下一个人查"为什么手机端没有图片出口"） ——
   const toolbarDoc874 = String(readFileSync('docs/TOOLBAR-AND-MENU.md', 'utf8'))
-  const releaseDoc874 = String(readFileSync('docs/RELEASE-NOTES.md', 'utf8'))
+  /**
+   * ⚠ adj887 收尾实测：**归档会让这条判红** —— 技能 OP-14 要求 `RELEASE-NOTES.md` **只留当版**，
+   * 于是历史版本里写过的"原因句"会跟着移进 `docs/RELEASE-NOTES-ARCHIVE.md`。
+   * 而本判据要问的是"**原因写进文档了没有**"，这件事不因归档而失效 ⇒ 两个文件**拼起来**看。
+   * （负对照复用同一个变量，`replace(/…/g)` 会把两边那几句一起清掉，判据仍然有效 ✓）
+   */
+  const releaseDoc874 =
+    String(readFileSync('docs/RELEASE-NOTES.md', 'utf8')) +
+    String(readFileSync('docs/RELEASE-NOTES-ARCHIVE.md', 'utf8'))
   /**
    * 文档判据**只查"原因 + 新口径 + 替代方案"写没写**，不查"已删除的符号有没有被提到"：
    * 本项目的习惯是删掉能力后留一句"原本是 X，已删除"（源代码侧靠 `codeOf()` 剥注释处理），
