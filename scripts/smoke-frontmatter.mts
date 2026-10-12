@@ -4230,6 +4230,21 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
    * （页面/满宽不裁剪 ⇒ 正常；只有这份谱有 ⇒ 某个元素被画到页面外、`getBBox()` 照样算进来）。
    * 处置：**防御式夹紧** —— 墨迹盒夹进页面（正常谱面天然在页面内 ⇒ 零影响）。
    */
+  /**
+   * adj911b（**用户实测**：夹紧后宽度变成 559 =「**不是墨迹范围 +2px 的效果**」）：
+   * 夹紧只是止血 ⇒ 真正的修法是**把"完全落在页面之外"的子元素排除**（画在纸外 = 看不见，
+   * 但 `getBBox()` 照样算进并集 ⇒ 墨迹盒被撑到 952）。同时把被排除元素的名字记进 `outsideInk`，
+   * 让诊断那行**直接点名**元凶。
+   */
+  check('adj911b 量墨迹时**排除完全落在页面外的子元素**（并记下名字供诊断点名）',
+    /const outside: string\[\] = \[\]/.test(pane862) &&
+      /if \(hasPage && \(b\.x \+ b\.width < 0 \|\| b\.x > pw \|\| b\.y \+ b\.height < 0 \|\| b\.y > ph\)\)/.test(pane862) &&
+      /svgEl\.dataset\.outsideInk = outside\.join/.test(pane862) &&
+      /svgEl\.dataset\.outsideInk \? `，已排除页面外元素/.test(pane862))
+  check('adj911b 负对照：把"排除页面外"那段删掉 ⇒ 上面那条为假',
+    !/if \(hasPage && \(b\.x \+ b\.width < 0 \|\| b\.x > pw \|\| b\.y \+ b\.height < 0 \|\| b\.y > ph\)\)/.test(
+      pane862.replace(/if \(hasPage && \(b\.x \+ b\.width < 0 \|\| b\.x > pw \|\| b\.y \+ b\.height < 0 \|\| b\.y > ph\)\)/, 'if (false)'),
+    ))
   check('adj911 裁剪前把墨迹盒**夹进页面**（墨迹不可能比整页还宽）',
     /const clampToPage = \([\s\S]{0,600}?const box = clampToPage\(b\)/.test(pane862) &&
       /rangeBox\(\{ range: 'score', pageW: w, pageH: h, ink: box \?\? undefined/.test(pane862))

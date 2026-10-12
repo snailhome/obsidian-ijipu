@@ -1922,6 +1922,20 @@ toolbar.dataset.ijipuPane = String(paneId)
      * 返回 `null` 表示量不出来（无子元素 / 元素不可见 / 过程中报错）——调用方据此退回"按边距裁"。
      */
     function measureContentBox(svgEl: SVGSVGElement): { x: number; y: number; w: number; h: number } | null {
+      /**
+       * adj911b（**用户实测**：夹紧后 `墨迹 559×750`、但「**不是墨迹范围 +2px 的效果**」）：
+       * 夹紧只是止血 —— 它把**被污染的盒**夹到页面边，所以结果 ≈ 整页减边距，而不是真正的墨迹 ✗。
+       * 真正的修法：**把"完全落在页面之外"的子元素排除**。
+       *
+       * 这类元素的特征：画在纸面外 ⇒ **肉眼看不见**（画面完全正常），但 `getBBox()` 照样算进并集
+       * ⇒ 墨迹盒被撑到比整页还宽（实测 952 vs 页宽 595）。判据用**页面矩形**（`data-origVb` =
+       * 进裁剪前的整页 viewBox；取不到就不筛，宁可不筛也不误伤）：
+       * 一个元素的 bbox 与页面矩形**毫无交集** ⇒ 它不可能在纸面上露出一点 ⇒ 不是内容。
+       */
+      const vbRaw = svgEl.dataset.origVb ?? svgEl.getAttribute('viewBox') ?? ''
+      const [, , pw, ph] = vbRaw.split(/[\s,]+/).map(Number)
+      const hasPage = Number.isFinite(pw) && pw > 0 && Number.isFinite(ph) && ph > 0
+      const outside: string[] = []
       let x0 = Infinity
       let y0 = Infinity
       let x1 = -Infinity
@@ -1937,11 +1951,20 @@ toolbar.dataset.ijipuPane = String(paneId)
           continue // 未渲染/不可见元素取不到盒，跳过
         }
         if (!(b.width > 0) && !(b.height > 0)) continue
+        /** adj911b：整块都落在页面外 ⇒ 排除（并记下名字，供诊断那行直接点名） */
+        if (hasPage && (b.x + b.width < 0 || b.x > pw || b.y + b.height < 0 || b.y > ph)) {
+          if (outside.length < 3) {
+            const cls = String(el.getAttribute('class') ?? '').split(/\s+/)[0]
+            outside.push(`${el.tagName.toLowerCase()}${cls ? '.' + cls : ''}@x${Math.round(b.x)}~${Math.round(b.x + b.width)}`)
+          }
+          continue
+        }
         if (b.x < x0) x0 = b.x
         if (b.y < y0) y0 = b.y
         if (b.x + b.width > x1) x1 = b.x + b.width
         if (b.y + b.height > y1) y1 = b.y + b.height
       }
+      svgEl.dataset.outsideInk = outside.join('、')
       if (!Number.isFinite(x0) || !Number.isFinite(y0) || x1 <= x0 || y1 <= y0) return null
       return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
     }
@@ -2129,6 +2152,7 @@ toolbar.dataset.ijipuPane = String(paneId)
               (b !== null && box !== null && (Math.round(b.w) !== Math.round(box.w) || Math.round(b.h) !== Math.round(box.h))
                 ? `，**原始量到 ${Math.round(b.w)}×${Math.round(b.h)} 已夹进页面**`
                 : '') +
+              (svgEl.dataset.outsideInk ? `，已排除页面外元素 ${svgEl.dataset.outsideInk}` : '') +
               ` + 每边 ${RANGE_PAD_DEFAULT}px；整页 ${Math.round(w)}×${Math.round(h)}，高度只剩 ${(((box?.h ?? 0) / h) * 100).toFixed(0)}%）`,
           )
         } else {
