@@ -4521,7 +4521,29 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
       // （实测小 6.9px），此时内部插值止于 `rightX` 而边界取 `next.x` ⇒ **最后一个子拍被算宽**
       // （实测 `1/ 2// 3//` = 11.10 / 5.50 / **12.50**，合计 29.10 但该拍跨度 22.2+6.9）——
       // 用户要求「多声部同一拍的总占宽要一致」，故两端统一口径。
-      const zoneEnd = nextNote ? Math.min(nextNote.x, nextBarXOf(n.x)) : noteRightOf(n)
+      /**
+       * adj905i（用户口径「**每个拍子上下是要对齐的**」，实测示例谱「最后一小节拍子没有对齐」）：
+       *
+       * **`zoneEnd` 必须用"本音符自己的步进宽"，不能把小节线预留区算成时值。**
+       *
+       * 实测（首页「铃儿响叮当」，`{bz 1, 3, 5, 3, | …}` 对 `3 3 3 - | …`）：
+       *   · 音符 `3` 在第 1 小节占 **2 拍**，`x = 119.9`、`width = 49.5`（= 2 × 24.8）⇒ 真实跨度终点 **169.4**；
+       *   · 而旧的 `zoneEnd = min(下个音 186.5, 小节线 175.7) = 175.7` —— **多算了 6.3px**
+       *     （那是小节线自己的预留区，不是这个音的时值宽）；
+       *   · 于是 `beatToX(第 3 拍) = 119.9 + 0.5 × 55.8 = **147.8**`，
+       *     而按真实跨度是 `119.9 + 0.5 × 49.5 = **144.65**` ——
+       *     后者与**独立算出的"主旋律第 4 拍格起点 144.7"完全吻合**。
+       *
+       * 后果：段层（`{bz}`）按 `beatToX` 落位到 `147.8`，而主旋律的增时线按拍段画在 `154.7`
+       * ⇒ **同一拍上下差 6.9px**（用户截图所见「最后一小节没对齐」）。
+       *
+       * 保留原有两条约束（adj441「数字到数字」、adj444「不跨小节线」）：两者都只会在
+       * "比自己步进宽更靠左"时起作用，与本次收紧不冲突。
+       */
+      const ownSpanEnd = n.x + n.width
+      const zoneEnd = nextNote
+        ? Math.min(ownSpanEnd, nextNote.x, nextBarXOf(n.x))
+        : Math.min(ownSpanEnd, noteRightOf(n))
       const t = s.beats > 1e-9 ? (beat - s.startBeat) / s.beats : 0
       return n.x + Math.min(1, Math.max(0, t)) * (zoneEnd - n.x)
     }
