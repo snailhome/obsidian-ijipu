@@ -1857,7 +1857,7 @@ console.log('\n[adj724b] community review: forbidden APIs / styles must stay fix
       /getAttribute\('data-page-bg'\)/.test(scorePaneSrc) &&
       /const box = measureContentBox\(svgEl\)/.test(scorePaneSrc) &&
       /svgEl\.dataset\.contentBox = /.test(scorePaneSrc) &&
-      /const b = engineInk \?\? contentBoxOf\(svgEl\)/.test(scorePaneSrc) &&
+      /const b = contentBoxOf\(svgEl\)/.test(scorePaneSrc) &&
       // adj843：下限**数据驱动** —— 量一个音符（`[data-notepos]`）的墨迹高，取其 90% 作下限 ✓
       /const noteEl = svgEl\.querySelector\('\[data-notepos\]'\)/.test(scorePaneSrc) &&
       /**
@@ -4224,54 +4224,6 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
    * 给的**墨迹盒**（实测 `x = 42` vs 边距盒 `x = 50`）⇒ 两个盒原点不同 ⇒ 开「排版」时虚线整体错位 ✗。
    * 现在改成**直接读 SVG 当前的 `viewBox`**（屏幕上显示的就是它），读不到才退回 `cropRectFor`。
    */
-  /**
-   * adj911（**用户实测**）：「谱面裁剪 956×754（墨迹 **952**×750 + 每边 2px；整页 595×842）」
-   * —— 墨迹盒比整页还宽 ⇒ 裁剪盒过宽 ⇒ 谱面只占左边、右边一大块空白 ✗
-   * （页面/满宽不裁剪 ⇒ 正常；只有这份谱有 ⇒ 某个元素被画到页面外、`getBBox()` 照样算进来）。
-   * 处置：**防御式夹紧** —— 墨迹盒夹进页面（正常谱面天然在页面内 ⇒ 零影响）。
-   */
-  /**
-   * adj911b（**用户实测**：夹紧后宽度变成 559 =「**不是墨迹范围 +2px 的效果**」）：
-   * 夹紧只是止血 ⇒ 真正的修法是**把"完全落在页面之外"的子元素排除**（画在纸外 = 看不见，
-   * 但 `getBBox()` 照样算进并集 ⇒ 墨迹盒被撑到 952）。同时把被排除元素的名字记进 `outsideInk`，
-   * 让诊断那行**直接点名**元凶。
-   */
-  /**
-   * adj911c（**用户实测**：「宽度收缩紧了，但**不是墨迹范围 +2px 的效果**」）：
-   * **墨迹盒以引擎的布局墨迹为准**（`inkBoxOfLayout`）—— 与 CLI `--crop score` / 应用导出 / 官网
-   * `v=s` 同一份几何（实测 `[42 .. 554.88]` = 墨迹 + 每边 2px ✓）；DOM 量取（`contentBoxOf`）
-   * **只作兜底**（它会被"看不见却有盒"的元素污染 ⇒ 实测量到 952 而页宽 595）。
-   */
-  check('adj911d 显示端 `pad: 0`（**用户要求试看**：去掉 +2px 留白、正好裁到墨迹；导出/CLI 的 2px 不动）',
-    /rangeBox\(\{ range: 'score', pageW: w, pageH: h, ink: box \?\? undefined, minInk: minInkFor\(noteInkH\), pad: 0 \}\)/.test(pane862))
-  check('adj911d 负对照：把 `pad: 0` 去掉（回到缺省 2px）⇒ 上面那条为假',
-    !/minInk: minInkFor\(noteInkH\), pad: 0 \}\)/.test(
-      pane862.replace('minInk: minInkFor(noteInkH), pad: 0', 'minInk: minInkFor(noteInkH)'),
-    ))
-  check('adj911c 谱面裁剪的墨迹**以引擎 `inkBoxOfLayout` 为准**，DOM 量取只作兜底',
-    /import \{ rangeBox, minInkFor, RANGE_PAD_DEFAULT, inkBoxOfLayout \} from '@ijipu\/engine'/.test(pane862) &&
-      /const engineInk = pageIdx >= 0 && layout\.pages\[pageIdx\] \? inkBoxOfLayout\(layout, pageIdx\) : null/.test(pane862) &&
-      /const b = engineInk \?\? contentBoxOf\(svgEl\)/.test(pane862))
-  check('adj911c 负对照：把墨迹换回"只用 DOM 量"⇒ 上面那条为假',
-    !/const b = engineInk \?\? contentBoxOf\(svgEl\)/.test(
-      pane862.replace('const b = engineInk ?? contentBoxOf(svgEl)', 'const b = contentBoxOf(svgEl)'),
-    ))
-  check('adj911b 量墨迹时**排除完全落在页面外的子元素**（并记下名字供诊断点名）',
-    /const outside: string\[\] = \[\]/.test(pane862) &&
-      /if \(hasPage && \(b\.x \+ b\.width < 0 \|\| b\.x > pw \|\| b\.y \+ b\.height < 0 \|\| b\.y > ph\)\)/.test(pane862) &&
-      /svgEl\.dataset\.outsideInk = outside\.join/.test(pane862) &&
-      /svgEl\.dataset\.outsideInk \? `，已排除页面外元素/.test(pane862))
-  check('adj911b 负对照：把"排除页面外"那段删掉 ⇒ 上面那条为假',
-    !/if \(hasPage && \(b\.x \+ b\.width < 0 \|\| b\.x > pw \|\| b\.y \+ b\.height < 0 \|\| b\.y > ph\)\)/.test(
-      pane862.replace(/if \(hasPage && \(b\.x \+ b\.width < 0 \|\| b\.x > pw \|\| b\.y \+ b\.height < 0 \|\| b\.y > ph\)\)/, 'if (false)'),
-    ))
-  check('adj911 裁剪前把墨迹盒**夹进页面**（墨迹不可能比整页还宽）',
-    /const clampToPage = \([\s\S]{0,600}?const box = clampToPage\(b\)/.test(pane862) &&
-      /rangeBox\(\{ range: 'score', pageW: w, pageH: h, ink: box \?\? undefined/.test(pane862))
-  check('adj911 负对照：把夹紧结果换回原始墨迹盒（`ink: b`）⇒ 上面那条为假',
-    !/rangeBox\(\{ range: 'score', pageW: w, pageH: h, ink: box \?\? undefined/.test(
-      pane862.replace('ink: box ?? undefined', 'ink: b'),
-    ))
   check('adj910 辅助虚线的盒与 SVG 视框**同源**（读 `viewBox`，而不是自己再算一份几何）',
     /getAttribute\('viewBox'\)[\s\S]{0,260}?cropRectFor\(paneMode/.test(pane862))
   check('adj910 负对照：把"读 viewBox"那段删掉（退回自己算盒）⇒ 上面那条为假',
@@ -4316,16 +4268,9 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
 
   // —— ① 引擎是唯一实现：插件里不得再有第二份"±2px / 两道闸" ——
   check('adj863 谱面视图的墨迹裁剪走**引擎** `rangeBox` + `minInkFor`（阈值公式也不在插件里）',
-    /import \{ rangeBox, minInkFor, RANGE_PAD_DEFAULT(?:, inkBoxOfLayout)? \} from '@ijipu\/engine'/.test(pane863) &&
-      /**
-       * ⚠ adj911 起 `ink` 传的是**夹进页面后的盒**（`box`），不是量到的原值（`b`）——
-       * 实测某份谱量到 952（页宽 595）⇒ 裁剪盒 956 ⇒ 右边一大块空白 ✗（元素画到页面外、
-       * 肉眼看不见但 `getBBox()` 照样算）。**±2px 与两道闸仍然全在引擎里** ✓，插件只是把
-       * **量到的输入**夹干净（输入卫生，不是自己算几何）✗ 不违反本条口径。
-       */
-      /const out = rangeBox\(\{ range: 'score', pageW: w, pageH: h, ink: box \?\? undefined, minInk: minInkFor\(noteInkH\)[^}]*\}\)/.test(pane863) &&
-      /svgEl\.setAttribute\('viewBox', `\$\{out\.box\.x\} \$\{out\.box\.y\} \$\{out\.box\.w\} \$\{out\.box\.h\}`\)/.test(pane863) &&
-      /const box = clampToPage\(b\)/.test(pane863))
+    /import \{ rangeBox, minInkFor, RANGE_PAD_DEFAULT \} from '@ijipu\/engine'/.test(pane863) &&
+      /const out = rangeBox\(\{ range: 'score', pageW: w, pageH: h, ink: b, minInk: minInkFor\(noteInkH\)[^}]*\}\)/.test(pane863) &&
+      /svgEl\.setAttribute\('viewBox', `\$\{out\.box\.x\} \$\{out\.box\.y\} \$\{out\.box\.w\} \$\{out\.box\.h\}`\)/.test(pane863))
   check('adj863 负对照：插件里**不再有**私有的 `PAD = 2` / `box.w + PAD * 2` 那份几何（有则口径必漂）',
     !/const PAD = 2/.test(pane863) && !/box\.w \+ PAD \* 2/.test(pane863) && !/Math\.round\(noteInkH \* 0\.9\)/.test(pane863))
 

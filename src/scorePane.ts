@@ -24,7 +24,7 @@ import { renderScoreFull, playScore, type PlayheadSeg } from './render'
 import { createPlaybackClock, instrumentColorMap, playheadBaseOf, playheadPosIn, trackKeysOf, type PlayheadPos } from '@ijipu/engine'
 // adj863（T-3 定稿）：**范围**（整页 / 墨迹 ± 每边 N px）的唯一实现在引擎 —— 谱面视图的墨迹裁剪与
 // 导出/复制的画布口径都消费它（本文件不再自带 `PAD = 2` 或退化闸的第二份副本）
-import { rangeBox, minInkFor, RANGE_PAD_DEFAULT, inkBoxOfLayout } from '@ijipu/engine'
+import { rangeBox, minInkFor, RANGE_PAD_DEFAULT } from '@ijipu/engine'
 
 /** adj764：起播延迟（与应用一致：前 200ms 不计入时间轴，避免"第一拍还没响、色块先动"） */
 const PLAY_START_DELAY_MS = 200
@@ -1922,20 +1922,6 @@ toolbar.dataset.ijipuPane = String(paneId)
      * 返回 `null` 表示量不出来（无子元素 / 元素不可见 / 过程中报错）——调用方据此退回"按边距裁"。
      */
     function measureContentBox(svgEl: SVGSVGElement): { x: number; y: number; w: number; h: number } | null {
-      /**
-       * adj911b（**用户实测**：夹紧后 `墨迹 559×750`、但「**不是墨迹范围 +2px 的效果**」）：
-       * 夹紧只是止血 —— 它把**被污染的盒**夹到页面边，所以结果 ≈ 整页减边距，而不是真正的墨迹 ✗。
-       * 真正的修法：**把"完全落在页面之外"的子元素排除**。
-       *
-       * 这类元素的特征：画在纸面外 ⇒ **肉眼看不见**（画面完全正常），但 `getBBox()` 照样算进并集
-       * ⇒ 墨迹盒被撑到比整页还宽（实测 952 vs 页宽 595）。判据用**页面矩形**（`data-origVb` =
-       * 进裁剪前的整页 viewBox；取不到就不筛，宁可不筛也不误伤）：
-       * 一个元素的 bbox 与页面矩形**毫无交集** ⇒ 它不可能在纸面上露出一点 ⇒ 不是内容。
-       */
-      const vbRaw = svgEl.dataset.origVb ?? svgEl.getAttribute('viewBox') ?? ''
-      const [, , pw, ph] = vbRaw.split(/[\s,]+/).map(Number)
-      const hasPage = Number.isFinite(pw) && pw > 0 && Number.isFinite(ph) && ph > 0
-      const outside: string[] = []
       let x0 = Infinity
       let y0 = Infinity
       let x1 = -Infinity
@@ -1951,20 +1937,11 @@ toolbar.dataset.ijipuPane = String(paneId)
           continue // 未渲染/不可见元素取不到盒，跳过
         }
         if (!(b.width > 0) && !(b.height > 0)) continue
-        /** adj911b：整块都落在页面外 ⇒ 排除（并记下名字，供诊断那行直接点名） */
-        if (hasPage && (b.x + b.width < 0 || b.x > pw || b.y + b.height < 0 || b.y > ph)) {
-          if (outside.length < 3) {
-            const cls = String(el.getAttribute('class') ?? '').split(/\s+/)[0]
-            outside.push(`${el.tagName.toLowerCase()}${cls ? '.' + cls : ''}@x${Math.round(b.x)}~${Math.round(b.x + b.width)}`)
-          }
-          continue
-        }
         if (b.x < x0) x0 = b.x
         if (b.y < y0) y0 = b.y
         if (b.x + b.width > x1) x1 = b.x + b.width
         if (b.y + b.height > y1) y1 = b.y + b.height
       }
-      svgEl.dataset.outsideInk = outside.join('、')
       if (!Number.isFinite(x0) || !Number.isFinite(y0) || x1 <= x0 || y1 <= y0) return null
       return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
     }
@@ -2098,44 +2075,7 @@ toolbar.dataset.ijipuPane = String(paneId)
       }
       if (mode === 'score') {
         const [, , w, h] = orig.split(/[\s,]+/).map(Number)
-        /**
-         * adj911c（**用户实测**：「宽度收缩紧了，但**不是墨迹范围 +2px 的效果**」）：
-         * **墨迹盒以引擎的布局墨迹为准**（`inkBoxOfLayout`）—— CLI `--crop score`、应用导出、
-         * 官网 `v=s` 用的都是它（实测 = `[42 .. 554.88]` ⇒ 正是"墨迹 + 每边 2px" ✓）。
-         *
-         * 为什么不继续用 DOM 量：`measureContentBox` 逐子元素 `getBBox()` 求并集，会被
-         * **"看不见却有盒"的元素**污染（实测某谱量到 952，页宽才 595 ⇒ 夹紧后变成 559 ≈ 整页减边距，
-         * 不是真正的墨迹 ✗；`adj911b` 的"整块在页面外"过滤也拦不住"跨页面边界"的那种）。
-         * 引擎那份来自**布局**（音符/小节线/段层…的几何），与"这份谱有哪些内容"同源 ✓，
-         * 顺带满足 AGENTS「两端共用的规则先落引擎」✓。
-         * DOM 量取**只作兜底**（引擎盒取不到时）；夹紧（`adj911`）仍留作第二道防线。
-         */
-        const pageIdx = svgEls.indexOf(svgEl)
-        const engineInk = pageIdx >= 0 && layout.pages[pageIdx] ? inkBoxOfLayout(layout, pageIdx) : null
-        const b = engineInk ?? contentBoxOf(svgEl)
-        /**
-         * adj911（**用户实测**：「谱面裁剪 956×754（墨迹 **952**×750 + 每边 2px；整页 595×842）」）：
-         * **墨迹盒不可能比整页还宽** —— 量到 952 而页宽只有 595 时，裁剪盒 956 ⇒ 谱面只占左边六成、
-         * 右边留一大块空白 ✗（页面/满宽不裁剪 ⇒ 正常 ✓，与用户观察一致）。
-         *
-         * 这类"比整页还大"的墨迹，来自**被画到页面之外、肉眼看不见、但 `getBBox()` 照样算**的元素
-         * （顶层 `<path>` 弧线之类；`measureContentBox` 是逐子元素求并集，看不见 ≠ 不算）。
-         *
-         * 这里先做**防御式夹紧**：把墨迹盒夹进页面（各边容差 1px）。正常谱面的墨迹天然在页面内 ⇒
-         * 夹紧对它们**零影响** ✓；而"裁剪盒宽于整页"本身就没有意义，夹掉必然更好 ✓。
-         * ⚠ 这只是止血：**根因（那个越界元素是谁）另查**，见 `measureContentBox` 里记的"最宽子元素"。
-         */
-        const clampToPage = (
-          bx: { x: number; y: number; w: number; h: number } | null,
-        ): { x: number; y: number; w: number; h: number } | null => {
-          if (bx === null) return null
-          const x0 = Math.max(0, Math.min(bx.x, w))
-          const y0 = Math.max(0, Math.min(bx.y, h))
-          const x1 = Math.max(x0, Math.min(bx.x + bx.w, w))
-          const y1 = Math.max(y0, Math.min(bx.y + bx.h, h))
-          return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
-        }
-        const box = clampToPage(b)
+        const b = contentBoxOf(svgEl)
         /**
          * adj843（用户 2026-10-11 给出**数据驱动**的判据 ✔）：
          * 「**通常音符墨迹高度为最小墨迹盒高度**」——整块谱面的墨迹盒**不可能比一个音符的墨迹还矮**。
@@ -2157,22 +2097,22 @@ toolbar.dataset.ijipuPane = String(paneId)
          * （本项目"数值口径必须同源"的老坑，见 AGENTS §六之二·4）。
          */
         /**
-         * adj911d（**用户要求试看**）：「这个的效果感觉更好，但应该可以去掉 + 2px 的留白，试下去掉它」——
-         * **显示端**传 `pad: 0`（引擎 `rangeBox` 支持、钳制 [0,64]）⇒ 谱面视图**正好裁到墨迹**、
-         * 四周不留白。**导出 / 复制 / CLI 的 2px 不动**（那是另一套口径，留着便于对比；用户看过效果再定）。
+         * adj911d（**用户要求**）：「显示端…显示目前按这个方式」—— 显示端**正好裁到墨迹、不留白**（`pad: 0`）。
+         *
+         * ⚠ 用户同时明确：「**不要因为这个谱做大的改动**，如果有发现多个谱这种情况再来改」⇒
+         * 墨迹盒**仍用原来那套**（DOM 量取 `contentBoxOf`），不为个别谱改成引擎口径、也不加"夹紧/排除"
+         * 那几层（`adj911`/`adj911b`/`adj911c` 已按此**回退**）✓；若将来**多份谱**都出现
+         * "墨迹盒被撑宽 ⇒ 右侧留白"，再照 `docs/TODO.md` 第 2 条查那个隐形的越界元素。
+         * **导出 / 复制 / CLI 仍是每边 2px** ✓（另一套口径，保留不动）。
          */
-        const out = rangeBox({ range: 'score', pageW: w, pageH: h, ink: box ?? undefined, minInk: minInkFor(noteInkH), pad: 0 })
+        const out = rangeBox({ range: 'score', pageW: w, pageH: h, ink: b, minInk: minInkFor(noteInkH), pad: 0 })
         if (out.ok) {
           svgEl.setAttribute('viewBox', `${out.box.x} ${out.box.y} ${out.box.w} ${out.box.h}`)
           publishZoomW(out.box.w)
           // 回传给插件，供设置页显示（运行期诊断；见 IJipuPlugin.lastCropInfo 的说明）
           noteCrop(
-            `按墨迹裁剪 ${out.box.w.toFixed(0)}×${out.box.h.toFixed(0)}（墨迹 ${Math.round(box?.w ?? 0)}×${Math.round(box?.h ?? 0)}` +
-              (b !== null && box !== null && (Math.round(b.w) !== Math.round(box.w) || Math.round(b.h) !== Math.round(box.h))
-                ? `，**原始量到 ${Math.round(b.w)}×${Math.round(b.h)} 已夹进页面**`
-                : '') +
-              (svgEl.dataset.outsideInk ? `，已排除页面外元素 ${svgEl.dataset.outsideInk}` : '') +
-              ` + 每边 0px（试验：不留白；导出/复制仍按每边 ${RANGE_PAD_DEFAULT}px）；整页 ${Math.round(w)}×${Math.round(h)}，高度只剩 ${(((box?.h ?? 0) / h) * 100).toFixed(0)}%）`,
+            `按墨迹裁剪 ${out.box.w.toFixed(0)}×${out.box.h.toFixed(0)}（墨迹 ${Math.round(b?.w ?? 0)}×${Math.round(b?.h ?? 0)}` +
+              ` + 每边 0px（显示端：不留白；导出/复制仍按每边 ${RANGE_PAD_DEFAULT}px）；整页 ${Math.round(w)}×${Math.round(h)}，高度只剩 ${(((b?.h ?? 0) / h) * 100).toFixed(0)}%）`,
           )
         } else {
           /**
