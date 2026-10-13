@@ -9,11 +9,15 @@
 import { ItemView, WorkspaceLeaf } from 'obsidian'
 import type IJipuPlugin from '../main'
 import { createEmbedFrame, fitEmbedFrame } from './frame'
+import {
+  jpsNameFromPath,
+  jpsViewTitle,
+  refreshLeafHeader,
+  type HeaderRefresh,
+  type LeafHeaderLike,
+} from './viewTitle'
 
 export const VIEW_TYPE_IJIPU_APP = 'ijipu-web-view'
-
-/** 应用页签的显示名 */
-const DISPLAY_TEXT = '爱记谱'
 
 export class IJipuAppView extends ItemView {
   private frame: HTMLIFrameElement | null = null
@@ -46,18 +50,23 @@ export class IJipuAppView extends ItemView {
   }
 
   /**
-   * adj724b（用户要求 #2）：**页签名显示正在编辑的谱面文件名**；没打开文件时显示「爱记谱」。
+   * adj724b / adj931（用户要求 ②③）：**页签名显示正在编辑的谱面文件名**；
+   * 没有承载任何 `.jps` 时才显示「爱记谱」。
    *
    * 背景：为**具体文件**打开的视图，Obsidian 的页签名会走"文件名"那条路
-   * （`ViewState` 里没有 `title` 字段可用，名字来自 `getDisplayText()`）。
+   * （`ViewState` 里的 `title` 只给"延迟视图"用，正常页签的名字来自 `getDisplayText()`）。
    * 用户口径：「如果在页签中打开 ijipu 时，页签名显示文件名，而不是爱记谱」。
    *
-   * 通过 `.jps` 文件视图路由过来的那些页签会被自动关掉（见 `fileView.ts` 的 `routeToIjipu`），
-   * 所以这里主要影响"应用页签里当前打开的谱"这个名字。
+   * ⚠ **adj931（用户 2026-10-13 实测，截图左侧基准是 `半山听雨.jps`）**，口径再收紧两条：
+   *  · 标题里的文件名**含扩展名**；
+   *  · 判据与 `.jps` 文件视图（`fileView.ts`）**共用纯函数** `jpsViewTitle()`，不再各写一遍。
+   *
+   * 为什么左边（`.jps` 文件视图）天然正确、右边（本视图）曾经错：见 `viewTitle.ts` 的 asar 证据
+   * —— 绑文件的视图由宿主按文件给标题；本视图不绑文件，标题得自己返回、还得自己催宿主刷新。
    */
   getDisplayText(): string {
-    // 先问应用"现在打开的是哪一份谱"（`setActiveFile` 由宿主在推 `openFile` 时告知）
-    return this.activeFileName ?? DISPLAY_TEXT
+    // 先问应用"现在打开的是哪一份谱"（`setActiveFileName` 由宿主在推 `openFile` 时告知）
+    return jpsViewTitle(this.activeFileName)
   }
 
   getIcon(): string {
@@ -65,19 +74,33 @@ export class IJipuAppView extends ItemView {
   }
 
   /**
-   * adj724b：宿主告知"这个页签现在打开的是哪份谱" ⇒ 更新页签名。
+   * adj724b / adj931：宿主告知"这个页签现在打开的是哪份谱" ⇒ 更新页签名。
    *
    * 为什么由宿主告诉、而不是自己读 `getState()`：本视图是**应用级**页签
    * （可以先后打开很多份谱），而 `ViewState` 只反映"创建它的那一次"。
    *
-   * ⚠ Obsidian **没有**公开的"刷新页签标题"API（`obsidian.d.ts` 里只有 `getDisplayText()`
-   * 与 `onPaneMenu()`）。所以这里只记状态、更新 `getDisplayText()` 的返回值：
-   * 新建/重开页签时一定正确；对**已经显示着**的页签，标题可能要到下次布局变化才刷新
-   * （这是宿主没给 API 的限制，不是这里疏漏）。
+   * ## adj931：改完名字必须**主动催宿主重画页签头**（这正是"页签名显示爱记谱"的真因）
+   *
+   * 旧写法只改私有字段 —— 而宿主只在 `setViewState()` 结束、`setPinned()` 等时机才调
+   * `updateHeader()`；"打开另一份谱"走的是**桥**（`openFile()` → postMessage），
+   * 不经过任何 `setViewState` ⇒ 宿主永远不知道标题该换了。用户实测的三种表现
+   * （新的页签/当前页签显示「爱记谱」、右栏复用了实例却不换名字）全都是这一条。
+   *
+   * 刷新方式：`refreshLeafHeader()`（`WorkspaceLeaf.updateHeader()` 优先，见 `viewTitle.ts`）。
+   * 新建页签时宿主本来就会取一次标题，这里多刷一次是幂等的。
    */
   setActiveFileName(name: string | null): void {
     if (this.activeFileName === name) return
     this.activeFileName = name
+    this.refreshHeader()
+  }
+
+  /** adj931：把当前标题刷到宿主的页签头/悬浮提示上（走不通时只记一句日志，不影响任何功能） */
+  private refreshHeader(): void {
+    const how: HeaderRefresh = refreshLeafHeader(this.leaf as unknown as LeafHeaderLike, this.getDisplayText())
+    if (how === 'none') {
+      console.info('[iJipu] 宿主没有可用的页签头刷新入口（updateHeader / tabHeaderInnerTitleEl 都没有）⇒ 标题要等下次布局变化')
+    }
   }
 
   async onOpen(): Promise<void> {
@@ -160,8 +183,11 @@ export class IJipuAppView extends ItemView {
    * 不 await 会把这一次打开静默丢掉。
    */
   async openFile(path: string): Promise<void> {
-    // adj724b：页签名跟着当前打开的谱走（见 `getDisplayText`）
-    this.setActiveFileName(path.split('/').pop() ?? path)
+    /**
+     * adj724b / adj931：页签名跟着当前打开的谱走（见 `getDisplayText`）。
+     * 取的是路径最后一段、**保留扩展名**（`半山听雨.jps`）—— 用户口径要的就是它。
+     */
+    this.setActiveFileName(jpsNameFromPath(path))
     await this.frameReady
     if (!this.frame) return
     this.plugin.bridge.openFile(this.frame, path)

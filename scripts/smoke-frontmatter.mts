@@ -76,6 +76,9 @@ import {
   planJpsInitialView,
   planSourceLeafDisposal,
 } from '../src/embed/openPlan'
+// adj931：标题口径（凡承载 `.jps` 的视图一律显示**文件名含扩展名**）与"让宿主立刻刷新页签头"
+// 都是**纯函数** ⇒ 冒烟里能**真跑**（见文件末尾 adj931 区块；不再只靠读源码文本猜）
+import { APP_DISPLAY_TEXT, jpsNameFromPath, jpsViewTitle, refreshLeafHeader } from '../src/embed/viewTitle'
 // adj926：「默认应用」那条外开链路（**真的调用**）
 import { canOpenWithDefaultApp, openUrlExternally, openWithDefaultApp } from '../src/openExternal'
 import {
@@ -434,7 +437,9 @@ console.log('[3g] adj631 设置面板：多页签 / 收藏音色分类列表 / �
       /addOption\('defaultApp', '默认应用（仅桌面端）'\)/.test(settingsSrc) &&
       settingsSrc.includes('?? DEFAULT_EMBED_OPEN_MODE') &&
       /DEFAULT_EMBED_OPEN_MODE: EmbedOpenMode = 'right'/.test(String(readFileSync('src/types.ts', 'utf8'))) &&
-      /openIjipuFile\(file: TFile \| null, sourceLeaf: WorkspaceLeaf \| null = null\): Promise<void>/.test(mainSrc) &&
+      // adj931：返回值从 `Promise<void>` 变成 `Promise<boolean>`（"这一趟办成了没有"，
+      // 「默认应用」档失败时视图据此把完整谱面预览补回来，见 adj931 区块）
+      /openIjipuFile\(file: TFile \| null, sourceLeaf: WorkspaceLeaf \| null = null\): Promise<boolean>/.test(mainSrc) &&
       // `defaultApp` 分支里夹着"非桌面端 ⇒ 提示并改走右侧栏"的回退，窗口给足
       // adj727：判据已抽成纯函数 `embedEditLeavesObsidian`（同一口径也用于"嵌入区要不要留链接"）
       /embedEditLeavesObsidian\(mode\)[\s\S]{0,460}?openWithDefaultApp\(/.test(mainSrc) &&
@@ -604,16 +609,20 @@ console.log('[3g] adj631 设置面板：多页签 / 收藏音色分类列表 / �
   /**
    * adj724b（用户实测 #2）：「在页签中打开 ijipu 时，页签名应显示**文件名**，而不是爱记谱」。
    *
-   * 页签名来自视图的 `getDisplayText()`（`ViewState` 里**没有** `title` 字段，已核对 `obsidian.d.ts`）。
+   * 页签名来自视图的 `getDisplayText()`（`ViewState` 的 `title` 只给"延迟视图"用，已核对 `obsidian.d.ts`）。
+   *
+   * ⚠ **adj931（用户 2026-10-13）改了实现、没改口径**：标题改由纯函数 `jpsViewTitle()` 决定
+   * （含**扩展名**，并与 `.jps` 文件视图共用），所以这里原来钉的 `?? DISPLAY_TEXT` 那句原文不再存在
+   * —— 本轮把它改守新原文，详细的"四档 × 切换文件"判据在文件末尾的 adj931 区块。
    */
   {
     const appViewSrc2 = String(readFileSync('src/embed/appView.ts', 'utf8'))
-    check('adj724b 应用页签的标题：打开谱时显示文件名、没打开时显示「爱记谱」',
-      /getDisplayText\(\): string \{[\s\S]{0,200}?return this\.activeFileName \?\? DISPLAY_TEXT/.test(appViewSrc2) &&
+    check('adj724b 应用页签的标题：打开谱时显示文件名、没打开时显示「爱记谱」（adj931 起走纯函数 `jpsViewTitle`）',
+      /getDisplayText\(\): string \{[\s\S]{0,260}?return jpsViewTitle\(this\.activeFileName\)/.test(appViewSrc2) &&
         /private activeFileName: string \| null = null/.test(appViewSrc2) &&
         /setActiveFileName\(name: string \| null\)/.test(appViewSrc2) &&
         // `openFile()` 里要把文件名记下来（否则标题永远停在「爱记谱」）
-        /async openFile\(path: string\): Promise<void> \{[\s\S]{0,200}?setActiveFileName\(path\.split\('\/'\)\.pop\(\)/.test(appViewSrc2))
+        /async openFile\(path: string\): Promise<void> \{[\s\S]{0,260}?setActiveFileName\(jpsNameFromPath\(path\)\)/.test(appViewSrc2))
   }
   /**
    * adj724b（用户要求）：「点文件列表的 `.jps` **不要再出**那个『已在爱记谱中打开…』的页签，
@@ -660,11 +669,18 @@ console.log('[3g] adj631 设置面板：多页签 / 收藏音色分类列表 / �
          */
         !/正在爱记谱（嵌入版）中打开/.test(viewSrc.replace(/\/\*[\s\S]*?\*\//g, '')) &&
         !/renderEmbedPlaceholder/.test(viewSrc.replace(/\/\*[\s\S]*?\*\//g, '')))
-    // 插件侧：按计划关掉中间页签（`plan.detachSource`），且"就地替换"时不关
-    check('adj724b 插件按计划关掉中间页签（`plan.detachSource`），就地替换时不动它',
+    // 插件侧：来源页签的收尾**由 `plan.detachSource` 决定**（就地替换 / 来源就是本 leaf 时都不动它）
+    /**
+     * ⚠ adj931：写法从 `if (…) { … }` 变成"**选好落点就把还原发出去**"
+     * （`const restoring = … : null`，末尾 `await restoring`）⇒ 判据跟着改守新形状。
+     * 三个条件一个都不许少（这正是"就地替换档不动来源页签"的判据），
+     * 并且**代码里**不许再出现 `sourceLeaf.detach()`（用户实测的"页签被关掉"就是它；
+     * 源码注释里留一句"从前是 detach"不算 —— 所以这里先 `codeOf()` 剥注释）。
+     */
+    check('adj724b 插件按计划决定"来源页签"的收尾（`plan.detachSource`）：就地替换 / 来源即本 leaf 时不动它，且**不再** `detach` 用户的页签',
       /await this\.plugin\.openIjipuFile\(file, this\.leaf\)/.test(viewSrc) &&
-        /if \(plan\.detachSource && !isSameLeaf && sourceLeaf\)/.test(mainSrc) &&
-        /sourceLeaf\.detach\(\)/.test(mainSrc))
+        /plan\.detachSource && !isSameLeaf && sourceLeaf \? this\.restoreSourceLeaf\(sourceLeaf\) : null/.test(mainSrc) &&
+        !/sourceLeaf\.detach\(\)/.test(codeOf(mainSrc)))
   }
   /**
    * adj724b：原「收藏音色」页签（`renderVoiceList` 流式分类列表）**已随设置整并删除**。
@@ -6368,14 +6384,27 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
     })())
 
   /** 视图侧接线：桌面端那条路是"画占位 + 交给插件的路由"，**不是**在本视图里塞 iframe */
-  check('adj923 ② 视图侧：初始形态交给纯函数，`embed` 档走 `routeToIjipu(…, true)`（先探服务）、`preview+external` 档保留预览再路由',
+  check('adj923 ② 视图侧：初始形态交给纯函数，`embed` 档走 `routeToIjipu(…, true)`（先探服务）、`preview+external` 档也先给一句轻提示再路由',
     /planJpsInitialView\(\{[\s\S]{0,320}?isDesktop: Platform\.isDesktopApp/.test(fv923) &&
       /this\.routeToIjipu\(this\.file, true\)/.test(fv923) &&
+      /**
+       * ⚠ adj931（用户要求 ④）：这一档过去是"**先在本页签画完整谱面**、再把文件交给系统默认程序"
+       * —— 那正是用户报的"当前页签会刷新"。现在与 `embed` 档一样**先给一句轻提示就路由**，
+       * 只有外开失败（`externalRouteFailedFor`）才回到下面的完整预览兜底。
+       */
+      /const externalViable =[\s\S]{0,220}?initialView === 'preview\+external'/.test(fv923) &&
+      /if \(externalViable && this\.file\) \{[\s\S]{0,400}?正在用系统默认应用打开/.test(fv923) &&
       /if \(initialView === 'preview\+external' && this\.file && !this\.editing\) \{[\s\S]{0,160}?this\.routeToIjipu\(this\.file\)/.test(fv923) &&
       // 占位那句（服务启动要时间，没有它用户会看到一片空白）
       /正在用嵌入版 iJipu 打开/.test(fv923))
   check('adj923 ② 视图侧负对照：把"直进嵌入版"那句删掉（= 回到"一律先预览"）⇒ 上面那条判假',
     !/this\.routeToIjipu\(this\.file, true\)/.test(fv923.replace("this.routeToIjipu(this.file, true)", "")))
+  /** adj931 ④：「默认应用」档"先给轻提示就路由"这段判据单独拎出来（负对照要把**整段**删掉） */
+  const defaultAppEarly931 = (src: string): boolean =>
+    /if \(externalViable && this\.file\) \{[\s\S]{0,400}?正在用系统默认应用打开[\s\S]{0,400}?this\.routeToIjipu\(this\.file\)\n {6}return/.test(src)
+  check('adj931 ④ 视图侧负对照：「默认应用」档把"先给轻提示再让位"**整段**删掉（= 回到 adj923 的"先在本页签画完整预览、再外开"）⇒ 上面那条判假',
+    defaultAppEarly931(fv923) &&
+      !defaultAppEarly931(fv923.replace(/const externalViable =[\s\S]*?\n    \}\n/, '\n')))
   check('adj923 ② 手机端那条路零改动：嵌入块的「编辑」仍按平台分派到 `openJpsForSourceEdit()`（手机端先预览、再编辑）',
     /if \(Platform\.isMobile\) \{\n {12}void this\.plugin\.openJpsForSourceEdit\(file\)/.test(embedSrc923) &&
       /完整编辑器（嵌入版 iJipu）仅桌面端可用/.test(main923))
@@ -6617,16 +6646,35 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
 
   // ───────────────── 接线：main.ts 里那两处（不许再 detach 来源页签 / 右栏把活动页签还回去） ─────────────────
 
+  /**
+   * ⚠ adj931：这段的形状变了 —— 还原不再是"末尾那句话"，而是**在动目标页签之前就发出去**
+   * （`const restoring = … this.restoreSourceLeaf(sourceLeaf)`，末尾只 `await restoring`）。
+   * 判据跟着改守新形状：**判据本身没变**（不 detach、走 `restoreSourceLeaf`），
+   * 另外多了"提前"这一条（见下面 adj931 区块）。
+   */
   const restoreJudge926 = (src: string): boolean => {
-    const seg = /if \(plan\.detachSource && !isSameLeaf && sourceLeaf\) \{([\s\S]*?)\n    \} else if \(isSameLeaf\)/.exec(src)?.[1] ?? ''
+    const seg = /const restoring: Promise<'back' \| 'detach'> \| null =\n([\s\S]*?)\n\n/.exec(src)?.[1] ?? ''
+    const tail = /if \(restoring\) \{\n {6}const disposal = await restoring/.exec(src)?.[0] ?? ''
     const code = codeOf(seg)
-    return code.length > 0 && /await this\.restoreSourceLeaf\(sourceLeaf\)/.test(code) && !/sourceLeaf\.detach\(\)/.test(code)
+    return (
+      code.length > 0 &&
+      /plan\.detachSource && !isSameLeaf && sourceLeaf \? this\.restoreSourceLeaf\(sourceLeaf\) : null/.test(code) &&
+      !/sourceLeaf\.detach\(\)/.test(codeOf(src)) &&
+      tail.length > 0
+    )
   }
-  check('adj926 接线：`openEmbedLeaf` 的收尾改成了 `restoreSourceLeaf(sourceLeaf)`，那段里**不再有** `sourceLeaf.detach()`',
+  check('adj926 接线：`openEmbedLeaf` 的来源页签收尾是 `restoreSourceLeaf(sourceLeaf)`（**不再** `sourceLeaf.detach()`），且末尾 `await restoring` 才算完',
     restoreJudge926(main926))
-  check('adj926 接线负对照：把那一行改回 `sourceLeaf.detach()` ⇒ 上面那条判假',
+  check('adj926 接线负对照：把它改回 `sourceLeaf.detach()`（adj926 之前的写法）⇒ 上面那条判假',
     !restoreJudge926(
-      main926.replace('const disposal = await this.restoreSourceLeaf(sourceLeaf)', 'sourceLeaf.detach()'),
+      main926.replace('sourceLeaf ? this.restoreSourceLeaf(sourceLeaf) : null', 'sourceLeaf ? sourceLeaf.detach() : null'),
+    ))
+  check('adj926 接线负对照：把"还原"那句直接删掉（= 谁都不收尾）⇒ 上面那条判假',
+    !restoreJudge926(
+      main926.replace(
+        'plan.detachSource && !isSameLeaf && sourceLeaf ? this.restoreSourceLeaf(sourceLeaf) : null',
+        'null',
+      ),
     ))
   check('adj926 右栏档：还原成功后**把活动页签还给来源页签**（`revealLeaf`/`setViewState({active})` 会把活动页签挪到右栏 ⇒ 用户要求"当前活动页签不变"）',
     /plan\.kind === 'right-sidebar' && disposal === 'back'[\s\S]{0,160}?setActiveLeaf\(sourceLeaf, \{ focus: true \}\)/.test(main926))
@@ -6753,6 +6801,379 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
     check('adj926 产物：`main.js` 里不再有 `import("electron")`', true, 'skipped：未构建产物')
     check('adj926 产物负对照', true, 'skipped：未构建产物')
   }
+}
+
+/**
+ * ---- adj931（用户 2026-10-13 的两条实测：页签名一律显示 `.jps` 文件名 + 打开时别刷新当前页签）----
+ *
+ * 用户原话（截图是**同一时刻两个页签**：左 `半山听雨.jps` ✓ 正确基准、右「爱记谱」✗）：
+ *  ②「新的页签打开方式下，文件列表点击 jps 文件 / 嵌入块点击编辑，**页签名显示的都是爱记谱**，
+ *     不是 jps 文件名」
+ *  ③「当前页签打开方式下，文件列表点击 jps 文件，页签名显示的都是爱记谱；嵌入块点击编辑，
+ *     是 jps 文件名」 ← 与 ② 同根：视图被**新建或复用**时，没人通知宿主刷新页签头
+ *  ①④「右侧栏 / 默认应用打开方式下……**会导致当前页签刷新**，这不是应该的操作」
+ *  补充「右侧栏（单实例）**也应该显示文件名**，这样我才能知道现在编辑的是哪个文件」
+ *  补充「打开 jps 文件时，**不管是哪种方式，都不要刷新当前页签的内容**」
+ *
+ * ## 真因（`obsidian.asar` 1.13.7 里逐行核对；完整说明见 `src/embed/viewTitle.ts`）
+ *
+ * · **左边（`.jps` 文件视图）为什么对**：它是**绑文件**的视图。宿主 `WorkspaceLeaf.updateHeader()`
+ *   干的就是 `tabHeaderInnerTitleEl.setText(this.getDisplayText())`（外加图标与悬浮提示），
+ *   而 `TextFileView` 基类返回 `this.file.basename`；更关键的是 `setViewState()` **末尾就会调
+ *   `updateHeader()`** ⇒ 绑定/切换文件时标题自然跟着变。
+ * · **右边（嵌入版视图）为什么是「爱记谱」**：它是**应用级**视图（不绑文件、不经过 `setViewState`），
+ *   `getDisplayText()` 在**视图创建那一刻**就被调用了（那时还没打开文件）⇒ 拿到写死的常量；
+ *   此后 `setActiveFileName()` 只改了一个私有字段，**没有任何东西通知宿主重画页签头**
+ *   ⇒ 标题永远停在「爱记谱」（"新的页签"档那种**全新**页签也一样：建视图 → 取标题 →
+ *   再 `openFile()` 设文件名，顺序天生是反的）。
+ * · **"当前页签被刷新"**：点文件管理器里的 `.jps`，宿主 `NavFile.onSelfClick()` 走的是
+ *   `getLeaf(Keymap.isModEvent(e)).openFile(file)`；普通左键 ⇒ `getLeaf(false)` ⇒ 宿主
+ *   `getUnpinnedLeaf()` 里那句 `if (i && i.canNavigate()) return i` ⇒ **活动 leaf 的视图被就地换掉**
+ *   （原视图进该 leaf 的历史）。`openFile()` 内部只有"按扩展名取视图类型"这一步，**用哪个 leaf
+ *   由调用方决定**，插件没有任何前置钩子 ⇒ **拦不住**；能做的只有**尽快还回去**。
+ *   旧写法把 `restoreSourceLeaf()` 排在整条流程的最后（等目标页签建好、嵌入版视图 `setViewState` 完、
+ *   `revealLeaf`、`openFile()` 里还 `await frameReady` 等 iframe 起来）⇒ 那几百毫秒里用户看到的
+ *   就是"当前页签被换成 `.jps` 占位页签"。adj931 把它提到"选好落点就发出去"。
+ *
+ * ## 这一节怎么"真跑"，以及它**不能**证明什么
+ *
+ * · 标题：`jpsViewTitle()` / `jpsNameFromPath()` / `refreshLeafHeader()` 都是**纯函数**，这里**真的调用**；
+ *   并配一个"嵌入版视图 + 宿主 leaf"的最小夹具（`updateHeader()` 按 asar 的语义读
+ *   `view.getDisplayText()`、并连带刷悬浮提示），跑一遍"打开谱 → 换谱"两个来回，
+ *   逐条核对**宿主页签头**上的文本与悬浮提示。`oldStyle = true` = **把 adj931 之前那句"只改字段"
+ *   真的跑一遍**。
+ * · "当前页签零改动"：用假 workspace 夹具记**事件顺序**（宿主就地替换 → 我们还回去 → 建目标页签 →
+ *   等 iframe）与**主编辑区最终形态**（leaf 数 / 视图类型）；`lateRestore = true` = adj926 的旧顺序
+ *   （还原排在最后），`oldDetach = true` = adj923 的旧写法（直接把来源页签 `detach()`）。
+ * · ⚠ **证明不了"在真 Obsidian 里点一下就是这样"**：本机跑不了 Obsidian，夹具里的 leaf / workspace
+ *   都是假的 —— 尤其"那一帧到底闪不闪"，最终只能由**用户在 Obsidian 里重载亲眼看**。
+ */
+{
+  const main931 = String(readFileSync('src/main.ts', 'utf8'))
+  const fv931 = String(readFileSync('src/fileView.ts', 'utf8'))
+  const av931 = String(readFileSync('src/embed/appView.ts', 'utf8'))
+  /** `.jps` 视图类型 / 嵌入版视图类型：都从源码里读（不 import 那两个模块，免得把 scorePane 拉进冒烟包） */
+  const jpsViewType931 = /export const VIEW_TYPE_IJIPU = '([^']+)'/.exec(fv931)?.[1] ?? ''
+  const appViewType931 = /export const VIEW_TYPE_IJIPU_APP = '([^']+)'/.exec(av931)?.[1] ?? ''
+  const modes931 = ['right', 'tab', 'current', 'defaultApp'] as const
+  const jpsPath931 = '曲谱集/半山听雨.jps'
+
+  // ───────────────── ① 标题：凡承载 `.jps` 的视图一律显示**文件名（含扩展名）** ─────────────────
+
+  const carriers931 = modes931.map((m) => ({ mode: m, title: jpsViewTitle(jpsNameFromPath(jpsPath931)) }))
+  check('adj931 ① 四档（右侧栏 / 新的页签 / 当前页签 / 默认应用）承载的那份 `.jps`，标题一律是**文件名（含扩展名）**',
+    carriers931.every((c) => c.title === '半山听雨.jps') &&
+      jpsNameFromPath('半山听雨.jps') === '半山听雨.jps' &&
+      jpsNameFromPath('a/b/c/小星星.jps') === '小星星.jps',
+    carriers931.map((c) => `${c.mode}=${c.title}`).join(' '))
+  check('adj931 ① 「爱记谱」只在**确实没承载任何 `.jps`** 时出现（点 ribbon 图标打开、还没选谱）',
+    jpsViewTitle(null) === APP_DISPLAY_TEXT && jpsViewTitle('  ') === APP_DISPLAY_TEXT &&
+      carriers931.every((c) => c.title !== APP_DISPLAY_TEXT),
+    `无文件=${jpsViewTitle(null)}`)
+  check('adj931 ① 负对照（**旧口径真跑一遍**：退回 `basename`，即去掉扩展名）⇒ 上面第一条判假',
+    ((): boolean => {
+      const oldTitle931 = (p: string): string => (p.split('/').pop() ?? '').replace(/\.[^.]+$/, '')
+      return oldTitle931(jpsPath931) === '半山听雨' && oldTitle931(jpsPath931) !== carriers931[0].title
+    })())
+
+  /**
+   * 夹具：**嵌入版视图 + 宿主 leaf** 的最小替身。
+   * `leaf.updateHeader()` 按 asar 里的语义实现（读 `view.getDisplayText()`，连带刷悬浮提示），
+   * 这样"标题到底有没有真的刷到页签头上"是可测的 —— 而"只改了视图字段"不算数。
+   */
+  type View931 = {
+    activeFileName: string | null
+    getDisplayText: () => string
+    openFile: (path: string) => void
+  }
+  type Leaf931 = {
+    updateHeaderCalls: number
+    titleText: string
+    ariaLabel: string
+    updateHeader?: () => void
+    tabHeaderInnerTitleEl?: { setText: (t: string) => void }
+    tabHeaderEl?: { setAttribute: (k: string, v: string) => void }
+  }
+  const makeFixture931 = (withUpdateHeader: boolean, oldStyle = false): { view: View931; leaf: Leaf931 } => {
+    const leaf: Leaf931 = { updateHeaderCalls: 0, titleText: '', ariaLabel: '' }
+    if (withUpdateHeader) {
+      leaf.updateHeader = (): void => {
+        leaf.updateHeaderCalls += 1
+        leaf.titleText = view.getDisplayText()
+        leaf.ariaLabel = view.getDisplayText()
+      }
+    } else {
+      leaf.tabHeaderInnerTitleEl = { setText: (t: string): void => void (leaf.titleText = t) }
+      leaf.tabHeaderEl = { setAttribute: (_k: string, v: string): void => void (leaf.ariaLabel = v) }
+    }
+    const view: View931 = {
+      activeFileName: null,
+      getDisplayText: (): string => jpsViewTitle(view.activeFileName),
+      /** 真实现（`IJipuAppView.setActiveFileName()`）：改字段 **＋** 主动催宿主刷页签头 */
+      openFile: (path: string): void => {
+        const name = jpsNameFromPath(path)
+        if (view.activeFileName === name) return
+        view.activeFileName = name
+        refreshLeafHeader(leaf, view.getDisplayText())
+      },
+    }
+    if (oldStyle) {
+      /** adj931 之前：只改字段（`this.activeFileName = name`）—— 宿主一无所知 */
+      view.openFile = (path: string): void => {
+        view.activeFileName = jpsNameFromPath(path)
+      }
+    }
+    return { view, leaf }
+  }
+  /** 判据：**宿主的页签头**上真的显示着这份谱的名字（不是"视图字段里对"就算） */
+  const headerShows931 = (f: { leaf: Leaf931 }): boolean => f.leaf.titleText === '半山听雨.jps'
+
+  const fixUpdate931 = makeFixture931(true)
+  const fixFallback931 = makeFixture931(false)
+  const fixOld931 = makeFixture931(true, true)
+  fixUpdate931.view.openFile(jpsPath931)
+  fixFallback931.view.openFile(jpsPath931)
+  fixOld931.view.openFile(jpsPath931)
+
+  check('adj931 ① 换谱后**宿主的页签头真的变了**：走 `updateHeader()` 的宿主 ⇒ 标题与悬浮提示 = `半山听雨.jps`',
+    headerShows931(fixUpdate931) && fixUpdate931.leaf.updateHeaderCalls === 1 &&
+      fixUpdate931.leaf.ariaLabel === '半山听雨.jps',
+    `标题=${fixUpdate931.leaf.titleText} 悬浮=${fixUpdate931.leaf.ariaLabel} 刷新=${fixUpdate931.leaf.updateHeaderCalls} 次`)
+  check('adj931 ① 没有 `updateHeader` 的宿主 ⇒ 退回写页签头文本 + `aria-label`（悬浮提示也要对）',
+    headerShows931(fixFallback931) && fixFallback931.leaf.ariaLabel === '半山听雨.jps',
+    `标题=${fixFallback931.leaf.titleText} 悬浮=${fixFallback931.leaf.ariaLabel}`)
+  check('adj931 ① **切换文件时必须刷新标题**（右栏那个实例被复用载入新谱 ⇒ 标题变 `小星星.jps`，并再刷一次页签头）',
+    ((): boolean => {
+      fixUpdate931.view.openFile('曲谱集/小星星.jps')
+      return fixUpdate931.leaf.titleText === '小星星.jps' && fixUpdate931.leaf.updateHeaderCalls === 2
+    })(),
+    `标题=${fixUpdate931.leaf.titleText} 刷新=${fixUpdate931.leaf.updateHeaderCalls} 次`)
+  check('adj931 ① 负对照（**旧写法真跑一遍**："只改字段、不通知宿主"）⇒ 上面两条判假（视图字段对了，页签头还是空的）',
+    fixOld931.view.getDisplayText() === '半山听雨.jps' && !headerShows931(fixOld931) &&
+      fixOld931.leaf.updateHeaderCalls === 0,
+    `视图字段=${fixOld931.view.getDisplayText()} 页签头=${fixOld931.leaf.titleText || '（空）'}`)
+  check('adj931 ① 判据本身真的在判"页签头"：同一个判据喂给"只改字段"的旧实现 ⇒ 假；喂给新实现 ⇒ 真',
+    ((): boolean => {
+      const fresh931 = makeFixture931(true)
+      fresh931.view.openFile(jpsPath931)
+      return headerShows931(fresh931) && !headerShows931(fixOld931)
+    })())
+
+  /** 接线判据：两个视图**共用**同一个标题口径（一个含扩展名、一个不再写死常量） */
+  const titleJudge931 = (src: { av: string; fv: string }): boolean =>
+    /getDisplayText\(\): string \{[\s\S]{0,260}?return jpsViewTitle\(this\.activeFileName\)/.test(src.av) &&
+    /return jpsViewTitle\(this\.file\?\.name, 'jps'\)/.test(src.fv)
+  check('adj931 ① 接线：`.jps` 文件视图用 `file.name`（含扩展名）、嵌入版视图用 `jpsViewTitle(this.activeFileName)` —— 两边**同一个纯函数口径**',
+    titleJudge931({ av: av931, fv: fv931 }))
+  check('adj931 ① 接线负对照：把嵌入版视图改回写死的 `?? DISPLAY_TEXT` ⇒ 上面那条判假',
+    !titleJudge931({
+      av: av931.replace('return jpsViewTitle(this.activeFileName)', 'return this.activeFileName ?? DISPLAY_TEXT'),
+      fv: fv931,
+    }))
+  check('adj931 ① 接线负对照：把 `.jps` 文件视图改回 `basename`（不含扩展名）⇒ 上面那条判假',
+    !titleJudge931({ av: av931, fv: fv931.replace("jpsViewTitle(this.file?.name, 'jps')", "this.file?.basename ?? 'jps'") }))
+  const setNameJudge931 = (src: string): boolean =>
+    /setActiveFileName\(name: string \| null\): void \{[\s\S]{0,220}?this\.activeFileName = name[\s\S]{0,140}?this\.refreshHeader\(\)/.test(src) &&
+    /refreshLeafHeader\(this\.leaf as unknown as LeafHeaderLike, this\.getDisplayText\(\)\)/.test(src) &&
+    /setActiveFileName\(jpsNameFromPath\(path\)\)/.test(src)
+  check('adj931 ① 接线：`setActiveFileName()` 改完名字**主动催宿主刷新**（`refreshHeader()` → `refreshLeafHeader(this.leaf, this.getDisplayText())`），`openFile()` 走 `jpsNameFromPath()`',
+    setNameJudge931(av931))
+  check('adj931 ① 接线负对照：把 `setActiveFileName()` 里那句 `this.refreshHeader()` 删掉（= 回到"只改字段"）⇒ 上面那条判假',
+    !setNameJudge931(av931.replace(/\n {4}this\.refreshHeader\(\)\n/, '\n')))
+
+  // ───────────────── ②③ 当前页签：除「当前页签」档外，三档一律零改动 ─────────────────
+
+  type Sim931 = { steps: string[]; mainViews: string[]; mainCount: number; rightApp: number }
+  /**
+   * 夹具：点一次文件列表里的 `.jps`，记下**主编辑区最终形态**与**事件顺序**。
+   * @param o.lateRestore  `true` = adj926 的旧顺序：还原排在"建目标页签 + 等 iframe"**之后**
+   * @param o.oldDetach    `true` = adj923 的旧写法：把来源页签直接 `detach()`
+   * @param o.oldNoRestore `true` = adj926 之前「默认应用」档的行为：外开成功后不做任何还原
+   * @param o.planOverride 仅负对照用：强行换一份 plan（模拟"取错了 leaf"那类改坏）
+   */
+  const simulate931 = (
+    mode: (typeof modes931)[number],
+    o: {
+      lateRestore?: boolean
+      oldDetach?: boolean
+      oldNoRestore?: boolean
+      planOverride?: { kind: string; detachSource: boolean }
+    } = {},
+  ): Sim931 => {
+    const steps: string[] = []
+    /** 用户当前页签：一份笔记 */
+    const main: { view: string; back: string[] }[] = [{ view: 'markdown', back: [] }]
+    const source = main[0]
+    const plan = o.planOverride ?? planEmbedTarget(mode, true)
+    let rightApp = 0
+    /**
+     * ① 宿主：`getLeaf(false).openFile(file)` ⇒ **就地换掉当前页签的视图**（拦不住，只能尽快还回去）。
+     * 「当前页签」档是**本意如此**（就地替换）⇒ 只有另三档算"被换掉"。
+     */
+    if (plan.kind !== 'replace-source') {
+      source.back.push(source.view)
+      source.view = jpsViewType931
+      steps.push('swap-in-jps')
+    }
+    if (mode === 'defaultApp') {
+      steps.push('open-external') // 交给系统默认程序：站内一个 leaf 都不建、一个都不动
+      if (o.oldNoRestore) {
+        /* adj926 之前：不做任何还原 ⇒ 页签留在 `.jps` 预览上（用户报的"当前状态被改"） */
+      } else {
+        source.back.pop()
+        source.view = 'markdown'
+        steps.push('restore-done')
+      }
+    } else if (plan.kind === 'replace-source') {
+      source.view = appViewType931 // 「当前页签」档：就地替换（用户选了 A：本意如此）
+      steps.push('open-target')
+    } else {
+      if (plan.detachSource && !o.lateRestore) steps.push('restore-start') // adj931：**选好落点就先还回去**
+      if (plan.kind === 'right-sidebar') rightApp = 1
+      else main.push({ view: 'empty', back: [] })
+      steps.push('open-target', 'load-frame') // = setViewState(嵌入版) + revealLeaf + await frameReady
+      if (plan.kind === 'right-sidebar') {
+        /* 落点在右栏：主编辑区那个 leaf 不动 */
+      } else {
+        main[main.length - 1].view = appViewType931
+      }
+      if (plan.detachSource && o.lateRestore) steps.push('restore-start') // adj926：排在最后
+      if (plan.detachSource && !o.oldDetach) {
+        source.back.pop()
+        source.view = 'markdown' // = 宿主页签栏那枚「← 后退」
+        steps.push('restore-done')
+      } else if (plan.detachSource) {
+        main.splice(main.indexOf(source), 1)
+        source.view = 'detached'
+        steps.push('restore-detach')
+        if (main.length === 0) main.push({ view: 'empty', back: [] }) // 宿主补一个空页签
+      }
+    }
+    return { steps, mainViews: main.map((l) => l.view), mainCount: main.length, rightApp }
+  }
+  /** 判据：主编辑区**还是原来那一个页签 + 还是那份笔记**，且没有 `.jps` 占位残留 */
+  const mainKept931 = (s: Sim931): boolean =>
+    s.mainCount === 1 && s.mainViews[0] === 'markdown' && !s.mainViews.includes(jpsViewType931)
+  /** 判据：还原**在动目标页签之前**就发出去了 */
+  const restoreEarly931 = (s: Sim931): boolean => {
+    const iRestore = s.steps.indexOf('restore-start')
+    const iTarget = s.steps.indexOf('open-target')
+    return iRestore >= 0 && iTarget >= 0 && iRestore < iTarget
+  }
+
+  const rightNew931 = simulate931('right')
+  const rightLate931 = simulate931('right', { lateRestore: true })
+  const rightDetach931 = simulate931('right', { oldDetach: true })
+  const tabNew931 = simulate931('tab')
+  const tabLate931 = simulate931('tab', { lateRestore: true })
+  const defNew931 = simulate931('defaultApp')
+  const defOld931 = simulate931('defaultApp', { oldNoRestore: true })
+  const cur931 = simulate931('current')
+  console.log(
+    '   adj931 夹具实测（假 workspace + 真的 `planEmbedTarget`，含事件顺序）：\n' +
+      `     右侧栏 主编辑区=${rightNew931.mainViews.join(',')}｜顺序=[${rightNew931.steps.join(' → ')}]\n` +
+      `     新的页签 主编辑区=${tabNew931.mainViews.join(',')}（共 ${tabNew931.mainCount} 个）｜顺序=[${tabNew931.steps.join(' → ')}]\n` +
+      `     默认应用 主编辑区=${defNew931.mainViews.join(',')}｜顺序=[${defNew931.steps.join(' → ')}]\n` +
+      `     当前页签（基准）主编辑区=${cur931.mainViews.join(',')}｜顺序=[${cur931.steps.join(' → ')}]`,
+  )
+
+  check('adj931 ② 右侧栏档：主编辑区**零改动**（1 个页签、还是那份笔记、无 `.jps` 残留），且**还原在开目标之前**发出',
+    mainKept931(rightNew931) && restoreEarly931(rightNew931) && rightNew931.rightApp === 1,
+    `主编辑区=${rightNew931.mainViews.join(',')} 顺序=[${rightNew931.steps.join(' → ')}]`)
+  check('adj931 ② 负对照（**adj926 的旧顺序真跑一遍**：还原排在"建目标 + 等 iframe"之后）⇒ "还原提前"判假 —— 那几百毫秒就是用户看到的"当前页签刷新"',
+    !restoreEarly931(rightLate931) && mainKept931(rightLate931),
+    `顺序=[${rightLate931.steps.join(' → ')}]`)
+  check('adj931 ② 负对照（**adj923 的旧写法真跑一遍**：来源页签直接 `detach()`）⇒ 主编辑区判假（用户的页签被关掉、宿主补了个空页签）',
+    !mainKept931(rightDetach931) && rightDetach931.mainViews.includes('empty'),
+    `主编辑区=${rightDetach931.mainViews.join(',')}`)
+
+  check('adj931 ② 新的页签档：**真的多出一个页签**（新页签里是嵌入版）、**原来那份笔记还在**、无 `.jps` 残留，且还原提前',
+    tabNew931.mainCount === 2 && tabNew931.mainViews[0] === 'markdown' &&
+      tabNew931.mainViews[1] === appViewType931 && restoreEarly931(tabNew931),
+    `主编辑区=${tabNew931.mainViews.join(',')} 顺序=[${tabNew931.steps.join(' → ')}]`)
+  check('adj931 ② 新的页签档负对照（旧顺序）⇒ "还原提前"判假',
+    !restoreEarly931(tabLate931) && tabNew931.mainCount === 2,
+    `旧顺序=[${tabLate931.steps.join(' → ')}]`)
+
+  check('adj931 ②④ 默认应用档：站内**一个 leaf 都不建、不动**（主编辑区仍是那份笔记），文件交给系统默认程序',
+    mainKept931(defNew931) && defNew931.steps.includes('open-external') && !defNew931.steps.includes('open-target'),
+    `主编辑区=${defNew931.mainViews.join(',')} 顺序=[${defNew931.steps.join(' → ')}]`)
+  check('adj931 ②④ 默认应用档负对照（**adj926 之前真跑一遍**：外开成功后不还原）⇒ 主编辑区判假（页签留在 `.jps` 预览上）',
+    !mainKept931(defOld931) && defOld931.mainViews[0] === jpsViewType931,
+    `主编辑区=${defOld931.mainViews.join(',')}`)
+
+  check('adj931 ③ 「当前页签」档**保持现状**（用户选了 A：就地替换是本意）：1 个页签、里面就是嵌入版，且**一次还原都不做**（不做多余刷新）',
+    cur931.mainCount === 1 && cur931.mainViews[0] === appViewType931 &&
+      !cur931.steps.some((x) => x.startsWith('restore')) && planEmbedTarget('current', true).detachSource === false,
+    `主编辑区=${cur931.mainViews.join(',')} 顺序=[${cur931.steps.join(' → ')}]`)
+  check('adj931 ③ 「当前页签」档负对照：把它改成"新页签 + 还原来源页签"（上游怀疑的取错 leaf）⇒ 上面那条判假',
+    ((): boolean => {
+      const broken931 = simulate931('current', { planOverride: { kind: 'new-tab', detachSource: true } })
+      return !(broken931.mainCount === 1 && broken931.mainViews[0] === appViewType931 &&
+        !broken931.steps.some((x) => x.startsWith('restore')))
+    })(),
+    '改坏后主编辑区=' + simulate931('current', { planOverride: { kind: 'new-tab', detachSource: true } }).mainViews.join(','))
+
+  // ───────────────── 接线（源码级）：还原提前 + 不去猴补丁宿主 ─────────────────
+
+  const restoringFirst931 = (src: string): boolean => {
+    const iRestore = src.indexOf(
+      'plan.detachSource && !isSameLeaf && sourceLeaf ? this.restoreSourceLeaf(sourceLeaf) : null',
+    )
+    const iTarget = src.indexOf('await target.setViewState({ type: VIEW_TYPE_IJIPU_APP, active: true })')
+    return iRestore > 0 && iTarget > iRestore
+  }
+  check('adj931 ② 源码：`restoring`（还回去）在 `target.setViewState(嵌入版)` **之前**发出（不再排在 iframe 之后）',
+    restoringFirst931(main931))
+  check('adj931 ② 源码负对照：把它挪回末尾（adj926 的位置）⇒ 上面那条判假',
+    !restoringFirst931(
+      main931.replace(
+        / {4}const restoring: Promise<'back' \| 'detach'> \| null =\n {6}plan\.detachSource && !isSameLeaf && sourceLeaf \? this\.restoreSourceLeaf\(sourceLeaf\) : null\n\n/,
+        '',
+      ),
+    ))
+  check('adj931 ② 边界（如实记录）：**没有**去猴补丁宿主的"用哪个 leaf / 按扩展名取视图类型"—— 那一步拦不住，只能尽快还回去',
+    !/workspace\.getLeaf\s*=[^=]/.test(codeOf(main931)) &&
+      !/viewRegistry\s*\.\s*getTypeByExtension\s*=[^=]/.test(codeOf(main931)) &&
+      !/\.openFile\s*=[^=]/.test(codeOf(main931)),
+    '（这条判据守的是"不许为了少一帧去硬改宿主行为"）')
+
+  // ───────────────── ④ 「默认应用」档：先让位、失败才补预览 ─────────────────
+
+  const externalFallback931 = (src: string): boolean =>
+    /const handled = await this\.plugin\.openIjipuFile\(file, this\.leaf\)[\s\S]{0,400}?if \(!handled[\s\S]{0,200}?this\.externalRouteFailedFor = file\.path[\s\S]{0,80}?this\.render\(\)/.test(
+      src,
+    )
+  check('adj931 ④ 「默认应用」档外开失败**仍退回完整谱面预览**（`externalRouteFailedFor` 记路径 + 重画）—— adj923 的"预览兜底"没断',
+    externalFallback931(fv931))
+  check('adj931 ④ 负对照：把兜底那段删掉（失败就只剩一句提示）⇒ 上面那条判假',
+    !externalFallback931(
+      fv931.replace('this.externalRouteFailedFor = file.path\n          this.render()', 'void 0'),
+    ))
+  check('adj931 ④ `openIjipuFile()` / `openEmbedLeaf()` 现在回报"办成了没有"（`Promise<boolean>`），视图据此决定要不要补预览兜底',
+    /async openIjipuFile\(file: TFile \| null, sourceLeaf: WorkspaceLeaf \| null = null\): Promise<boolean>/.test(main931) &&
+      /async openEmbedLeaf\(\n {4}file: TFile \| null,\n {4}mode: EmbedOpenMode = DEFAULT_EMBED_OPEN_MODE,\n {4}sourceLeaf: WorkspaceLeaf \| null = null,\n {2}\): Promise<boolean> \{/.test(
+        main931,
+      ) &&
+      /return this\.openEmbedLeaf\(file, mode, sourceLeaf\)/.test(main931) &&
+      /const handled = await this\.plugin\.openIjipuFile\(file, this\.leaf\)/.test(fv931))
+
+  // ───────────────── ④ 手机端 / ribbon：一行未改（与 adj926 同判据重跑一遍） ─────────────────
+
+  check('adj931 手机端 / `![[xx.jps]]` 内嵌 / 左侧 ribbon **一行未改**：四档仍是轻量预览，ribbon 仍是 `addRibbonIcon(\'music\', \'打开爱记谱\')`',
+    modes931.every((m) => planJpsInitialView({ mode: m, isDesktop: false, embedded: false, embedEnabled: true }) === 'preview') &&
+      modes931.every((m) => planJpsInitialView({ mode: m, isDesktop: true, embedded: true, embedEnabled: true }) === 'preview') &&
+      /addRibbonIcon\('music', '打开爱记谱'/.test(main931))
+  check('adj931 手机端 / ribbon 负对照：改掉 ribbon 的图标名 ⇒ 上面那条判假',
+    !/addRibbonIcon\('music', '打开爱记谱'/.test(
+      main931.replace("addRibbonIcon('music', '打开爱记谱'", "addRibbonIcon('piano', '打开发记谱')"),
+    ))
+  check('adj931 「打开 .jps 的方式」四档分档一行未改（`planEmbedTarget` 仍是老结果）',
+    planEmbedTarget('current', true).kind === 'replace-source' &&
+      planEmbedTarget('current', true).detachSource === false &&
+      planEmbedTarget('tab', true).kind === 'new-tab' && planEmbedTarget('tab', true).detachSource === true &&
+      planEmbedTarget('right', true).kind === 'right-sidebar' && planEmbedTarget('right', true).detachSource === true,
+    `jpsViewType=${jpsViewType931 || '（没读到！）'} appViewType=${appViewType931 || '（没读到！）'}`)
 }
 
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。

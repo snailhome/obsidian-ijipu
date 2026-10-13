@@ -14,6 +14,7 @@ import { Notice, Platform, TextFileView, type TFile, type WorkspaceLeaf } from '
 import { formatJps } from '@ijipu/engine'
 import { mountScorePane, type ScorePaneHandle } from './scorePane'
 import { planJpsInitialView } from './embed/openPlan'
+import { jpsViewTitle } from './embed/viewTitle'
 import { DEFAULT_EMBED_OPEN_MODE } from './types'
 import type IJipuPlugin from './main'
 
@@ -178,6 +179,16 @@ export class IJipuFileView extends TextFileView {
    * 记**路径**而不是布尔值：换文件后要重新尝试进嵌入版。
    */
   private embedRouteFailedFor: string | null = null
+  /**
+   * adj931（用户要求 ④）：**「默认应用」档这一趟外开没走通**（宿主 API 拿不到 / 系统没关联程序 /
+   * 已在非桌面端）⇒ 本页签**退回完整谱面预览**（与 adj923「预览留作兜底」同一口径）。
+   *
+   * 为什么需要它：外开这一趟本来**不必**在本页签里先画一遍完整谱面（那正是用户报的"当前页签
+   * 会刷新"——谱面渲染要几十~几百毫秒，用户看到的是一次很重的重画）。现在先画一句轻提示、
+   * 同时把文件交出去；**只有交不出去时**才把完整预览补上。
+   * 记**路径**而不是布尔值：换文件后要重新尝试外开。
+   */
+  private externalRouteFailedFor: string | null = null
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -190,8 +201,17 @@ export class IJipuFileView extends TextFileView {
     return VIEW_TYPE_IJIPU
   }
 
+  /**
+   * adj931（用户要求 ①）：本视图承载的是**某一份具体的 `.jps`** ⇒ 页签名一律显示**文件名（含扩展名）**
+   * （`半山听雨.jps`），与嵌入版视图（`embed/appView.ts`）**共用**纯函数 `jpsViewTitle()`。
+   *
+   * 为什么改：左页签（本视图）就是用户截图里那个"正确的基准"，而它显示的正是**含扩展名**的文件名；
+   * 右边那个"爱记谱"错在嵌入版视图上（它是应用级视图，不绑文件）—— 两边现在同一口径。
+   * 顺带：宿主把 `getDisplayText()` 存进 `ViewState.title`（延迟视图用），于是**重启后恢复布局**时
+   * 页签名也不会退回应用名。
+   */
   getDisplayText(): string {
-    return this.file?.basename ?? 'jps'
+    return jpsViewTitle(this.file?.name, 'jps')
   }
 
   getIcon(): string {
@@ -390,7 +410,19 @@ export class IJipuFileView extends TextFileView {
          * 于是「当前页签」= 就地替换它（不关），其余方式 = 另开并把这个中间页签关掉——
          * 关不关由插件按模式统一决定（见 `openEmbedLeaf`），这里不再自己判断。
          */
-        await this.plugin.openIjipuFile(file, this.leaf)
+        const handled = await this.plugin.openIjipuFile(file, this.leaf)
+        /**
+         * adj931（用户要求 ④）：**「默认应用」档这一趟没走通**（宿主 API 拿不到 / 系统没关联程序）
+         * ⇒ 本页签退回**完整谱面预览**。
+         *
+         * 为什么在这里兜：为了"当前页签不刷新"（用户要求 ②），`render()` 在 `preview+external` 档
+         * 只画了一句轻提示、**没有**先画完整谱面 —— 所以失败时得把那份预览补上，
+         * 否则用户点开一个 `.jps` 只会看到一句提示 + 一个 Notice（adj923 的"预览留作兜底"就断了）。
+         */
+        if (!handled && this.externalRouteFailedFor !== file.path && this.file?.path === file.path) {
+          this.externalRouteFailedFor = file.path
+          this.render()
+        }
       })()
     }, 0)
   }
@@ -483,6 +515,35 @@ export class IJipuFileView extends TextFileView {
         text: '打开方式见「设置 → iJipu → 嵌入版 → 打开 .jps 的方式」；打不开时这里会自动退回谱面预览。',
       })
       this.routeToIjipu(this.file, true)
+      return
+    }
+
+    /**
+     * adj931（用户要求 ④）：**「默认应用」档也一律"先让位、不先画谱"**。
+     *
+     * 用户原话：「默认应用打开方式下，文件列表点击 jps 文件 / 嵌入块点击编辑，都能用外部应用打开
+     * jps 文件，**但文件列表点击 jps 文件打开时，当前页签会刷新**，这也不应该」。
+     *
+     * 真因就是这里：这一档过去在本页签里**先画一遍完整谱面**（`mountScorePane` ⇒ 解析 + 排版 + SVG），
+     * 然后才把文件交给系统默认程序、再把页签还给用户 ⇒ 用户看到的是一次很重的重画（= "刷新"）。
+     * 现在只画一句轻提示、立刻路由；**只有外开失败时**才回到下面的完整预览
+     * （`externalRouteFailedFor` 记着这个文件 ⇒ 下一次 `render()` 走兜底那条路，口径没变）。
+     */
+    const externalViable =
+      initialView === 'preview+external' &&
+      this.file !== null &&
+      !this.editing &&
+      this.externalRouteFailedFor !== this.file.path
+    if (externalViable && this.file) {
+      const bar = contentEl.createDiv({ cls: 'ijipu-file-bar' })
+      bar.createSpan({ cls: 'ijipu-page-label', text: this.file.name })
+      const hint = contentEl.createDiv({ cls: 'ijipu-web-hint' })
+      hint.createDiv({ text: `正在用系统默认应用打开「${this.file.name}」…` })
+      hint.createDiv({
+        cls: 'ijipu-web-hint-sub',
+        text: '「默认应用」会把文件交给系统里关联的程序（离开 Obsidian）；交不出去时这里会自动退回谱面预览。',
+      })
+      this.routeToIjipu(this.file)
       return
     }
 
@@ -603,12 +664,17 @@ export class IJipuFileView extends TextFileView {
     })
 
     /**
-     * adj923（用户要求 ②）：「打开方式 = **默认应用**」时，这个页签**留着预览**，同时把文件交给
-     * 系统默认程序（`defaultApp` 是"离开 Obsidian"，本站内没有嵌入版实例可给）。
+     * adj923（用户要求 ②）：「打开方式 = **默认应用**」时，把文件交给系统默认程序
+     * （`defaultApp` 是"离开 Obsidian"，本站内没有嵌入版实例可给）。
      *
      * 为什么预览留着而不是关掉页签：这一步是 Obsidian 因 `registerExtensions` 必然创建的页签，
      * 关掉它用户在本站内就什么都没有了；而系统程序是另一个进程、"多开"不成立 ⇒ 留着对用户有用。
      * 只对**同一个文件**路由一次（`embedRoutedFor` 守卫在 `routeToIjipu` 里，反复重画不会再拉起外部程序）。
+     *
+     * ⚠ **adj931（用户要求 ②④）改了触发时机**：正常路径在上面那句轻提示里就已经 `return` 并开始路由
+     * （先不画谱面，免得当前页签被重画一遍）；只有 `externalViable` 为假时才走到这里，
+     * 也就是"**外开失败过一次**（`externalRouteFailedFor`）⇒ 本页签已经是完整预览"，
+     * 或用户点了「编辑」把守卫重置了 ⇒ 再试一次外开。`routeToIjipu()` 自己带"同一文件只路由一次"的守卫。
      */
     if (initialView === 'preview+external' && this.file && !this.editing) {
       this.routeToIjipu(this.file)

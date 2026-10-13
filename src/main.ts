@@ -1404,16 +1404,18 @@ export default class IJipuPlugin extends Plugin {
    *
    * @param sourceLeaf 从 `.jps` 文件视图路由过来时传**它自己那个 leaf**——
    *   "当前页签"要的就地替换靠它，而不是靠猜（见 `openEmbedLeaf` 的说明）。
+   * @returns adj931：**这一趟到底有没有办成**（`false` = 什么都没发生：非桌面端 / 开关关着 /
+   *   外开失败 / 没有可用落点）。调用方据此决定要不要退回"谱面预览"兜底
+   *   —— 见 `fileView.ts` 的 `externalRouteFailedFor`（「默认应用」档失败时把完整预览补回来）。
    */
-  async openIjipuFile(file: TFile | null, sourceLeaf: WorkspaceLeaf | null = null): Promise<void> {
+  async openIjipuFile(file: TFile | null, sourceLeaf: WorkspaceLeaf | null = null): Promise<boolean> {
     const mode = this.settings.embedOpenMode ?? DEFAULT_EMBED_OPEN_MODE
     // adj727：判据收敛到纯函数（同一口径也用于"嵌入区工具栏要不要保留那枚链接"）
     if (embedEditLeavesObsidian(mode)) {
-      if (!file) return // 没指定文件时"默认应用"无从谈起（侧栏图标就是这种情况）
+      if (!file) return false // 没指定文件时"默认应用"无从谈起（侧栏图标就是这种情况）
       if (!canOpenWithDefaultApp(this.app)) {
         new Notice('「默认应用」仅在桌面端可用；已改为在右侧栏打开')
-        await this.openEmbedLeaf(file, 'right', sourceLeaf)
-        return
+        return this.openEmbedLeaf(file, 'right', sourceLeaf)
       }
       /**
        * adj926（用户要求 ②）：「打开方式 = 默认应用，打开时也是同样的操作
@@ -1428,9 +1430,9 @@ export default class IJipuPlugin extends Plugin {
        */
       const opened = await openWithDefaultApp(this.app, file.path)
       if (opened && sourceLeaf) await this.restoreSourceLeaf(sourceLeaf)
-      return
+      return opened
     }
-    await this.openEmbedLeaf(file, mode, sourceLeaf)
+    return this.openEmbedLeaf(file, mode, sourceLeaf)
   }
 
   /**
@@ -1726,14 +1728,14 @@ export default class IJipuPlugin extends Plugin {
     file: TFile | null,
     mode: EmbedOpenMode = DEFAULT_EMBED_OPEN_MODE,
     sourceLeaf: WorkspaceLeaf | null = null,
-  ): Promise<void> {
+  ): Promise<boolean> {
     /**
      * adj741（手机端 P0）：嵌入版完整编辑器依赖本地 HTTP 服务 ⇒ **只在桌面端可用**。
      * 手机端给一句明确提示后返回（而不是让 `setViewState` 指向一个没注册的视图类型）。
      */
     if (!Platform.isDesktopApp) {
       new Notice('完整编辑器（嵌入版 iJipu）仅桌面端可用；手机端请直接看谱面预览与试听。')
-      return
+      return false
     }
     /**
      * adj776b（上一条用户报障的同族缺口）：**开关关着时任何入口都不该开出一个"死页签"**。
@@ -1748,7 +1750,7 @@ export default class IJipuPlugin extends Plugin {
           '要使用完整编辑器：设置 → iJipu → 嵌入版 → 打开该开关。',
         6000,
       )
-      return
+      return false
     }
     const { workspace } = this.app
     /**
@@ -1776,7 +1778,7 @@ export default class IJipuPlugin extends Plugin {
       //    ⚠ 不能用 `getLeaf(false)`：它的语义是"返回一个**可导航的既有 leaf**"，
       //      当 iJipu 已占着右栏 leaf 时它会**优先返回那个**（用户实测踩到）。
       target = sourceLeaf ?? workspace.getMostRecentLeaf(workspace.rootSplit) ?? workspace.getLeaf(false)
-      if (!sourceLeaf && !target) return
+      if (!sourceLeaf && !target) return false
     } else if (plan.kind === 'right-sidebar') {
       /**
        * adj923（用户要求 ①）：**右栏已经有嵌入版实例就复用它**，不再每次新建一个。
@@ -1810,18 +1812,42 @@ export default class IJipuPlugin extends Plugin {
     } else {
       target = workspace.getLeaf('tab')
     }
-    if (!target) return
+    if (!target) return false
+
+    const isSameLeaf = sourceLeaf !== null && target === sourceLeaf
 
     /**
-     * 切到目标 leaf 并**直接驱动视图**打开文件。
+     * adj931（用户要求 ②）：**"把来源页签还回去"要越早越好 —— 现在就发出去**。
+     *
+     * 用户原话：「打开 jps 文件时，**不管是哪种方式，都不要刷新当前页签的内容**」。
+     *
+     * ## 为什么要提前
+     *
+     * 点文件管理器里的 `.jps`，宿主**已经**把用户当前页签就地换成了 `.jps` 文件视图
+     * （`getLeaf(false).openFile()`，见 `embed/openPlan.ts` 里 `planSourceLeafDisposal` 的 asar 证据）
+     * —— 这个替换**拦不住**（没有任何插件可用的前置钩子），我们能做的只有"尽快还回去"。
+     * 而旧写法把还原排在**最后**：要等目标页签建好、`setViewState` 建出嵌入版视图、
+     * `revealLeaf`、`view.openFile()` 里还 `await frameReady`（等 iframe 起来）……
+     * 那几百毫秒里用户看到的就是"当前页签被换成了 `.jps` 占位页签" ⇒ 他说的"当前页签被刷新"。
+     *
+     * 现在：**选好落点就把这一步发出去**（`restoreSourceLeaf` 是异步的，这里不 await），
+     * 随后才去建目标页签/加载 iframe；末尾再 `await` 它（右栏档要等还原完才能把活动页签还给来源页签）。
+     * 这样"还回去"与"打开嵌入版"**并行**，用户几乎看不到中间那一帧。
+     *
+     * ⚠ 安全性：`history.back()` 只换视图、**不带 `active`**（asar 核对：`getViewState()` 里没有
+     * `active` 字段）⇒ 提前发出去不会抢活动页签，也不会影响下面选定的落点。
+     */
+    const restoring: Promise<'back' | 'detach'> | null =
+      plan.detachSource && !isSameLeaf && sourceLeaf ? this.restoreSourceLeaf(sourceLeaf) : null
+
+    /**
+     * 切到目标 leaf 并**直接驱动视图**打开文件（下面 `adj905z` 那段说的是"进历史"这一步）。
      *
      * 早先的做法是把路径塞进 `pendingOpenPaths` 并靠 `ViewState.state` 里的令牌让
      * `onOpen()` 去取——但那依赖"`setViewState()` 会重建视图"这个不成立的假设：
      * **复用同一个 leaf 时 Obsidian 不会重建视图**，`onOpen` 不再跑 ⇒ 令牌没人读 ⇒
      * 表现为"只展开了右栏/切了页签，应用里没打开文件"（用户实测）。
-     */
-    const isSameLeaf = sourceLeaf !== null && target === sourceLeaf
-    /**
+     *
      * adj905z（**用户实测**：「这个操作没有进操作历史 ⇒ **无法通过回退返回到刚刚的笔记中**」）：
      *
      * 「当前页签」模式（以及从**嵌入块**点「编辑」时的落点）是把**当前那个 leaf 换成嵌入版视图** ——
@@ -1853,11 +1879,12 @@ export default class IJipuPlugin extends Plugin {
       }
     }
     /**
-     * adj926（用户要求 ①③）：**收尾"来源页签"** —— 从 `detach()` 改为 `restoreSourceLeaf()`。
+     * adj926（用户要求 ①③）+ adj931（用户要求 ②）：**"来源页签"是还原、不是关闭**。
      *
      * 用户原话：①「打开方式=**右侧栏**，在点击 jps 打开时，**不要打开一个新标签页**，
      * 即**当前的打开状态不要变**」；③「打开方式=**新的页签**，现在还是**在当前页签里打开** ✗，
-     * 应该在**新的页签**打开嵌入应用」。
+     * 应该在**新的页签**打开嵌入应用」；补充：「打开 jps 文件时，不管是哪种方式，
+     * **都不要刷新当前页签的内容**」。
      *
      * 真因（在 `obsidian.asar` 里核对过，见 `embed/openPlan.ts` 的 `planSourceLeafDisposal`）：
      * 点文件管理器里的 `.jps` 是**就地换掉用户当前页签的视图**（那段 `openFile` 的语义），
@@ -1867,9 +1894,12 @@ export default class IJipuPlugin extends Plugin {
      *  · 「新的页签」档更隐蔽：新 leaf 插在当前页签**紧后面**、再把当前页签关掉 ⇒
      *    页签栏数量位置都没变 ⇒ 用户看到的就是"还是在当前页签里打开"。
      * ⇒ 现在**不关**，让这个 leaf 回到上一份视图（Obsidian 自己的「← 后退」同一套）。
+     *
+     * ⚠ adj931：这一步**已经在上面（动目标页签之前）发出去了**（`restoring`），这里只是等它落地
+     * —— 详见 `restoring` 那里的说明（越早还原，用户越看不到"当前页签被刷新"）。
      */
-    if (plan.detachSource && !isSameLeaf && sourceLeaf) {
-      const disposal = await this.restoreSourceLeaf(sourceLeaf)
+    if (restoring) {
+      const disposal = await restoring
       /**
        * 「右侧栏」档是"在旁边**揭开**那个实例"：`revealLeaf(target)` 会把右栏那个 leaf 变成活动
        * 页签（`focusLeaf` + `setViewState({active:true})` 都会 `setActiveLeaf`）⇒
@@ -1877,7 +1907,7 @@ export default class IJipuPlugin extends Plugin {
        * 所以还原成功后**把活动页签还给来源页签**（桌面端 `focusLeaf` 不会收折侧栏，
        * 只有手机端才会 —— 而这条路本来就在 `Platform.isDesktopApp` 之后）。
        */
-      if (plan.kind === 'right-sidebar' && disposal === 'back') {
+      if (plan.kind === 'right-sidebar' && disposal === 'back' && sourceLeaf) {
         workspace.setActiveLeaf(sourceLeaf, { focus: true })
       }
     } else if (isSameLeaf) {
@@ -1889,6 +1919,7 @@ export default class IJipuPlugin extends Plugin {
      * `sweepToolbarsAfterNavigation()`）。放在**最后**：那时页签的增删/替换都已经落定。
      */
     this.sweepToolbarsAfterNavigation()
+    return true
   }
 
   /**
