@@ -1264,8 +1264,16 @@ export function layoutScore(
     sp: Spacing,
     slotStart: number,
     refPerBeat?: number,
-    /** adj421：本曲部只有这一行（单行曲部）——小节数 < align_min_bars 时按槽预分整行占宽 */
+    /**
+     * adj421：本曲部只有这一行（单行曲部）——小节数 < align_min_bars 时按槽预分整行占宽。
+     * adj925（用户裁定）：**单行曲部本身就是末行** ⇒ 它照样受 `align_min_bars` 判（阈值只对末行生效）。
+     */
     singleRowGroup = false,
+    /**
+     * adj925（用户裁定）：本行是**整份谱的最后一行** —— 只有末行才看 `align_min_bars` 阈值，
+     * 非末行一律两端对齐撑满（见下方 `stretch`）。
+     */
+    isLastRowOfScore = false,
     /** adj625：组内每个 seg 的全曲小节序号（见 `barOrdinalsOf`；不传 = 不画小节序号） */
     ord: (number | null)[] = [],
   ): number | undefined => {
@@ -1559,23 +1567,44 @@ export function layoutScore(
     // adj205：>3 小节一律撑满两端对齐（**含最后一行**——此前最后一行即使
     // 5 小节也不撑满，违反「≤3 才自然宽」规则）
     // adj297：阈值可配置——行小节数 < align_min_bars（默认 4）自然对齐，≥ 则撑满
+    // adj925（**用户裁定**）：`align_min_bars` **只对末行生效** ——
+    //   · **非末行** ⇒ **一律两端对齐（撑满）**，哪怕这一行只有 1 小节；
+    //   · **末行** ⇒ 才按阈值判：小节数 ≥ 该值撑满、< 该值自然对齐（行尾留白）。
+    // "末行" = ① `isLastRowOfScore`（整份谱最后一个排版单元的最后一行），或
+    //          ② `singleRowGroup`（**本曲部只有一行** —— 用户追加裁定「单行曲部本身也是末行呀」）
+    //          ⇒ ②把 `adj421` 的"按阈值预分槽"（下面 `singleRowGroup && !stretch` 那一段）
+    //            自动收在"末行"口径里，那段代码一个字没改。
     // adj199：未撑满行前面有曲部（refPerBeat 提供）时，按小节线对齐——
     // 每拍宽直接取参考行平均每拍宽（不加 BPW_NATURAL 下限：撑满行每拍宽可小于自然宽，
     // 抬升会破坏小节线对齐），使各小节宽与前面行一致（纵向小节线对齐）
     const barCount = row.end - row.start - leadingEmpty
-    const stretch = barCount >= config.align_min_bars
+    const isFinalRow = isLastRowOfScore || singleRowGroup
+    const stretch = !isFinalRow || barCount >= config.align_min_bars
     // adj211：行末以 ||（终止线）结束且 ≤3 小节时，不参与前面行的小节线对齐
     // （refPerBeat）——终止线行音乐已结束，无需与其他行纵向对齐小节线，按自然宽排布
     const endsByTerminal = segs[row.end - 1]?.bar?.type === '||'
+    /** 本行"每拍宽"的可分配预算（与下面 `singleRulePerBeats` 同一个入参口径） */
+    const beatBudget = availW - pads - noteGap - bracketPadTotal
+    /**
+     * adj925（**越界是硬约束** —— 与 `adj601` 在多声部那一侧的取舍同一口径，也与上面空间优先
+     * `adj355` 的闸门对称）："按参考行每拍宽对齐"（adj199）**只会加宽**；本轮口径把非末行一律撑满后，
+     * 参考行的每拍宽变大 ⇒ "本行拍数比上一行多"时会把整行推出右界。
+     * 故先试算 `参考每拍宽 × 本行拍数`：超过预算就**放弃对齐**、退回自然宽（`singleRulePerBeats(..., false)`），
+     * 而不是硬按参考宽画到纸外。
+     */
+    const refFits = refPerBeat !== undefined && refPerBeat * beatsInfo.length <= beatBudget + 0.01
     const perBeats =
-      !stretch && refPerBeat !== undefined && !endsByTerminal
+      !stretch && refPerBeat !== undefined && !endsByTerminal && refFits
         ? beatsInfo.map(() => refPerBeat)
-        : singleRulePerBeats(beatsInfo, availW - pads - noteGap - bracketPadTotal, m.noteSize, stretch)
+        : singleRulePerBeats(beatsInfo, beatBudget, m.noteSize, stretch)
 
     // adj421（用户规则，与空间优先同规则）：**单行曲部**且小节数 < align_min_bars 时，
     // 整行占宽按 align_min_bars 个小节预分（槽宽 = availW / align_min_bars），
     // 每小节领一个槽、槽内按拍宽比例摊开；若某小节本体（各拍宽 + 拍间距）已超过槽内容宽，
     // 则该小节保持自然宽（不压缩、允许越出槽）。行首空小节（多声部填充）不参与。
+    // adj925（用户裁定）：门上的 `!stretch` 现在蕴含"**这一行就是末行**"（非末行一律撑满，
+    // `stretch` 恒真）—— 而"单行曲部本身就是末行"（用户原话）⇒ 本规则照旧对它生效，
+    // 与新口径（阈值只对末行生效）自洽，**本段一个字没改**。
     if (singleRowGroup && !stretch && leadingEmpty === 0 && barCount >= 1) {
       const slotOuter = availW / config.align_min_bars
       for (let b = row.start; b < row.end; b++) {
@@ -1900,6 +1929,10 @@ export function layoutScore(
    * `align_min_bars` 个小节**预分槽**（槽宽 = availW / align_min_bars）：每小节领一个槽，槽内音符按
    * 空间优先摊开；某小节「本体宽 + 小节线占位」超过槽宽时保持自然宽（不压缩、允许越出槽）。
    * 多行曲部不适用（末行仍按 adj199/adj355 对齐前面行）。详见 docs/SPACE-LAYOUT.md §1.1b。
+   *
+   * adj925（用户裁定）：本规则的生效门是 `singleRowGroup && !stretch`，而 `stretch` 现在由
+   * "**只有末行才看阈值**"决定（见函数内 `stretch`）⇒ **单行曲部本身就是末行**（用户原话），
+   * 所以这条规则照旧对该曲部生效、与 adj925 新口径自洽，代码一个字没改。
    */
   const placeMusicRowSpace = (
     segs: BarSeg[],
@@ -1912,8 +1945,16 @@ export function layoutScore(
     sp: Spacing,
     slotStart: number,
     refRelMeasureW?: (number | undefined)[],
-    /** adj421：本曲部只有这一行（单行曲部）——小节数 < align_min_bars 时按槽预分整行占宽 */
+    /**
+     * adj421：本曲部只有这一行（单行曲部）——小节数 < align_min_bars 时按槽预分整行占宽。
+     * adj925（用户裁定）：**单行曲部本身就是末行** ⇒ 它照样受 `align_min_bars` 判（阈值只对末行生效）。
+     */
     singleRowGroup = false,
+    /**
+     * adj925（用户裁定）：本行是**整份谱的最后一行** —— 只有末行才看 `align_min_bars` 阈值，
+     * 非末行一律两端对齐撑满（见下方 `stretch`）。
+     */
+    isLastRowOfScore = false,
     /** adj625：组内每个 seg 的全曲小节序号（见 `barOrdinalsOf`；不传 = 不画小节序号） */
     ord: (number | null)[] = [],
   ): number[] | undefined => {
@@ -2118,8 +2159,13 @@ export function layoutScore(
     // adjNN：空间优先与时间优先同步——行小节数 < align_min_bars 时自然宽（不撑满、不钳制末线）。
     // 原实现无论行小节数多少都撑满（W=全部剩余宽），违反「两端对齐最小小节数」；此处与多声部
     // 空间优先（avStretch=0）一致：stretch=false 时 W=0，音符按自然本体宽排布、行尾留白。
+    // adj925（用户裁定，与 `placeMusicRow` 同一口径）：**只有末行才看阈值** ——
+    // 非末行一律撑满；末行才 `barCount >= align_min_bars` 判。"末行"= `isLastRowOfScore` 或
+    // `singleRowGroup`（单行曲部本身就是末行）⇒ `adj421` 的预分槽（下面 `singleRowGroup && !stretch`）
+    // 自动只在末行生效。
     const barCount = row.end - row.start - leadingEmpty
-    const stretch = barCount >= config.align_min_bars
+    const isFinalRow = isLastRowOfScore || singleRowGroup
+    const stretch = !isFinalRow || barCount >= config.align_min_bars
     /**
      * adj663/adj664（用户要求「末段的 `)` 再宽松一点」＋「**小节线前的音符**都有可能有这个问题，
      * 需要合理考虑」）：**替谱段在行末收尾时，给"右括号 + 间距"预留行宽**。
@@ -2166,6 +2212,8 @@ export function layoutScore(
      * 每小节领一个槽、槽内音符按空间优先摊开（extraWByBar 按时值比例分配）；
      * 若某小节「本体宽 + 小节线占位」已超过槽宽，则该小节**保持自然宽**（不压缩、允许越出槽）。
      * 行首空小节（多声部填充）不参与，沿用既有对齐规则。
+     * adj925（用户裁定）：门上的 `!stretch` 现在蕴含"**这一行就是末行**"（非末行一律撑满 ⇒ `stretch` 恒真），
+     * 而"单行曲部本身就是末行"（用户原话）⇒ 本规则照旧生效、与新口径自洽，**本段一个字没改**。
      */
     const slotOuter =
       singleRowGroup && !stretch && leadingEmpty === 0 && barCount >= 1
@@ -2189,10 +2237,28 @@ export function layoutScore(
         for (let b = row.start; b < row.end; b++) {
           extraWByBar[b] = Math.max(0, slotOuter - (segNatW[b] + barOuter[b]))
         }
-      } else {
+      } else if (refRelMeasureW) {
+        /**
+         * adj925（**越界是硬约束** —— 与 `adj601` 在多声部那一侧显式做过的取舍**同一口径**）：
+         * "对齐上一行对应小节"（adj355）**只能加宽、不会收窄** ⇒ 当"上一行小节少、本行小节多"时，
+         * 逐小节对齐会把整行推到页面右界之外。本轮口径把**非末行一律撑满**之后，上一行的每小节宽变大，
+         * 这件事立刻变成真问题：实测（`Q: <40 个十六分音符> | <16 个> | <16 个> |`，阈值 4）
+         * 上一行被撑满到 `544.80`，本行两小节的末线落到 `x=678.00`，而**页内容右界只有 545.28**
+         * （纸宽 595.28）⇒ 内容画到纸外 **132.72px**；旧口径下同一谱是 `512.60`（放得下、不越界）。
+         * 故先**整体试算**一遍 `Σ max(本行自然宽, 上一行对应小节宽) + 非时值占位`：
+         * 超过本行可用宽（`rowAvailW`）就**整体放弃对齐**、退回自然宽
+         * （对齐是"尽量"，越界是硬约束）。
+         */
+        let alignedTotal = nonDurPad
         for (let b = row.start; b < row.end; b++) {
-          const refW = refRelMeasureW?.[b - row.start]
-          if (refW !== undefined && refW > segNatW[b]) extraWByBar[b] = refW - segNatW[b]
+          const refW = refRelMeasureW[b - row.start]
+          alignedTotal += refW !== undefined ? Math.max(segNatW[b], refW) : segNatW[b]
+        }
+        if (alignedTotal <= rowAvailW + 0.01) {
+          for (let b = row.start; b < row.end; b++) {
+            const refW = refRelMeasureW[b - row.start]
+            if (refW !== undefined && refW > segNatW[b]) extraWByBar[b] = refW - segNatW[b]
+          }
         }
       }
     }
@@ -2493,8 +2559,12 @@ export function layoutScore(
     return measureContentW
   }
 
-  /** 处理一个单声部组 */
-  const placeGroup = (groupIndex: number, voice: number, tokens: MusicToken[], lyrics: LyricLine[], startBar = 1) => {
+  /**
+   * 处理一个单声部组。
+   * adj925（用户裁定）：`isLastGroup` = 本组是**整份谱最后一个排版单元**（其最后一行即"末行"）——
+   * 只有末行才看 `align_min_bars` 阈值，非末行一律两端对齐撑满。
+   */
+  const placeGroup = (groupIndex: number, voice: number, tokens: MusicToken[], lyrics: LyricLine[], startBar = 1, isLastGroup = false) => {
     const segs = splitBars(tokens)
     // adj625：本组每个 seg 的**全曲小节序号**（决定哪几个小节画方框序号）
     const ord = barOrdinalsOf(segs, startBar)
@@ -2580,13 +2650,20 @@ export function layoutScore(
       // 含 &zkh/&ykh 括号的行先行版回退时值优先（括号的空间优先占位后续再补）
       // adj286：空间优先已支持 &zkh/&ykh 括号占位，不再因括号回退时值优先
       const isSpace = config.noteSpaceLayout === 'space' && row.kind === 'bars'
-      // adj421：单行曲部（本曲部只有这一行）——小节数 < align_min_bars 时按槽预分整行占宽
+      // adj421：单行曲部（本曲部只有这一行）——小节数 < align_min_bars 时按槽预分整行占宽。
+      // adj925（用户裁定）：**单行曲部本身就是末行** ⇒ 与新口径（阈值只对末行生效）自洽：
+      // `placeMusicRow*` 里的 `stretch` 把 `singleRowGroup` 一并当"末行"，故 `adj421` 的
+      // `singleRowGroup && !stretch` 门自动只在"末行且小节数 < 阈值"时开。
       const singleRowGroup = rows.length === 1
+      // adj925（用户裁定）：**本行是不是"末行"** —— 末行才看 align_min_bars 阈值。
+      // 末行 = ① 本组是整份谱最后一个排版单元**且**这是它的最后一行；或
+      //        ② `singleRowGroup`（单行曲部本身就是末行 —— 用户原话），由 `stretch` 里一并认。
+      const isLastRow = isLastGroup && ri === rows.length - 1
       if (isSpace) {
-        const mws = placeMusicRowSpace(segs, row, groupIndex, voice, y, lyricMaps, geciSize, sp, rowSlots[ri], prevRowMeasW, singleRowGroup, ord)
+        const mws = placeMusicRowSpace(segs, row, groupIndex, voice, y, lyricMaps, geciSize, sp, rowSlots[ri], prevRowMeasW, singleRowGroup, isLastRow, ord)
         if (mws !== undefined) prevRowMeasW = mws
       } else {
-        const pb = placeMusicRow(segs, row, groupIndex, voice, y, lyricMaps, geciSize, sp, rowSlots[ri], refPerBeat, singleRowGroup, ord)
+        const pb = placeMusicRow(segs, row, groupIndex, voice, y, lyricMaps, geciSize, sp, rowSlots[ri], refPerBeat, singleRowGroup, isLastRow, ord)
         if (row.kind === 'bars' && pb !== undefined) refPerBeat = pb
       }
       y += rowH + segDown
@@ -2608,8 +2685,12 @@ export function layoutScore(
    */
   let lastMultiBarLineOff: readonly number[] | null = null
 
-  /** 多声部块：各声部按小节对齐纵向堆叠（块内小节等宽 + 时值等宽） */
-  const placeVoiceBlock = (unit: Unit, startBar = 1) => {
+  /**
+   * 多声部块：各声部按小节对齐纵向堆叠（块内小节等宽 + 时值等宽）。
+   * adj925（用户裁定）：`isLastBlock` = 本块就是**整份谱的最后一行** —— 只有它才看
+   * `align_min_bars` 阈值（`stretchBars`），非末行一律撑满。
+   */
+  const placeVoiceBlock = (unit: Unit, startBar = 1, isLastBlock = false) => {
     const geciSize = config.geci_size
     const sp = spacingFor(config, pageIndex)
     // adj275：多声部括号占位（括号/注释在页面有效范围、音符内容区右移）；每组占位在 parts 后按注释长度独立计算
@@ -2942,7 +3023,10 @@ export function layoutScore(
       // 令 lineX0末 = pageW - margin_right - halfW → ΣbarBar = (pageW - margin_right - halfW) - blockStartX - ΣgapSpaces - BAR
       // adj318：行小节数 < align_min_bars（与单声部 stretch 同步）→ 自然宽，不撑满、不钳制末线
       // （sBeat=0，avStretch=0，ΣbarBar=baseBarSum，lineX末 自然值 ≤ 钳制上界）
-      const stretchBars = numBars >= config.align_min_bars
+      // adj925（用户裁定，与单声部两处同一口径）：**只有末行才看阈值** ——
+      // `isLastBlock` = 本多声部块就是**整份谱最后一行**（多声部块一块即一行，没有"块内折行"）。
+      // 非末行 ⇒ 一律撑满；末行 ⇒ 才按 `numBars >= align_min_bars` 判。
+      const stretchBars = !isLastBlock || numBars >= config.align_min_bars
       const sumGapSpaces = gapSpaces.reduce((a, s) => a + s, 0)
       const halfBarW = barlineTotalW('|') / 2
       const targetEndBarX = pages[pageIndex].width - config.margin_right - halfBarW
@@ -2971,13 +3055,14 @@ export function layoutScore(
        * 单声部路径对同一情形是**等比压缩**（`allocatePerBeats` 的 `scale = avail / total`，
        * adj253 规则②"Σ≥avail ⇒ 等比压缩"）——多声部块缺的正是这一步，现在补齐、口径一致：
        * 压缩比同时作用于**拍本体宽与拍间距**，压缩后仍严格贴右边界（不越界、不留白）。
-       * ⚠ 只在 `stretchBars`（≥ `align_min_bars` 小节、即"撑满"行）时压缩：
+       * ⚠ 只在 `stretchBars`（**末行**且 `≥ align_min_bars` 小节、即"撑满"行）时压缩：
        * 少小节行按既有规则保持自然宽（行尾留白），与单声部 `!stretch` 分支口径相同。
+       * adj925：`stretchBars` 现在对**非末行恒真**（非末行一律撑满）⇒ 非末行的超宽也会走压缩。
        */
       const shrink = stretchBars && baseBarSum > targetBarSum && baseBarSum > 0 ? targetBarSum / baseBarSum : 1
       /**
        * adj601：**小节线对齐用的"下限宽"**——只对"自然对齐"（不撑满）的块生效：
-       * 撑满的块（≥ `align_min_bars` 小节）本来就按行宽拉伸，不参与。
+       * 撑满的块（**末行**且 ≥ `align_min_bars` 小节；adj925 起非末行恒撑满）本来就按行宽拉伸，不参与。
        * 先整体试算一遍 `Σ max(自然宽, 上一组对应小节宽)`：若合计超过本行可用宽（极端情形：
        * "这一个小节更宽、那一个更窄"互相错开），就**整体放弃对齐**、退回自然宽——
        * 对齐是"尽量"，越界是硬约束（与 adj593 同一取舍）。
@@ -3556,6 +3641,21 @@ export function layoutScore(
     }
   }
 
+  /**
+   * adj925（**用户裁定**）：**整份谱的最后一行**是哪个排版单元 —— 只有它才看 `align_min_bars` 阈值
+   * （非末行一律两端对齐撑满）。这里按"最后一个 `kind === 'unit'` 的事件"认：
+   *  · 单声部单元 ⇒ 该单元**最后一行**才是末行（`placeGroup` 里按 `ri === rows.length - 1` 认）；
+   *  · 多声部单元 ⇒ **一块即一行**（多声部块内部不折行）⇒ 整个块就是末行。
+   * 末尾的 `pagebreak` 不影响（那是"翻页"，不是内容）。
+   */
+  const lastUnit: Unit | null = (() => {
+    for (let i = events.length - 1; i >= 0; i--) {
+      const e = events[i]
+      if (e.kind === 'unit') return e.unit
+    }
+    return null
+  })()
+
   // ---- 按事件序列排版 ----
   for (const ev of events) {
     if (ev.kind === 'pagebreak') {
@@ -3567,11 +3667,13 @@ export function layoutScore(
       continue
     }
     const { unit } = ev
+    // adj925：本单元是不是"整份谱最后一行"所在的那个单元（见 `lastUnit` 的说明）
+    const isLastUnit = unit === lastUnit
     if (unit.multi) {
-      placeVoiceBlock(unit, startBarOfGroup.get(unit.groups[0]?.groupIndex ?? -1) ?? 1)
+      placeVoiceBlock(unit, startBarOfGroup.get(unit.groups[0]?.groupIndex ?? -1) ?? 1, isLastUnit)
     } else {
       for (const { groupIndex, group } of unit.groups) {
-        placeGroup(groupIndex, group.music.voice, group.music.tokens, group.lyrics, startBarOfGroup.get(groupIndex) ?? 1)
+        placeGroup(groupIndex, group.music.voice, group.music.tokens, group.lyrics, startBarOfGroup.get(groupIndex) ?? 1, isLastUnit)
       }
     }
   }
