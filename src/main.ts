@@ -20,7 +20,7 @@ import { DEFAULT_EMBED_CHANNEL, DEFAULT_EMBED_OPEN_MODE, DEFAULT_EXPORT_RANGE, D
 // adj912：「保存为 PNG / SVG」的**落点与文件名**全在这份纯函数里（`.jps` 同目录 + 主名，同名不覆盖就加序号）
 import { fileNameOf, uniqueNameIn } from './savePath'
 import { IJipuBridge } from './embed/bridge'
-import { embedEditLeavesObsidian, planEmbedTarget } from './embed/openPlan'
+import { embedEditLeavesObsidian, pickRightSidebarLeaf, planEmbedTarget } from './embed/openPlan'
 /**
  * adj741（用户决定：按 P0"一版多端"做，见任务 1）—— **嵌入版 iJipu 的本地服务必须按需加载**。
  *
@@ -1755,6 +1755,8 @@ export default class IJipuPlugin extends Plugin {
         ` ⇒ 动作=${plan.kind} detachSource=${plan.detachSource}`,
     )
     let target: WorkspaceLeaf | null
+    /** adj923（用户要求 ①）：本趟「右侧栏」是**复用**了已有实例，还是新建了一个（只用于下面那句日志） */
+    let rightReused = false
     if (plan.kind === 'replace-source') {
       // 「当前页签」：
       //  · 由文件视图路由而来 ⇒ 就地替换**它自己**那个 leaf（语义确定，最符合预期）；
@@ -1764,8 +1766,35 @@ export default class IJipuPlugin extends Plugin {
       target = sourceLeaf ?? workspace.getMostRecentLeaf(workspace.rootSplit) ?? workspace.getLeaf(false)
       if (!sourceLeaf && !target) return
     } else if (plan.kind === 'right-sidebar') {
-      target = workspace.getRightLeaf(false) ?? workspace.getLeaf('tab')
+      /**
+       * adj923（用户要求 ①）：**右栏已经有嵌入版实例就复用它**，不再每次新建一个。
+       *
+       * 用户原话：「插件里 jps 文件打开方式为**右侧栏**时，点编辑还是在右侧栏**新的页签**上打开，
+       * 而不是**使用同一个页签**打开，这个之前有要求，还未实现」。
+       *
+       * 真因：`getRightLeaf(false)` 在 `obsidian.asar` 里的实现（`getSideLeaf`）**每次都会
+       * `insertChild` 一个全新的 leaf** —— 它从来不是"取右栏那个"，所以每点一次就多一个页签。
+       * 现在先按类型找、再判"在不在右栏"（`leaf.getRoot() === workspace.rightSplit`，
+       * Obsidian 自己判侧栏用的就是这个），命中 ⇒ 复用（`revealLeaf` + 推文件），
+       * 没命中 ⇒ 才 `getRightLeaf(false)` 建第一个。判据抽在 `embed/openPlan.ts` 的
+       * `pickRightSidebarLeaf()` 里（可在冒烟里用假 workspace 真跑一遍）。
+       */
+      const picked = pickRightSidebarLeaf(
+        workspace.getLeavesOfType(VIEW_TYPE_IJIPU_APP),
+        workspace.rightSplit,
+        () => workspace.getRightLeaf(false) ?? workspace.getLeaf('tab'),
+      )
+      target = picked.leaf
+      rightReused = picked.reused
       workspace.rightSplit?.expand()
+      /**
+       * adj923：把"复用 / 新建"记进决策日志 —— 本机跑不了 Obsidian，"右栏到底有没有多开一个"
+       * 只能靠这条日志把运行时事实带回来（与上面那条同一个用途）。
+       */
+      console.info(
+        `[iJipu] 打开方式=right：右侧栏${rightReused ? '**复用**已有嵌入版页签' : '新建了一个嵌入版页签'}` +
+          `（现共有 ${workspace.getLeavesOfType(VIEW_TYPE_IJIPU_APP).length} 个嵌入版页签）`,
+      )
     } else {
       target = workspace.getLeaf('tab')
     }

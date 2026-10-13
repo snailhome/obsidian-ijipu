@@ -3,6 +3,9 @@
  *
  * 行为：
  *  - 打开 `xxx.jps`（含从 `[[xxx.jps]]` 链接点进来）→ 渲染为简谱，工具条含试听/显示模式/⚙ 排版
+ *    ⚠ adj923（用户 2026-10-13）起：**桌面端**点开时先按设置里的「打开方式」**直接进嵌入版 iJipu**
+ *    （本页签让位 / 被关掉，见 `render()` 与 `embed/openPlan.ts` 的 `planJpsInitialView`）；
+ *    手机端与笔记里的 `![[xx.jps]]` 内嵌**仍是**下面的轻量渲染（嵌入版只在桌面端注册）。
  *  - ⇄ 源码：可切到纯文本编辑（textarea，输入停 600ms 自动保存；也可 Ctrl+S 立即保存）
  *  - `![[xxx.jps]]` 嵌入：Obsidian 会把本视图嵌进笔记，自动切到紧凑形态（隐藏页数/编辑器）
  *  - 「⚙ 排版 → 保存到谱面」直接改写文件内容（`# jps-config` 行），与 iJipu 行为一致
@@ -10,6 +13,8 @@
 import { Notice, Platform, TextFileView, type TFile, type WorkspaceLeaf } from 'obsidian'
 import { formatJps } from '@ijipu/engine'
 import { mountScorePane, type ScorePaneHandle } from './scorePane'
+import { planJpsInitialView } from './embed/openPlan'
+import { DEFAULT_EMBED_OPEN_MODE } from './types'
 import type IJipuPlugin from './main'
 
 /**
@@ -164,6 +169,15 @@ export class IJipuFileView extends TextFileView {
    * 但**换文件**时必须重新路由（记路径而不是布尔值，就是为了这个）。
    */
   private embedRoutedFor: string | null = null
+  /**
+   * adj923（用户要求 ②）：**"嵌入版不可用 ⇒ 退回轻量预览"的那个文件路径**。
+   *
+   * 桌面端点 `.jps` 现在直接按「打开方式」进嵌入版（不再先给预览）；但本地服务**可能起不来**
+   * （端口被占 / 动态导入失败…）。那一步若失败，用户不该只剩一个写着"启动失败"的空页签——
+   * 这里记下路径 ⇒ `render()` 见到它就把**轻量预览**画出来（这正是用户交代的"预览留作兜底"）。
+   * 记**路径**而不是布尔值：换文件后要重新尝试进嵌入版。
+   */
+  private embedRouteFailedFor: string | null = null
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -324,8 +338,12 @@ export class IJipuFileView extends TextFileView {
    *
    * 本方法只对**同一个文件**执行一次（`embedRoutedFor` 记路径）：视图因保存/frontmatter
    * 变化重画时不该反复跳；但换文件时必须重新路由。
+   *
+   * @param needEmbed adj923（用户要求 ②）：本次路由**要靠嵌入版**（把本页签让位给嵌入版视图）。
+   *   此时先探一次"嵌入版能不能用"（`getEmbedUrl()`），**起不来就退回轻量预览**而不是留一个空白/报错页签
+   *   —— 用户交代的"预览留作兜底"就落在这里。默认 `false`（「编辑」那条老路径自己已经查过开关）。
    */
-  private routeToIjipu(file: TFile): void {
+  private routeToIjipu(file: TFile, needEmbed = false): void {
     if (this.embedRoutedFor === file.path) return
     this.embedRoutedFor = file.path
     /**
@@ -339,6 +357,27 @@ export class IJipuFileView extends TextFileView {
           await this.saveNow()
         } catch {
           /* 保存失败不阻塞打开 */
+        }
+        /**
+         * adj923（用户要求 ②）：**嵌入版不可用 ⇒ 兜底画轻量预览**。
+         *
+         * `getEmbedUrl()` 在"开关关着"与"服务起不来（端口被占 / 动态导入失败）"两种情况下
+         * 都会给出 `null`（失败时还会把原因记进 `lastEmbedError`，见 `main.ts`）。
+         * 这一步必须**在换视图之前**问：换过去之后本页签可能已被 detach（新页签/右栏档），
+         * 再想退回预览就没地方退了。
+         */
+        if (needEmbed) {
+          const url = await this.plugin.getEmbedUrl().catch(() => null)
+          if (!url) {
+            this.embedRouteFailedFor = file.path
+            this.render()
+            new Notice(
+              '嵌入版 iJipu 暂时不可用 ⇒ 已在 Obsidian 里显示谱面预览；' +
+                '原因见「设置 → iJipu → 诊断」页签的「嵌入版本地服务」（点一下即复制）。',
+              8000,
+            )
+            return
+          }
         }
         /**
          * ⚠ **把 `this.leaf` 交给插件**——这是"当前页签"能生效的关键。
@@ -360,11 +399,34 @@ export class IJipuFileView extends TextFileView {
    * adj773：原 `renderEmbedPlaceholder()`（把整页 `.jps` 直接换成"嵌入版 iJipu 的 iframe + 中转提示"）
    * **已删除** —— 用户要求"点击 `.jps` 一律先显示预览，PC 与手机端一致"。要用嵌入版编辑，
    * 点工具条最右的「编辑」即可（桌面端走 `plugin.openIjipuFile` ⇒ 独立的嵌入版页签）。
+   *
+   * ⚠ adj923（用户 2026-10-13 要求 ②）**推翻了 adj773 的"PC 也先给预览"**：桌面端点 `.jps`
+   * 现在按「打开方式」**直接进嵌入版**（手机端与 `![[xx.jps]]` 内嵌仍是轻量预览）。
+   * 但"另一个 renderEmbedPlaceholder"没有回来 —— 那种写法（本页签里自己塞 iframe）会造成
+   * **两个地方同时显示同一份谱**（本页签 + 目标页签），所以这里只画一句占位、随后把页签
+   * 交给插件的路由（见 `render()` 顶部与 `planJpsInitialView`）。
    */
 
   private render(): void {
     const { contentEl } = this
     const embedded = this.embedded
+    /**
+     * adj923（用户要求 ②）：**这次打开该长什么样**由纯函数决定（`planJpsInitialView`）——
+     * 桌面端按「打开方式」直进嵌入版；手机端 / 内嵌 / 开关关着 ⇒ 沿用原来的轻量预览。
+     * 抽成纯函数是为了能在冒烟里逐条断言这四个条件（含手机端与另三档"没变"）。
+     */
+    const initialView = planJpsInitialView({
+      mode: this.plugin.settings.embedOpenMode ?? DEFAULT_EMBED_OPEN_MODE,
+      isDesktop: Platform.isDesktopApp,
+      embedded,
+      embedEnabled: this.plugin.embedEnabled,
+    })
+    /** 嵌入版起不来过（`embedRouteFailedFor`）⇒ 不再重试，直接走兜底预览 */
+    const embedViable =
+      initialView === 'embed' &&
+      this.file !== null &&
+      !this.editing &&
+      this.embedRouteFailedFor !== this.file.path
     /**
      * adj744b：本视图重新渲染 ⇒ 那个页签**不再**是"纯文本源码态"（视图已切回谱面）
      * ⇒ 把中和 Markdown 着色的标记摘掉，免得影响以后在这个页签里打开的 markdown 笔记。
@@ -398,7 +460,31 @@ export class IJipuFileView extends TextFileView {
      * 现在**两端一致：一律先给原生预览**；要用嵌入版编辑就点工具条最右的「编辑」
      * （桌面端 `onEdit` ⇒ 嵌入版；手机端 ⇒ 宿主编辑器源码模式，分派见 `scorePane` 的编辑按钮）。
      * 设置项 `embedIjuipu` 仍生效：它决定「编辑」能不能走嵌入版（关掉即退回源码编辑）。
+     *
+     * ⚠ adj923（用户 2026-10-13 要求 ②）：**上面这条"PC 也先给预览"已被推翻** ——
+     * 「点击 ob 左侧的文件管理器里的 `.jps` 文件，对于 **PC 端**，建议还是**直接用嵌入版 iJipu 打开**，
+     * 而不是先预览 jps 文件再其它操作」。现在桌面端按「打开方式」直进嵌入版；
+     * **手机端与 `![[xx.jps]]` 内嵌一行没动**（仍是轻量预览）。分派见 `planJpsInitialView()`。
      */
+
+    /**
+     * adj923：**让位给嵌入版**（桌面端按打开方式路由）——
+     * 这里只画一句可读的占位：路由做完后本页签要么被换成嵌入版视图（当前页签档）、
+     * 要么被关掉（右栏/新页签档）。⚠ 不在这里塞 iframe：那会造成"两个地方同时显示同一份谱"。
+     * 占位也不能省：服务启动要时间，没有它用户会看到一片空白（adj775 那类"点了没反应"）。
+     */
+    if (embedViable && this.file) {
+      const bar = contentEl.createDiv({ cls: 'ijipu-file-bar' })
+      bar.createSpan({ cls: 'ijipu-page-label', text: this.file.name })
+      const hint = contentEl.createDiv({ cls: 'ijipu-web-hint' })
+      hint.createDiv({ text: `正在用嵌入版 iJipu 打开「${this.file.basename}」…` })
+      hint.createDiv({
+        cls: 'ijipu-web-hint-sub',
+        text: '打开方式见「设置 → iJipu → 嵌入版 → 打开 .jps 的方式」；打不开时这里会自动退回谱面预览。',
+      })
+      this.routeToIjipu(this.file, true)
+      return
+    }
 
     // —— 文件级工具条（嵌入形态只留标题）——
     const bar = contentEl.createDiv({ cls: 'ijipu-file-bar' })
@@ -515,6 +601,18 @@ export class IJipuFileView extends TextFileView {
       filePath: this.file?.path,
       beforeOpenExternal: () => this.saveNow(),
     })
+
+    /**
+     * adj923（用户要求 ②）：「打开方式 = **默认应用**」时，这个页签**留着预览**，同时把文件交给
+     * 系统默认程序（`defaultApp` 是"离开 Obsidian"，本站内没有嵌入版实例可给）。
+     *
+     * 为什么预览留着而不是关掉页签：这一步是 Obsidian 因 `registerExtensions` 必然创建的页签，
+     * 关掉它用户在本站内就什么都没有了；而系统程序是另一个进程、"多开"不成立 ⇒ 留着对用户有用。
+     * 只对**同一个文件**路由一次（`embedRoutedFor` 守卫在 `routeToIjipu` 里，反复重画不会再拉起外部程序）。
+     */
+    if (initialView === 'preview+external' && this.file && !this.editing) {
+      this.routeToIjipu(this.file)
+    }
   }
 
   /** 「排版 → 保存到谱面」：改写视图数据并落盘，随后重画（新配置立即生效） */

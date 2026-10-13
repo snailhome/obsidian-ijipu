@@ -67,7 +67,14 @@ import { jpsBlockRanges, zoomOfInfo, zoomWrittenInInfo } from '../src/jpsBlocks'
 import { computeGuideLines, cropRectFor, guideLimits, guidePlacement } from '../src/guides'
 // adj724b：「打开 .jps 的方式 → 开在哪里」是**纯函数**，冒烟直接跑它
 // （此前只能对 main.ts 做字符串匹配：脆，且注释里写同样的字都会误判）
-import { embedEditLeavesObsidian, planEmbedTarget } from '../src/embed/openPlan'
+// adj923：同一个模块里又加了"右栏复用"（`pickRightSidebarLeaf`）与"点 .jps 的初始形态"
+// （`planJpsInitialView`）两个纯函数 —— 都能在冒烟里**真跑**（见文件末尾的 adj923 区块）
+import {
+  embedEditLeavesObsidian,
+  pickRightSidebarLeaf,
+  planEmbedTarget,
+  planJpsInitialView,
+} from '../src/embed/openPlan'
 // 新建 JPS 文件（文件夹右键菜单 + 点击未解析链接 + 默认模板）
 import {
   NEW_JPS_BASE,
@@ -603,16 +610,37 @@ console.log('[3g] adj631 设置面板：多页签 / 收藏音色分类列表 / �
    */
   {
     const viewSrc = String(readFileSync('src/fileView.ts', 'utf8'))
-    check('adj724b/adj773 点 `.jps` 不再"中转进嵌入版"：原生预览直出；`routeToIjipu` 仅供「编辑」调用（仍交出本页签）',
-      /private routeToIjipu\(file: TFile\): void \{/.test(viewSrc) &&
+    /**
+     * ⚠ **adj923（用户 2026-10-13 要求 ②）：这条断言改守新口径** ——
+     *
+     * adj773 当时守的是「点 `.jps` 一律先给原生预览、只有点「编辑」才进嵌入版」，
+     * 用户现在明确要的是「**PC 端点文件管理器里的 `.jps` 直接用嵌入版打开**，而不是先预览」。
+     * 旧的"预览直出"判据因此**必须改**（不改就是"断言绿、行为已被推翻"的假绿）。
+     *
+     * 新口径下仍然承重的两件事没变：
+     *  ① 路由要把 `this.leaf` 交出去（「当前页签」靠它就地替换，不靠猜）；
+     *  ② **本视图不许自己塞 iframe**（`renderEmbedPlaceholder` 那套）—— 那会"两个地方同时显示同一份谱"；
+     *     初始形态一律交给纯函数 `planJpsInitialView()` 分派（见下面的 adj923 区块）。
+     */
+    check('adj923 点 `.jps` 的初始形态由纯函数分派（不再写死在视图里）；路由仍把本页签交出去、且不自己塞 iframe',
+      /private routeToIjipu\(file: TFile, needEmbed = false\): void \{/.test(viewSrc) &&
         // 关键：把 `this.leaf` 交出去 —— 「当前页签」靠它做就地替换，而不是靠猜
         /await this\.plugin\.openIjipuFile\(file, this\.leaf\)/.test(viewSrc) &&
         // 关页签的判断已收到插件的纯函数计划里（`plan.detachSource`），视图不再自己判断
         !/this\.leaf\.detach\(\)/.test(viewSrc) &&
         // 一个文件只路由一次（视图重画不该反复跳）；但「编辑」按钮每次都会先重置它 ⇒ 每次点都生效
         /if \(this\.embedRoutedFor === file\.path\) return/.test(viewSrc) &&
+        // adj923：初始形态由纯函数分派
+        /planJpsInitialView\(\{/.test(viewSrc) &&
         /**
-         * adj773：中转页（"正在打开…" + "用源码视图编辑"按钮）整块删除 —— 点文件不再跳嵌入版。
+         * adj923：**"嵌入版不可用 ⇒ 退回轻量预览"必须在换视图之前问** ——
+         * 换过去之后本页签可能已被 detach（右栏/新页签档），再想退回预览就没地方退了。
+         */
+        /if \(needEmbed\) \{[\s\S]{0,260}?await this\.plugin\.getEmbedUrl\(\)\.catch\(\(\) => null\)[\s\S]{0,260}?this\.embedRouteFailedFor = file\.path/.test(
+          viewSrc,
+        ) &&
+        /**
+         * adj773 的"中转页"仍然不许回来（点文件就跳嵌入版 ≠ 在本视图里塞一个 iframe）。
          * ⚠ 负向判据先**剥注释**：文件里保留了一句"已删除 renderEmbedPlaceholder"的说明，
          * 直接搜整份源码会被自己的注释绊倒（仓库里记过的坑，见 E-2026-237 与 adj734/adj736）。
          */
@@ -2703,7 +2731,12 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
       embedEditLeavesObsidian('current') === false)
   check('adj727 判据只写一处：main.ts 与 embed.ts 都改用纯函数',
     /if \(embedEditLeavesObsidian\(mode\)\)/.test(main725) &&
-      /import \{ embedEditLeavesObsidian, planEmbedTarget \} from '\.\/embed\/openPlan'/.test(main725) &&
+      /**
+       * adj923：`main.ts` 的这条 import 又多了 `pickRightSidebarLeaf`（用户要求 ① 的复用判据）
+       * ⇒ 判据从"逐字列出两个名字"放宽成"**同时**从 `embed/openPlan` 引入这两个纯函数"。
+       * 守的仍然是同一件事：判据来自那个纯函数模块，而不是在 `main.ts` 里另写一遍字面量。
+       */
+      /import \{[^}]*embedEditLeavesObsidian[^}]*planEmbedTarget[^}]*\} from '\.\/embed\/openPlan'/.test(main725) &&
       /editLeavesObsidian: embedEditLeavesObsidian\(this\.plugin\.settings\.embedOpenMode \?\? DEFAULT_EMBED_OPEN_MODE\)/.test(embed725) &&
       /import \{ embedEditLeavesObsidian \} from '\.\/embed\/openPlan'/.test(embed725))
 
@@ -3077,12 +3110,19 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
     }
   }
 
-  check('adj741/adj773 `.jps` 文件视图**两端一致：一律先给原生预览**（不再在桌面端默认塞嵌入版 iframe）',
-    // adj773：桌面端"直接渲染嵌入版"那条分支已删除；手机端/桌面端走同一套原生预览
-    // ⚠ 负向判据剥注释（文件里保留了一句"已删除"的说明）
+  /**
+   * ⚠ adj923（用户 2026-10-13 要求 ②）：这里原来是 adj741/adj773 的
+   * 「`.jps` 文件视图**两端一致：一律先给原生预览**」——**该口径已被用户推翻**：
+   * PC 端点 `.jps` 要"直接用嵌入版打开"，手机端才继续"先预览"。
+   * 断言随之改守新口径：**分派交给纯函数**（`planJpsInitialView`），且视图里不许再有
+   * "在桌面端直接塞 iframe" 的那种分支（`renderEmbedPlaceholder` 仍是零残留）。
+   */
+  check('adj923 `.jps` 文件视图的初始形态走纯函数分派（PC 直进嵌入版 / 手机端仍预览），视图内不再塞 iframe',
+    // 负向判据剥注释（文件里保留了一句"已删除"的说明）
     !/renderEmbedPlaceholder/.test(fvSrc741.replace(/\/\*[\s\S]*?\*\//g, '')) &&
       !/if \(!Platform\.isMobile && !embedded && !this\.editing && this\.plugin\.embedEnabled/.test(fvSrc741) &&
-      // 要用嵌入版编辑 ⇒ 只有「编辑」这一条路（`onEdit` ⇒ 交给插件路由；每次点都生效）
+      /planJpsInitialView\(\{/.test(fvSrc741) &&
+      // 要用嵌入版编辑 ⇒ 「编辑」仍然是站内那条路（`onEdit` ⇒ 交给插件路由；每次点都生效）
       /onEdit: this\.file/.test(fvSrc741) &&
       /this\.embedRoutedFor = null/.test(fvSrc741))
 
@@ -3379,15 +3419,21 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
    * adj773/adj775 **文案与行为一致**：改了"点 `.jps` 先给预览、编辑才进嵌入版"之后，
    * 设置里那句"在库里打开 `.jps` 会用这个完整编辑器打开"就**不再成立** ⇒ 必须一起改掉。
    * （改行为不改文案是"用户按文案操作却得不到那个结果"的经典来源。）
+   *
+   * ⚠ adj923（用户 2026-10-13 要求 ②）：行为又变了一次 —— **桌面端点 `.jps` 直进完整编辑器**，
+   * 手机端仍"先预览、点「编辑」"。文案与这条断言一起改守新口径（同一套理由：文案必须跟行为一致）。
    */
   const readme775 = String(readFileSync('README.md', 'utf8'))
-  check('adj775 文案跟行为一致：设置与 README 都写"先给预览、点「编辑」进完整编辑器"',
-    /点库里打开 `\.jps` \*\*一律先给谱面预览\*\*/.test(settings775) &&
-      /点预览工具条最右的「编辑」即可/.test(settings775) &&
-      /点开先看\*\*谱面预览\*\*，点工具条最右的「编辑」用完整编辑器/.test(readme775) &&
-      // 负对照：那句过时文案不得再出现（它会让人以为"点文件就直接进编辑器"）。
+  check('adj923 文案跟行为一致：设置与 README 都写"桌面端点开就进完整编辑器、手机端仍先给预览"',
+    /桌面端\*\*点库里打开 `\.jps` 会直接进这个完整编辑器\*\*/.test(settings775) &&
+      /手机端仍是\*\*先给谱面预览\*\*/.test(settings775) &&
+      /桌面端点开就进完整编辑器/.test(readme775) &&
+      /手机端先看\*\*谱面预览\*\*/.test(readme775) &&
+      // 负对照①：那句过时文案不得再出现（它会让人以为"点文件只会先给预览"）。
       // ⚠ 必须先剥注释：我在这段设置文案旁边留了"原来写的是…"的说明，那句话里就有旧文案（第三次踩到）
-      !/在库里打开 `\.jps` 会用这个完整编辑器打开/.test(codeOf(settings775)))
+      !/在库里打开 `\.jps` 会用这个完整编辑器打开/.test(codeOf(settings775)) &&
+      // 负对照②：adj923 之前的另一句旧文案（"一律先给谱面预览"）也不得留在**代码**里
+      !/一律先给谱面预览/.test(codeOf(settings775)))
 }
 
 /**
@@ -6108,6 +6154,215 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
   )
   check('adj922 实测两个方向都查过：「诊断」页签没有混进别人的 item，「嵌入版」页签也没有反向混入（含"诊断 ↔ 说明"一对）',
     c922f, d922f)
+}
+
+/**
+ * ---- adj923（用户 2026-10-13 的两条要求）----
+ *
+ * ① 「插件里 jps 文件打开方式为**右侧栏**时，点编辑还是在右侧栏**新的页签**上打开，
+ *    而不是**使用同一个页签**打开，这个之前有要求，还未实现」；
+ * ② 「点击 ob 左侧的文件管理器里的 `.jps` 文件，对于 **PC 端**，建议还是**直接用嵌入版 iJipu 打开**，
+ *    而不是先预览 jps 文件再其它操作」。
+ *
+ * 用户随后确认的口径：PC 端点 `.jps` **仍然尊重设置里的「打开方式」**那一档；**手机端完全不变**
+ * （仍是"先预览、再其它操作"）；左侧 ribbon 图标不挪。
+ *
+ * ## 这一节怎么做到"真跑"，以及它**不能**证明什么
+ *
+ * 三条判据都尽量跑代码，而不是匹配源码字符串：
+ *  · ① 用一个**假 workspace**（只有"按类型找 leaf / 在右栏建一个 leaf"两件事）**真的跑**
+ *    `pickRightSidebarLeaf()`，并模拟"连点 3 次「编辑」"数**右栏里最终有几个嵌入版页签**；
+ *    负对照是**把旧写法也真的跑一遍**（`getRightLeaf(false)` —— `obsidian.asar` 的 `getSideLeaf`
+ *    每次 `insertChild` 一个全新 leaf ⇒ 旧写法下 3 次点击就是 3 个页签）。
+ *  · ② 直接跑 `planJpsInitialView()` 的全部条件组合（桌面四种方式 / 手机端 / 内嵌 / 开关关着）。
+ *  · 源码级只用来守"接线"（视图有没有调用它、另三档有没有被顺手改）。
+ *
+ * ⚠ **它证明不了"在真 Obsidian 里只剩一个实例"**：本机跑不了 Obsidian，夹具里的 workspace 是假的
+ *   （`getRoot() === rightSplit` 这条判据的**真值语义**是在 `obsidian.asar` 里逐行核对的：
+ *   `getSideLeaf` 每次新建 + Obsidian 自己用 `leaf.getRoot().side` 判侧栏）。
+ *   最终"点两下是不是只用一个页签""点 .jps 是不是真的直进嵌入版"要**用户重载插件亲眼看**。
+ */
+{
+  const main923 = String(readFileSync('src/main.ts', 'utf8'))
+  const fv923 = String(readFileSync('src/fileView.ts', 'utf8'))
+  const embedSrc923 = String(readFileSync('src/embed.ts', 'utf8'))
+
+  // ───────────────── ① 右栏：复用一个实例（假 workspace 真夹具） ─────────────────
+
+  /** 夹具里的 leaf：只要 `getRoot()`（真 `WorkspaceLeaf` 判"在不在右栏"用的就是这个） */
+  type SimLeaf = { id: string; getRoot: () => unknown }
+  /**
+   * 模拟"**连点 N 次**「编辑」（打开方式=右侧栏）"，返回**右栏里嵌入版页签的最终个数**。
+   *
+   * 跑的是本仓库真正承重的两个纯函数：`planEmbedTarget()`（该往哪开）+ `pickRightSidebarLeaf()`
+   * （右栏那个要不要复用）。`oldWay = true` = adj923 之前那一行
+   * `target = workspace.getRightLeaf(false) ?? workspace.getLeaf('tab')`（**每次都新建**）。
+   */
+  const simulateRightClicks = (clicks: number, oldWay: boolean): number => {
+    const rightSplit = { side: 'right' }
+    const all: SimLeaf[] = []
+    let seq = 0
+    const createRight = (): SimLeaf => {
+      const leaf: SimLeaf = { id: 'right#' + ++seq, getRoot: () => rightSplit }
+      all.push(leaf)
+      return leaf
+    }
+    for (let i = 0; i < clicks; i++) {
+      // 「编辑」/点文件都带着一个来源页签（就是那个 `.jps` 文件视图页签）
+      const plan = planEmbedTarget('right', true)
+      if (plan.kind !== 'right-sidebar') continue
+      if (oldWay) {
+        createRight()
+        continue
+      }
+      pickRightSidebarLeaf(all, rightSplit, createRight)
+    }
+    return all.filter((l) => l.getRoot() === rightSplit).length
+  }
+  const rightNew923 = simulateRightClicks(3, false)
+  const rightOld923 = simulateRightClicks(3, true)
+  /** 通过时也把量到的数字打出来（否则"只看到 ✓"、看不出夹具到底量到了什么） */
+  console.log(
+    `   adj923 ① 夹具实测（假 workspace + **真的** \`pickRightSidebarLeaf\`）：连点 3 次「编辑」⇒ ` +
+      `新写法右栏 ${rightNew923} 个嵌入版页签；旧写法（getRightLeaf(false)）${rightOld923} 个`,
+  )
+  check('adj923 ① 夹具实测：打开方式=右侧栏，连点 3 次「编辑」⇒ 右栏里**始终只有 1 个**嵌入版页签（复用）',
+    rightNew923 === 1,
+    `新写法 ${rightNew923} 个；旧写法 ${rightOld923} 个`)
+  check('adj923 ① 负对照（**旧写法真的跑一遍**）：`getRightLeaf(false)` 每次调用都新建 ⇒ 同样 3 次点击变成 3 个页签，上面那条判假',
+    rightOld923 === 3 && rightNew923 !== rightOld923,
+    `旧写法 ${rightOld923} 个（≠ 新写法 ${rightNew923} 个）`)
+
+  /** 直接量 `pickRightSidebarLeaf` 的返回：命中 ⇒ 返回**那一个**、且**一次都没调 create** */
+  {
+    const rightSplit = { side: 'right' }
+    let made = 0
+    const create = (): SimLeaf => ({ id: 'new#' + ++made, getRoot: () => rightSplit })
+    const existing: SimLeaf = { id: 'right-embed', getRoot: () => rightSplit }
+    const hit = pickRightSidebarLeaf([existing], rightSplit, create)
+    const miss = pickRightSidebarLeaf([], rightSplit, create)
+    check('adj923 ① `pickRightSidebarLeaf`：右栏已有 ⇒ 返回**它**且 `reused=true`、**不新建**；没有 ⇒ 建一个且 `reused=false`',
+      hit.leaf === existing && hit.reused === true && made === 1 /* 只有 miss 那一次建了 */ && miss.reused === false && miss.leaf !== null,
+      `命中 leaf=${String(hit.leaf?.id)} reused=${String(hit.reused)}｜新建次数=${made}`)
+    /**
+     * 反向条件：**主编辑区**里那个嵌入版页签不算"右栏那个"（`ensureSideLeaf` 只看类型、不看在哪一侧，
+     * 我们要的是"揭开右栏那个"）⇒ 这种情况应当**新建一个右栏的**，而不是把主编辑区那个当作右栏用。
+     */
+    const inMain: SimLeaf = { id: 'main-embed', getRoot: () => ({ side: undefined }) }
+    const other = pickRightSidebarLeaf([inMain], rightSplit, create)
+    check('adj923 ① 判据带"在不在右栏"：主编辑区那个嵌入版页签**不算**右栏（否则会把它当右栏用）⇒ 命中判假、另建一个',
+      other.reused === false && other.leaf !== inMain,
+      `other.reused=${String(other.reused)}`)
+  }
+
+  /** 源码级接线：右栏分支必须是"先找、再判、命中就复用"，`getRightLeaf` 只作为"没有才建"的回调 */
+  {
+    const judgeRight = (src: string): boolean => {
+      const seg = /else if \(plan\.kind === 'right-sidebar'\) \{([\s\S]{0,1600}?)\n    \} else \{/.exec(src)?.[1] ?? ''
+      const code = codeOf(seg)
+      return (
+        code.length > 0 &&
+        /getLeavesOfType\(VIEW_TYPE_IJIPU_APP\)/.test(code) &&
+        /pickRightSidebarLeaf\(/.test(code) &&
+        /workspace\.getRightLeaf\(false\)/.test(code) &&
+        // `getRightLeaf` 只能出现在 picker 的 create 回调里（**不能**直接当 target）
+        !/target = workspace\.getRightLeaf/.test(code)
+      )
+    }
+    const brokenRight = main923.replace(
+      /const picked = pickRightSidebarLeaf\([\s\S]*?\n      \)/,
+      "target = workspace.getRightLeaf(false) ?? workspace.getLeaf('tab')",
+    )
+    check('adj923 ① 源码：右栏分支先 `getLeavesOfType` 找、再判右栏、命中就复用（`getRightLeaf` 退化成"没有才建"的回调）',
+      judgeRight(main923))
+    check('adj923 ① 源码负对照：把该分支改回旧写法（`target = workspace.getRightLeaf(false) ?? …`）⇒ 上面那条判假',
+      brokenRight !== main923 && !judgeRight(brokenRight))
+    check('adj923 ① 决策日志带"复用 / 新建"（本机跑不了 Obsidian，右栏到底有没有多开只能靠这条日志）',
+      /右侧栏\$\{rightReused \? '\*\*复用\*\*已有嵌入版页签' : '新建了一个嵌入版页签'\}/.test(main923))
+  }
+
+  // ───────────────── ② PC 端点 `.jps` ⇒ 直进嵌入版 ─────────────────
+
+  const modeOf923 = ['right', 'tab', 'current', 'defaultApp'] as const
+  const at923 = (mode: (typeof modeOf923)[number], o: Partial<{ isDesktop: boolean; embedded: boolean; embedEnabled: boolean }> = {}) =>
+    planJpsInitialView({
+      mode,
+      isDesktop: o.isDesktop ?? true,
+      embedded: o.embedded ?? false,
+      embedEnabled: o.embedEnabled ?? true,
+    })
+  /** 通过时也把分派表打出来（一眼能看到"PC 直进嵌入版 / 手机端仍预览"） */
+  console.log(
+    '   adj923 ② planJpsInitialView 分派：桌面（无内嵌、开关开）' +
+      modeOf923.map((m) => `${m}=${at923(m)}`).join(' / ') +
+      '；手机 ' + modeOf923.map((m) => `${m}=${at923(m, { isDesktop: false })}`).join(' / ') +
+      '；内嵌 ' + at923('right', { embedded: true }) +
+      '；开关关 ' + at923('right', { embedEnabled: false }),
+  )
+  check('adj923 ② 桌面端点 `.jps` ⇒ **直进嵌入版**（右侧栏 / 新的页签 / 当前页签 三档都给 `embed`）',
+    at923('right') === 'embed' && at923('tab') === 'embed' && at923('current') === 'embed',
+    `right=${at923('right')} tab=${at923('tab')} current=${at923('current')}`)
+  check('adj923 ② 桌面端「默认应用」⇒ 本页签留着预览 + 把文件交给系统默认程序（本站内没有嵌入版实例可给）',
+    at923('defaultApp') === 'preview+external',
+    `defaultApp=${at923('defaultApp')}`)
+  check('adj923 ② 负对照（**旧写法**）：桌面端一律先给预览（恒返回 preview）⇒ 上面那条判假',
+    // adj773 的实现就是这个：不分平台、不分方式，一律 'preview'
+    ((): boolean => {
+      const oldPlan923 = (): string => 'preview'
+      return !(oldPlan923() === 'embed')
+    })())
+  check('adj923 ② 手机端**一行没变**：四种打开方式都仍是轻量预览（先预览、再其它操作）',
+    modeOf923.every((m) => at923(m, { isDesktop: false }) === 'preview'),
+    modeOf923.map((m) => `${m}=${at923(m, { isDesktop: false })}`).join(' '))
+  check('adj923 ② 笔记里 `![[xx.jps]]` 内嵌不变：桌面端也仍是轻量预览（笔记里塞完整编辑器既难看也没必要）',
+    at923('right', { embedded: true }) === 'preview' && at923('current', { embedded: true }) === 'preview')
+  check('adj923 ② 嵌入版开关关着 ⇒ 轻量预览兜底（不再开一个写着"未启用"的死页签）',
+    modeOf923.every((m) => at923(m, { embedEnabled: false }) === 'preview'))
+  check('adj923 ② 负对照：去掉 `embedded` 那一条（内嵌也走嵌入版）⇒ 上面"内嵌不变"那条判假',
+    ((): boolean => {
+      const broken923 = (o: { embedded: boolean; isDesktop: boolean; embedEnabled: boolean }): string =>
+        o.embedEnabled && o.isDesktop ? 'embed' : 'preview'
+      return broken923({ embedded: true, isDesktop: true, embedEnabled: true }) !== 'preview'
+    })())
+  check('adj923 ② 负对照：去掉平台那一条（手机端也走嵌入版）⇒ 上面"手机端不变"那条判假',
+    ((): boolean => {
+      const broken923 = (): string => 'embed' // = 不看 isDesktop
+      return broken923() !== 'preview'
+    })())
+
+  /** 视图侧接线：桌面端那条路是"画占位 + 交给插件的路由"，**不是**在本视图里塞 iframe */
+  check('adj923 ② 视图侧：初始形态交给纯函数，`embed` 档走 `routeToIjipu(…, true)`（先探服务）、`preview+external` 档保留预览再路由',
+    /planJpsInitialView\(\{[\s\S]{0,320}?isDesktop: Platform\.isDesktopApp/.test(fv923) &&
+      /this\.routeToIjipu\(this\.file, true\)/.test(fv923) &&
+      /if \(initialView === 'preview\+external' && this\.file && !this\.editing\) \{[\s\S]{0,160}?this\.routeToIjipu\(this\.file\)/.test(fv923) &&
+      // 占位那句（服务启动要时间，没有它用户会看到一片空白）
+      /正在用嵌入版 iJipu 打开/.test(fv923))
+  check('adj923 ② 视图侧负对照：把"直进嵌入版"那句删掉（= 回到"一律先预览"）⇒ 上面那条判假',
+    !/this\.routeToIjipu\(this\.file, true\)/.test(fv923.replace("this.routeToIjipu(this.file, true)", "")))
+  check('adj923 ② 手机端那条路零改动：嵌入块的「编辑」仍按平台分派到 `openJpsForSourceEdit()`（手机端先预览、再编辑）',
+    /if \(Platform\.isMobile\) \{\n {12}void this\.plugin\.openJpsForSourceEdit\(file\)/.test(embedSrc923) &&
+      /完整编辑器（嵌入版 iJipu）仅桌面端可用/.test(main923))
+
+  // ───────────────── 另三档：一行未改 ─────────────────
+
+  const mainCode923 = codeOf(main923)
+  check('adj923 另三档一行未改：「当前页签」仍用**来源页签 / 主编辑区最近页签**，「新的页签」仍是 `getLeaf(\'tab\')`',
+    /target = sourceLeaf \?\? workspace\.getMostRecentLeaf\(workspace\.rootSplit\) \?\? workspace\.getLeaf\(false\)/.test(mainCode923) &&
+      /target = workspace\.getLeaf\('tab'\)/.test(mainCode923))
+  check('adj923 另三档负对照：把「当前页签」那条换成 `getLeaf(false)` ⇒ 上面那条判假（它真的在守那两句原文）',
+    !/target = sourceLeaf \?\? workspace\.getMostRecentLeaf\(workspace\.rootSplit\) \?\? workspace\.getLeaf\(false\)/.test(
+      mainCode923.replace(
+        'target = sourceLeaf ?? workspace.getMostRecentLeaf(workspace.rootSplit) ?? workspace.getLeaf(false)',
+        'target = workspace.getLeaf(false)',
+      ),
+    ))
+  check('adj923 另三档的"开在哪里"判据本身没动（纯函数 `planEmbedTarget` 的四方式 × 有/无来源页签仍是老结果）',
+    planEmbedTarget('current', true).kind === 'replace-source' &&
+      planEmbedTarget('current', true).detachSource === false &&
+      planEmbedTarget('tab', true).kind === 'new-tab' &&
+      planEmbedTarget('tab', true).detachSource === true &&
+      planEmbedTarget('right', true).kind === 'right-sidebar' &&
+      planEmbedTarget('right', true).detachSource === true)
 }
 
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。

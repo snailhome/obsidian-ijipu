@@ -76,3 +76,89 @@ export function planEmbedTarget(mode: EmbedOpenModeLike, hasSourceLeaf: boolean)
 export function embedEditLeavesObsidian(mode: EmbedOpenModeLike): boolean {
   return mode === 'defaultApp'
 }
+
+/**
+ * adj923（用户要求 ①）：**「右侧栏」档只用一个嵌入版实例 —— 已经在右栏的那个要复用，绝不新建第二个**。
+ *
+ * ## 真因（在 `obsidian.asar` 里逐行核对过，不是猜的）
+ *
+ * 原写法是 `target = workspace.getRightLeaf(false) ?? workspace.getLeaf('tab')`。
+ * `getRightLeaf(split)` 的实现是 `getSideLeaf(this.rightSplit, split)`，而 `getSideLeaf` 干的是：
+ *   · `split` 为真 ⇒ 先 `insertChild` 一个 `WorkspaceTabs`、再往里 `insertChild` 一个新 leaf；
+ *   · `split` 为假 ⇒ 取 `rightSplit.children[0]`，**照样 `insertChild(-1, new WorkspaceLeaf(…))`**。
+ * ⇒ **它每次调用都新建一个 leaf**，从不返回"已经在右栏的那个"。
+ * 用户看到的正是这个：右栏已经有一个嵌入版实例，再点「编辑」⇒ 右栏又多一个页签
+ * （用户原话：「点编辑还是在右侧栏新的页签上打开，而不是使用同一个页签」）。
+ *
+ * Obsidian 自己处理同类需求用的是 `ensureSideLeaf(type, side, …)`，它第一步就是
+ * `c = this.getLeavesOfType(type); u = c.length === 0 ? getRightLeaf(o) : c[0]` ——
+ * **先找已存在的同类型 leaf，找不到才建**。这里照同一口径做，并补上"必须在右栏"这一条：
+ * `ensureSideLeaf` 只看类型、不看在哪一侧，而我们要的是"揭开右栏那个"，不能把主编辑区的实例当右栏用。
+ *
+ * ## 判据
+ *  · 命中 ⇒ 返回**它**、`reused = true`、**一次都不调 `create()`**；
+ *  · 没命中 ⇒ 调 `create()` 建一个、`reused = false`。
+ *
+ * `leaf.getRoot()` 对侧栏 leaf 返回的是**侧栏那个 split**（不是最外层 root）——
+ * `obsidian.asar` 里 Obsidian 自己就这么用（`getSideTooltipPlacement(){ var e = this.leaf.getRoot();
+ * return e.side ? … }`）⇒ `leaf.getRoot() === workspace.rightSplit` 就是"这个 leaf 在右侧栏里"的正判。
+ * （抽成纯函数是为了能在冒烟里用**假 workspace 真跑一遍**：量"到底新建了几个 leaf、复用了没有"。）
+ */
+export interface RightSidebarPick<L> {
+  leaf: L | null
+  /** 是否**复用**了已存在的实例（`false` = 这一次新建了一个） */
+  reused: boolean
+}
+
+export function pickRightSidebarLeaf<L extends { getRoot(): unknown }>(
+  existing: readonly L[],
+  rightSplit: unknown,
+  create: () => L | null,
+): RightSidebarPick<L> {
+  const found = existing.find((leaf) => leaf.getRoot() === rightSplit)
+  if (found) return { leaf: found, reused: true }
+  return { leaf: create(), reused: false }
+}
+
+/**
+ * adj923（用户要求 ②）：**桌面端点文件管理器里的 `.jps` ⇒ 直接按「打开方式」进嵌入版**
+ * （不再先落到插件自己的轻量预览）。
+ *
+ * ## 为什么这段也要是纯函数
+ *
+ * 它是"点一下文件，看到什么"的**唯一分派点**（`fileView.ts` 的 `render()`），而这里有三个
+ * **必须原样保住**的反向条件（用户明确交代"手机端完全不变""预览要留作兜底"）：
+ *  ① 笔记里的 `![[xx.jps]]` 内嵌 ⇒ 仍是轻量预览（笔记里塞一个完整编辑器既难看也没必要）；
+ *  ② 「使用嵌入版 iJipu（完整应用）」关着 ⇒ 轻量预览（否则用户会得到一个写着"未启用"的死页签）；
+ *  ③ **手机端 ⇒ 轻量预览**（嵌入版依赖本地 HTTP 服务，只在桌面端注册）；
+ * 剩下的桌面端才按设置里的「打开方式」分派。
+ *
+ * 返回值是**动作**而不是"位置"（与 `EmbedTargetKind` 同一姿势）：
+ *  · `'embed'`           ⇒ 本页签让位给嵌入版（画一句占位，随后按打开方式路由过去）；
+ *  · `'preview+external'`⇒ **默认应用**：本页签留着画轻量预览，同时把文件交给系统默认程序
+ *                          （系统程序不算"另一个嵌入版实例"，预览留着对用户有用）；
+ *  · `'preview'`         ⇒ 就画轻量预览（上面 ①②③ 三种情形）。
+ *
+ * ⚠ adj773 的旧口径（"PC 与手机端一律先给预览"）**已被用户 2026-10-13 的②推翻**：
+ * 桌面端不再先预览；手机端与 `![[xx.jps]]` 内嵌**一行没动**。
+ */
+export type JpsInitialView = 'preview' | 'embed' | 'preview+external'
+
+export interface JpsInitialViewInput {
+  /** 设置里的打开方式 */
+  mode: EmbedOpenModeLike
+  /** 是不是桌面端（`Platform.isDesktopApp`） */
+  isDesktop: boolean
+  /** 本次渲染是不是 `![[xx.jps]]` 的内嵌形态 */
+  embedded: boolean
+  /** 设置里「使用嵌入版 iJipu（完整应用）」开着吗 */
+  embedEnabled: boolean
+}
+
+export function planJpsInitialView(o: JpsInitialViewInput): JpsInitialView {
+  if (o.embedded) return 'preview'
+  if (!o.embedEnabled) return 'preview'
+  if (!o.isDesktop) return 'preview'
+  if (o.mode === 'defaultApp') return 'preview+external'
+  return 'embed'
+}
