@@ -991,9 +991,29 @@
   display: block;
   padding: 2px 0;
 }
-.ijipu-embed .ijipu-score {
-  margin: 0.2em 0;
-  padding: 0.2em;
+/**
+ * adj917：**嵌入块 / 代码块 与同上下文段落文字左对齐、同宽**
+ * （用户报「jps嵌入块与其它段落的对齐不一致，请调整嵌入块与其它段落的左对齐、宽度一致」）。
+ *
+ * 由来（真实 `app.css` + 用户库实测）：我们的容器是**块级盒**，而 `text-indent` 是"可继承、
+ * 但只作用于**行盒**"的属性 ⇒ 段落文字被缩进时我们的块**不动**。用户库里启用的片段
+ * `首行缩进.css`（`.markdown-preview-section p { text-indent: 2em }` / `.cm-line { text-indent: 2em }`）
+ * 把文字右移 2em（= 32px）⇒ 实测（视图宽 974）段落盒 `x=32 宽=895`、**文字首行 x=64**，
+ * 而我们的块 `x=32 宽=895` ⇒ 比文字**左出 32px、宽出 32px** ✗（正是用户看到的现象）。
+ *
+ * 这里把"同上下文段落文字的缩进"当**起始外边距**用：左缘与文字首行同线、右缘仍贴段落盒右缘，
+ * 宽度因此自动等于文字那一行的宽度 ⇒ 用户要的"左对齐、宽度一致"。
+ * 值由 `scorePane.ts` 读计算样式（`paraIndent.ts`）后用 `setCssProps` 写进 `--ijipu-para-indent`
+ * （**不写内联样式** —— 社区审核 `no-static-styles-assignment` 是 Error 级，闸门见冒烟 `adj799`）；
+ * **上下文没有缩进时不加 `.ijipu-para-indent` 这个类**（默认 0）⇒ 对其它主题/库零影响。
+ *
+ * ⚠ 这里原来是一条 **`.ijipu-embed .ijipu-score`**（**后代**选择器）—— 而 `.ijipu-score` 恰恰加在
+ * **同一个元素**上（`scorePane.ts` 的 `container.addClass('ijipu-score')`；`embed.ts` 的
+ * `claimContainer` / `mount` 加 `.ijipu-embed`）⇒ 那条规则**从来没命中过**，它写的
+ * `margin/padding: 0.2em` 也从来没生效（查本轮问题时差点被它带偏 ✗）⇒ 删除，换成下面这条真规则。
+ */
+.ijipu-para-indent {
+  margin-inline-start: var(--ijipu-para-indent, 0px);
 }
 /* 工具栏右侧的「打开谱面文件」（仅嵌入模式）：链接图标 + 谱面名。
    `margin-inline-start:auto` 把它推到工具栏这一行的右端；容器窄时只留图标。 */
