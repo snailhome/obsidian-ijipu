@@ -39,7 +39,10 @@ import { computeGuideLines, cropRectFor, guideLimits, guidePlacement, type CropR
 import { GUIDES_CHANGED, SETTINGS_CHANGED } from './main'
 import type IJipuPlugin from './main'
 // adj873：导出范围的**缺省值**只有一处定义（`types.ts`）——菜单打勾 / 设置页 / 解析都读它
-import { DEFAULT_EXPORT_RANGE } from './types'
+// adj873/adj912：**两个单一来源的缺省值**都从 `types.ts` 取（设置页 / 菜单 / 出口同源，不许各写一份字面量）
+import { DEFAULT_EXPORT_RANGE, DEFAULT_IMAGE_SCALE } from './types'
+// adj912：「保存为 PNG / SVG」的落点（`.jps` 同目录 + 主名；代码块退到承载笔记）是**纯函数**
+import { saveTargetOf } from './savePath'
 
 type ViewMode = 'page' | 'full' | 'score'
 const MODE_LABEL: Record<ViewMode, string> = { page: '整页', full: '满宽', score: '谱面' }
@@ -146,6 +149,18 @@ export type ScorePaneHost = {
    * （用户要求：手机端不出现）——点它用系统默认应用（`.jps` 关联的 iJipu 桌面版）打开去编辑。
    */
   filePath?: string
+  /**
+   * adj912（用户 2026-10-13 定稿）：**保存出口在代码块里的落点提示** —— 承载这个 ```jps 代码块的
+   * **笔记的库内路径**（如 `笔记/我的歌.md`）。
+   *
+   * 为什么只有代码块需要它：`.jps` 文件视图与 `![[x.jps]]` 嵌入都有"自己的文件"（`filePath`），
+   * 保存就落在那个 `.jps` 的目录、用它的主名；而**代码块没有自己的文件** —— 用户口径是
+   * "与那份谱同一目录 + 主名"，在代码块上的等价落法就是**与承载它的笔记同目录 + 笔记主名**。
+   *
+   * 与 `filePath` 一样是**路径字符串**，但用途不同（一个决定"打开谁"、一个决定"存到哪"）；
+   * 解析成落点是 `savePath.saveTargetOf(filePath, containerPath)` 的活，面板只负责**如实传值**。
+   */
+  containerPath?: string
   /**
    * 「应用打开」之前的**落盘钩子**：先把未保存的编辑写进文件，再交给外部应用。
    * 不提供就只在"已经落盘"的状态下打开（嵌入模式的写回是即时的，故嵌入可以不传）。
@@ -1716,6 +1731,12 @@ toolbar.dataset.ijipuPane = String(paneId)
         box: { x: number; y: number; w: number; h: number } | null
         mode: ViewMode
       }
+      /**
+       * adj912（用户 2026-10-13 定稿）：**保存出口的落点** —— `.jps` 文件视图 / 嵌入用那份 `.jps`
+       * （同目录 + 主名），代码块用**承载它的笔记**（同一手法）。解析在 `savePath.saveTargetOf` 里
+       * （纯函数、有断言），面板只把宿主给的两条路径如实传过去。
+       */
+      const saveTarget = saveTargetOf(host.filePath, host.containerPath)
       switch (id) {
         case 'settings':
           cfgBtn?.click()
@@ -1724,24 +1745,38 @@ toolbar.dataset.ijipuPane = String(paneId)
           fmtBtn?.click()
           return
         /**
-         * adj874（用户 2026-10-11 定稿）：`copy-image-*` **一律**走 `copyScoreImage`（PNG → 剪贴板），
-         * 不再按平台分派。
-         *
-         * ⚠ 这三项**只在桌面菜单里出现**（`buildScoreMenu` 在 `isMobile` 时不生成图片组）：
-         * 取图必须走**嵌入版 iJipu 应用**，而嵌入版**只在桌面注册**（`main.ts` 的
-         * `if (Platform.isDesktopApp) this.registerView(...)`；`embed.ts` 的 `getEmbedUrl` 在手机
-         * 直接 `return null`）⇒ 手机上点它必然失败，于是**手机端根本不暴露这个入口**。
-         * `copyScoreImage` 在手机上仍会失败（同一条嵌入版依赖），只是菜单不会再给到它
-         * （adj873 那条"手机端保存到谱面同目录"也要取图 ⇒ 同样必失败，已整条删除）。
+         * adj912（用户 2026-10-13 定稿）：**图片出口合成一项**「复制图片」—— 分辨率不再是三个写死的
+         * 菜单项，而是**「分辨率」组里选中的那条 L1 设置**（`settings.imageScale`，默认 2×）。
+         * 这仍然**只在桌面菜单里出现**：取图必须走**嵌入版 iJipu 应用**，而嵌入版**只在桌面注册**
+         * （`main.ts` 的 `if (Platform.isDesktopApp) this.registerView(...)`；`embed.ts` 的 `getEmbedUrl`
+         * 在手机直接 `return null`）⇒ 手机上点它必然失败，于是**手机端根本不暴露这个入口**
+         * （`buildScoreMenu` 里按 `ctx.isMobile` 过滤；用户裁定 ③ 把两个保存出口也一并隐藏）。
          */
-        case 'copy-image-1':
-          void plugin.copyScoreImage(source, 1, paneRange)
+        case 'copy-image':
+          void plugin.copyScoreImage(source, plugin.settings.imageScale ?? DEFAULT_IMAGE_SCALE, paneRange)
           return
-        case 'copy-image-2':
-          void plugin.copyScoreImage(source, 2, paneRange)
+        /**
+         * adj912：「保存为 PNG / 保存为 SVG」—— 与「复制图片 / 复制 SVG 文本」是**同一份实现**，
+         * 只有最后一步不同（写 vault 文件而不是剪贴板），所以这里不另写渲染逻辑，只转交（含落点）。
+         */
+        case 'save-png':
+          void plugin.saveScorePng(source, paneRange, saveTarget)
           return
-        case 'copy-image-4':
-          void plugin.copyScoreImage(source, 4, paneRange)
+        case 'save-svg':
+          void plugin.saveScoreSvg(source, paneRange, saveTarget)
+          return
+        /**
+         * adj912：「分辨率」组 = **改一条设置**（与「导出范围」那三项同一手法：菜单项 → `plugin.setXxx`），
+         * 因此菜单里点 1×/2×/4× 与在「设置 → iJipu → 说明」里改下拉是**同一个值**。
+         */
+        case 'scale-1':
+          plugin.setImageScale(1)
+          return
+        case 'scale-2':
+          plugin.setImageScale(2)
+          return
+        case 'scale-4':
+          plugin.setImageScale(4)
           return
         case 'copy-svg':
           void plugin.copyScoreSvg(source, paneRange)
@@ -1776,6 +1811,8 @@ toolbar.dataset.ijipuPane = String(paneId)
         // adj864：菜单里能改「导出范围」；"跟随视图"把当前显示模式写实（不点开也知道会按哪种口径）
         // adj873：缺省值读 `types.ts` 的 `DEFAULT_EXPORT_RANGE`（**一处定义**：设置页 / 解析 / 菜单同源）
         range: plugin.settings.exportRange ?? DEFAULT_EXPORT_RANGE,
+        // adj912：「分辨率」组同理 —— 当前值 + 缺省值都来自**一处**（设置 / `DEFAULT_IMAGE_SCALE`）
+        imageScale: plugin.settings.imageScale ?? DEFAULT_IMAGE_SCALE,
         paneModeLabel: MODE_LABEL[paneMode],
       })
       const menu = new Menu()

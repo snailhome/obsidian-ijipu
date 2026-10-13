@@ -16,9 +16,9 @@
  *   （工具条多一个/少一个/换位置 ⇒ 冒烟红灯，必须**明确**改这份契约而不是悄悄漂）。
  * · 工具条**不再包含** 设置 / 格式化 / 应用打开 / 打开谱面文件（它们是菜单项；见 `MENU_ONLY_ACTIONS`）。
  * · 移动端**没有**「在应用中打开」（嵌入版仅桌面可用，`embed.ts` 的视图注册也只在桌面）。
- * · 移动端**没有图片出口**（`copy-image-1/2/4` 整组不生成）：取图必须走嵌入版应用，而嵌入版只在桌面
- *   注册 ⇒ 手机上必失败；手机能用的只有「复制 SVG 文本 / 复制谱面源码」这类**走插件自己引擎**的出口
- *   （`adj874`，用户 2026-10-11 定稿；详见 `buildScoreMenu` 里那段注释）。
+ * · 移动端**没有图片出口**（`copy-image` / `save-png` / `save-svg` 都不生成）：取图必须走嵌入版应用，
+ *   而嵌入版只在桌面注册 ⇒ 手机上必失败；手机能用的只有「复制 SVG 文本 / 复制谱面源码」这类
+ *   **走插件自己引擎**的出口（`adj874` + `adj912`，用户 2026-10-13 定稿；详见 `buildScoreMenu` 里那段注释）。
  *
  * ## 移动端 Action Sheet 为什么不自己画
  * Obsidian 的 `Menu` 在手机上**本身就是底部弹出的大行高面板**——`obsidian.asar` 的 app.css 里有
@@ -27,9 +27,10 @@
  * 「移动端 = Action Sheet」，**不引入第二套渲染**（少一套就少一处漂移）。
  *
  * ## 依赖约束
- * 本模块**不依赖 obsidian / DOM**（只输出纯数据）⇒ 可被 `npm run smoke` 直接 import 逐项断言；
- * 真正的渲染（`new Menu()` / 事件绑定）留在 `scorePane.ts`。
+ * 本模块**不依赖 obsidian / DOM**（只输出纯数据；唯一的运行时依赖是引擎的 `dpiForScale`，也是纯函数）
+ * ⇒ 可被 `npm run smoke` 直接 import 逐项断言；真正的渲染（`new Menu()` / 事件绑定）留在 `scorePane.ts`。
  */
+import { dpiForScale } from '@ijipu/engine'
 
 /** 工具条上的 5 个槽位（顺序即渲染顺序；`scorePane.ts` 的 `dataset.slot` 必须按此出现） */
 export const SCORE_TOOLBAR_SLOTS = [
@@ -50,14 +51,21 @@ export type ScoreToolbarSlot = (typeof SCORE_TOOLBAR_SLOTS)[number]['id']
 export const MENU_ONLY_ACTIONS = [
   'settings',
   'format',
-  // adj864（T-5「复制」组）：图片出口（1× / **2×默认** / 4×）+ 复制 SVG 文本 + 复制谱面源码
-  // adj874：图片出口**只在桌面生成**（依赖嵌入版应用，而嵌入版只在桌面注册 ⇒ 手机端必失败）；
-  //   id 仍然留着：桌面菜单与 `scorePane.ts` 的路由表都按它们分派（手机端菜单里根本不出现这几项）
-  'copy-image-1',
-  'copy-image-2',
-  'copy-image-4',
+  // adj864（T-5「复制」组）→ **adj912 改组**：图片出口从三项「复制为图片（1×/2×/4×）」合成**一项**
+  //   「复制图片」，分辨率改由**「分辨率」组**（`scale-1/2/4`，单选打勾）决定 —— 它是一条**可持久化的
+  //   L1 设置**（`settings.imageScale`，默认 2×），与「导出范围」同一手法（菜单里点 = 改设置）。
+  // adj874 的口径不变：图片类出口**只在桌面生成**（取图必须走嵌入版应用，而嵌入版只在桌面注册）；
+  'copy-image',
+  // adj912 新增：两个**保存到文件**的出口（PNG 走嵌入版渲染通道、SVG 走插件自己的引擎），
+  //   落点与命名见 `savePath.ts`（`.jps` 同目录 + 主名，同名不覆盖就加序号）
+  'save-png',
+  'save-svg',
   'copy-svg',
   'copy-source',
+  // adj912：「分辨率」组（单选打勾；只对**位图**出口生效 —— 复制图片 / 保存为 PNG，矢量不适用）
+  'scale-1',
+  'scale-2',
+  'scale-4',
   // adj864（T-5「范围」组）：跟随视图 / 页面 / 谱面 —— 决定复制与导出时的画布口径
   'range-view',
   'range-page',
@@ -116,20 +124,31 @@ export interface ScoreMenuContext {
    * 写进菜单标签「跟随视图（谱面）」，让用户不点开也知道会按哪种口径复制/导出。
    */
   paneModeLabel?: string
+  /**
+   * adj912（用户 2026-10-13 定稿）：当前**图片分辨率**（`1` / `2` / `4`）——「分辨率」组据此打勾。
+   * 取值与插件设置同域（`types.ts` 的 `ImageScaleSetting`），这里用字面量联合避免跨模块耦合。
+   * 缺省值由调用方从 `types.ts` 的 `DEFAULT_IMAGE_SCALE` 取（**不许**在这里再写一个默认值）。
+   */
+  imageScale: 1 | 2 | 4
 }
 
 /**
  * 按能力标志生成菜单模型（**纯函数**：同一输入必得同一输出，便于断言与"三处共用"）。
  *
- * 分组口径（与 T-5 定稿一致，后续 `范围参数` / `复制为图片` / `导出` / `诊断` 都往这里加组，
- * **不许**在渲染端另加项）：
- *   · **显示**：设置（页面设置）
- *   · **源码**：格式化源码
- *   · **打开**：在应用中打开（仅桌面）、打开谱面文件（嵌入模式）
+ * ## 分组口径（**adj912 用户 2026-10-13 定稿**，从上到下四组，组间分隔）
+ *   · **显示**：设置（页面设置）—— 用户裁定 ①：「显示 / 设置」两项放**最上面单独一组**；
+ *   · **操作**：复制图片 / 复制 SVG 文本 / 复制谱面源码 / 保存为 PNG / 保存为 SVG；
+ *   · **分辨率**：1× / 2×（默认）/ 4×（单选打勾）—— 只对**位图**出口生效（复制图片、保存为 PNG），
+ *     对 SVG **不生效**（矢量无分辨率，用户裁定 ④）；
+ *   · **导出范围**（视图）：跟随视图 / 页面 / 谱面（单选打勾）—— 对**四个**出口都生效（用户裁定 ④）；
+ *   之后的「源码」/「打开」两组照旧（能力标志决定建不建）。
+ *
+ * 后续要加东西**往这里加组**，不许在渲染端另加项（三处共用同一份模型）。
  */
 export function buildScoreMenu(ctx: ScoreMenuContext): ScoreMenuSection[] {
   const sections: ScoreMenuSection[] = []
 
+  // ——【第 0 组】显示 / 设置（用户 2026-10-13 定稿：单独一组、放最上面）——
   const display: ScoreMenuItem[] = []
   if (ctx.hasWriteSource) {
     display.push({
@@ -141,51 +160,91 @@ export function buildScoreMenu(ctx: ScoreMenuContext): ScoreMenuSection[] {
   if (display.length > 0) sections.push({ title: '显示', items: display })
 
   /**
-   * **文本出口**（adj864，T-5 定稿；**adj874 起图片出口只在桌面生成**）。
+   * ——【第 1 组】操作（adj912）——
    *
-   * ## 图片类出口为什么手机端**不出现**（adj874，用户 2026-10-11 定稿）
-   * 取图必须走**嵌入版 iJipu 应用**（插件没有 canvas，只能走既有的 `render.png` 通道），
-   * 而嵌入版**只在桌面注册**（`src/main.ts` 里 `if (Platform.isDesktopApp) this.registerView(...)`；
-   * `embed.ts` 的 `getEmbedUrl` 在手机直接 `return null`）⇒ 手机上点图片项**必然失败**
-   * （`main.ts` 的 `copyScoreImage` 只会报"嵌入版通道不可用"）。
+   * 「复制图片」用**第 2 组选中的分辨率**（`ctx.imageScale`，来自插件设置）；分辨率在 `title` 里写实，
+   * 让用户不点开也知道会按多少 DPI 复制（与「跟随视图（谱面）」同一手法：把当前值写进文案）。
    *
-   * adj873 曾试图在手机端把这三项改成"保存图片到谱面同目录"，但**取图这一步同样要走嵌入版**
-   * ⇒ 手机上一样存不下来；该实现已**整条删除**（项目规矩：不留死代码）。
-   * 所以手机端**根本不生成图片项** —— 菜单里既不出现「复制为图片」，也不出现「保存图片」，
-   * 而不是让用户点一下才知道不行。要出图请用**桌面端**，或走「导出 PNG」命令（同样需要嵌入版通道）。
+   * ## 为什么位图出口**手机端不生成**（adj874 口径延续到 adj912）
+   * 「复制图片」与「保存为 PNG」都要**取图**，而插件没有 canvas ⇒ 必须走**嵌入版 iJipu 应用**的
+   * `render.png`，而嵌入版**只在桌面注册**（`main.ts` 里 `if (Platform.isDesktopApp) this.registerView(...)`；
+   * `embed.ts` 的 `getEmbedUrl` 在手机直接 `return null`）⇒ 手机上点它**必然失败**，
+   * 所以手机端**根本不出现**这两个入口（而不是让用户点了才知道不行）。
+   * 「保存为 SVG」用户 2026-10-13 也明确裁定**手机端隐藏** ⇒ 一并进这两处平台守则。
    *
-   * ## 手机端**可以**用的出口（都走插件自己的引擎，两端一致）
-   *  · 「复制 SVG 文本」—— `plugin.copyScoreSvg()`，插件侧 `api.renderSvg` 自己渲染（同理「导出 SVG」命令可用）；
-   *  · 「复制谱面源码」—— 纯文本，不涉及任何渲染通道。
-   *
-   * 为什么默认 2×：页面基准 72 DPI，2× ⇒ **144 DPI** ≈ 常见文档插图清晰度；1× 只够屏幕看、4× 体积翻倍。
-   * 图片走**嵌入版通道**（插件没有 canvas）：渲染在应用侧完成，与 GUI 导出**同一套** `svgToCanvas`；
-   * 桌面再补 **pHYs（DPI）** 后写剪贴板 —— 否则 Word / 微信按 96 DPI 兜底，把谱插成巨图。
+   * 手机端**能**用的出口：`copy-svg`（复制 SVG 文本）与 `copy-source`（复制谱面源码）——
+   * 它们走**插件自己的引擎**（`api.renderSvg` / 纯文本），不经过嵌入版通道。
    */
-  const copy: ScoreMenuItem[] = []
+  const ops: ScoreMenuItem[] = []
   if (!ctx.isMobile) {
-    const imageItem = (id: ScoreMenuActionId, scale: 1 | 2 | 4, dpiNote: string, extra: string): ScoreMenuItem => ({
-      id,
-      label: `复制为图片（${scale}×${extra}）`,
-      title: `复制为 PNG 图片到剪贴板（${scale}× ⇒ ${dpiNote}）`,
+    ops.push({
+      id: 'copy-image',
+      label: '复制图片',
+      title: `按「分辨率」组选中的分辨率复制 PNG 图片到剪贴板（当前 ${ctx.imageScale}× ⇒ ${dpiForScale(ctx.imageScale)} DPI）`,
     })
-    copy.push(
-      imageItem('copy-image-2', 2, '144 DPI', '，默认'),
-      imageItem('copy-image-1', 1, '72 DPI，体积最小', ''),
-      imageItem('copy-image-4', 4, '288 DPI，最清晰、体积最大', ''),
-    )
   }
-  copy.push(
+  ops.push(
     { id: 'copy-svg', label: '复制 SVG 文本', title: '复制这一份谱的 SVG 源码文本（矢量，可粘进支持 SVG 的编辑器）' },
     { id: 'copy-source', label: '复制谱面源码', title: '复制 `.jps` 源码文本（发给别人/存档）' },
   )
-  sections.push({ title: '复制', items: copy })
+  if (!ctx.isMobile) {
+    ops.push({
+      id: 'save-png',
+      label: '保存为 PNG',
+      title: `存到谱面同一目录（分辨率按「分辨率」组，当前 ${ctx.imageScale}×）；同名不覆盖，自动加序号`,
+    })
+  }
+  if (!ctx.isMobile) {
+    ops.push({
+      id: 'save-svg',
+      label: '保存为 SVG',
+      title: '存到谱面同一目录（矢量 ⇒ 不受分辨率影响）；同名不覆盖，自动加序号',
+    })
+  }
+  sections.push({ title: '操作', items: ops })
 
   /**
-   * **导出范围**（adj864，T-5 定稿）：跟随视图 / 页面 / 谱面 —— 单选，当前项打勾。
+   * ——【第 2 组】分辨率（adj912 用户裁定 ④）——
+   *
+   * 单选打勾、与设置页那一项是**同一个值**（`settings.imageScale`，L1 偏好 ⇒ 只存 `data.json`）。
+   * 只作用于**位图**出口（「复制图片」「保存为 PNG」）；SVG 是矢量 ⇒ 不受影响（那两项的 `title` 已写明）。
+   *
+   * **只在菜单里真有吃分辨率的出口时**才给这一组：出口全是矢量/文本时（例如手机端没有图片出口），
+   * 摆一排 1×/2×/4× 就是"点了没事发生"的死入口（本项目口径：不摆必失败的入口）。
+   */
+  const scale: ScoreMenuItem[] = [
+    {
+      id: 'scale-1',
+      label: '1×',
+      title: '1× ⇒ 72 DPI（体积最小）；作用于「复制图片」与「保存为 PNG」',
+      checked: ctx.imageScale === 1,
+    },
+    {
+      id: 'scale-2',
+      label: '2×（默认）',
+      title: '2× ⇒ 144 DPI（默认，常见文档插图足够清晰）；作用于「复制图片」与「保存为 PNG」',
+      checked: ctx.imageScale === 2,
+    },
+    {
+      id: 'scale-4',
+      label: '4×',
+      title: '4× ⇒ 288 DPI（最清晰、体积最大）；作用于「复制图片」与「保存为 PNG」',
+      checked: ctx.imageScale === 4,
+    },
+  ]
+  if (ops.some((i) => i.id === 'copy-image' || i.id === 'save-png')) {
+    sections.push({ title: '分辨率', items: scale })
+  }
+
+  /**
+   * ——【第 3 组】导出范围（adj864 定稿；adj912 起组名与文案**保持不变**）——
+   *
+   * 跟随视图 / 页面 / 谱面 —— 单选，当前项打勾。
    *
    * 与设置页的那一项是**同一个值**（`settings.exportRange`）：这里改、那里也变（反之亦然）。
    * `view` 的标签把"当前视图是什么"写实（「跟随视图（谱面）」），因为它的含义完全取决于所在面板的显示模式。
+   * 对**四个**出口都生效：复制图片 / 保存为 PNG（走 `resolveRangeBox` + `params.crop`）、
+   * 复制 SVG 文本 / 保存为 SVG（走 `applyExportRange`）。
    */
   const rangeView = ctx.paneModeLabel ? `跟随视图（${ctx.paneModeLabel}）` : '跟随视图'
   const range: ScoreMenuItem[] = [

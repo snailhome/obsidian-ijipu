@@ -54,6 +54,21 @@ export type IJipuSettings = Partial<PageConfig> & {
    */
   exportRange?: ExportRangeSetting
   /**
+   * adj912（用户 2026-10-13 定稿）：**图片分辨率**（`1` / `2` / `4`）—— 位图出口的清晰度。
+   *
+   * 用户口径：菜单里单列一组「分辨率」（1× / **2× 默认** / 4×），**单选打勾**；它作用于
+   * **「复制图片」与「保存为 PNG」**两个**位图**出口；**对 SVG 不生效**（矢量没有分辨率）
+   * —— 「复制 SVG 文本」「保存为 SVG」不看这个值。
+   *
+   * 与「导出范围」同类（`adj863`）：**界面偏好（L1）**，与具体谱无关 ⇒ 只存 `data.json`，
+   * 既不写进谱面源码、也不进 `defs.ts` 的 `DEFS`（那里的键被钉死为 `keyof PageConfig`）。
+   * 缺省值只在本文件定义一处（`DEFAULT_IMAGE_SCALE`）：设置页下拉、菜单打勾、两个出口都读它。
+   *
+   * 逐档含义（`DPI = 72 × scale`，引擎 `dpiForScale`）：`1` ⇒ 72 DPI（体积最小）；`2` ⇒ 144 DPI（默认，
+   * 常见文档插图足够清晰）；`4` ⇒ 288 DPI（最清晰、体积最大）。
+   */
+  imageScale?: ImageScaleSetting
+  /**
    * adj868（用户要求）：**嵌入版通道**总开关（原来叫「开发者：允许嵌入版调用插件能力」）。
    *
    * 它不是只给开发者用的东西 —— 它是「嵌入版 iJipu（应用）↔ 插件」**两条** postMessage 通道的总开关：
@@ -91,6 +106,24 @@ export type ExportRangeSetting = 'view' | 'page' | 'score'
  * 都把**当前值打勾/选中**，用户一眼能看出按哪种口径导出，也能就地改回 `page` 或 `score` ✓。
  */
 export const DEFAULT_EXPORT_RANGE: ExportRangeSetting = 'view'
+
+/**
+ * 图片出口分辨率（见 `IJipuSettings.imageScale`）：`DPI = 72 × scale`（引擎 `dpiForScale`）。
+ */
+export type ImageScaleSetting = 1 | 2 | 4
+
+/**
+ * 分辨率的默认值：**2×**（= **144 DPI**）—— 用户 2026-10-13 定稿。
+ *
+ * 为什么还是 2×：它是「复制为图片（2×，默认）」时代就定下的默认（`adj864` 的用户口径：
+ * 页面基准 72 DPI，2× ⇒ 144 DPI ≈ 常见文档插图清晰度；1× 只够屏幕看、4× 体积翻倍）。
+ * `adj912` 只是把"三个写死倍率的菜单项"换成"一项 + 这个设置"，**默认值不动** ⇒ 老用户升级后
+ * 复制/保存出来的图片与之前一样清晰。
+ *
+ * 缺省值**只在 `types.ts` 定义这一处**：设置页下拉（`settings.ts`）、菜单打勾（`scorePane.ts` 传进
+ * `buildScoreMenu`）、复制/保存两个出口（`main.ts`）都读它 —— 不许在别处再写一个 `2` 字面量。
+ */
+export const DEFAULT_IMAGE_SCALE: ImageScaleSetting = 2
 
 /**
  * 嵌入版通道（`IJipuSettings.embedChannel`）的默认值：**关闭**。

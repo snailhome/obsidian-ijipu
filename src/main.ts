@@ -16,7 +16,9 @@ import { IJipuFileView, JPS_EXTENSION, VIEW_TYPE_IJIPU } from './fileView'
 import { createJpsFile, consumeJpsLinkCreate, materializeJpsFile, planJpsLinkCreate, registerJpsFileCreator, unregisterJpsFileCreator, NEW_JPS_TEMPLATE } from './newFile'
 import { replaceCodeBlockBody } from './sourceEdit'
 import { canOpenWithDefaultApp, openWithDefaultApp } from './openExternal'
-import { DEFAULT_EMBED_CHANNEL, DEFAULT_EMBED_OPEN_MODE, DEFAULT_EXPORT_RANGE, type EmbedOpenMode, type ExportRangeSetting, type IJipuSettings } from './types'
+import { DEFAULT_EMBED_CHANNEL, DEFAULT_EMBED_OPEN_MODE, DEFAULT_EXPORT_RANGE, DEFAULT_IMAGE_SCALE, type EmbedOpenMode, type ExportRangeSetting, type IJipuSettings, type ImageScaleSetting } from './types'
+// adj912：「保存为 PNG / SVG」的**落点与文件名**全在这份纯函数里（`.jps` 同目录 + 主名，同名不覆盖就加序号）
+import { fileNameOf, uniqueNameIn } from './savePath'
 import { IJipuBridge } from './embed/bridge'
 import { embedEditLeavesObsidian, planEmbedTarget } from './embed/openPlan'
 /**
@@ -1158,7 +1160,138 @@ export default class IJipuPlugin extends Plugin {
     }
   }
 
-  /** adj864（T-5「复制」组）：复制**谱面源码**文本（`.jps` 原文，便于发给别人/存档） */
+  /**
+   * adj912（用户 2026-10-13 定稿）：「保存为 PNG」—— **与「复制图片」同一条渲染通道，只换出口**。
+   *
+   * 为什么直接复用：取图必须走**嵌入版 iJipu 应用**（插件没有 canvas）⇒ 探活 → 算范围盒 →
+   * `render.png`（带 `params.crop`）→ 补 **pHYs** 这一串与 `copyScoreImage` 逐字相同，
+   * 差别只有最后一步：**写进 vault 文件**（`createBinary`）而不是写剪贴板。
+   *
+   * 落点与命名（用户裁定 ②）：与那份 `.jps` **同目录**、文件名用**主名** + `.png`；
+   * 同名**不覆盖** ⇒ 依次加序号（`花又期二重奏 2.png`）。命名**不在本文件里手写**，
+   * 一律走 `savePath.ts` 的纯函数 `uniqueNameIn`（冒烟逐项断言）。
+   *
+   * 备注：`adj874` 起（`adj912` 沿用）这个入口**只在桌面菜单里出现** —— 取图依赖嵌入版应用，
+   * 而嵌入版**只在桌面注册**（本文件里 `if (Platform.isDesktopApp) this.registerView(...)`；
+   * `embed.ts` 的 `getEmbedUrl` 在手机直接 `return null`）⇒ 手机上必然失败，菜单干脆不给（用户裁定 ③）。
+   */
+  async saveScorePng(
+    source: string,
+    pane?: { box: RangeBox | null; mode: 'page' | 'full' | 'score' },
+    target?: { dir: string; base: string },
+  ): Promise<void> {
+    const scale = this.settings.imageScale ?? DEFAULT_IMAGE_SCALE
+    if (this.appRpc === null) {
+      new Notice('iJipu：嵌入版通道不可用（请先打开一次嵌入版 iJipu，再保存图片）', 8000)
+      return
+    }
+    try {
+      const probe = await this.appRpc.request<{ svgs: string[] }>('render.svg', { source }, 4000)
+      const ranged = this.resolveRangeBox(source, probe.svgs, pane)
+      if (ranged.error !== undefined) {
+        new Notice(`iJipu：保存为 PNG 失败 —— ${ranged.error}`, 8000)
+        return
+      }
+      const params: Record<string, unknown> = { source, scale }
+      if (ranged.box !== null) params.crop = ranged.box
+      const res = await this.appRpc.request<{ pngs: string[] }>('render.png', params)
+      const saveDir = target?.dir ?? ''
+      const saveBase = target?.base ?? '未命名谱面'
+      const taken = this.takenNamesIn(saveDir)
+      const dpi = dpiForScale(scale)
+      const made: string[] = []
+      for (const dataUrl of res.pngs) {
+        const b64 = dataUrl.split(',')[1] ?? ''
+        const bytes = Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0))
+        // 与剪贴板那条一样补 pHYs：否则 Word / 微信按 96 DPI 兜底，把 2× 的 A4 谱插成巨图
+        const withDpi = insertPngPhys(bytes, dpi)
+        const path = uniqueNameIn(saveDir, saveBase, '.png', (p) => taken.has(fileNameOf(p).toLowerCase()))
+        const existing = this.app.vault.getAbstractFileByPath(path)
+        // Obsidian 的 `*Binary` 接口要 `ArrayBuffer`（不是 `Uint8Array` ✗）
+        if (existing instanceof TFile) await this.app.vault.modifyBinary(existing, withDpi.buffer as ArrayBuffer)
+        else await this.app.vault.createBinary(path, withDpi.buffer as ArrayBuffer)
+        taken.add(fileNameOf(path).toLowerCase())
+        made.push(fileNameOf(path))
+      }
+      new Notice(`iJipu：已保存 ${made.join('、')}（${scale}×，${dpi} DPI）`)
+    } catch (e) {
+      // 诚实报错：通道未启用 / 嵌入版没开 / 应用侧渲染失败 —— 原因原样透出 ✓
+      new Notice(`iJipu：保存为 PNG 失败 —— ${e instanceof Error ? e.message : String(e)}`, 8000)
+    }
+  }
+
+  /**
+   * adj912（用户 2026-10-13 定稿）：「保存为 SVG」—— **与「复制 SVG 文本」同一份引擎渲染 + 范围口径**，
+   * 区别只有出口：**写进 vault 文件**。
+   *
+   * 矢量 ⇒ **与分辨率无关**（用户裁定 ④）：这里不读 `settings.imageScale`、也不碰 pHYs；
+   * 范围（导出范围 / 视图）照旧生效（`applyExportRange` 那一份几何）。
+   * 命名规则与 PNG 那条**共用同一个纯函数**（`uniqueNameIn`）。
+   */
+  async saveScoreSvg(
+    source: string,
+    pane?: { box: RangeBox | null; mode: 'page' | 'full' | 'score' },
+    target?: { dir: string; base: string },
+  ): Promise<void> {
+    const r = this.api.renderSvg(source)
+    if (!r.ok) {
+      new Notice(`iJipu：无法渲染 —— ${r.error ?? '未知原因'}`)
+      return
+    }
+    const ranged = this.applyExportRange(source, r.svgs, pane)
+    if (ranged.error !== undefined) {
+      new Notice(`iJipu：保存为 SVG 失败 —— ${ranged.error}`, 8000)
+      return
+    }
+    try {
+      const saveDir = target?.dir ?? ''
+      const saveBase = target?.base ?? '未命名谱面'
+      const taken = this.takenNamesIn(saveDir)
+      const made: string[] = []
+      for (const svg of ranged.svgs) {
+        const path = uniqueNameIn(saveDir, saveBase, '.svg', (p) => taken.has(fileNameOf(p).toLowerCase()))
+        const existing = this.app.vault.getAbstractFileByPath(path)
+        if (existing instanceof TFile) await this.app.vault.modify(existing, svg)
+        else await this.app.vault.create(path, svg)
+        taken.add(fileNameOf(path).toLowerCase())
+        made.push(fileNameOf(path))
+      }
+      new Notice(`iJipu：已保存 ${made.join('、')}`)
+    } catch (e) {
+      new Notice(`iJipu：保存为 SVG 失败 —— ${e instanceof Error ? e.message : String(e)}`, 6000)
+    }
+  }
+
+  /**
+   * adj912：两个保存出口共用的「这个目录里已有哪些文件名」。
+   *
+   * 为什么不用 `getAbstractFileByPath` 一把梭：**大小写**在各平台口径不同，而 Windows / macOS
+   * 上 `a.PNG` 与 `a.png` 就是同一个文件 ⇒ 这里统一按**小写**建集合，交给纯函数 `uniqueNameIn`
+   * 只做"序号"这一件事（判据一处、命名一处）。
+   */
+  private takenNamesIn(dir: string): Set<string> {
+    const names = new Set<string>()
+    const folder = dir === '' || dir === '/' ? this.app.vault.getRoot() : this.app.vault.getAbstractFileByPath(dir)
+    if (folder instanceof TFolder) for (const child of folder.children) names.add(child.name.toLowerCase())
+    return names
+  }
+
+  /**
+   * adj912（用户 2026-10-13 定稿）：设置**图片分辨率**（菜单「分辨率」组 = 设置页那一项，**同一个值**）。
+   *
+   * 为什么菜单里也要能改：用户是在"要复制/保存图片"的那一刻才关心清不清晰 ⇒ 与「导出范围」同理，
+   * 不该逼他离开谱面去设置页。L1 偏好 ⇒ 只存 `data.json`（不写进谱面源码、不进 `defs.ts` 的 DEFS）。
+   */
+  setImageScale(scale: ImageScaleSetting): void {
+    if (this.settings.imageScale === scale) return
+    this.settings.imageScale = scale
+    void this.saveSettings()
+    new Notice(`iJipu：图片分辨率 = ${scale}×（${dpiForScale(scale)} DPI）`)
+  }
+
+  /**
+   * adj864（T-5「复制」组）：复制**谱面源码**文本（`.jps` 原文，便于发给别人/存档）
+   */
   async copyScoreSource(source: string): Promise<void> {
     try {
       await navigator.clipboard.writeText(source)
@@ -1925,6 +2058,12 @@ class IJipuBlock extends MarkdownRenderChild {
       zoomWritten: this.zoomWrittenOfBlock(),
       /** adj870：代码块写死的初始显示模式（`v=p|w|s`）；没写 ⇒ 面板用缺省「谱面」 */
       mode: this.modeOfBlock(),
+      /**
+       * adj912（用户 2026-10-13 定稿：「保存为 PNG / SVG」存到**谱面同一目录 + 主名**）：
+       * 代码块**没有自己的 `.jps` 文件** ⇒ 把**承载它的笔记**的库内路径交给面板，
+       * 于是保存落点 = 这份笔记的同目录 + 笔记主名（`.jps` 文件视图 / 嵌入则用自己的 `filePath`）。
+       */
+      containerPath: this.sourcePath,
     })
   }
 

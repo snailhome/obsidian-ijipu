@@ -96,6 +96,11 @@ import {
 } from '../src/scoreMenu'
 // ⚠ adj874 起 `src/imageSave.ts` **已整条删除**（手机端保存路径是死代码：取图要走嵌入版，而嵌入版只在桌面注册）
 //   ⇒ 这里**不再** import 它的纯函数；"它确实没了"由 `adj874` 区块的源码扫描闸门守着。
+// adj912（用户 2026-10-13 定稿）：保存出口的「同名不覆盖、依次加序号」与 `.jps` 主名解析都是**纯函数**
+// ⇒ 直接 import 逐项断言（与 adj862 的菜单模型同一姿势：能跑的一律跑，不靠字符串匹配）
+import { fileNameOf, normExt, saveTargetOf, scoreBaseName, uniqueNameIn } from '../src/savePath'
+// adj912：图片分辨率的**默认值只有一处定义**（`types.ts`）——设置页、菜单打勾、复制/保存出口都读它
+import { DEFAULT_IMAGE_SCALE } from '../src/types'
 
 let pass = 0
 let fail = 0
@@ -4076,27 +4081,33 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
     hasAppOpen: true,
     embedTitle: '小星星.jps',
     range: 'page',
+    imageScale: 2,
   })
   check('adj862 满能力宿主的桌面菜单含 设置 / 格式化 / 在应用中打开 / 打开谱面文件',
     MENU_ONLY_ACTIONS.every((id) => hasScoreMenuItem(menuFull, id)),
     `实际：${scoreMenuIds(menuFull).join('、')}`)
   check('adj862 负对照：宿主没给 writeSource ⇒ 菜单里就没有「设置」',
-    !hasScoreMenuItem(buildScoreMenu({ isMobile: false, hasWriteSource: false, hasFormat: false, hasAppOpen: false, range: 'page' }), 'settings'))
-  const codeBlockMenu = buildScoreMenu({ isMobile: false, hasWriteSource: true, hasFormat: false, hasAppOpen: false, range: 'page' })
-  check('adj862/adj864 真实宿主能力：代码块（有 writeSource、无格式化、无文件）⇒ 菜单 = 设置 + 复制组 + 范围组，' +
+    !hasScoreMenuItem(buildScoreMenu({ isMobile: false, hasWriteSource: false, hasFormat: false, hasAppOpen: false, range: 'page', imageScale: 2 }), 'settings'))
+  const codeBlockMenu = buildScoreMenu({ isMobile: false, hasWriteSource: true, hasFormat: false, hasAppOpen: false, range: 'page', imageScale: 2 })
+  /**
+   * ⚠ adj912 起这段「真实宿主能力」判据里的 id 换成了**新版四组**的 id（`copy-image` 一项 + 分辨率三项 +
+   * 保存两项）——断言**意图不变**（真实宿主：有 writeSource、无格式化、无文件 ⇒ 显示/操作/分辨率/范围四组；
+   * 没有格式化 / 在应用中打开 / 打开谱面文件），只是菜单结构按用户 2026-10-13 的定稿改了。
+   */
+  check('adj862/adj864/adj912 真实宿主能力：代码块（有 writeSource、无格式化、无文件）⇒ 菜单 = 显示 + 操作 + 分辨率 + 导出范围，' +
     '且**没有**格式化 / 在应用中打开 / 打开谱面文件',
     hasScoreMenuItem(codeBlockMenu, 'settings') &&
       !hasScoreMenuItem(codeBlockMenu, 'format') &&
       !hasScoreMenuItem(codeBlockMenu, 'app-open') &&
       !hasScoreMenuItem(codeBlockMenu, 'embed-link') &&
-      (['copy-image-1', 'copy-image-2', 'copy-image-4', 'copy-svg', 'copy-source', 'range-view', 'range-page', 'range-score'] as const)
+      (['copy-image', 'copy-svg', 'copy-source', 'save-png', 'save-svg', 'scale-1', 'scale-2', 'scale-4', 'range-view', 'range-page', 'range-score'] as const)
         .every((id) => hasScoreMenuItem(codeBlockMenu, id)),
     `实际：${scoreMenuIds(codeBlockMenu).join('、')}`)
   check('adj862 菜单项都带面向用户的标题与说明（不许只给 id：手机 Action Sheet 上 id 看不见）',
     menuFull.every((s) => s.items.every((i) => i.label.length > 0 && i.title.length > 0)))
-  check('adj862/adj864 负对照：把能力标志全关掉 ⇒ 只剩**无条件的两组**（复制 / 导出范围），显示/源码/打开组整组消失（不留空标题）',
-    menuFull.length === 5 &&
-      buildScoreMenu({ isMobile: false, hasWriteSource: false, hasFormat: false, hasAppOpen: false, range: 'page' }).length === 2)
+  check('adj862/adj864/adj912 负对照：把能力标志全关掉 ⇒ 只剩**无条件的三组**（操作 / 分辨率 / 导出范围），显示/源码/打开组整组消失（不留空标题）',
+    menuFull.length === 6 &&
+      buildScoreMenu({ isMobile: false, hasWriteSource: false, hasFormat: false, hasAppOpen: false, range: 'page', imageScale: 2 }).length === 3)
 
   // —— ③ 移动端策略 + 移动端菜单差异 ——
   const pDesk = toolbarPolicy(false)
@@ -4111,8 +4122,8 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
   check('adj862 右键菜单**仅桌面**（手机没有右键、长按被宿主占用 ⇒ 唯一入口是 ⋯）',
     pDesk.contextMenu === true && pMob.contextMenu === false)
   check('adj862/adj864 移动端菜单里没有「在应用中打开」（嵌入版视图只在桌面注册）',
-    !hasScoreMenuItem(buildScoreMenu({ isMobile: true, hasWriteSource: true, hasAppOpen: true, range: 'page' }), 'app-open') &&
-      hasScoreMenuItem(buildScoreMenu({ isMobile: false, hasWriteSource: true, hasAppOpen: true, range: 'page' }), 'app-open'))
+    !hasScoreMenuItem(buildScoreMenu({ isMobile: true, hasWriteSource: true, hasAppOpen: true, range: 'page', imageScale: 2 }), 'app-open') &&
+      hasScoreMenuItem(buildScoreMenu({ isMobile: false, hasWriteSource: true, hasAppOpen: true, range: 'page', imageScale: 2 }), 'app-open'))
 
   // —— ④ scorePane 结构闸门（可数事实；负对照：删掉一处槽位标记即判负）——
   const toolbarBtnCount = [...pane862.matchAll(/toolbar\.createEl\('button'/g)].length
@@ -4296,7 +4307,9 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       // adj874 起是**四处**：导出 PNG / 导出 SVG / 复制为图片 / 复制 SVG（每处都要如实报错）
       // ⚠ adj873 时是五处（多一条"手机端保存图片"）；该路径整条删除 ⇒ 计数随之改回四处（**不是**放宽：
       //   删掉的那条由 `adj874` 的死代码闸门断言"确实不再存在"）
-      [...main863.matchAll(/if \(ranged\.error !== undefined\) \{/g)].length === 4)
+      // ⚠ adj912 起是**六处**：新增的「保存为 PNG」「保存为 SVG」两个出口也各自如实报错（范围不可用时
+      //   绝不静默退回整页 ⇒ 与既有四处同一判据；计数变了是因为出口真的变多了，**不是**放宽）
+      [...main863.matchAll(/if \(ranged\.error !== undefined\) \{/g)].length === 6)
   check('adj863 PNG 走应用通道时把**算好的盒**传过去（`params.crop`），应用侧不重算几何',
     /let probeSvgs: string\[\] = \[\]/.test(main863) &&
       /const ranged = this\.applyExportRange\(c\.source, probeSvgs\)/.test(main863) &&
@@ -4370,16 +4383,22 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
   const main864 = codeOf(String(readFileSync('src/main.ts', 'utf8')))
   const menu864 = codeOf(String(readFileSync('src/scoreMenu.ts', 'utf8')))
 
-  // —— ① 菜单模型：复制组 + 范围组（单选打勾） ——
-  const menuCopy = buildScoreMenu({ isMobile: false, hasWriteSource: true, hasFormat: false, hasAppOpen: false, range: 'view', paneModeLabel: '谱面' })
-  const copyIds = ['copy-image-2', 'copy-image-1', 'copy-image-4', 'copy-svg', 'copy-source'] as const
+  // —— ① 菜单模型：操作组 + 分辨率组 + 范围组（后两组都是单选打勾） ——
+  const menuCopy = buildScoreMenu({ isMobile: false, hasWriteSource: true, hasFormat: false, hasAppOpen: false, range: 'view', paneModeLabel: '谱面', imageScale: 2 })
+  /**
+   * ⚠ adj912（用户 2026-10-13 定稿）改的是**分组口径**，这一节守的性质不变：
+   * 复制出口仍在菜单里、范围组仍是单选打勾、图片出口仍只在桌面出现。
+   * 变的只是：图片三项「复制为图片（1×/2×/4×）」合并成一项「复制图片」（分辨率走**分辨率组**＝一条 L1 设置），
+   * 并新增「保存为 PNG / 保存为 SVG」两项。
+   */
+  const copyIds = ['copy-image', 'copy-svg', 'copy-source', 'save-png', 'save-svg'] as const
   const rangeIds = ['range-view', 'range-page', 'range-score'] as const
-  check('adj864 菜单含「复制」组（图片 2×/1×/4× + SVG 文本 + 源码）与「导出范围」组（跟随视图/页面/谱面）',
+  check('adj864/adj912 菜单含「操作」组（复制图片 + SVG 文本 + 源码 + 保存 PNG/SVG）与「导出范围」组（跟随视图/页面/谱面）',
     copyIds.every((id) => hasScoreMenuItem(menuCopy, id)) && rangeIds.every((id) => hasScoreMenuItem(menuCopy, id)) &&
-      menuCopy.some((s) => s.title === '复制') && menuCopy.some((s) => s.title === '导出范围'),
+      menuCopy.some((s) => s.title === '操作') && menuCopy.some((s) => s.title === '导出范围'),
     `实际：${scoreMenuIds(menuCopy).join('、')}`)
   const rangeItemsOf = (range: 'view' | 'page' | 'score') => {
-    const m = buildScoreMenu({ isMobile: false, hasWriteSource: true, hasFormat: false, hasAppOpen: false, range, paneModeLabel: '谱面' })
+    const m = buildScoreMenu({ isMobile: false, hasWriteSource: true, hasFormat: false, hasAppOpen: false, range, paneModeLabel: '谱面', imageScale: 2 })
     const sec = m.find((s) => s.title === '导出范围')
     return (sec?.items ?? []).filter((i) => i.checked === true).map((i) => i.id)
   }
@@ -4388,38 +4407,51 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       rangeItemsOf('page').join(',') === 'range-page' &&
       rangeItemsOf('score').join(',') === 'range-score',
     `view=${rangeItemsOf('view')} page=${rangeItemsOf('page')} score=${rangeItemsOf('score')}`)
-  check('adj864/adj874 「跟随视图」的标签把当前视图写实（不点开也知道按哪种口径）；图片组**只在桌面**出现（手机端不暴露图片出口，见 adj874）',
+  check('adj864/adj874/adj912 「跟随视图」的标签把当前视图写实（不点开也知道按哪种口径）；图片出口**只在桌面**出现（手机端不暴露图片出口，见 adj874）',
     (menuCopy.find((s) => s.title === '导出范围')?.items[0]?.label ?? '') === '跟随视图（谱面）' &&
-      hasScoreMenuItem(buildScoreMenu({ isMobile: true, hasWriteSource: true, hasFormat: false, hasAppOpen: false, range: 'page' }), 'copy-image-2') === false)
+      hasScoreMenuItem(buildScoreMenu({ isMobile: true, hasWriteSource: true, hasFormat: false, hasAppOpen: false, range: 'page', imageScale: 2 }), 'copy-image') === false)
   check('adj864 负对照：菜单里**没有**工具条那 5 个槽位（复制/范围都是菜单专属，不许重复入口）',
     MENU_ONLY_ACTIONS.every((a) => !(SCORE_TOOLBAR_SLOTS.map((s) => s.id) as readonly string[]).includes(a)) &&
       copyIds.every((id) => (MENU_ONLY_ACTIONS as readonly string[]).includes(id)) &&
       rangeIds.every((id) => (MENU_ONLY_ACTIONS as readonly string[]).includes(id)))
 
   // —— ② 动作接上（菜单项 → 插件方法；面板传**自己手里的**墨迹盒，比插件缓存新鲜） ——
-  // ⚠ adj874：图片三项**不再按平台分派**，一律 `copyScoreImage(source, 1|2|4, paneRange)`——
-  //   手机端菜单不再生成这三项（原因与"手机端仍会失败"都写在 `scorePane.ts` 的 case 注释里）。
-  check('adj864/adj874 三个图片项都走 `copyScoreImage(source, 1|2|4, paneRange)`（无平台分派），SVG/源码/范围项的 case 也都在',
-    /case 'copy-image-1':\s*void plugin\.copyScoreImage\(source, 1, paneRange\)/.test(pane864) &&
-      /case 'copy-image-2':\s*void plugin\.copyScoreImage\(source, 2, paneRange\)/.test(pane864) &&
-      /case 'copy-image-4':\s*void plugin\.copyScoreImage\(source, 4, paneRange\)/.test(pane864) &&
+  /**
+   * ⚠ adj912：图片出口从"三项各带一个写死倍率"改成**一项 + 分辨率设置**：
+   *   · `copy-image` ⇒ `copyScoreImage(source, 面板读到的分辨率, paneRange)`；
+   *   · `save-png` / `save-svg` ⇒ 新增的保存方法（落点是 `saveTargetOf(host.filePath, host.containerPath)`）；
+   *   · `scale-1/2/4` ⇒ `setImageScale(1|2|4)`（**改的是 L1 设置**，与「导出范围」那些 case 同一手法）。
+   * 手机端仍不生成图片/保存项（原因写在 `scorePane.ts` 的 case 注释里）。
+   */
+  check('adj864/adj874/adj912 操作组每项都接上了路由：复制图片带**设置里的分辨率**、保存 PNG/SVG 各一支、分辨率三项改设置',
+    /case 'copy-image':\s*void plugin\.copyScoreImage\(source, plugin\.settings\.imageScale \?\? DEFAULT_IMAGE_SCALE, paneRange\)/.test(pane864) &&
+      /case 'save-png':\s*void plugin\.saveScorePng\(source, paneRange, saveTarget\)/.test(pane864) &&
+      /case 'save-svg':\s*void plugin\.saveScoreSvg\(source, paneRange, saveTarget\)/.test(pane864) &&
+      /case 'scale-1':\s*plugin\.setImageScale\(1\)/.test(pane864) &&
+      /case 'scale-2':\s*plugin\.setImageScale\(2\)/.test(pane864) &&
+      /case 'scale-4':\s*plugin\.setImageScale\(4\)/.test(pane864) &&
       /case 'copy-svg':\s*void plugin\.copyScoreSvg\(source, paneRange\)/.test(pane864) &&
       /case 'copy-source':\s*void plugin\.copyScoreSource\(source\)/.test(pane864) &&
       /case 'range-view':\s*plugin\.setExportRange\('view'\)/.test(pane864) &&
       /case 'range-page':\s*plugin\.setExportRange\('page'\)/.test(pane864) &&
       /case 'range-score':\s*plugin\.setExportRange\('score'\)/.test(pane864))
-  check('adj864/adj873 菜单把当前范围与"视图写实"传给模型（`range` + `paneModeLabel`），单选项打勾走 `setChecked`',
+  check('adj864/adj873/adj912 菜单把当前范围、当前分辨率与"视图写实"传给模型（`range` + `imageScale` + `paneModeLabel`），单选项打勾走 `setChecked`',
     // adj873：缺省值读 `types.ts` 的 `DEFAULT_EXPORT_RANGE`（默认值只有**一处**定义），不再是字面量 `'page'`
+    // adj912：分辨率同理读 `DEFAULT_IMAGE_SCALE`
     /range: plugin\.settings\.exportRange \?\? DEFAULT_EXPORT_RANGE,/.test(pane864) &&
-      /import \{ DEFAULT_EXPORT_RANGE \} from '\.\/types'/.test(pane864) &&
+      /imageScale: plugin\.settings\.imageScale \?\? DEFAULT_IMAGE_SCALE,/.test(pane864) &&
+      /import \{ DEFAULT_EXPORT_RANGE, DEFAULT_IMAGE_SCALE \} from '\.\/types'/.test(pane864) &&
       /paneModeLabel: MODE_LABEL\[paneMode\],/.test(pane864) &&
       /if \(it\.checked !== undefined\) item\.setChecked\(it\.checked\)/.test(pane864) &&
       /checked: ctx\.range === 'view',/.test(menu864) &&
       /checked: ctx\.range === 'page',/.test(menu864) &&
-      /checked: ctx\.range === 'score',/.test(menu864))
-  check('adj864 负对照：删掉 `case \'copy-image-2\'` 那一支 ⇒ 判据为假（菜单项会变成"点了没反应"）',
-    !/case 'copy-image-2':\s*void plugin\.copyScoreImage\(source, 2, paneRange\)/.test(
-      pane864.replace("case 'copy-image-2':\n          void plugin.copyScoreImage(source, 2, paneRange)", ''),
+      /checked: ctx\.range === 'score',/.test(menu864) &&
+      /checked: ctx\.imageScale === 1,/.test(menu864) &&
+      /checked: ctx\.imageScale === 2,/.test(menu864) &&
+      /checked: ctx\.imageScale === 4,/.test(menu864))
+  check('adj864/adj912 负对照：删掉 `case \'copy-image\'` 那一支 ⇒ 判据为假（菜单项会变成"点了没反应"）',
+    !/case 'copy-image':\s*void plugin\.copyScoreImage\(source, plugin\.settings\.imageScale \?\? DEFAULT_IMAGE_SCALE, paneRange\)/.test(
+      pane864.replace("case 'copy-image':\n          void plugin.copyScoreImage(source, plugin.settings.imageScale ?? DEFAULT_IMAGE_SCALE, paneRange)", ''),
     ))
 
   // —— ③ 图片路径：应用渲染 → 插件补 pHYs → 剪贴板；失败如实说 ——
@@ -4813,10 +4845,17 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
   const fv873 = codeOf(String(readFileSync('src/fileView.ts', 'utf8')))
   const em873 = codeOf(String(readFileSync('src/embed.ts', 'utf8')))
 
-  // —— ① 菜单文案按平台切换（动作 id 不变；手机端不许出现"复制为图片"） ——
-  const imageIds873 = ['copy-image-1', 'copy-image-2', 'copy-image-4'] as const
+  // —— ① 菜单文案按平台切换（手机端不许出现任何"要嵌入版应用才能出图"的出口） ——
+  /**
+   * ⚠ adj912（用户 2026-10-13 定稿）后的**新结构**：图片出口由三项合成一项 `copy-image`，并新增
+   * `save-png` / `save-svg`。这一节守的**性质没变**：手机端**根本不生成**需要嵌入版的出口
+   * （`copy-image`：取图必须走嵌入版；`save-png`：同一条 `render.png` 通道 + 用户明确要求手机端隐藏），
+   * 只有走插件自己引擎的文本出口（`copy-svg` / `copy-source`）两端都有。
+   * （`save-svg` 用户也裁定手机端隐藏 ⇒ 一并进这份"手机端不生成"的名单。）
+   */
+  const imageIds873 = ['copy-image', 'save-png', 'save-svg'] as const
   const menuOf873 = (isMobile: boolean) =>
-    buildScoreMenu({ isMobile, hasWriteSource: true, hasFormat: false, hasAppOpen: false, range: 'view', paneModeLabel: '谱面' })
+    buildScoreMenu({ isMobile, hasWriteSource: true, hasFormat: false, hasAppOpen: false, range: 'view', paneModeLabel: '谱面', imageScale: 2 })
   const label873 = (m: ReturnType<typeof menuOf873>, id: string): string =>
     m.flatMap((s) => s.items).find((i) => i.id === id)?.label ?? ''
   /** 菜单里**所有**面向用户的文字（组标题 + 项标题 + 项说明）——负向判据必须查全部，不能只看 label */
@@ -4825,64 +4864,76 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
   const texts873mob = textsOf873(menuOf873(true))
   /**
    * 判据写成**一个函数**：正反两条断言用**同一份判据**（负对照不许另写一条更宽松的）。
-   * 量的是"手机端**根本不生成**图片出口"：菜单输出里没有 `copy-image-*` 三项，通篇也搜不到
-   * "复制为图片 / 保存图片 / 剪贴板"任何一种说法；源码层面图片组被 `if (!ctx.isMobile)` 包着
-   * （`buildScoreMenu` 是纯函数，"塞回去"只能改源码）。
+   * 量的是"手机端**根本不生成**这些出口"：菜单输出里没有那几个 id，通篇也搜不到
+   * "复制为图片 / 保存为"任何一种说法（`保存为` 覆盖「保存为 PNG / SVG」的**任何**写法）；
+   * 源码层面它们各自被 `if (!ctx.isMobile) {` 包着（`buildScoreMenu` 是纯函数，"塞回去"只能改源码）。
    */
   const mobileHasNoImage873 = (m: ReturnType<typeof menuOf873>, src: string): boolean =>
     imageIds873.every((id) => !hasScoreMenuItem(m, id)) &&
-    textsOf873(m).every((t) => !t.includes('复制为图片') && !t.includes('保存图片') && !t.includes('剪贴板')) &&
-    /const copy: ScoreMenuItem\[\] = \[\]\s*\n\s*if \(!ctx\.isMobile\) \{/.test(src)
-  /** 桌面端该有的样子（三项「复制为图片」+ 剪贴板说明，且不出现"保存图片"）——与上一条互为负对照 */
+    textsOf873(m).every((t) => !t.includes('复制为图片') && !t.includes('保存为') && !t.includes('剪贴板')) &&
+    /const ops: ScoreMenuItem\[\] = \[\]\s*\n\s*if \(!ctx\.isMobile\) \{/.test(src) &&
+    /if \(!ctx\.isMobile\) \{\s*\n\s*ops\.push\(/.test(src)
+  /** 桌面端该有的样子（一项「复制图片」+ 剪贴板说明 + 两项「保存为 …」，且不出现旧文案"复制为图片"）——与上一条互为负对照 */
   const deskImageLabels873 = (m: ReturnType<typeof menuOf873>): boolean =>
-    imageIds873.every((id) => label873(m, id).startsWith('复制为图片')) &&
-    label873(m, 'copy-image-2') === '复制为图片（2×，默认）' &&
-    textsOf873(m).every((t) => !t.includes('保存图片')) &&
-    textsOf873(m).some((t) => t.includes('复制为 PNG 图片到剪贴板'))
-  check('adj873/adj874 手机菜单：图片三项**一项都不出现**，通篇也没有「复制为图片」/「保存图片」、不提剪贴板（入口直接没有，不用点才知道）',
+    imageIds873.every((id) => hasScoreMenuItem(m, id)) &&
+    label873(m, 'copy-image') === '复制图片' &&
+    label873(m, 'save-png') === '保存为 PNG' &&
+    label873(m, 'save-svg') === '保存为 SVG' &&
+    textsOf873(m).every((t) => !t.includes('复制为图片')) &&
+    textsOf873(m).some((t) => t.includes('复制 PNG 图片到剪贴板'))
+  check('adj873/adj874/adj912 手机菜单：需要嵌入版才能出图的出口（复制图片 / 保存为 PNG / 保存为 SVG）**一项都不出现**，通篇也没有「复制为图片」/「保存为」、不提剪贴板（入口直接没有，不用点才知道）',
     mobileHasNoImage873(menuOf873(true), menu873),
     `手机菜单文字：${texts873mob.join('｜')}`)
-  check('adj873/adj874 负对照 A（元素一侧）：图片项只要出现在这个菜单里 ⇒ 同一条判据判假（拿桌面菜单当手机菜单喂进去）',
+  check('adj873/adj874/adj912 负对照 A（元素一侧）：这些出口只要出现在这个菜单里 ⇒ 同一条判据判假（拿桌面菜单当手机菜单喂进去）',
     imageIds873.some((id) => hasScoreMenuItem(menuOf873(false), id)) && !mobileHasNoImage873(menuOf873(false), menu873))
-  check('adj873/adj874 负对照 B（源码一侧）：把守卫改成 `if (true)`（= 给手机端加回 `copy-image-2`）⇒ 同一条判据判假',
+  check('adj873/adj874/adj912 负对照 B（源码一侧）：把守卫改成 `if (true)`（= 给手机端加回 `copy-image`）⇒ 同一条判据判假',
     (() => {
       const back873 = menu873.replace('if (!ctx.isMobile) {', 'if (true) {')
       return back873 !== menu873 && !mobileHasNoImage873(menuOf873(true), back873)
     })())
-  check('adj873/adj874 桌面菜单：图片三项仍是「复制为图片…」（`copy-image-2` = 2× 默认，带剪贴板说明）',
+  check('adj873/adj874/adj912 桌面菜单：「复制图片」（带剪贴板说明）+「保存为 PNG / 保存为 SVG」都在（旧文案「复制为图片（N×）」已消失）',
     deskImageLabels873(menuOf873(false)),
     `桌面：${imageIds873.map((id) => label873(menuOf873(false), id)).join('｜')}`)
-  check('adj873/adj874 负对照：把**手机**菜单（没有图片项）喂给"桌面文案"判据 ⇒ 判假（这条判据真的在看那三项）',
+  check('adj873/adj874 负对照：把**手机**菜单（没有图片项）喂给"桌面文案"判据 ⇒ 判假（这条判据真的在看那几项）',
     !deskImageLabels873(menuOf873(true)))
 
-  // —— ② 路由回到"一律复制"；adj873 为保存路径新增的三样**确实不再存在** ——
+  // —— ② 路由：图片出口一律走插件方法（**没有**平台三元分派）；adj873 的保存路径三样仍不许复活 ——
   /**
    * 判据写成**一个函数**（正反两条断言共用）：
-   *  · 三个尺度一律 `plugin.copyScoreImage(source, 1|2|4, paneRange)`（**没有**平台三元分派）；
-   *  · adj873 为"手机端保存"新增的 `notePath` / `targetPath` / `saveScoreImage` 一个都不剩。
+   *  · 图片出口只有**一处** `plugin.copyScoreImage(source, 设置里的分辨率, paneRange)`（**没有**平台三元分派）；
+   *  · adj873 为"手机端保存"新增的 `notePath` / `targetPath` / `saveScoreImage` 一个都不剩
+   *    （adj912 新增的「保存为 PNG/SVG」是**用户新要的桌面出口**，走 `saveScorePng` / `saveScoreSvg` +
+   *      `saveTargetOf(host.filePath, host.containerPath)`，**不是**那条被删掉的手机端路径）。
    */
   const noSavePath873 = (pane: string, main: string): boolean =>
     (pane.match(/Platform\.isMobile \? plugin\.saveScoreImage/g) ?? []).length === 0 &&
-    (pane.match(/plugin\.copyScoreImage\(source, [124], paneRange\)/g) ?? []).length === 3 &&
+    (pane.match(/plugin\.copyScoreImage\(source, plugin\.settings\.imageScale \?\? DEFAULT_IMAGE_SCALE, paneRange\)/g) ?? []).length === 1 &&
     !/notePath/.test(pane) && !/targetPath/.test(pane) && !/notePath/.test(main) &&
     (main.match(/saveScoreImage/g) ?? []).length === 0
-  check('adj873/adj874 三处图片路由一律 `copyScoreImage(source, 1|2|4, paneRange)`；`notePath` / `targetPath` / `saveScoreImage` 在 `scorePane.ts` + `main.ts` 里**一个字都不剩**',
+  check('adj873/adj874/adj912 图片出口只有一处 `copyScoreImage(source, 设置里的分辨率, paneRange)`；`notePath` / `targetPath` / `saveScoreImage` 在 `scorePane.ts` + `main.ts` 里**一个字都不剩**',
     noSavePath873(pane873, main873) &&
-      /case 'copy-image-1':\s*void plugin\.copyScoreImage\(source, 1, paneRange\)/.test(pane873) &&
-      /case 'copy-image-4':\s*void plugin\.copyScoreImage\(source, 4, paneRange\)/.test(pane873))
-  check('adj873/adj874 负对照：把平台三元分派**塞回**一处（手机保存 / 桌面复制）⇒ 同一条判据判假',
+      /case 'copy-image':\s*void plugin\.copyScoreImage\(/.test(pane873) &&
+      /case 'save-png':\s*void plugin\.saveScorePng\(source, paneRange, saveTarget\)/.test(pane873) &&
+      /case 'save-svg':\s*void plugin\.saveScoreSvg\(source, paneRange, saveTarget\)/.test(pane873))
+  check('adj873/adj874/adj912 负对照：把平台三元分派**塞回**一处（手机保存 / 桌面复制）⇒ 同一条判据判假',
     (() => {
       const back873 = pane873.replace(
-        'void plugin.copyScoreImage(source, 2, paneRange)',
+        'void plugin.copyScoreImage(source, plugin.settings.imageScale ?? DEFAULT_IMAGE_SCALE, paneRange)',
         'void (Platform.isMobile ? plugin.saveScoreImage(source, 2, paneImage) : plugin.copyScoreImage(source, 2, paneRange))',
       )
       return back873 !== pane873 && !noSavePath873(back873, main873)
     })())
   check('adj873/adj874 负对照：往 `main.ts` 塞回 `notePath: this.sourcePath,` ⇒ 判假（"宿主笔记路径"这条也不许复活）',
     !noSavePath873(pane873, `${main873}\n      notePath: this.sourcePath,`))
-  check('adj873/adj874 宿主的落点信息**只剩** `filePath`（文件视图 / 嵌入各有自己的文件；代码块没有 ⇒ 不再传 `notePath`）',
+  /**
+   * ⚠ adj912：宿主的落点信息**多了一位** `containerPath`（代码块"承载它的笔记"），但**仍然没有**
+   * `notePath` —— 这一条守的性质（不把"宿主笔记路径"当成一种跨平台保存能力）没变，只是多了一位
+   * 只有**代码块**才传、且只用于"保存到与笔记同目录"的路径。
+   */
+  check('adj873/adj874/adj912 宿主的落点信息：文件视图 / 嵌入各给 `filePath`，代码块给 `containerPath`（承载笔记）——`notePath` 仍然不存在',
     /filePath: this\.file\?\.path,/.test(fv873) && /filePath: file\.path,/.test(em873) &&
-      !/notePath/.test(fv873) && !/notePath/.test(em873))
+      !/notePath/.test(fv873) && !/notePath/.test(em873) &&
+      /containerPath: this\.sourcePath,/.test(String(readFileSync('src/main.ts', 'utf8'))))
   check('adj873/adj874 负对照：把文件视图那份 `filePath:` 去掉 ⇒ 上面那条判据判假（`filePath` 仍由宿主给出，不是空转）',
     !/filePath: this\.file\?\.path,/.test(fv873.replace('filePath: this.file?.path,', '')))
 
@@ -4930,28 +4981,34 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
   const paneSrc874 = String(readFileSync('src/scorePane.ts', 'utf8'))
   const mainSrc874 = String(readFileSync('src/main.ts', 'utf8'))
   const menu874 = (isMobile: boolean) =>
-    buildScoreMenu({ isMobile, hasWriteSource: true, hasFormat: true, hasAppOpen: true, embedTitle: '小星星.jps', range: 'view', paneModeLabel: '谱面' })
+    buildScoreMenu({ isMobile, hasWriteSource: true, hasFormat: true, hasAppOpen: true, embedTitle: '小星星.jps', range: 'view', paneModeLabel: '谱面', imageScale: 2 })
   /** 菜单里**所有**面向用户的文字（组标题 + 项标题 + 项说明）——负向判据必须查全部，不能只看 label */
   const texts874 = (m: ReturnType<typeof menu874>): string[] =>
     m.flatMap((s) => [s.title, ...s.items.flatMap((i) => [i.label, i.title])])
-  const imgIds874 = ['copy-image-1', 'copy-image-2', 'copy-image-4'] as const
+  /**
+   * ⚠ adj912：名单跟着菜单结构更新（三项「复制为图片（N×）」→ 一项 `copy-image` + 两项保存）。
+   * 判据**意图不变**：需要**嵌入版应用**才能出图的出口在手机端一个都不生成
+   * （`copy-image` 取图必走嵌入版；`save-png` 同一条 `render.png` 通道 ⇒ 用户 2026-10-13 明确要求手机端隐藏；
+   *   `save-svg` 用户也要求手机端隐藏）。
+   */
+  const imgIds874 = ['copy-image', 'save-png', 'save-svg'] as const
 
-  // —— ① 手机菜单没有图片出口（"保存图片"这个词在手机菜单里也一个都不许有） ——
+  // —— ① 手机菜单没有这些出口（"复制为图片"/"保存为"这些字样在手机菜单里也一个都不许有） ——
   const mobileHasNoImage874 = (m: ReturnType<typeof menu874>): boolean =>
     imgIds874.every((id) => !hasScoreMenuItem(m, id)) &&
-    texts874(m).every((t) => !t.includes('保存图片') && !t.includes('复制为图片'))
-  check('adj874 手机菜单**不含** `copy-image-1/2/4`，也没有任何含「保存图片」的文案；桌面菜单**含**这三项',
+    texts874(m).every((t) => !t.includes('保存为') && !t.includes('复制为图片') && !t.includes('剪贴板'))
+  check('adj874/adj912 手机菜单**不含** `copy-image` / `save-png` / `save-svg`，也没有任何含「保存为」/「复制为图片」的文案；桌面菜单**含**这三项',
     mobileHasNoImage874(menu874(true)) && imgIds874.every((id) => hasScoreMenuItem(menu874(false), id)),
     `手机：${scoreMenuIds(menu874(true)).join('、')}｜桌面：${scoreMenuIds(menu874(false)).join('、')}`)
   /**
-   * 负对照用：把**桌面**菜单里的图片项原样搬进手机菜单的「复制」组 ——
-   * 这就是"若 `buildScoreMenu` 不再按平台过滤"会产出的那份菜单（等价于手工加回 `copy-image-2`）。
+   * 负对照用：把**桌面**菜单里的这些项原样搬进手机菜单的「操作」组 ——
+   * 这就是"若 `buildScoreMenu` 不再按平台过滤"会产出的那份菜单（等价于手工加回 `copy-image`）。
    */
-  const imageItems874 = menu874(false).flatMap((s) => s.items.filter((i) => (i.id as string).startsWith('copy-image')))
+  const imageItems874 = menu874(false).flatMap((s) => s.items.filter((i) => (imgIds874 as readonly string[]).includes(i.id)))
   const withImageBack874 = (m: ReturnType<typeof menu874>): ReturnType<typeof menu874> =>
-    m.map((s) => (s.title === '复制' ? { title: s.title, items: [...imageItems874, ...s.items] } : s))
-  check('adj874 负对照：给手机菜单加回 `copy-image-2` ⇒ 上面那条判据为假（先确认改动真的落进了那份菜单）',
-    hasScoreMenuItem(withImageBack874(menu874(true)), 'copy-image-2') &&
+    m.map((s) => (s.title === '操作' ? { title: s.title, items: [...imageItems874, ...s.items] } : s))
+  check('adj874/adj912 负对照：给手机菜单加回 `copy-image` ⇒ 上面那条判据为假（先确认改动真的落进了那份菜单）',
+    hasScoreMenuItem(withImageBack874(menu874(true)), 'copy-image') &&
       !mobileHasNoImage874(withImageBack874(menu874(true))))
 
   // —— ② 文本出口（走插件自己的引擎）不许被误删 ——
@@ -5012,6 +5069,303 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
     !docConsistent874(toolbarDoc874.replace(/只在桌面注册/g, '（原因待补）'), releaseDoc874) &&
       !docConsistent874(toolbarDoc874, releaseDoc874.replace(/手机端不提供图片出口/g, '手机端把图片存到同目录')) &&
       !docConsistent874(toolbarDoc874.replace(/走插件自己的引擎/g, '（省略）'), releaseDoc874))
+}
+
+/**
+ * ---- adj912（用户 2026-10-13 定稿）：菜单四组重排 + 「保存为 PNG / SVG」+ 分辨率升级为 L1 设置 ----
+ *
+ * 用户四条裁定（原话见任务单）：
+ *  ① 「显示 / 设置」两项放**最上面单独一组**；
+ *  ② 「保存为 PNG / SVG」**存到同一目录、同名不覆盖就加序号**（`.jps` 同目录 + 该 `.jps` 的主名，
+ *     已存在则依次加序号，例 `花又期二重奏 2.png`）；
+ *  ③ **手机端隐藏**「保存为 PNG / 保存为 SVG」这两项；
+ *  ④ 分辨率组对「复制图片」「保存为 PNG」生效，**对 SVG 不生效**（矢量无分辨率）；
+ *     视图（导出范围）组对「复制图片 / 保存为 PNG / 保存为 SVG / 复制 SVG 文本」都生效。
+ *
+ * 目标版式（四组，组间分隔）：
+ *   `显示（设置）→ 操作（复制图片 / 复制 SVG 文本 / 复制谱面源码 / 保存为 PNG / 保存为 SVG）`
+ *   `→ 分辨率（1× / 2×（默认）/ 4×，单选打勾）→ 导出范围（跟随视图 / 页面 / 谱面，单选打勾）`
+ *
+ * 这一节把四条**机器化**，每条断言都配**负对照**（把关键那行删掉/改成旧写法 ⇒ 判据必须为假）：
+ *  · 结构与顺序（纯数据，直接跑 `buildScoreMenu`；负对照 = 把两组对调 / 塞回旧文案）；
+ *  · 命名（纯函数 `uniqueNameIn` / `scoreBaseName` / `saveTargetOf`；负对照 = 换成"直接覆盖"的老写法）；
+ *  · 平台（手机端不生成保存项；负对照 = 元素一侧塞回去、源码一侧删掉守卫）；
+ *  · 设置（L1：`types.ts` 默认 2× + 设置页下拉 + 菜单三项改同一个值；负对照 = 默认改 1 / 混进 DEFS）；
+ *  · 两个出口的实现（PNG 复用 `render.png` + crop + pHYs；SVG 复用 `renderSvg` + `applyExportRange`；
+ *    负对照 = 删 crop / 不补 pHYs / 往 SVG 里塞分辨率）。
+ */
+{
+  const menu912 = codeOf(String(readFileSync('src/scoreMenu.ts', 'utf8')))
+  const pane912 = codeOf(String(readFileSync('src/scorePane.ts', 'utf8')))
+  const main912 = codeOf(String(readFileSync('src/main.ts', 'utf8')))
+  const types912 = codeOf(String(readFileSync('src/types.ts', 'utf8')))
+  const settings912 = codeOf(String(readFileSync('src/settings.ts', 'utf8')))
+  const defs912 = codeOf(String(readFileSync('src/defs.ts', 'utf8')))
+
+  /** 代码块宿主（有 writeSource、无格式化、无文件）= 用户口中"四组"的那份菜单 */
+  const menuOf912 = (isMobile: boolean, imageScale: 1 | 2 | 4 = 2) =>
+    buildScoreMenu({ isMobile, hasWriteSource: true, hasFormat: false, hasAppOpen: false, range: 'view', paneModeLabel: '谱面', imageScale })
+  const titles912 = (m: ReturnType<typeof menuOf912>): string[] => m.map((s) => s.title)
+  const idsOf912 = (m: ReturnType<typeof menuOf912>, title: string): string[] =>
+    (m.find((s) => s.title === title)?.items ?? []).map((i) => i.id)
+  const labelsOf912 = (m: ReturnType<typeof menuOf912>, title: string): string[] =>
+    (m.find((s) => s.title === title)?.items ?? []).map((i) => i.label)
+  const textsOf912 = (m: ReturnType<typeof menuOf912>): string[] =>
+    m.flatMap((s) => [s.title, ...s.items.flatMap((i) => [i.label, i.title])])
+  const clone912 = (m: ReturnType<typeof menuOf912>): ReturnType<typeof menuOf912> =>
+    m.map((s) => ({ title: s.title, items: s.items.map((i) => ({ ...i })) }))
+  /**
+   * 取某个方法的**函数体**（到它自己那一层 `  }` 为止；内层块缩进更深 ⇒ 不会提前截断）。
+   * ⚠ 必须锚到**类方法定义**那一行（行首两个空格 + 方法名）：`this.copyScoreSvg(c.source)` 这种
+   * **调用点**在同一行里也含 `copyScoreSvg(`，不锚定就会取到调用点到下一个 `  }` 的一小段（实测踩过）。
+   */
+  const bodyOf912 = (src: string, name: string): string =>
+    src.match(new RegExp(`\\n  (?:async )?${name}\\([\\s\\S]*?\\n  \\}`))?.[0] ?? ''
+
+  // —— ① 四组 + 顺序 + 每组的成员（用户裁定 ①） ——
+  const fourGroups912 = (m: ReturnType<typeof menuOf912>): boolean =>
+    titles912(m).join(',') === '显示,操作,分辨率,导出范围' &&
+    idsOf912(m, '显示').join(',') === 'settings' &&
+    idsOf912(m, '操作').join(',') === 'copy-image,copy-svg,copy-source,save-png,save-svg' &&
+    idsOf912(m, '分辨率').join(',') === 'scale-1,scale-2,scale-4' &&
+    idsOf912(m, '导出范围').join(',') === 'range-view,range-page,range-score'
+  check('adj912 桌面菜单**恰有四组**，顺序 = 显示/设置 → 操作（5 个动作）→ 分辨率（1×/2×/4×）→ 导出范围（三项）',
+    fourGroups912(menuOf912(false)),
+    `实际：${titles912(menuOf912(false)).join(' → ')}｜${scoreMenuIds(menuOf912(false)).join('、')}`)
+  check('adj912 负对照：把「操作」与「分辨率」两组对调 ⇒ 顺序判据判假（这条真的在量顺序）',
+    (() => {
+      const m = clone912(menuOf912(false))
+      const i = m.findIndex((s) => s.title === '操作')
+      const j = m.findIndex((s) => s.title === '分辨率')
+      const a = m[i] as (typeof m)[number]
+      m[i] = m[j] as (typeof m)[number]
+      m[j] = a
+      return titles912(m).join(',') !== '显示,操作,分辨率,导出范围' && !fourGroups912(m) && fourGroups912(menuOf912(false))
+    })())
+  check('adj912 显示组在**最上面**（用户裁定 ①：显示/设置单独一组、放最前），且只有「设置」一项',
+    titles912(menuOf912(false))[0] === '显示' && idsOf912(menuOf912(false), '显示').join(',') === 'settings' &&
+      labelsOf912(menuOf912(false), '显示').join(',') === '设置')
+  check('adj912 负对照：把「显示」组挪到最后 ⇒ "最上面"判据判假',
+    (() => {
+      const m = clone912(menuOf912(false))
+      const head = m.shift() as (typeof m)[number]
+      m.push(head)
+      return titles912(m)[0] !== '显示' && titles912(menuOf912(false))[0] === '显示'
+    })())
+
+  // —— ② 操作组：新五项都在，旧的三项「复制为图片（N×）」**不再存在** ——
+  const noLegacyCopy912 = (m: ReturnType<typeof menuOf912>): boolean =>
+    m.flatMap((s) => s.items).every((i) => !(i.id as string).startsWith('copy-image-')) &&
+    textsOf912(m).every((t) => !t.includes('复制为图片'))
+  const ops912 = (m: ReturnType<typeof menuOf912>): boolean =>
+    idsOf912(m, '操作').join(',') === 'copy-image,copy-svg,copy-source,save-png,save-svg' &&
+    labelsOf912(m, '操作').join(',') === '复制图片,复制 SVG 文本,复制谱面源码,保存为 PNG,保存为 SVG' &&
+    noLegacyCopy912(m)
+  check('adj912 操作组**五个动作 id 都在**（复制图片 / 复制 SVG 文本 / 复制谱面源码 / 保存为 PNG / 保存为 SVG），且菜单里**不再有**三项「复制为图片（N×）」',
+    ops912(menuOf912(false)),
+    `实际：${idsOf912(menuOf912(false), '操作').join('、')}`)
+  check('adj912 负对照：把旧写法「复制为图片（2×，默认）」塞回操作组 ⇒ 同一条判据判假（旧结构真的被判假）',
+    (() => {
+      const m = clone912(menuOf912(false))
+      const ops = m.find((s) => s.title === '操作')
+      ops?.items.push({ id: 'copy-image-2' as never, label: '复制为图片（2×，默认）', title: '（负对照：旧结构）' })
+      return !ops912(m) && ops912(menuOf912(false))
+    })())
+
+  // —— ③ 分辨率组：1×/2×/4× 单选打勾、默认 2×；只在菜单里真有"吃分辨率"的出口时出现（用户裁定 ④） ——
+  const scaleChecked912 = (m: ReturnType<typeof menuOf912>): string[] =>
+    (m.find((s) => s.title === '分辨率')?.items ?? []).filter((i) => i.checked === true).map((i) => i.id)
+  const singleScale912 = (m: ReturnType<typeof menuOf912>, scale: 1 | 2 | 4): boolean =>
+    scaleChecked912(m).join(',') === `scale-${scale}`
+  check('adj912 分辨率组**单选**且默认 2×：imageScale=1/2/4 时分别只有对应那一项打勾；组内文案 = 1× / 2×（默认）/ 4×',
+    singleScale912(menuOf912(false, 1), 1) && singleScale912(menuOf912(false, 2), 2) && singleScale912(menuOf912(false, 4), 4) &&
+      labelsOf912(menuOf912(false), '分辨率').join('|') === '1×|2×（默认）|4×' &&
+      DEFAULT_IMAGE_SCALE === 2,
+    `1×⇒${scaleChecked912(menuOf912(false, 1))}｜2×⇒${scaleChecked912(menuOf912(false, 2))}｜4×⇒${scaleChecked912(menuOf912(false, 4))}`)
+  check('adj912 负对照：把分辨率三项**全打勾**（多选）⇒ 单选判据判假（这条真的在数勾）',
+    (() => {
+      const m = clone912(menuOf912(false, 2))
+      const sec = m.find((s) => s.title === '分辨率')
+      if (sec) sec.items = sec.items.map((i) => ({ ...i, checked: true }))
+      return scaleChecked912(m).length === 3 && !singleScale912(m, 2) && singleScale912(menuOf912(false, 2), 2)
+    })())
+  check('adj912 负对照：把「2×（默认）」文案改成「2×」⇒ 文案判据判假（版式与用户给的写法一致，不许漂）',
+    labelsOf912(menuOf912(false), '分辨率').join('|') !== '1×|2×|4×')
+  check('adj912 分辨率组只在菜单里**真有吃分辨率的出口**时出现：桌面端有（复制图片 / 保存为 PNG），手机端没有（两项都不生成 ⇒ 不摆点了没事发生的死入口）',
+    titles912(menuOf912(false)).includes('分辨率') && !titles912(menuOf912(true)).includes('分辨率'),
+    `手机菜单：${scoreMenuIds(menuOf912(true)).join('、')}`)
+  check('adj912 负对照：给手机菜单硬塞一个「分辨率」组 ⇒ "手机端没有这一组"判据判假',
+    (() => {
+      const m = clone912(menuOf912(true))
+      m.push({ title: '分辨率', items: (menuOf912(false).find((s) => s.title === '分辨率')?.items ?? []).map((i) => ({ ...i })) })
+      return titles912(m).includes('分辨率') && !titles912(menuOf912(true)).includes('分辨率')
+    })())
+
+  // —— ④ 手机端隐藏「保存为 PNG / 保存为 SVG」（用户裁定 ③）；桌面端出现 ——
+  const mobileHidesSave912 = (m: ReturnType<typeof menuOf912>): boolean =>
+    !hasScoreMenuItem(m, 'save-png') && !hasScoreMenuItem(m, 'save-svg')
+  check('adj912 手机端（`Platform.isMobile` 为真）**不出现** `save-png` / `save-svg`（用户裁定 ③）；桌面端两项都在',
+    mobileHidesSave912(menuOf912(true)) && hasScoreMenuItem(menuOf912(false), 'save-png') && hasScoreMenuItem(menuOf912(false), 'save-svg'),
+    `手机：${scoreMenuIds(menuOf912(true)).join('、')}`)
+  check('adj912 负对照 A（元素一侧）：拿桌面菜单喂给"手机端不出现保存项"判据 ⇒ 判假',
+    !mobileHidesSave912(menuOf912(false)))
+  /** 源码一侧：两个保存项各自被 `if (!ctx.isMobile) { … ops.push({ id: 'save-…' … }) }` 包着 */
+  const saveGate912 = (src: string): boolean =>
+    /if \(!ctx\.isMobile\) \{\s*\n\s*ops\.push\(\{\s*\n\s*id: 'save-png'/.test(src) &&
+    /if \(!ctx\.isMobile\) \{\s*\n\s*ops\.push\(\{\s*\n\s*id: 'save-svg'/.test(src)
+  check('adj912 两个保存项在 `buildScoreMenu` 里各有一处平台守卫（`if (!ctx.isMobile) { ops.push({ id: \'save-…\' }) }`）',
+    saveGate912(menu912))
+  check('adj912 负对照 B（源码一侧）：把 `save-png` 那处平台守卫删掉 ⇒ 同一条源码判据判假（守卫不是摆设）',
+    (() => {
+      const back = menu912.replace(/if \(!ctx\.isMobile\) \{\s*\n\s*ops\.push\(\{\s*\n\s*id: 'save-png'/, "ops.push({ id: 'save-png'")
+      return back !== menu912 && !saveGate912(back)
+    })())
+
+  // —— ⑤ 命名：「同名不覆盖，依次加序号」（用户裁定 ②）——纯函数直接跑 ——
+  /** 造一个"目录里已有哪些文件名"的判据（**按小写**比：Windows/macOS 上 `a.PNG` 就是 `a.png`） */
+  const taken912 = (names: readonly string[]) => {
+    const set = new Set(names.map((n) => fileNameOf(n).toLowerCase()))
+    return (p: string): boolean => set.has(fileNameOf(p).toLowerCase())
+  }
+  const namingOk912 = (f: (dir: string, base: string, ext: string, exists: (p: string) => boolean) => string): boolean =>
+    f('', 'a', '.png', taken912([])) === 'a.png' &&
+    f('', 'a', '.png', taken912(['a.png'])) === 'a 2.png' &&
+    f('', 'a', '.png', taken912(['a.png', 'a 2.png'])) === 'a 3.png' &&
+    // 取**第一个空位**（不是"已有数量 + 1"）：删掉中间那个之后不会又撞上已占用的名字
+    f('', 'a', '.png', taken912(['a.png', 'a 3.png'])) === 'a 2.png'
+  check('adj912 「同名不覆盖就加序号」：`a.png` 已存在 ⇒ `a 2.png`；`a.png` + `a 2.png` 都在 ⇒ `a 3.png`；取第一个空位',
+    namingOk912(uniqueNameIn))
+  check('adj912 负对照：换成"直接覆盖"的老写法（总是返回第一个名字）⇒ 同一条判据判假',
+    !namingOk912((_dir, base, ext) => `${base}${ext}`))
+  const extNormOk912 = (f: (e: string) => string): boolean => f('PNG') === '.png' && f('.PnG') === '.png' && f('png') === '.png'
+  check('adj912 扩展名大小写：`png` / `PNG` / `.PnG` 一律规范成 `.png`（拼接前统一，免得两套规则）',
+    extNormOk912(normExt))
+  check('adj912 负对照：扩展名原样返回（不做规范化）⇒ 判据判假',
+    !extNormOk912((e) => e))
+  check('adj912 扩展名大小写（已存在的文件）：`a.PNG` 也算占用 `a.png` 这个名字 ⇒ 新建的仍是 `a 2.png`；目录也要拼对',
+    uniqueNameIn('', 'a', 'PNG', taken912(['a.PNG'])) === 'a 2.png' &&
+      uniqueNameIn('曲谱', 'a', '.png', taken912(['曲谱/a.png'])) === '曲谱/a 2.png',
+    `实际：${uniqueNameIn('', 'a', 'PNG', taken912(['a.PNG']))}`)
+  const baseOk912 = (f: (p: string) => string): boolean =>
+    f('曲谱/花又期二重奏.jps') === '花又期二重奏' &&
+    f('花又期二重奏.JPS') === '花又期二重奏' &&
+    // 只去**最后一个**扩展名，前面/中间的点号保留（`v1.2.jps` ⇒ `v1.2`，不是 `v1`）
+    f('曲谱集/v1.2.jps') === 'v1.2' &&
+    // 代码块没有自己的 .jps ⇒ 用承载它的笔记的主名（去掉的是 `.md`，同一个规则）
+    f('笔记/我的歌.md') === '我的歌'
+  check('adj912 主名取法：去目录 + 去**最后一个扩展名**（`.jps` ⇒ 谱名、承载笔记的 `.md` ⇒ 笔记名），其它点号保留',
+    baseOk912(scoreBaseName))
+  check('adj912 负对照：只按第一个点截断（`v1.2.jps` 变 `v1`）⇒ 同一条判据判假',
+    !baseOk912((p) => fileNameOf(p).split('.')[0] ?? ''))
+  const targetOk912 = (f: (filePath?: string, containerPath?: string) => { dir: string; base: string }): boolean =>
+    f('曲谱/花又期二重奏.jps').dir === '曲谱' && f('曲谱/花又期二重奏.jps').base === '花又期二重奏' &&
+    f('a.jps').dir === '' && f(undefined, '笔记/我的歌.md').dir === '笔记' && f(undefined, '笔记/我的歌.md').base === '我的歌'
+  check('adj912 保存落点：文件视图 / 嵌入 ⇒ `.jps` 同目录 + 主名；代码块（没有 `filePath`）⇒ 承载笔记的同目录 + 笔记主名',
+    targetOk912(saveTargetOf))
+  check('adj912 负对照：只用 `filePath`（丢掉代码块那一路）⇒ 代码块取不到落点 ⇒ 同一条判据判假',
+    !targetOk912((filePath) => saveTargetOf(filePath)))
+  check('adj912 保存落点由**宿主**给出：`.jps` 文件视图 / 嵌入给 `filePath`，代码块给 `containerPath`（承载笔记）',
+    /containerPath\?: string/.test(pane912) && /saveTargetOf\(host\.filePath, host\.containerPath\)/.test(pane912) &&
+      /containerPath: this\.sourcePath,/.test(String(readFileSync('src/main.ts', 'utf8'))))
+  check('adj912 负对照：把代码块那份 `containerPath: this.sourcePath,` 删掉 ⇒ 同一条判据判假（代码块就没有落点了）',
+    !/containerPath: this\.sourcePath,/.test(String(readFileSync('src/main.ts', 'utf8')).replace('containerPath: this.sourcePath,', '')))
+
+  // —— ⑥ 分辨率是**可持久化的 L1 设置**（默认 2×；与「导出范围」同类，不进 `defs.ts` 的 DEFS） ——
+  const l1Scale912 = (types: string, settings: string, main: string): boolean =>
+    /imageScale\?: ImageScaleSetting/.test(types) &&
+    /export type ImageScaleSetting = 1 \| 2 \| 4/.test(types) &&
+    /export const DEFAULT_IMAGE_SCALE: ImageScaleSetting = 2/.test(types) &&
+    /dd\.addOption\('1', '1×（72 DPI）'\)/.test(settings) &&
+    /dd\.addOption\('2', '2×（144 DPI，默认）'\)/.test(settings) &&
+    /dd\.addOption\('4', '4×（288 DPI）'\)/.test(settings) &&
+    /dd\.setValue\(String\(this\.plugin\.settings\.imageScale \?\? DEFAULT_IMAGE_SCALE\)\)/.test(settings) &&
+    /this\.plugin\.settings\.imageScale = v === '1' \? 1 : v === '4' \? 4 : 2/.test(settings) &&
+    // 菜单里点 1×/2×/4× = 改这个设置（与「导出范围」点法一致）：**存盘**才算持久化
+    /setImageScale\(scale: ImageScaleSetting\): void \{/.test(main) &&
+    /this\.settings\.imageScale = scale/.test(main)
+  check('adj912 分辨率是**可持久化的 L1 设置**：`types.ts` 声明 + 默认 2× + 设置页下拉（三档）+ 菜单点选即改同一个值并存盘',
+    l1Scale912(types912, settings912, main912) &&
+      /void this\.saveSettings\(\)/.test(bodyOf912(main912, 'setImageScale')))
+  check('adj912 负对照：把默认值从 2× 改成 1× ⇒ 同一条判据判假（默认真的由 `DEFAULT_IMAGE_SCALE` 决定）',
+    !l1Scale912(types912.replace("DEFAULT_IMAGE_SCALE: ImageScaleSetting = 2", "DEFAULT_IMAGE_SCALE: ImageScaleSetting = 1"), settings912, main912))
+  check('adj912 负对照：去掉 `setImageScale` 里的存盘/赋值 ⇒ 判据判假（否则菜单里改完重启就丢）',
+    !l1Scale912(types912, settings912, main912.replace('this.settings.imageScale = scale', '')) &&
+      !l1Scale912(types912, settings912, main912.replace('setImageScale(scale: ImageScaleSetting): void {', 'setImageScaleX(scale: ImageScaleSetting): void {')))
+  const notInDefs912 = (src: string): boolean => !/imageScale/.test(src)
+  check('adj912 分辨率不得混进 `defs.ts` 的 DEFS（那是**跟着谱走**的 L2：本机偏好会被写进别人的谱）',
+    notInDefs912(defs912))
+  check('adj912 负对照：往 DEFS 里塞一项 `imageScale` ⇒ 上面那条判据判假（"不许混进 L2"不是空转）',
+    !notInDefs912(defs912 + "\n  { key: 'imageScale' },\n"))
+
+  // —— ⑦ 两个新出口的实现（复用既有通道，只是出口改成文件） ——
+  const savePng912 = (src: string): boolean =>
+    /async saveScorePng\(\s*source: string,\s*pane\?: \{ box: RangeBox \| null; mode: 'page' \| 'full' \| 'score' \},\s*target\?: \{ dir: string; base: string \},?\s*\): Promise<void>/.test(src) &&
+    /await this\.appRpc\.request<\{ svgs: string\[\] \}>\('render\.svg', \{ source \}, 4000\)/.test(src) &&
+    /const ranged = this\.resolveRangeBox\(source, probe\.svgs, pane\)/.test(src) &&
+    /if \(ranged\.box !== null\) params\.crop = ranged\.box/.test(src) &&
+    /await this\.appRpc\.request<\{ pngs: string\[\] \}>\('render\.png', params\)/.test(src) &&
+    /const withDpi = insertPngPhys\(bytes, dpi\)/.test(src) &&
+    /await this\.app\.vault\.createBinary\(path, withDpi\.buffer as ArrayBuffer\)/.test(src) &&
+    /this\.settings\.imageScale \?\? DEFAULT_IMAGE_SCALE/.test(src)
+  check('adj912 `saveScorePng`：与「复制图片」**同一条渲染通道**（探活 → `resolveRangeBox(pane)` → `render.png` 带 crop → 补 pHYs），出口改成**写 vault 文件**（`createBinary`），分辨率读设置',
+    savePng912(main912))
+  check('adj912 负对照：删掉保存路径的 `params.crop`（= 悄悄存成整页）/ 不补 pHYs ⇒ 同一条判据判假',
+    !savePng912(main912.replace(/if \(ranged\.box !== null\) params\.crop = ranged\.box/g, '')) &&
+      !savePng912(main912.replace(/const withDpi = insertPngPhys\(bytes, dpi\)/g, 'const withDpi = bytes')))
+  /** `saveScoreSvg` 是**同步引擎**渲染后的写文件（没有 await 的 renderSvg），函数体单独取出来查"不许碰分辨率" */
+  const saveSvg912 = (src: string): boolean => {
+    const body = bodyOf912(src, 'saveScoreSvg')
+    return (
+      body !== '' &&
+      /this\.api\.renderSvg\(source\)/.test(body) &&
+      /this\.applyExportRange\(source, r\.svgs, pane\)/.test(body) &&
+      /await this\.app\.vault\.create\(path, svg\)/.test(body) &&
+      // 矢量 ⇒ **与分辨率无关**（用户裁定 ④）：这个方法里不许出现 scale / DPI / pHYs
+      !/imageScale|insertPngPhys|dpiForScale/.test(body)
+    )
+  }
+  check('adj912 `saveScoreSvg`：走插件自己的引擎（`renderSvg` + `applyExportRange`，与「复制 SVG 文本」**同一份几何**），出口改成写 vault 文件；**与分辨率无关**（矢量无分辨率）',
+    saveSvg912(main912))
+  check('adj912 负对照：往 `saveScoreSvg` 里塞一句读分辨率的代码 ⇒ 同一条判据判假（矢量出口不许碰分辨率）',
+    !saveSvg912(main912.replace(/const r = this\.api\.renderSvg\(source\)/g, 'const s = this.settings.imageScale\n    const r = this.api.renderSvg(source)')))
+  const namingViaPure912 = (src: string): boolean =>
+    /uniqueNameIn\(saveDir, saveBase, '\.png',/.test(src) && /uniqueNameIn\(saveDir, saveBase, '\.svg',/.test(src) &&
+    !/\$\{saveBase\} \$\{/.test(src)
+  check('adj912 两个保存出口的文件名**一律**走纯函数 `uniqueNameIn`（不在 `main.ts` 里手写序号循环）',
+    namingViaPure912(main912))
+  check('adj912 负对照：在 `main.ts` 里手写一份序号循环（`${saveBase} ${i}`）⇒ 同一条判据判假',
+    !namingViaPure912(`${main912}\n    const p = \`\${saveBase} \${i}.png\`\n`) && namingViaPure912(main912))
+  check('adj912 「量不到墨迹」时两个新出口也**明确报错**（Notice + 原因），不静默退回整页',
+    /iJipu：保存为 PNG 失败 —— \$\{ranged\.error\}/.test(main912) &&
+      /iJipu：保存为 SVG 失败 —— \$\{ranged\.error\}/.test(main912) &&
+      /if \(ranged\.error !== undefined\) \{/.test(bodyOf912(main912, 'saveScorePng')) &&
+      /if \(ranged\.error !== undefined\) \{/.test(bodyOf912(main912, 'saveScoreSvg')))
+  check('adj912 负对照：把保存出口那句"范围不可用"的报错删掉 ⇒ 同一条判据判假（不静默退回整页）',
+    !/iJipu：保存为 PNG 失败 —— \$\{ranged\.error\}/.test(main912.replace('iJipu：保存为 PNG 失败 —— ${ranged.error}', '（静默）')))
+
+  // —— ⑧ 视图（导出范围）对**四个**出口都生效（用户裁定 ④；分辨率只对位图两项生效） ——
+  const rangeOk912 = (src: string): boolean =>
+    /this\.resolveRangeBox\(source, probe\.svgs, pane\)/.test(bodyOf912(src, 'copyScoreImage')) &&
+    /this\.resolveRangeBox\(source, probe\.svgs, pane\)/.test(bodyOf912(src, 'saveScorePng')) &&
+    /this\.applyExportRange\(source, r\.svgs, pane\)/.test(bodyOf912(src, 'copyScoreSvg')) &&
+    /this\.applyExportRange\(source, r\.svgs, pane\)/.test(bodyOf912(src, 'saveScoreSvg'))
+  check('adj912 视图（导出范围）组对四个出口都生效：复制图片 / 保存为 PNG 走 `resolveRangeBox(…, pane)`，复制 SVG / 保存为 SVG 走 `applyExportRange(…, pane)`',
+    rangeOk912(main912))
+  check('adj912 负对照：把 `saveScoreSvg` 的范围参数 `pane` 去掉（= SVG 保存不吃导出范围）⇒ 同一条判据判假',
+    !rangeOk912(main912.replace(/this\.applyExportRange\(source, r\.svgs, pane\)/g, 'this.applyExportRange(source, r.svgs)')))
+
+  // —— ⑨ 面板侧的分派（菜单项 → 插件方法；少一个 case 就是"点了没反应"） ——
+  const paneOps912 = (src: string): boolean =>
+    /case 'copy-image':\s*void plugin\.copyScoreImage\(source, plugin\.settings\.imageScale \?\? DEFAULT_IMAGE_SCALE, paneRange\)/.test(src) &&
+    /case 'save-png':\s*void plugin\.saveScorePng\(source, paneRange, saveTarget\)/.test(src) &&
+    /case 'save-svg':\s*void plugin\.saveScoreSvg\(source, paneRange, saveTarget\)/.test(src) &&
+    /case 'scale-1':\s*plugin\.setImageScale\(1\)/.test(src) &&
+    /case 'scale-2':\s*plugin\.setImageScale\(2\)/.test(src) &&
+    /case 'scale-4':\s*plugin\.setImageScale\(4\)/.test(src)
+  check('adj912 面板把六个新 id 都接到插件方法上（复制图片带设置里的分辨率；保存两项带面板自己的落点；分辨率三项改设置）',
+    paneOps912(pane912))
+  check('adj912 负对照：删掉 `case \'save-svg\'` 那一支 ⇒ 同一条判据判假（新增菜单项必须真的接上路由）',
+    !paneOps912(pane912.replace("case 'save-svg':\n          void plugin.saveScoreSvg(source, paneRange, saveTarget)", '')))
 }
 
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。

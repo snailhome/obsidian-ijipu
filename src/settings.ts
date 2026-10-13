@@ -30,7 +30,7 @@ import jianpuLogoPng from '../vendor/icons/Jianpu.png'
 // adj738：笔记 frontmatter 那一层整体删除（含 `frontmatterKey` 的转出与「复制模板」入口）。
 // adj724b：外链统一走这处（Electron 里 `window.open` 不可靠）
 import { openUrlExternally } from './openExternal'
-import { DEFAULT_EMBED_OPEN_MODE, DEFAULT_EXPORT_RANGE, type EmbedOpenMode } from './types'
+import { DEFAULT_EMBED_OPEN_MODE, DEFAULT_EXPORT_RANGE, DEFAULT_IMAGE_SCALE, type EmbedOpenMode } from './types'
 // adj730：微信赞赏码（与应用「关于」页同一张图；构建期内联成 data URI，不联网）
 import donateQrPng from '../vendor/icons/good.png'
 import type IJipuPlugin from './main'
@@ -318,6 +318,31 @@ export class IJipuSettingTab extends PluginSettingTab {
         dd.setValue(this.plugin.settings.exportRange ?? DEFAULT_EXPORT_RANGE)
         dd.onChange((v) => {
           this.plugin.settings.exportRange = v === 'view' ? 'view' : v === 'score' ? 'score' : 'page'
+          void this.plugin.saveSettings({ from: 'settingsTab' })
+        })
+      })
+
+    /**
+     * adj912（用户 2026-10-13 定稿）：**图片分辨率**（1× / 2× / 4×）—— 与菜单「分辨率」组是**同一个值**。
+     *
+     * 只作用于**位图**出口（「复制图片」与「保存为 PNG」）；SVG 是矢量 ⇒ **不受分辨率影响**
+     * （「复制 SVG 文本」「保存为 SVG」不看这个值）。默认 2×（= 144 DPI），缺省值只在 `types.ts` 定义一处。
+     */
+    new Setting(host)
+      .setName('图片分辨率（复制图片 / 保存为 PNG）')
+      .setDesc(
+        '`1×` = 72 DPI（体积最小，只够屏幕看）；`2×` = 144 DPI（**默认**，常见文档插图足够清晰）；' +
+          '`4×` = 288 DPI（最清晰、体积最大）。\n' +
+          '与 `⋯ 更多 → 分辨率` 是**同一个值**。只作用于**位图**出口（「复制图片」「保存为 PNG」）；' +
+          '「复制 SVG 文本」「保存为 SVG」是**矢量**，不受分辨率影响。',
+      )
+      .addDropdown((dd) => {
+        dd.addOption('1', '1×（72 DPI）')
+        dd.addOption('2', '2×（144 DPI，默认）')
+        dd.addOption('4', '4×（288 DPI）')
+        dd.setValue(String(this.plugin.settings.imageScale ?? DEFAULT_IMAGE_SCALE))
+        dd.onChange((v) => {
+          this.plugin.settings.imageScale = v === '1' ? 1 : v === '4' ? 4 : 2
           void this.plugin.saveSettings({ from: 'settingsTab' })
         })
       })
