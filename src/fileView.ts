@@ -13,7 +13,7 @@
 import { Notice, Platform, TextFileView, type TFile, type WorkspaceLeaf } from 'obsidian'
 import { formatJps } from '@ijipu/engine'
 import { mountScorePane, type ScorePaneHandle } from './scorePane'
-import { planJpsInitialView } from './embed/openPlan'
+import { keepsSourceOnPreview, planJpsInitialView } from './embed/openPlan'
 import { jpsViewTitle } from './embed/viewTitle'
 import { DEFAULT_EMBED_OPEN_MODE } from './types'
 import type IJipuPlugin from './main'
@@ -367,6 +367,12 @@ export class IJipuFileView extends TextFileView {
     if (this.embedRoutedFor === file.path) return
     this.embedRoutedFor = file.path
     /**
+     * adj934：这两档下**本页签已经是"完整预览"这个终态**（见 `render()` 的 `keepPreview`）⇒
+     * 失败/起不来时**不必再重画一次**（那本身就是一次可见的重绘）——只提示、保持预览。
+     * 判据与 `main.ts`"要不要还原来源页签"共用同一个纯函数。
+     */
+    const alreadyOnPreview = keepsSourceOnPreview(this.plugin.settings.embedOpenMode ?? DEFAULT_EMBED_OPEN_MODE)
+    /**
      * 异步执行：`render()` 是同步的，而 `openIjipuFile()` 要 await（服务启动 / 页签状态）。
      * 也让本视图先把"正在打开…"画出来——路由失败时用户至少知道发生了什么，而不是一片空白。
      */
@@ -390,7 +396,8 @@ export class IJipuFileView extends TextFileView {
           const url = await this.plugin.getEmbedUrl().catch(() => null)
           if (!url) {
             this.embedRouteFailedFor = file.path
-            this.render()
+            // adj934：这两档的画面上**已经**是完整预览了 ⇒ 不再多余重画（`render()` 仍会走预览那条路）
+            if (!alreadyOnPreview) this.render()
             new Notice(
               '嵌入版 iJipu 暂时不可用 ⇒ 已在 Obsidian 里显示谱面预览；' +
                 '原因见「设置 → iJipu → 诊断」页签的「嵌入版本地服务」（点一下即复制）。',
@@ -418,8 +425,11 @@ export class IJipuFileView extends TextFileView {
          * 为什么在这里兜：为了"当前页签不刷新"（用户要求 ②），`render()` 在 `preview+external` 档
          * 只画了一句轻提示、**没有**先画完整谱面 —— 所以失败时得把那份预览补上，
          * 否则用户点开一个 `.jps` 只会看到一句提示 + 一个 Notice（adj923 的"预览留作兜底"就断了）。
+         *
+         * ⚠ adj934：这两档下 `render()` 已经直接画了完整预览（`keepPreview`）⇒ 这里同样**不必补画**
+         * （`alreadyOnPreview` 为真时跳过；预览还在，用户不会只剩一句提示）。
          */
-        if (!handled && this.externalRouteFailedFor !== file.path && this.file?.path === file.path) {
+        if (!handled && !alreadyOnPreview && this.externalRouteFailedFor !== file.path && this.file?.path === file.path) {
           this.externalRouteFailedFor = file.path
           this.render()
         }
@@ -442,17 +452,31 @@ export class IJipuFileView extends TextFileView {
   private render(): void {
     const { contentEl } = this
     const embedded = this.embedded
+    /** 设置里的「打开 .jps 的方式」（下面 `keepPreview` 与 `planJpsInitialView` 共用同一个值） */
+    const mode = this.plugin.settings.embedOpenMode ?? DEFAULT_EMBED_OPEN_MODE
     /**
      * adj923（用户要求 ②）：**这次打开该长什么样**由纯函数决定（`planJpsInitialView`）——
      * 桌面端按「打开方式」直进嵌入版；手机端 / 内嵌 / 开关关着 ⇒ 沿用原来的轻量预览。
      * 抽成纯函数是为了能在冒烟里逐条断言这四个条件（含手机端与另三档"没变"）。
      */
     const initialView = planJpsInitialView({
-      mode: this.plugin.settings.embedOpenMode ?? DEFAULT_EMBED_OPEN_MODE,
+      mode,
       isDesktop: Platform.isDesktopApp,
       embedded,
       embedEnabled: this.plugin.embedEnabled,
     })
+    /**
+     * adj934（用户 2026-10-14 裁定）：**「右侧栏」「默认应用」两档不再把页签还回去** ⇒
+     * **本页签就是用户最终看到的那个** ⇒ 不能只画一句"正在打开…"的轻提示（那样用户最后盯着一句提示），
+     * 必须像手机端那样**把完整预览画出来**；右栏那一个实例 / 系统默认程序照旧去开。
+     *
+     * 为什么改成这样（完整证据在 `embed/openPlan.ts` 的 `keepsSourceOnPreview()`）：宿主换视图时
+     * **笔记内容必然在插件任何能动手的代码之前就被 detach**，而 `history.back()` 要等这次
+     * `setViewState` 结束才发得出去；中间那次读 `.jps` 又是真文件 I/O ⇒ 至少一次绘制机会
+     * ⇒ "一帧都不闪"做不到。用户给的兜底就是这条：不还原、停在这份谱的预览上。
+     */
+    const keepPreview =
+      keepsSourceOnPreview(mode) && (initialView === 'embed' || initialView === 'preview+external')
     /** 嵌入版起不来过（`embedRouteFailedFor`）⇒ 不再重试，直接走兜底预览 */
     const embedViable =
       initialView === 'embed' &&
@@ -504,8 +528,11 @@ export class IJipuFileView extends TextFileView {
      * 这里只画一句可读的占位：路由做完后本页签要么被换成嵌入版视图（当前页签档）、
      * 要么被关掉（右栏/新页签档）。⚠ 不在这里塞 iframe：那会造成"两个地方同时显示同一份谱"。
      * 占位也不能省：服务启动要时间，没有它用户会看到一片空白（adj775 那类"点了没反应"）。
+     *
+     * ⚠ **adj934**：「右侧栏」「默认应用」两档例外 —— 这两档**不再把页签还回去** ⇒ 本页签就是
+     * 用户最终看到的那个 ⇒ **不能**只画提示，直接往下走、画完整预览（见 `keepPreview`）。
      */
-    if (embedViable && this.file) {
+    if (embedViable && !keepPreview && this.file) {
       const bar = contentEl.createDiv({ cls: 'ijipu-file-bar' })
       bar.createSpan({ cls: 'ijipu-page-label', text: this.file.name })
       const hint = contentEl.createDiv({ cls: 'ijipu-web-hint' })
@@ -528,13 +555,16 @@ export class IJipuFileView extends TextFileView {
      * 然后才把文件交给系统默认程序、再把页签还给用户 ⇒ 用户看到的是一次很重的重画（= "刷新"）。
      * 现在只画一句轻提示、立刻路由；**只有外开失败时**才回到下面的完整预览
      * （`externalRouteFailedFor` 记着这个文件 ⇒ 下一次 `render()` 走兜底那条路，口径没变）。
+     *
+     * ⚠ **adj934**：这一档也**不再把页签还回去**了（用户复核 adj931 之后仍然看得见刷新，并给了兜底方案）
+     * ⇒ 本页签就是最终那个 ⇒ 直接往下画**完整预览**，不再只画一句提示（见 `keepPreview`）。
      */
     const externalViable =
       initialView === 'preview+external' &&
       this.file !== null &&
       !this.editing &&
       this.externalRouteFailedFor !== this.file.path
-    if (externalViable && this.file) {
+    if (externalViable && !keepPreview && this.file) {
       const bar = contentEl.createDiv({ cls: 'ijipu-file-bar' })
       bar.createSpan({ cls: 'ijipu-page-label', text: this.file.name })
       const hint = contentEl.createDiv({ cls: 'ijipu-web-hint' })
@@ -678,6 +708,14 @@ export class IJipuFileView extends TextFileView {
      */
     if (initialView === 'preview+external' && this.file && !this.editing) {
       this.routeToIjipu(this.file)
+    }
+    /**
+     * adj934：「右侧栏」档**不再把页签还回去**了（用户复核 + 兜底裁定，见 `keepPreview`）⇒
+     * 上面那条"轻提示 + 让位"的分支被跳过、完整预览已经画好，这里把活干完：
+     * 去开/揭开右栏那**一个**嵌入版实例。默认应用档的收尾由上面那句负责（同一个函数、同一个守卫）。
+     */
+    if (keepPreview && this.file && !this.editing && initialView === 'embed') {
+      this.routeToIjipu(this.file, true)
     }
   }
 

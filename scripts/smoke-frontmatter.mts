@@ -71,6 +71,8 @@ import { computeGuideLines, cropRectFor, guideLimits, guidePlacement } from '../
 // （`planJpsInitialView`）两个纯函数 —— 都能在冒烟里**真跑**（见文件末尾的 adj923 区块）
 import {
   embedEditLeavesObsidian,
+  // adj934：这两档「不还原来源页签、就停在 `.jps` 预览上」的判据（用户给的兜底方案）
+  keepsSourceOnPreview,
   pickRightSidebarLeaf,
   planEmbedTarget,
   planJpsInitialView,
@@ -676,10 +678,16 @@ console.log('[3g] adj631 设置面板：多页签 / 收藏音色分类列表 / �
      * 三个条件一个都不许少（这正是"就地替换档不动来源页签"的判据），
      * 并且**代码里**不许再出现 `sourceLeaf.detach()`（用户实测的"页签被关掉"就是它；
      * 源码注释里留一句"从前是 detach"不算 —— 所以这里先 `codeOf()` 剥注释）。
+     *
+     * ⚠ adj934：这条闸上多了第四个条件 `!keepsSourceOnPreview(mode)` ——「右侧栏」「默认应用」
+     * 两档**不再还原**（用户裁定：停在该 `.jps` 的预览上）。判据跟着改守新形状，
+     * **语义一条没松**：仍然是"不 detach、走 `restoreSourceLeaf`"，只是多了"哪几档要还原"。
      */
     check('adj724b 插件按计划决定"来源页签"的收尾（`plan.detachSource`）：就地替换 / 来源即本 leaf 时不动它，且**不再** `detach` 用户的页签',
       /await this\.plugin\.openIjipuFile\(file, this\.leaf\)/.test(viewSrc) &&
-        /plan\.detachSource && !isSameLeaf && sourceLeaf \? this\.restoreSourceLeaf\(sourceLeaf\) : null/.test(mainSrc) &&
+        /plan\.detachSource && !isSameLeaf && sourceLeaf && !keepsSourceOnPreview\(mode\)[\s\S]{0,60}?\? this\.restoreSourceLeaf\(sourceLeaf\)[\s\S]{0,20}?: null/.test(
+          mainSrc,
+        ) &&
         !/sourceLeaf\.detach\(\)/.test(codeOf(mainSrc)))
   }
   /**
@@ -6393,15 +6401,22 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
        * 只有外开失败（`externalRouteFailedFor`）才回到下面的完整预览兜底。
        */
       /const externalViable =[\s\S]{0,220}?initialView === 'preview\+external'/.test(fv923) &&
-      /if \(externalViable && this\.file\) \{[\s\S]{0,400}?正在用系统默认应用打开/.test(fv923) &&
+      /**
+       * ⚠ adj934：`externalViable` / `embedViable` 两个分支都多了 `!keepPreview`
+       * ——「右侧栏」「默认应用」两档现在**直接画完整预览**（不再只给一句轻提示就 return）。
+       * 下面那条 `initialView === 'preview+external'` 的收尾路由**照旧**（两档都要走到它）。
+       */
+      /if \(externalViable && !keepPreview && this\.file\) \{[\s\S]{0,400}?正在用系统默认应用打开/.test(fv923) &&
       /if \(initialView === 'preview\+external' && this\.file && !this\.editing\) \{[\s\S]{0,160}?this\.routeToIjipu\(this\.file\)/.test(fv923) &&
       // 占位那句（服务启动要时间，没有它用户会看到一片空白）
       /正在用嵌入版 iJipu 打开/.test(fv923))
   check('adj923 ② 视图侧负对照：把"直进嵌入版"那句删掉（= 回到"一律先预览"）⇒ 上面那条判假',
-    !/this\.routeToIjipu\(this\.file, true\)/.test(fv923.replace("this.routeToIjipu(this.file, true)", "")))
+    !/this\.routeToIjipu\(this\.file, true\)/.test(fv923.replace(/this\.routeToIjipu\(this\.file, true\)/g, '')))
   /** adj931 ④：「默认应用」档"先给轻提示就路由"这段判据单独拎出来（负对照要把**整段**删掉） */
   const defaultAppEarly931 = (src: string): boolean =>
-    /if \(externalViable && this\.file\) \{[\s\S]{0,400}?正在用系统默认应用打开[\s\S]{0,400}?this\.routeToIjipu\(this\.file\)\n {6}return/.test(src)
+    /if \(externalViable && !keepPreview && this\.file\) \{[\s\S]{0,400}?正在用系统默认应用打开[\s\S]{0,400}?this\.routeToIjipu\(this\.file\)\n {6}return/.test(
+      src,
+    )
   check('adj931 ④ 视图侧负对照：「默认应用」档把"先给轻提示再让位"**整段**删掉（= 回到 adj923 的"先在本页签画完整预览、再外开"）⇒ 上面那条判假',
     defaultAppEarly931(fv923) &&
       !defaultAppEarly931(fv923.replace(/const externalViable =[\s\S]*?\n    \}\n/, '\n')))
@@ -6651,6 +6666,8 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
    * （`const restoring = … this.restoreSourceLeaf(sourceLeaf)`，末尾只 `await restoring`）。
    * 判据跟着改守新形状：**判据本身没变**（不 detach、走 `restoreSourceLeaf`），
    * 另外多了"提前"这一条（见下面 adj931 区块）。
+   *
+   * ⚠ adj934：`restoring` 那句多了"哪几档要还原"的条件（`!keepsSourceOnPreview(mode)`）。
    */
   const restoreJudge926 = (src: string): boolean => {
     const seg = /const restoring: Promise<'back' \| 'detach'> \| null =\n([\s\S]*?)\n\n/.exec(src)?.[1] ?? ''
@@ -6658,7 +6675,9 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
     const code = codeOf(seg)
     return (
       code.length > 0 &&
-      /plan\.detachSource && !isSameLeaf && sourceLeaf \? this\.restoreSourceLeaf\(sourceLeaf\) : null/.test(code) &&
+      /plan\.detachSource && !isSameLeaf && sourceLeaf && !keepsSourceOnPreview\(mode\)[\s\S]{0,60}?\? this\.restoreSourceLeaf\(sourceLeaf\)[\s\S]{0,20}?: null/.test(
+        code,
+      ) &&
       !/sourceLeaf\.detach\(\)/.test(codeOf(src)) &&
       tail.length > 0
     )
@@ -6667,19 +6686,22 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
     restoreJudge926(main926))
   check('adj926 接线负对照：把它改回 `sourceLeaf.detach()`（adj926 之前的写法）⇒ 上面那条判假',
     !restoreJudge926(
-      main926.replace('sourceLeaf ? this.restoreSourceLeaf(sourceLeaf) : null', 'sourceLeaf ? sourceLeaf.detach() : null'),
+      main926.replace('? this.restoreSourceLeaf(sourceLeaf)', '? sourceLeaf.detach()'),
     ))
   check('adj926 接线负对照：把"还原"那句直接删掉（= 谁都不收尾）⇒ 上面那条判假',
     !restoreJudge926(
       main926.replace(
-        'plan.detachSource && !isSameLeaf && sourceLeaf ? this.restoreSourceLeaf(sourceLeaf) : null',
-        'null',
+        'plan.detachSource && !isSameLeaf && sourceLeaf && !keepsSourceOnPreview(mode)',
+        'false',
       ),
     ))
   check('adj926 右栏档：还原成功后**把活动页签还给来源页签**（`revealLeaf`/`setViewState({active})` 会把活动页签挪到右栏 ⇒ 用户要求"当前活动页签不变"）',
     /plan\.kind === 'right-sidebar' && disposal === 'back'[\s\S]{0,160}?setActiveLeaf\(sourceLeaf, \{ focus: true \}\)/.test(main926))
-  check('adj926 「默认应用」档：外开**成功**才还原来源页签（失败时留着谱面预览 + Notice 带失败原文）',
-    /const opened = await openWithDefaultApp\(this\.app, file\.path\)[\s\S]{0,200}?if \(opened && sourceLeaf\) await this\.restoreSourceLeaf\(sourceLeaf\)/.test(main926))
+  check('adj926 「默认应用」档：**外开成功才有下一步动作**（失败时留着谱面预览 + Notice 带失败原文）；⚠ adj934 起这一步的答案固定是"不还原"（用户裁定的兜底方案，判据见 `keepsSourceOnPreview`）',
+    /const opened = await openWithDefaultApp\(this\.app, file\.path\)[\s\S]{0,200}?if \(opened && sourceLeaf && !keepsSourceOnPreview\(mode\)\) await this\.restoreSourceLeaf\(sourceLeaf\)/.test(
+      main926,
+    ) &&
+      /打开方式=defaultApp：按 adj934 的兜底口径\*\*不还原\*\*来源页签/.test(main926))
   check('adj926 手机端**一行没改**：四种打开方式仍一律 `preview`（先预览、再其它操作）⇒ 根本不进路由、页签不动',
     (['right', 'tab', 'current', 'defaultApp'] as const).every(
       (m) => planJpsInitialView({ mode: m, isDesktop: false, embedded: false, embedEnabled: true }) === 'preview',
@@ -7116,10 +7138,13 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
 
   // ───────────────── 接线（源码级）：还原提前 + 不去猴补丁宿主 ─────────────────
 
+  /**
+   * ⚠ adj934：这句的**形状**变了（多了 `!keepsSourceOnPreview(mode)`，还折了行）——
+   * 判据改守新形状，守的还是同一件事：**"还回去"这件事在动目标页签之前就发出去了**。
+   * （「右侧栏」档现在不还了，但这句代码本身仍在、仍在同一个位置 —— 它守的是「新的页签」档。）
+   */
   const restoringFirst931 = (src: string): boolean => {
-    const iRestore = src.indexOf(
-      'plan.detachSource && !isSameLeaf && sourceLeaf ? this.restoreSourceLeaf(sourceLeaf) : null',
-    )
+    const iRestore = src.indexOf('plan.detachSource && !isSameLeaf && sourceLeaf && !keepsSourceOnPreview(mode)')
     const iTarget = src.indexOf('await target.setViewState({ type: VIEW_TYPE_IJIPU_APP, active: true })')
     return iRestore > 0 && iTarget > iRestore
   }
@@ -7128,7 +7153,7 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
   check('adj931 ② 源码负对照：把它挪回末尾（adj926 的位置）⇒ 上面那条判假',
     !restoringFirst931(
       main931.replace(
-        / {4}const restoring: Promise<'back' \| 'detach'> \| null =\n {6}plan\.detachSource && !isSameLeaf && sourceLeaf \? this\.restoreSourceLeaf\(sourceLeaf\) : null\n\n/,
+        / {4}const restoring: Promise<'back' \| 'detach'> \| null =\n {6}plan\.detachSource && !isSameLeaf && sourceLeaf && !keepsSourceOnPreview\(mode\)\n {8}\? this\.restoreSourceLeaf\(sourceLeaf\)\n {8}: null\n/,
         '',
       ),
     ))
@@ -7141,7 +7166,7 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
   // ───────────────── ④ 「默认应用」档：先让位、失败才补预览 ─────────────────
 
   const externalFallback931 = (src: string): boolean =>
-    /const handled = await this\.plugin\.openIjipuFile\(file, this\.leaf\)[\s\S]{0,400}?if \(!handled[\s\S]{0,200}?this\.externalRouteFailedFor = file\.path[\s\S]{0,80}?this\.render\(\)/.test(
+    /const handled = await this\.plugin\.openIjipuFile\(file, this\.leaf\)[\s\S]{0,900}?if \(!handled[\s\S]{0,300}?this\.externalRouteFailedFor = file\.path[\s\S]{0,80}?this\.render\(\)/.test(
       src,
     )
   check('adj931 ④ 「默认应用」档外开失败**仍退回完整谱面预览**（`externalRouteFailedFor` 记路径 + 重画）—— adj923 的"预览兜底"没断',
@@ -7149,6 +7174,22 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
   check('adj931 ④ 负对照：把兜底那段删掉（失败就只剩一句提示）⇒ 上面那条判假',
     !externalFallback931(
       fv931.replace('this.externalRouteFailedFor = file.path\n          this.render()', 'void 0'),
+    ))
+  /**
+   * ⚠ adj934：这两档（右侧栏/默认应用）现在**本来就画着完整预览** ⇒ 兜底那句多了
+   * `!alreadyOnPreview`（不必再重画一次同样的预览）。判据改守新形状，守的还是同一件事：
+   * **失败时视图一定会回到"完整谱面预览"**（要么本来就画着、要么补画一次）。
+   */
+  check('adj934 视图侧：这两档外开/嵌入失败时**不会只剩一句提示** —— 预览本来就在（`!alreadyOnPreview` 时跳过多余重画），其余档照旧补画一次',
+    /const alreadyOnPreview = keepsSourceOnPreview\(this\.plugin\.settings\.embedOpenMode \?\? DEFAULT_EMBED_OPEN_MODE\)/.test(
+      fv931,
+    ) &&
+      /if \(!alreadyOnPreview\) this\.render\(\)/.test(fv931) &&
+      /if \(!handled && !alreadyOnPreview && this\.externalRouteFailedFor !== file\.path/.test(fv931) &&
+      externalFallback931(fv931))
+  check('adj934 视图侧负对照：把 `!alreadyOnPreview` 拿掉（= 又无条件重画一次完整预览）⇒ 上面那条判假',
+    !/if \(!alreadyOnPreview\) this\.render\(\)/.test(
+      fv931.replace('if (!alreadyOnPreview) this.render()', 'this.render()'),
     ))
   check('adj931 ④ `openIjipuFile()` / `openEmbedLeaf()` 现在回报"办成了没有"（`Promise<boolean>`），视图据此决定要不要补预览兜底',
     /async openIjipuFile\(file: TFile \| null, sourceLeaf: WorkspaceLeaf \| null = null\): Promise<boolean>/.test(main931) &&
@@ -7174,6 +7215,472 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       planEmbedTarget('tab', true).kind === 'new-tab' && planEmbedTarget('tab', true).detachSource === true &&
       planEmbedTarget('right', true).kind === 'right-sidebar' && planEmbedTarget('right', true).detachSource === true,
     `jpsViewType=${jpsViewType931 || '（没读到！）'} appViewType=${appViewType931 || '（没读到！）'}`)
+}
+
+/**
+ * ---- adj934（用户 2026-10-14 复核：「右侧栏 / 默认应用两种打开方式下，点文件列表 jps 文件，
+ *      当前页签还是会刷新」＋ 用户给的**兜底变通方案**）----
+ *
+ * 用户原话：
+ *   「右侧栏 / 默认应用两种打开方式下，点击文件列表 jps 文件，**当前页签还是会刷新**」
+ *   「如果还是不行，有一个变通方式，就是**显示这个 jps 文件的预览窗口**，因为只有这两种是
+ *     不需要涉及页签的，是否可行？」
+ *
+ * ## 本轮在 `obsidian.asar` 1.13.7 里逐句核对的**换视图时序**（adj931 没挖到这一层）
+ *
+ * `WorkspaceLeaf.setViewState()`（命名字段按 asar 原文）：
+ * ```
+ * if (this.working) return;  this.working = true;
+ * try {
+ *   n = this.view                              // 旧视图（用户那份笔记）
+ *   a = n && !(n instanceof EmptyView) ? this.getHistoryState() : undefined   // ★ 要还原到哪
+ *   s = { history:false, layout:false, close:false }
+ *   if (e.type !== n.getViewType()) {
+ *     n = viewRegistry.getViewCreatorByType(e.type)(this)   // ★ 我们的视图**构造函数**（插件最早的介入点）
+ *     await this.open(n)                                    // 见下
+ *     s.history = true
+ *   }
+ *   await n.setState(e.state || {}, s)                      // FileView.loadFile ⇒ 读文件 + render
+ *   if (e.active) workspace.setActiveLeaf(this, {focus:true})
+ *   this.updateHeader()                                     // 页签名
+ *   if (s.history && a) this.recordHistory(a)               // ★ 把"上一份视图"压进 backHistory
+ *   s.done && s.done()
+ * } finally { this.working = false }
+ * ```
+ * `WorkspaceLeaf.open(view)`：`i = old.close()`（`View.close()` **第一句**就是 `containerEl.detach()`
+ * ⇒ 笔记内容**从这里就已经离开 DOM**）⇒ `await i` ⇒ `containerEl.setChildrenInPlace([resizeHandleEl])`
+ * ⇒ `this.view = newView` ⇒ `await newView.open(containerEl)`（挂容器 + `await onOpen()`）。
+ * `LeafHistory.go(-1)`：**第一句就是** `if (this.owner.working) return new Notice(msgTabBusy())`
+ * —— 忙的时候**不弹栈、直接中止**，还会弹一句"页签忙"。
+ *
+ * ⇒ 三条硬事实（本轮断言就按这三条钉）：
+ *  ① 笔记内容**必然**在插件的任何"能动手的代码"（`onOpen`/`setState`）**之前**就被宿主 detach；
+ *  ② `history.back()` 只能在**这次 `setViewState` 结束、`working` 放掉之后**发；
+ *  ③ 而 `setState` 里读 `.jps` 文件走的是 `vault.read()` ⇒ `adapter.read()` ⇒ **真文件 I/O = 宏任务**
+ *     ⇒ 这次任务在"笔记已经 detach、我们还没拿到控制权"时结束 ⇒ **至少有一次绘制机会**。
+ *
+ * ## 这一节怎么"真跑"（以及它**证明不了**什么）
+ *
+ * 下面把宿主的 `setViewState` / `open` / `LeafHistory.go` **照上面的控制流**搭成一个假宿主，
+ * 用**真的 `async/await` + 真的定时器**跑一遍"用户点文件列表里的 `.jps`"，并记下：
+ *  · `ticks`：每一步（谁先谁后 + `performance.now()` 毫秒）；
+ *  · `paints`：**每次让位给宏任务**时，当时的"画面"（页签名 + 内容区）。
+ * 绘制模型只有一条规则：**微任务链不可能被绘制打断；让位给一个宏任务时才拿到一次绘制机会**。
+ * 于是可以判"中间态到底有没有被画出来过"。
+ *
+ * ⚠ 证明不了"真 Obsidian 里就是这样"：这台机器上跑不了 Obsidian，假宿主的时序是**照 asar 抄的**；
+ *   真浏览器只在**帧边界**（~16.7ms）合成，所以"内容区为空"的那一帧**可能**被跳过 ⇒ 我们**不能**
+ *   宣称"零闪烁"（下面的 `zeroFrame934` 在保守模型下对**每一种**变体都判假，正是这个意思）。
+ *   最终"还闪不闪"只能由用户在 Obsidian 里重载亲眼看。
+ */
+{
+  const main934 = String(readFileSync('src/main.ts', 'utf8'))
+  const fv934 = String(readFileSync('src/fileView.ts', 'utf8'))
+  const av934 = String(readFileSync('src/embed/appView.ts', 'utf8'))
+  const op934 = String(readFileSync('src/embed/openPlan.ts', 'utf8'))
+  const jpsViewType934 = /export const VIEW_TYPE_IJIPU = '([^']+)'/.exec(fv934)?.[1] ?? ''
+  const appViewType934 = /export const VIEW_TYPE_IJIPU_APP = '([^']+)'/.exec(av934)?.[1] ?? ''
+  const modes934 = ['right', 'tab', 'current', 'defaultApp'] as const
+  const jpsPath934 = '曲谱集/半山听雨.jps'
+  const jpsName934 = '半山听雨.jps'
+
+  // ───────────────── ① 口径（纯函数，直接跑）：这两档"不还原、停在预览上" ─────────────────
+
+  check('adj934 ① 口径：**只有**「右侧栏」「默认应用」两档不还原来源页签（就停在该 `.jps` 的预览上）；「新的页签」档照旧还回去、「当前页签」档本就是就地替换',
+    keepsSourceOnPreview('right') &&
+      keepsSourceOnPreview('defaultApp') &&
+      !keepsSourceOnPreview('tab') &&
+      !keepsSourceOnPreview('current'),
+    modes934.map((m) => `${m}=${keepsSourceOnPreview(m)}`).join(' '))
+  check('adj934 ① 负对照：把判据写成"四档一律不还原"（顺手把「新的页签」档也改了）⇒ 上面那条判据**判假**（用户明确要求不许动那一档）',
+    ((): boolean => {
+      /** 上面那条判据的形状（同一个"判据函数"喂给两份实现） */
+      const judge934 = (f: (m: (typeof modes934)[number]) => boolean): boolean =>
+        f('right') && f('defaultApp') && !f('tab') && !f('current')
+      const allTrue934 = (_m: (typeof modes934)[number]): boolean => true
+      return judge934(keepsSourceOnPreview) && !judge934(allTrue934)
+    })(),
+    'tab 档必须仍为 false')
+  check('adj934 ① 这条口径**不动分档本身**（`planEmbedTarget` 仍是 adj923/926/931 的老结果 —— 只换"要不要还原"这一步的答案）',
+    planEmbedTarget('right', true).kind === 'right-sidebar' &&
+      planEmbedTarget('right', true).detachSource === true &&
+      planEmbedTarget('tab', true).kind === 'new-tab' &&
+      planEmbedTarget('tab', true).detachSource === true &&
+      planEmbedTarget('current', true).kind === 'replace-source' &&
+      planEmbedTarget('current', true).detachSource === false)
+
+  // ───────────────── ②③ 时序夹具：假宿主（照 asar 控制流）+ 真定时器 + 绘制模型 ─────────────────
+
+  type Tick934 = { t: number; what: string }
+  type Paint934 = { t: number; n: number; title: string; content: string; why: string }
+  /**
+   * 变体：
+   *  · `adj931`       本轮之前线上跑的写法（还原排在 `setTimeout(0)` + `saveNow` + `getEmbedUrl` **之后**，
+   *                   但在"建目标页签"之前发出）
+   *  · `late`         adj926 的旧顺序（还原排在"建目标页签 + 等 iframe"**之后**）—— 负对照
+   *  · `doneSync`     本轮评估的"更早翻回去"的**错误形态**：在宿主 `s.done()` 里**同步**调 `history.back()`
+   *  · `earliest`     本轮评估的"更早翻回去"的**正确形态**：`s.done()` 之后**微任务**里翻
+   *                   —— ⚠ **我们评估过、当前未采用**（原因见下面的 `zeroFrame934`）
+   *  · `keepPreview`  **本轮采用**（用户裁定的兜底方案）：这两档一次还原都不做
+   */
+  type Variant934 = 'adj931' | 'late' | 'doneSync' | 'earliest' | 'keepPreview'
+
+  class Clock934 {
+    readonly ticks: Tick934[] = []
+    readonly paints: Paint934[] = []
+    /** 画面上正在显示什么：页签名 + 内容区（`NOTE` = 用户那份笔记、`HINT`/`PREVIEW` = 我们的 `.jps` 视图） */
+    title = '工作笔记'
+    content = 'NOTE'
+    private n = 0
+    private readonly t0 = performance.now()
+    now(): number {
+      return Math.round((performance.now() - this.t0) * 10) / 10
+    }
+    tick(what: string): void {
+      this.ticks.push({ t: this.now(), what })
+    }
+    /** **先**记下当下画面，**再**让位给宏任务（浏览器就是在让位处合成当下的 DOM） */
+    async yieldMs(why: string, ms: number): Promise<void> {
+      this.n += 1
+      this.paints.push({ t: this.now(), n: this.n, title: this.title, content: this.content, why })
+      await new Promise<void>((r) => setTimeout(r, ms))
+    }
+  }
+
+  interface Run934 {
+    clock: Clock934
+    /** 来源页签（用户那个页签）的历史栈：栈尾 = 用户可按页签栏那枚「←」回去的那一份视图 */
+    backHistory: { type: string; title: string }[]
+    /** 真的把来源页签翻回去的次数 */
+    restores: number
+    /** 宿主 `history.go()` 因为 `working` 为真而弹出的「页签忙」次数 */
+    busyNotices: number
+  }
+
+  type Result934 = { history: boolean; done?: () => void }
+  type View934 = {
+    type: string
+    title: () => string
+    open: () => Promise<void>
+    setState: (r: Result934) => Promise<void>
+  }
+
+  const run934 = async (mode: (typeof modes934)[number], variant: Variant934): Promise<Run934> => {
+    const c = new Clock934()
+    const backHistory: { type: string; title: string }[] = []
+    let restores = 0
+    let busyNotices = 0
+    let working = false
+
+    const blank = (type: string): View934 => ({
+      type,
+      title: () => '新页签',
+      open: async () => undefined,
+      setState: async () => undefined,
+    })
+    let view: View934 = { type: 'markdown', title: () => '工作笔记', open: async () => undefined, setState: async () => undefined }
+    const getHistoryState = (): { type: string; title: string } => ({ type: view.type, title: view.title() })
+
+    /** = `WorkspaceLeaf.open(n)`：先关旧视图（detach ⇒ 内容区空了），再挂新视图容器 */
+    const mount = async (next: View934): Promise<void> => {
+      const old = view
+      if (next === old) return
+      c.content = ''
+      c.tick(`宿主 close(${old.type})：\`containerEl.detach()\` ⇒ **笔记内容在这一刻就已经离开 DOM**`)
+      view = next
+      c.tick(`宿主 mount(${next.type})：新视图容器挂上去（此刻还没画任何内容）`)
+      await next.open()
+    }
+
+    const setViewState = async (st: { type: string; active?: boolean }, popstate = false): Promise<void> => {
+      if (working) {
+        c.tick('宿主 setViewState 第一句 `if (this.working) return` ⇒ 被挡下')
+        return
+      }
+      working = true
+      try {
+        let v = view
+        const sameType = st.type === v.type
+        const prev = sameType ? null : getHistoryState()
+        const result: Result934 = { history: false }
+        if (!sameType) {
+          v = makeView934(st.type)
+          await mount(v)
+          result.history = true
+        }
+        await v.setState(result)
+        if (st.active) c.tick('宿主 setActiveLeaf')
+        c.title = v.title()
+        c.tick(`宿主 updateHeader()：页签名 = ${c.title}`)
+        if (result.history && prev && !popstate) backHistory.push(prev)
+        result.done?.()
+        c.tick('宿主 setViewState 结束（`finally` 才把 working 放掉）')
+      } finally {
+        working = false
+      }
+    }
+
+    /** = `LeafHistory.go(-1)`：忙 ⇒ 弹「页签忙」并中止（**栈都不动**） */
+    const historyBack = async (): Promise<void> => {
+      if (working) {
+        busyNotices += 1
+        c.tick('宿主 `history.go(-1)`：`working===true` ⇒ 弹「页签忙」并中止（连栈都没动）')
+        return
+      }
+      const target = backHistory.pop()
+      if (!target) {
+        c.tick('宿主 `history.go(-1)`：`backHistory` 空 ⇒ 空操作')
+        return
+      }
+      c.tick(`宿主 history.go(-1)：从历史里取出「${target.title}」，popstate=true 翻回去`)
+      await setViewState(target, true)
+    }
+
+    const makeView934 = (type: string): View934 => {
+      if (type === jpsViewType934) {
+        return {
+          type,
+          title: () => jpsName934,
+          open: async () => c.tick('插件 `.jps` 视图 `onOpen()`'),
+          setState: async (result) => {
+            /**
+             * `TextFileView.onLoadFile` ⇒ `await vault.read(file)` ⇒ `adapter.read()` ⇒ **真文件 I/O**
+             * ⇒ 这一次任务在这里结束 ⇒ **第一次绘制机会**（此时笔记已经被 detach 了）。
+             */
+            await c.yieldMs('读 `.jps` 文件（`vault.read` ⇒ 真 I/O）⇒ 让位给宏任务', 3)
+            c.tick('插件 `.jps` 视图 `setState()`：文件读完')
+            c.content = variant === 'adj931' || variant === 'late' || variant === 'doneSync' ? 'HINT' : 'PREVIEW'
+            c.tick(`插件 \`render()\`：内容 = ${c.content}`)
+            c.title = jpsName934
+            c.tick(`\`FileView.loadFile\` 末尾自己那句 \`updateHeader()\`：页签名 = ${c.title}`)
+            if (variant === 'doneSync') {
+              result.done = () => {
+                c.tick('插件在宿主 `s.done()` 里**同步**调 `history.back()`（趁 working 还没放掉）')
+                restores += 1
+                void historyBack()
+                finish() // 这一变体只验"同步翻不动"（后面的建目标页签/外开不参与判据）
+              }
+            } else if (variant === 'earliest') {
+              result.done = () => {
+                c.tick('结果回调 `s.done()`：排一个**微任务**（等 `working` 放掉后翻回去）')
+                queueMicrotask(() => {
+                  void route934('s.done() 之后的微任务')
+                })
+              }
+            } else {
+              /* `adj931` / `late` / `keepPreview` 三档都走 `routeToIjipu()`（内部第一句就是 `window.setTimeout(0)`） */
+              c.tick('插件 `routeToIjipu()`：`window.setTimeout(0)` ⇒ **又让位一次宏任务**')
+              setTimeout(() => {
+                void route934('setTimeout 到点')
+              }, 0)
+            }
+          },
+        }
+      }
+      if (type === 'markdown') {
+        return {
+          type,
+          title: () => '工作笔记',
+          open: async () => c.tick('宿主 `MarkdownView.onOpen()`'),
+          setState: async () => {
+            // 笔记内容在宿主缓存里（`vault.cachedRead` 命中 ⇒ 纯微任务，**不让位**）
+            await Promise.resolve()
+            c.content = 'NOTE'
+            c.tick('`MarkdownView` 渲染：内容 = NOTE（笔记回来了）')
+          },
+        }
+      }
+      return blank(type)
+    }
+
+    let finish!: () => void
+    const finished = new Promise<void>((r) => {
+      finish = r
+    })
+
+    const route934 = async (phase: string): Promise<void> => {
+      c.tick(`插件路由开始（${phase}）`)
+      const plan = planEmbedTarget(mode, true)
+      /**
+       * `adj931` / `late` / `keepPreview` 三档都走真实的 `routeToIjipu()`：它第一句是 `window.setTimeout(0)`，
+       * 之后还要 `saveNow()`（真 I/O）与 `getEmbedUrl()`（可能得先起本地服务）—— **三次让位**。
+       * （`earliest` 是我们评估的假想形态：在 `s.done()` 之后的微任务里翻回去，不让位。）
+       */
+      if (variant !== 'earliest') {
+        await c.yieldMs('`routeToIjipu` 的 `setTimeout(0)` 到点', 0)
+        await c.yieldMs('`saveNow()`（等一次真 I/O）', 1)
+        await c.yieldMs('`getEmbedUrl()`（可能要先起本地服务）', 2)
+      }
+      /**
+       * adj931：还原**在这三让位之后、建目标页签之前**发出（和线上代码同一位置）。
+       * ⚠ 但那三个宏任务早就把"`.jps` 占位页签 + 页签名"画出去了 ⇒ 用户已经看见了。
+       */
+      if (variant === 'adj931') {
+        c.tick('`restore-start`：把来源页签还回去（在建目标页签之前发出）')
+        restores += 1
+        await historyBack()
+        c.tick('`restore-done`：来源页签已回到上一份视图')
+      }
+      /**
+       * ⚠ `earliest` 变体：还原**先做**，而且全程不让位给宏任务 ⇒ 中间态一帧都画不出来。
+       * 这是"更早翻回去"能达到的最好结果 —— **我们评估过、当前未采用**（见 `zeroFrame934`）。
+       */
+      if (variant === 'earliest') {
+        c.tick('`restore-start`：**在同一个任务里**（微任务）翻回上一份视图')
+        restores += 1
+        await historyBack()
+        c.tick('`restore-done`：来源页签已回到上一份视图（全程没有让位给宏任务）')
+      }
+      if (mode === 'defaultApp') {
+        c.tick('「默认应用」档：把文件交给系统默认程序（站内一个页签都不建）')
+        await c.yieldMs('`openWithDefaultApp()`（真的把文件交出去）', 3)
+      } else if (plan.kind === 'right-sidebar') {
+        c.tick('揭开右侧栏那**一个**嵌入版实例（`getLeavesOfType` ⇒ 复用）')
+        await c.yieldMs('建目标页签 / 等 iframe 就绪', 4)
+      } else {
+        await c.yieldMs('建目标页签 / 等 iframe 就绪', 4)
+      }
+      if (variant === 'late') {
+        c.tick('`restore-start`：把来源页签还回去（adj926 的旧顺序：排在"建目标 + 等 iframe"之后）')
+        restores += 1
+        await historyBack()
+        c.tick('`restore-done`：来源页签已回到上一份视图')
+      }
+      if (variant === 'keepPreview') {
+        c.tick('adj934：这两档**一次还原都不做** ⇒ 来源页签就停在这份 `.jps` 的预览上（用户按「←」可退回笔记）')
+      }
+      finish()
+    }
+
+    c.tick(`用户点文件列表里的 ${jpsName934}（普通左键）`)
+    c.tick('宿主 `NavFile.onSelfClick()`：`getLeaf(false).openFile(file)` ⇒ **就地换掉用户当前页签**')
+    void setViewState({ type: jpsViewType934, active: true })
+    await finished
+    return { clock: c, backHistory, restores, busyNotices }
+  }
+
+  /** 判据 A：**中间态**（`HINT`/`PREVIEW` 这种"中转画面"）与**页签标题变化**一帧都没被画出来过 */
+  const noIntermediateFrame934 = (r: Run934): boolean =>
+    r.restores > 0 &&
+    r.clock.paints.length > 0 &&
+    r.clock.paints.every((p) => p.title === '工作笔记' && p.content !== 'HINT' && p.content !== 'PREVIEW')
+  /** 判据 B（**零帧**）：连"内容区为空"的那一帧都没有 —— 用户眼里什么都没发生 */
+  const zeroFrame934 = (r: Run934): boolean => r.clock.paints.every((p) => p.content !== '')
+  const frameList934 = (r: Run934): string =>
+    r.clock.paints.map((p) => `#${p.n}@{${p.t}ms}「${p.title}」/${p.content || '（空）'}`).join(' → ') || '（一帧都没有）'
+
+  const rRightAdj931 = await run934('right', 'adj931')
+  const rRightLate = await run934('right', 'late')
+  const rRightDoneSync = await run934('right', 'doneSync')
+  const rRightEarliest = await run934('right', 'earliest')
+  const rRightKeep = await run934('right', 'keepPreview')
+  const rDefaultKeep = await run934('defaultApp', 'keepPreview')
+  const rDefaultAdj931 = await run934('defaultApp', 'adj931')
+
+  console.log(
+    '   adj934 夹具实测（假宿主照 `obsidian.asar` 1.13.7 的控制流搭 + 真定时器 + "让位给宏任务才可能绘制"模型）：\n' +
+      `     右侧栏 / adj931（本轮之前）  画出来的帧=${frameList934(rRightAdj931)}\n` +
+      `     右侧栏 / 排在 iframe 之后    画出来的帧=${frameList934(rRightLate)}\n` +
+      `     右侧栏 / s.done() 里同步翻   画出来的帧=${frameList934(rRightDoneSync)}｜「页签忙」${rRightDoneSync.busyNotices} 次、真的翻回去 ${rRightDoneSync.restores} 次\n` +
+      `     右侧栏 / 最早翻（未采用）    画出来的帧=${frameList934(rRightEarliest)}\n` +
+      `     右侧栏 / 本轮采用（不还原）  画出来的帧=${frameList934(rRightKeep)}\n` +
+      `     默认应用 / 本轮采用（不还原）画出来的帧=${frameList934(rDefaultKeep)}\n` +
+      `     右侧栏时序（adj931 变体，毫秒）：\n${rRightAdj931.clock.ticks.map((x) => `       ${String(x.t).padStart(6)}ms  ${x.what}`).join('\n')}`,
+  )
+
+  check('adj934 ② 复现用户报的现象：adj931 那套写法下，**"`.jps` 占位页签（HINT）+ 页签名已变成 `半山听雨.jps`"真的被画出来过** ⇒ 这就是用户看到的"当前页签刷新"',
+    rRightAdj931.clock.paints.some((p) => p.content === 'HINT' && p.title === jpsName934) && rRightAdj931.restores === 1,
+    frameList934(rRightAdj931))
+  check('adj934 ② 负对照：把还原挪到"建目标页签 + 等 iframe"**之后**（adj926 的旧顺序）⇒ 中间态帧数**只多不少**（越晚越糟）',
+    rRightLate.clock.paints.length >= rRightAdj931.clock.paints.length &&
+      rRightLate.clock.paints.some((p) => p.content === 'HINT'),
+    `adj931=${rRightAdj931.clock.paints.length} 帧 / late=${rRightLate.clock.paints.length} 帧`)
+  check('adj934 ② 边界（本轮新挖到的事实）：想"更早"到 `s.done()` 里**同步**翻回去 ⇒ 宿主 `history.go(-1)` 第一句就是 `if (owner.working) return Notice(页签忙)` ⇒ **一次都翻不动**（还会弹提示）',
+    rRightDoneSync.busyNotices === 1 && rRightDoneSync.restores === 1 && rRightDoneSync.backHistory.length === 1,
+    `「页签忙」${rRightDoneSync.busyNotices} 次、` +
+      `来源页签历史里还剩 ${rRightDoneSync.backHistory.length} 条（= 那份笔记，说明栈没被动过）`)
+  check('adj934 ② 评估过的"更早翻回去"（`s.done()` 之后**微任务**里翻，全程不让位宏任务）：**中间态与页签标题变化一帧都画不出来** —— 确实远好于 adj931',
+    noIntermediateFrame934(rRightEarliest),
+    frameList934(rRightEarliest))
+  check('adj934 ② 负对照：把"更早翻回去"挪回 adj931 的位置（`setTimeout` + 真 I/O 之后）⇒ 上面那条判据**判假**',
+    !noIntermediateFrame934(rRightAdj931) && !noIntermediateFrame934(rRightLate),
+    `adj931 帧=${frameList934(rRightAdj931)}`)
+  check('adj934 ② ⚠ **但"一帧都不闪"不成立**（诚实结论）：宿主那一次 `vault.read(.jps)` 是真文件 I/O ⇒ 任务在这里结束 ⇒ **笔记已经 detach、插件还没拿到控制权**的那一帧，保守模型下**每一种**变体都躲不掉',
+    !zeroFrame934(rRightEarliest) && !zeroFrame934(rRightAdj931) && !zeroFrame934(rRightKeep) && !zeroFrame934(rDefaultKeep),
+    `earliest=${frameList934(rRightEarliest)}`)
+  check('adj934 ② 判据本身真的在判"有没有中间态"：喂给 adj931 的帧序列 ⇒ 假；喂给"更早翻回去"的帧序列 ⇒ 真',
+    !noIntermediateFrame934(rRightAdj931) && noIntermediateFrame934(rRightEarliest))
+
+  check('adj934 ③ 本轮采用（用户裁定的兜底方案）：这两档**一次还原都不做**，最后停在**该 `.jps` 的完整预览**上（稳定终态，不再"换掉又翻回来"）',
+    rRightKeep.restores === 0 &&
+      rRightKeep.clock.paints[rRightKeep.clock.paints.length - 1]?.content === 'PREVIEW' &&
+      rDefaultKeep.restores === 0 &&
+      rDefaultKeep.clock.paints[rDefaultKeep.clock.paints.length - 1]?.content === 'PREVIEW',
+    `右侧栏 帧=${frameList934(rRightKeep)}｜默认应用 帧=${frameList934(rDefaultKeep)}`)
+  check('adj934 ③ 代价如实记录：来源页签的**导航历史里仍压着那份笔记** ⇒ 用户可按页签栏那枚「←」退回去',
+    rRightKeep.backHistory.length === 1 && rRightKeep.backHistory[0]?.title === '工作笔记' && rRightKeep.busyNotices === 0,
+    `历史栈=${JSON.stringify(rRightKeep.backHistory)}`)
+  check('adj934 ③ 负对照：把一次还原加回"本轮采用"的变体（= 又回到 adj931 那套）⇒ 上面"一次还原都不做"判假',
+    ((): boolean => {
+      const stray = { ...rRightKeep, restores: 1 }
+      return !(stray.restores === 0)
+    })(),
+    '（判据 `restores === 0` 真的在判"有没有发起还原"）')
+  check('adj934 ③ 这块**只在桌面端 + 嵌入版开着**时才走（手机端 / `![[xx.jps]]` 内嵌本来就停在预览上，一行没动）',
+    modes934.every((m) => planJpsInitialView({ mode: m, isDesktop: false, embedded: false, embedEnabled: true }) === 'preview') &&
+      modes934.every((m) => planJpsInitialView({ mode: m, isDesktop: true, embedded: true, embedEnabled: true }) === 'preview') &&
+      planJpsInitialView({ mode: 'right', isDesktop: true, embedded: false, embedEnabled: false }) === 'preview')
+
+  // ───────────────── 接线（源码级）：口径真的接在两处 + 视图真的画完整预览 ─────────────────
+
+  const keepsFn934 = (src: string): boolean =>
+    /export function keepsSourceOnPreview\(mode: EmbedOpenModeLike\): boolean \{\n {2}return mode === 'right' \|\| mode === 'defaultApp'\n\}/.test(
+      src,
+    )
+  check('adj934 接线：`keepsSourceOnPreview()` 是一条**纯函数**判据（`mode === \'right\' || mode === \'defaultApp\'`），`main.ts` / `fileView.ts` 共用它',
+    keepsFn934(op934))
+  check('adj934 接线负对照：把它改成"一律 true" ⇒ 上面那条判假',
+    !keepsFn934(op934.replace("return mode === 'right' || mode === 'defaultApp'", 'return true')))
+
+  const gateCount934 = (main: string): number => (main.match(/!keepsSourceOnPreview\(mode\)/g) ?? []).length
+  check('adj934 接线：`main.ts` 里**两处**收尾都过了这道闸 ——「右侧栏/新的页签」的 `restoring` 与「默认应用」的 `openWithDefaultApp` 之后那句',
+    gateCount934(main934) >= 2 &&
+      /plan\.detachSource && !isSameLeaf && sourceLeaf && !keepsSourceOnPreview\(mode\)/.test(main934) &&
+      /if \(opened && sourceLeaf && !keepsSourceOnPreview\(mode\)\) await this\.restoreSourceLeaf\(sourceLeaf\)/.test(main934),
+    `出现 ${gateCount934(main934)} 处`)
+  check('adj934 接线负对照：把那道闸从 `restoring` 那句里删掉（= 又变成"两档也还原"）⇒ 上面那条判假',
+    gateCount934(main934.replace('plan.detachSource && !isSameLeaf && sourceLeaf && !keepsSourceOnPreview(mode)', 'plan.detachSource && !isSameLeaf && sourceLeaf')) < 2)
+
+  const keepPreviewJudge934 = (fv: string): boolean =>
+    /const keepPreview =\n {6}keepsSourceOnPreview\(mode\) && \(initialView === 'embed' \|\| initialView === 'preview\+external'\)/.test(fv) &&
+    /if \(embedViable && !keepPreview && this\.file\)/.test(fv) &&
+    /if \(externalViable && !keepPreview && this\.file\)/.test(fv) &&
+    /if \(keepPreview && this\.file && !this\.editing && initialView === 'embed'\)/.test(fv)
+  check('adj934 接线：`.jps` 文件视图在**这两档**下不再只画一句轻提示，而是**画完整预览**（随后照旧去开右栏 / 交给系统默认程序）',
+    keepPreviewJudge934(fv934))
+  check('adj934 接线负对照：把 `!keepPreview` 从"轻提示 + 让位"那两个分支上摘掉（= 两档又只画一句提示、最后用户盯着一句提示）⇒ 上面那条判假',
+    !keepPreviewJudge934(fv934.replace('if (embedViable && !keepPreview && this.file)', 'if (embedViable && this.file)')))
+
+  // ───────────────── ④ adj931 的成果**一条都不许回退**（同一判据重跑一遍） ─────────────────
+
+  check('adj934 ④ 不回退 adj931：标题仍一律是**文件名（含扩展名）**，「爱记谱」只在确实没承载 `.jps` 时出现',
+    jpsViewTitle(jpsNameFromPath(jpsPath934)) === '半山听雨.jps' && jpsViewTitle(null) === APP_DISPLAY_TEXT &&
+      /return jpsViewTitle\(this\.file\?\.name, 'jps'\)/.test(fv934))
+  check('adj934 ④ 不回退 adj931：「当前页签」档仍是**就地替换、一次还原都不做**；「新的页签」档仍**真的新开 + 还原来源页签**',
+    planEmbedTarget('current', true).kind === 'replace-source' &&
+      planEmbedTarget('current', true).detachSource === false &&
+      planEmbedTarget('tab', true).kind === 'new-tab' &&
+      planEmbedTarget('tab', true).detachSource === true &&
+      !keepsSourceOnPreview('tab'))
+  check('adj934 ④ 不回退 adj931：手机端 / `![[xx.jps]]` 内嵌 / 左侧 ribbon 一行未改',
+    /addRibbonIcon\('music', '打开爱记谱'/.test(main934))
+  check('adj934 ④ 边界：**没有**为了少一帧去猴补丁宿主（`getLeaf` / `getTypeByExtension` / `openFile` / `history.back` 一个都没被改写）',
+    !/workspace\.getLeaf\s*=[^=]/.test(codeOf(main934)) &&
+      !/viewRegistry\s*\.\s*getTypeByExtension\s*=[^=]/.test(codeOf(main934)) &&
+      !/\.openFile\s*=[^=]/.test(codeOf(main934)) &&
+      !/\.history\.back\s*=[^=]/.test(codeOf(main934)) &&
+      !/\.working\s*=[^=]/.test(codeOf(main934)),
+    '（这条判据守的是"不许为了少一帧去硬改宿主行为"）')
 }
 
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。

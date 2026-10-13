@@ -20,7 +20,7 @@ import { DEFAULT_EMBED_CHANNEL, DEFAULT_EMBED_OPEN_MODE, DEFAULT_EXPORT_RANGE, D
 // adj912：「保存为 PNG / SVG」的**落点与文件名**全在这份纯函数里（`.jps` 同目录 + 主名，同名不覆盖就加序号）
 import { fileNameOf, uniqueNameIn } from './savePath'
 import { IJipuBridge } from './embed/bridge'
-import { embedEditLeavesObsidian, pickRightSidebarLeaf, planEmbedTarget, planSourceLeafDisposal } from './embed/openPlan'
+import { embedEditLeavesObsidian, keepsSourceOnPreview, pickRightSidebarLeaf, planEmbedTarget, planSourceLeafDisposal } from './embed/openPlan'
 /**
  * adj741（用户决定：按 P0"一版多端"做，见任务 1）—— **嵌入版 iJipu 的本地服务必须按需加载**。
  *
@@ -1425,11 +1425,22 @@ export default class IJipuPlugin extends Plugin {
        *  · **真的打开**：`openWithDefaultApp()` 已改为走宿主自己的 API（不再动态 import electron，
        *    见 `src/openExternal.ts` 的说明）；返回值 `opened` 告诉我们文件到底交出去没有。
        *  · **当前状态不变**：`.jps` 是**就地**开在用户当前页签里的（宿主 `openFile` 的语义），
-       *    所以这里要像另两档一样，**把那个页签还回去**（`restoreSourceLeaf`）——
-       *    成功才还：万一外开失败，页签留在**谱面预览**上比留个空白更有用（Notice 里带着失败原文）。
+       *    所以要处理那个页签——成功才处理：万一外开失败，页签留在**谱面预览**上比留个空白更有用。
+       *
+       * ⚠ **adj934（用户 2026-10-14 复核 + 裁定）改了这里的收尾姿势**：
+       * 用户复核「右侧栏 / 默认应用两种打开方式下，点文件列表 jps 文件，**当前页签还是会刷新**」
+       * （adj931 把"还回去"提前到"选好落点就发出去"，用户说**还是看得见**），
+       * 并提出兜底方案：「显示这个 jps 文件的预览窗口，因为只有这两种是不需要涉及页签的」。
+       * 现在这一档**一次还原都不做**：那个页签就停在该 `.jps` 的**完整轻量预览**上（稳定终态，
+       * 没有"换掉又翻回来"），文件照样交给系统默认程序；用户要回笔记就按页签栏那枚「←」
+       * （该 leaf 的 `backHistory` 里仍压着它）。判据与「右侧栏」档共用 `keepsSourceOnPreview()`
+       * —— 完整证据（asar 时序 + 冒烟里逐帧实测的"一帧都躲不掉"）见 `embed/openPlan.ts`。
        */
       const opened = await openWithDefaultApp(this.app, file.path)
-      if (opened && sourceLeaf) await this.restoreSourceLeaf(sourceLeaf)
+      if (opened && sourceLeaf && !keepsSourceOnPreview(mode)) await this.restoreSourceLeaf(sourceLeaf)
+      if (opened && sourceLeaf) {
+        console.info('[iJipu] 打开方式=defaultApp：按 adj934 的兜底口径**不还原**来源页签（就停在该 .jps 的谱面预览上；按「←」可退回原笔记）')
+      }
       return opened
     }
     return this.openEmbedLeaf(file, mode, sourceLeaf)
@@ -1836,9 +1847,28 @@ export default class IJipuPlugin extends Plugin {
      *
      * ⚠ 安全性：`history.back()` 只换视图、**不带 `active`**（asar 核对：`getViewState()` 里没有
      * `active` 字段）⇒ 提前发出去不会抢活动页签，也不会影响下面选定的落点。
+     *
+     * ## adj934（用户 2026-10-14 复核 + 裁定）：**这两档干脆不还了**
+     *
+     * 用户复核「右侧栏 / 默认应用两种打开方式下……**当前页签还是会刷新**」——即使把还原提到这里
+     * 也还是看得见。本轮把宿主换视图的时序挖到底（`embed/openPlan.ts` 的 `keepsSourceOnPreview()`
+     * 里有完整证据 + 冒烟里逐帧实测）：**"一帧都不闪"做不到**（宿主 `open()` 里 `old.close()` 的
+     * 第一句就把笔记 detach 掉，而那时插件连构造函数都还没跑完；等我们能动手时 `working` 还挡着
+     * `history.back()`；而 `.jps` 那一次 `vault.read` 是真 I/O = 宏任务 ⇒ 至少一次绘制机会）。
+     * 于是按用户给的兜底方案：**这两档一次还原都不做**，来源页签就停在该 `.jps` 的完整轻量预览上
+     * （稳定终态，不再"换掉又翻回来"）；真正的工作照旧。
+     * ⚠ 只动这两档：「新的页签」档照旧还回去、「当前页签」档本就是就地替换。
      */
     const restoring: Promise<'back' | 'detach'> | null =
-      plan.detachSource && !isSameLeaf && sourceLeaf ? this.restoreSourceLeaf(sourceLeaf) : null
+      plan.detachSource && !isSameLeaf && sourceLeaf && !keepsSourceOnPreview(mode)
+        ? this.restoreSourceLeaf(sourceLeaf)
+        : null
+    if (!restoring && !isSameLeaf && sourceLeaf && keepsSourceOnPreview(mode)) {
+      console.info(
+        `[iJipu] 打开方式=${mode}：按 adj934 的兜底口径**不还原**来源页签` +
+          '（当前页签就停在该 .jps 的谱面预览上；按页签栏那枚「←」可退回原笔记）',
+      )
+    }
 
     /**
      * 切到目标 leaf 并**直接驱动视图**打开文件（下面 `adj905z` 那段说的是"进历史"这一步）。
@@ -1912,6 +1942,13 @@ export default class IJipuPlugin extends Plugin {
       }
     } else if (isSameLeaf) {
       console.info(`[iJipu] 打开方式=${mode}：就地替换来源页签（不关）`)
+    } else if (plan.kind === 'right-sidebar' && sourceLeaf) {
+      /**
+       * adj934：「右侧栏」档现在**不还原**来源页签（见上面 `restoring` 的说明）⇒ 上面那段
+       * "还原完再把活动页签还给来源页签"不会跑；但 `revealLeaf(target)` 照样已经把活动页签
+       * 交给右栏了 ⇒ 这里补上同一件事：主编辑区那个页签仍是活动页签（右栏只是"在旁边揭开"）。
+       */
+      workspace.setActiveLeaf(sourceLeaf, { focus: true })
     }
     /**
      * adj905z 之二（**用户口径**）：「可以在打开 jps 文件做一个检查，如果有工具条残留，关闭就行」——

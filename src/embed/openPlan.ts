@@ -225,3 +225,60 @@ export function planSourceLeafDisposal(
   const dropCount = historyTypes.length - usable
   return usable > 0 ? { action: 'back', dropCount } : { action: 'detach', dropCount }
 }
+
+/**
+ * adj934（用户 2026-10-14 复核 + 裁定）：**「右侧栏」「默认应用」两档不做任何还原** ——
+ * 让来源页签就停在该 `.jps` 的**轻量预览**上。
+ *
+ * ## 用户怎么说的
+ *
+ * 「右侧栏 / 默认应用两种打开方式下，点击文件列表 jps 文件，**当前页签还是会刷新**」
+ * （adj931 已把"还回去"提前到"选好落点就发出去"，用户复核：**还是看得见**）；
+ * 并提出兜底：「如果还是不行，有一个变通方式，就是**显示这个 jps 文件的预览窗口**，
+ * 因为**只有这两种是不需要涉及页签的**，是否可行？」
+ *
+ * ## 为什么"更早还回去"到头了（本轮在 `obsidian.asar` 1.13.7 里把换视图的时序逐句核对过）
+ *
+ * `WorkspaceLeaf.setViewState()` 的顺序（字段名按 asar 原文）：
+ * ```
+ * if (this.working) return;  this.working = true;
+ *   n = this.view                                            // 旧视图（用户那份笔记）
+ *   a = n ? this.getHistoryState() : undefined               // 要还原到哪一份视图
+ *   if (e.type !== n.getViewType()) {
+ *     n = viewRegistry.getViewCreatorByType(e.type)(this)    // ★ 插件视图的**构造函数**
+ *     await this.open(n)                                     // 旧视图 close() ⇒ containerEl.detach()
+ *     ...
+ *   }
+ *   await n.setState(e.state || {}, s)                       // FileView.loadFile ⇒ vault.read(真 I/O) + render
+ *   if (e.active) workspace.setActiveLeaf(this, {focus:true})
+ *   this.updateHeader()                                      // 页签名
+ *   if (s.history && a) this.recordHistory(a)                // ★ 到这里"上一份视图"才进 backHistory
+ *   s.done && s.done()
+ * finally { this.working = false }
+ * ```
+ * 三条硬事实：
+ *  ① **笔记内容必然在本插件任何"能动手的代码"之前就被 detach** —— `open()` 里 `old.close()` 的
+ *     第一句就是 `containerEl.detach()`，而插件最早的介入点（视图构造函数）里调 `history.back()`
+ *     会被 `if (this.working) return` 挡下（`LeafHistory.go()` 的第一句是
+ *     `if (this.owner.working) return new Notice(msgTabBusy())` —— 不光翻不动，还会弹一句"页签忙"）；
+ *  ② `history.back()` 只能等这次 `setViewState` 结束、`working` 放掉之后发（而"上一份视图"
+ *     要 `recordHistory(a)` 之后才在 `backHistory` 里 —— 那已经是 `setState` 之后了）；
+ *  ③ `setState` 里读 `.jps` 走 `vault.read()` ⇒ `adapter.read()` ⇒ **真文件 I/O = 宏任务**
+ *     ⇒ 任务在"笔记已 detach、插件还没拿到控制权"时结束 ⇒ **至少有一次绘制机会**。
+ * ⇒ 结论（冒烟 adj934 夹具里**真跑过**五种时序变体、逐帧记录）：**"一帧都不闪"做不到**；
+ *    能做到的是"中间态与页签名变化一帧都不画"（把还原提到 `s.done()` 之后的微任务里，全程不让位宏任务）
+ *    —— 那一档我们评估过、**当前未采用**（它仍然躲不掉上面 ③ 那一帧，见 `scripts/smoke-frontmatter.mts` 的 adj934 区块）。
+ *
+ * ## 采用的口径（用户裁定的兜底）
+ *
+ * 这两档**一次还原都不做**：来源页签就停在该 `.jps` 的**完整轻量预览**上（稳定终态，
+ * 没有"换掉又翻回来"的闪烁）；真正的工作照旧 —— 右侧栏档照样在**右栏那一个实例**里打开/揭开，
+ * 默认应用档照样把文件交给**系统默认程序**。
+ * 代价（如实记录）：用户原来那份笔记会被替换掉 ✗，但**该 leaf 的 `backHistory` 里仍压着它**
+ * ⇒ 用户可按页签栏那枚「←」退回去 ✓。
+ *
+ * ⚠ **只动这两档**：「新的页签」档照旧"真的新开 + 还原来源页签"、「当前页签」档本就是就地替换。
+ */
+export function keepsSourceOnPreview(mode: EmbedOpenModeLike): boolean {
+  return mode === 'right' || mode === 'defaultApp'
+}
