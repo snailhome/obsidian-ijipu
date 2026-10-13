@@ -972,8 +972,11 @@ export function layoutScore(
 
   let pageIndex = 0
   let y = m.titleAreaH // 当前行顶 y
-  // adj355：上一行/上一组(空间优先)各小节内容宽——跨组共享，供后续自然宽行小节对齐（如 2 行谱第 2 行对齐第 1 行）
-  let prevRowMeasW: (number | undefined)[] | undefined
+  // adj355 → **adj940（用户裁定）**：上一行各小节的**小节线实位**（绝对 x，按行内相对小节下标；
+  // 该小节没有小节线则为 `undefined`）。跨组、**跨页都不清空**——用户明确要求「新页第一行仍拿
+  // 上一页最后一行的线位当基准」。为什么不是 adj355 的"内容宽"：见下面 `placeMusicRowSpace` 里
+  // `adj940` 那一段（内容宽保证不了"线落在哪"，差的就是"内容右端 → 线中心"的偏移）。
+  let prevRowLineX: (number | undefined)[] | undefined
 
   /**
    * 放置一个音符并处理歌词对齐。
@@ -1264,6 +1267,12 @@ export function layoutScore(
     sp: Spacing,
     slotStart: number,
     refPerBeat?: number,
+    /**
+     * adj940（用户裁定）：**上一行各小节的小节线实位**（绝对 x，按行内相对小节下标）——
+     * 时值优先这一路原来只有"参考每拍宽"（`adj199`），小节数/拍数一不同就必然错开；
+     * 现在与空间优先同一口径：有实位就按**小节序号**对齐（见下面 `adj940` 那一段）。
+     */
+    refLineX?: (number | undefined)[],
     /**
      * adj421：**整份谱只有一行**（本曲部只有这一行**且整份谱只有一个排版单元**）——
      * 小节数 < align_min_bars 时按槽预分整行占宽（`adj935` 收窄了它的含义，见 `placeGroup`）。
@@ -1584,9 +1593,13 @@ export function layoutScore(
     const barCount = row.end - row.start - leadingEmpty
     const isFinalRow = isLastRowOfScore
     const stretch = !isFinalRow || barCount >= config.align_min_bars
-    // adj211：行末以 ||（终止线）结束且 ≤3 小节时，不参与前面行的小节线对齐
-    // （refPerBeat）——终止线行音乐已结束，无需与其他行纵向对齐小节线，按自然宽排布
-    const endsByTerminal = segs[row.end - 1]?.bar?.type === '||'
+    /**
+     * adj211 的「行末以 `||` 结束且 ≤3 小节 ⇒ 不参与对齐」豁免 **已删除**（用户裁定）。
+     *
+     * 旧理由（"终止线行音乐已结束、不必纵向对齐"）站不住：末行本来就是"自然宽 + 对齐上一行"，
+     * 一条终止线不该把它排除在外——用户看到的"末行没对上"里就有一条是这个豁免造的。
+     * 现在**所有**自然宽行都按小节序号对齐上一行（见下面 `adj940` 那一段），与行末是什么线无关。
+     */
     /** 本行"每拍宽"的可分配预算（与下面 `singleRulePerBeats` 同一个入参口径） */
     const beatBudget = availW - pads - noteGap - bracketPadTotal
     /**
@@ -1595,10 +1608,11 @@ export function layoutScore(
      * 参考行的每拍宽变大 ⇒ "本行拍数比上一行多"时会把整行推出右界。
      * 故先试算 `参考每拍宽 × 本行拍数`：超过预算就**放弃对齐**、退回自然宽（`singleRulePerBeats(..., false)`），
      * 而不是硬按参考宽画到纸外。
+     * adj940：这条"参考每拍宽"只在**拿不到线位**时兜底（有 `refLineX` 时按小节序号对齐，见下）。
      */
     const refFits = refPerBeat !== undefined && refPerBeat * beatsInfo.length <= beatBudget + 0.01
     const perBeats =
-      !stretch && refPerBeat !== undefined && !endsByTerminal && refFits
+      !stretch && refLineX === undefined && refPerBeat !== undefined && refFits
         ? beatsInfo.map(() => refPerBeat)
         : singleRulePerBeats(beatsInfo, beatBudget, m.noteSize, stretch)
 
@@ -1631,6 +1645,83 @@ export function layoutScore(
         const scale = slotInner / bodyW
         for (let p = p0; p <= p1; p++) perBeats[p] = (perBeats[p] ?? 0) * scale
       }
+    }
+
+    /**
+     * adj940（**用户裁定**）：时值优先这一路也改成**按小节序号对齐上一行的小节线实位**。
+     *
+     * 线位公式（与下面放置处同一份量，逐项对齐 `lineX0` / `x +=`）：
+     *   `line_b = xx_b + BAR_PAD + w_b + barSpace_b/2 + E_b × NOTE_GAP`
+     *   `xx_{b+1} = xx_b + w_b + barSpace_b`（末小节不再推进；行首空 seg 只推进 `leadPad`、线贴 `xx`）
+     * 其中 `w_b` = 本小节各拍宽之和（时值优先路径的小节宽就是这么来的），`E_b` = 本小节为止的
+     * 累计拍数（放置时每段加 `所在拍 × NOTE_GAP`，所以小节线前的净距就是 `E_b × NOTE_GAP`）。
+     *
+     * 于是给定目标线位就能**反解** `w_b`；多出来的宽按时值比例摊进该小节的每拍
+     * （`perBeats[p] += extra × 本拍在本小节内的重叠量 / Σ 重叠量²` —— 整拍小节退化成"按时值比例"，
+     * 半拍起小节也能**精确**补足 `w_b` 的增量）。
+     *
+     * 口径与空间优先**同一套**（前 k−1 根精确重合、末根贴右内容界、越界闸门保留、
+     * 不依赖任何 `# jps-config` 键），只差一处：**时值优先可以适度压缩**。
+     *
+     * 为什么这一路允许压缩：它的"自然每拍宽"里本来就带**间距**下限（`BPW_NATURAL` / `minNoteW`），
+     * 旧 `adj199`（"每拍宽取参考行平均每拍宽"）一直就是压缩着对齐的；而空间优先那一侧的"自然宽"
+     * 是**墨迹本体之和**（音符紧挨着排），压下去音符本体就会重叠 ⇒ 只能加宽。
+     * 压缩的地板取该拍的**墨迹最小需求** `minNoteW/minDur`（低于它才会真重叠），
+     * 地板夹住时线位到不了目标，后面的小节按**绝对目标**重新锚定（不累积漂移）。
+     */
+    if (!stretch && refLineX) {
+      const naturalPB = perBeats.slice()
+      /** 每拍的"墨迹最小需求"（压缩地板：低于它音符本体就会重叠） */
+      const floorPB = beatsInfo.map((e) => (e.minDur > 0 ? minNoteW(m.noteSize, e.extra ?? 0) / e.minDur : 0))
+      const rightContentX = page.width - config.margin_right
+      let xx = config.margin_left
+      let beatAcc = 0
+      for (let b = row.start; b < row.end; b++) {
+        const seg = segs[b]
+        const isEmptyLead = leadingEmpty === 1 && b === row.start
+        if (isEmptyLead) {
+          // 行首空 seg：线贴行内容起点、内容宽 0（放置处就是 `x`），没有可调的宽
+          xx += leadPad
+          continue
+        }
+        const sb = segBeats(seg)
+        const p0 = Math.max(0, Math.floor(beatAcc + 1e-9))
+        const p1 = Math.min(beatsInfo.length - 1, Math.floor(beatAcc + sb - 1e-9))
+        /** 本小节内每拍的重叠量（整拍小节 = 1）+ 重叠量平方和（用于精确摊额外宽） */
+        const ovs: number[] = []
+        let ovSq = 0
+        let natW = 0
+        for (let p = p0; p <= p1; p++) {
+          const ov = Math.max(0, Math.min(p + 1, beatAcc + sb) - Math.max(p, beatAcc))
+          ovs.push(ov)
+          ovSq += ov * ov
+          natW += ov * (perBeats[p] ?? 0)
+        }
+        const barSpace = barlineSpace(config.bar_gap, seg.bar?.type, seg.bar?.comment, m.noteSize)
+        const E = Math.floor(beatAcc + sb)
+        const refX = refLineX[b - row.start]
+        if (seg.bar && refX !== undefined) {
+          const halfW = barlineTotalW(seg.bar.type) / 2
+          const meterGapD = meterGapRight(seg.bar.comment, m.noteSize) ?? 0
+          // 末小节：贴右内容界（`min` 保住"上一行末线更靠左时照旧精确重合"）
+          const aim = b === row.end - 1 ? Math.min(refX, rightContentX - halfW - meterGapD) : refX
+          const delta = aim - (xx + BAR_PAD + barSpace / 2 + E * NOTE_GAP) - natW
+          if (delta !== 0 && ovSq > 0) {
+            for (let k = 0; k < ovs.length; k++) {
+              const p = p0 + k
+              const base = perBeats[p] ?? 0
+              perBeats[p] = Math.max(floorPB[p] ?? 0, base + (delta * ovs[k]) / ovSq)
+            }
+          }
+        }
+        // 用**实际**落定的每拍宽推进游标（地板夹住时线位到不了目标，后续小节据此重新锚定）
+        let w = 0
+        for (let k = 0; k < ovs.length; k++) w += ovs[k] * (perBeats[p0 + k] ?? 0)
+        xx += w + (b < row.end - 1 ? barSpace : 0)
+        beatAcc += sb
+      }
+      // 越界闸门（与 `adj925` 同一取舍）：整行右缘超出行可用宽 ⇒ 整体放弃对齐、退回自然宽
+      if (xx > config.margin_left + availW + 0.01) for (let p = 0; p < perBeats.length; p++) perBeats[p] = naturalPB[p] ?? 0
     }
 
     // 段列表（adj36）：附点段（dots 部分）每拍宽 = 音符基础时值拍的 perBeat，
@@ -1703,6 +1794,11 @@ export function layoutScore(
 
     x = config.margin_left
     let segBeat = 0 // 小节起点拍（行内，跳过行首空 seg）
+    /**
+     * adj940：本行各小节的**小节线实位**（按行内相对下标）——放置完交给下一行当对齐基准
+     * （与空间优先同一份量；`frag` 行在上面已 `return`，不参与）。
+     */
+    const durRowLineX: (number | undefined)[] = new Array(row.end - row.start).fill(undefined)
     let segIdx = 0
     // adj47：跨行跳房子起点——上一行末的 voltaStart 小节线画在本行行首（贴左边距）
     if (leadVoltaBar) {
@@ -1879,6 +1975,8 @@ export function layoutScore(
             Math.max(lineX0, config.margin_left + halfW),
             page.width - config.margin_right - halfW - meterGapD,
           )
+          // adj940：把**实际**线位记下来（未取整原值）——下一行按它反解，见 `prevRowLineX`
+          durRowLineX[b - row.start] = lineX
           const bid: LayoutId = { page: pageIndex, voice, group: groupIndex, index: barCounter }
           // adj625：这根是 seg b 的**收尾小节线**，也就是「下一个算作小节的 seg」的**左侧小节线**——
           // 若那个小节在本行内（序号要画在左侧小节线底下），就在这里埋点；
@@ -1918,8 +2016,10 @@ export function layoutScore(
       segBeat += isEmptyLead ? 0 : segBeats(seg)
     }
     finishDyn(x) // 行尾关闭未闭合渐强
+    // adj940：本行线位交给下一行（跨组、跨页都不清空）
+    prevRowLineX = durRowLineX
     // adj199：返回该行平均每拍宽（撑满行 → 实际均分宽；未撑满行 → 参考宽/自然宽），
-    // 供后续行按小节线对齐
+    // 供后续行按小节线对齐（adj940 起只在拿不到线位时兜底）
     const totalBeats = beatsInfo.reduce((a, b) => a + b.dur, 0)
     return totalBeats > 0 ? beatsInfo.reduce((a, b, p) => a + b.dur * perBeats[p], 0) / totalBeats : undefined
   }
@@ -1950,7 +2050,12 @@ export function layoutScore(
     geciSize: number,
     sp: Spacing,
     slotStart: number,
-    refRelMeasureW?: (number | undefined)[],
+    /**
+     * adj940（用户裁定）：**上一行各小节的小节线实位**（绝对 x，按行内相对小节下标；缺失 = `undefined`）。
+     * 有值时本行（自然宽）按"第 k 根线落在上一行第 k 根线的位置"反解每小节占宽——
+     * 取代 `adj355` 的"上一行小节内容宽"（那条保证不了线落在哪，见下面 `adj940` 的实现注释）。
+     */
+    refLineX?: (number | undefined)[],
     /**
      * adj421：**整份谱只有一行**（本曲部只有这一行**且整份谱只有一个排版单元**）——
      * 小节数 < align_min_bars 时按槽预分整行占宽（`adj935` 收窄了它的含义，见 `placeGroup`）。
@@ -1963,7 +2068,8 @@ export function layoutScore(
     isLastRowOfScore = false,
     /** adj625：组内每个 seg 的全曲小节序号（见 `barOrdinalsOf`；不传 = 不画小节序号） */
     ord: (number | null)[] = [],
-  ): number[] | undefined => {
+    /** adj940：返回本行各小节的**小节线实位**（给下一行当对齐基准，见 `prevRowLineX`） */
+  ): (number | undefined)[] | undefined => {
     if (row.kind !== 'bars') return undefined
     const page = pages[pageIndex]
     // adj627：本组"每小节生效调号"（空间优先路径同样要按当下调号定音高）
@@ -2234,7 +2340,62 @@ export function layoutScore(
     const segNatW: number[] = new Array(segs.length).fill(0)
     const segDurSum: number[] = new Array(segs.length).fill(0)
     const extraWByBar: number[] = new Array(segs.length).fill(0)
+    /**
+     * adj940（**用户裁定**）：自然宽行的对齐基准从「上一行小节**内容宽**」（adj355）改成
+     * 「**上一行小节线实位**」。
+     *
+     * 为什么换（诊断的第二层原因）：`adj355` 只保证"逐小节**内容**宽不窄于上一行对应小节"，
+     * 而线落在哪还取决于「内容右端 → 线中心」的偏移（`gapL + 线半宽`）。上一行末小节是 `|`
+     * （线组宽 1）、本行末小节是 `:|`（线组宽 7.6）时这条偏移差 3.3px，逐根累积 ⇒ 线位错开
+     * 3.3 / −3.4 / −5.2px。多声部那一侧 `adj644` 早就是"记下**实际**偏移"（不按 `barlinePad/2`
+     * 假设），单声部这里照抄同一办法：上一行的线位**一律记实测值**，本行反过来解"要让第 k 根线
+     * 落在哪、每小节该占多宽"。
+     *
+     * 口径（用户裁定，三条一起才算对齐）：
+     *  · **前 k−1 根小节线精确重合**（与上一行同 x）；
+     *  · **末根线贴右内容界**（`min(上一行末线位, 页内容右界 − 线半宽)`）—— 末根线组更宽时按
+     *    **半个线宽差**让位（实测 1.52px），换来的是**不越界**；
+     *  · 对齐**只能加宽**（`extraWByBar ≥ 0`，绝不压缩）⇒ 逐小节宽必 ≥ 上一行对应小节；
+     *  · 越界闸门（`adj925`）保留：整行（内容 + 线组）真的超出行可用宽时**整体放弃对齐**、
+     *    退回自然宽（对齐是"尽量"，越界是硬约束）；
+     *  · 对齐是**默认行为**，不依赖任何 `# jps-config` 键。
+     */
+    const hasNotesIn = (bb: number): boolean => noteList.some((n) => n.barIdx === bb)
+    const barTokenOf = (bb: number) => barList.find((x) => x.barIdx === bb)
+    /** 本小节线左侧净距（与放置处 `gapL` 同一份量：该小节无音符时左侧不留距） */
+    const lineGapLOf = (bb: number): number => (hasNotesIn(bb) ? bp : 0) + segPadL[bb]
+    /** 线自身半宽（放置处 `barHalf` 用的是同一个 `barlineTotalW/2`） */
+    const lineHalfOf = (bb: number): number => {
+      const bk = barTokenOf(bb)
+      return bk ? barlineTotalW(bk.bar.type) / 2 : 0
+    }
+    /** 「本小节内容右端 → 该小节线中心」的偏移（adj644 在多声部那一侧记的就是它） */
+    const lineOffOf = (bb: number): number => lineGapLOf(bb) + lineHalfOf(bb)
+    /** 本小节线组的完整占位（左净距 + 线宽 + 右净距）——放置处 `curX` 的推进量 */
+    const lineOuterOf = (bb: number): number => {
+      const bk = barTokenOf(bb)
+      if (!bk) return 0
+      let gapR = (bk.atEnd ? 0 : bp) + segPadR[bb]
+      const meterGap = meterGapRight(bk.bar.comment, m.noteSize)
+      if (meterGap != null) gapR = Math.max(gapR, meterGap)
+      return lineGapLOf(bb) + barlineTotalW(bk.bar.type) + gapR
+    }
+    /**
+     * 每小节"非时值但占宽"的量（`&hx` 本体、`{dsb}` 大括号左右预留、**行内** `&zkh/&ykh` 括号）：
+     * 放置时的推进 = `segNatW[b] + extraWByBar[b] + 这一份`（与上面 `nonDurPad` 的记账同源——
+     * 段内括号不在此列：空间优先路径的放置循环不推进它们）。
+     */
+    const nondurByBar: number[] = new Array(segs.length).fill(0)
     if (!stretch) {
+      for (const n of noteList) {
+        const bpad = bracePads.get(n.t)
+        nondurByBar[n.barIdx] += (bpad?.lead ?? 0) + (bpad?.tail ?? 0) + (n.hasHx ? hxBodyW(m.noteSize) : 0)
+      }
+      for (let bi = row.start; bi < row.end; bi++) {
+        for (const tk of segs[bi].notes) {
+          if (tk.kind === 'bracket') nondurByBar[bi] += markBodyW(tk.code, m.noteSize)
+        }
+      }
       for (const n of noteList) {
         const noteElDur = n.noteDur + (n.hasDot ? n.dotDur : 0)
         segNatW[n.barIdx] += n.noteBodyW + (n.hasDot ? n.dotBodyW : 0) + n.augCount * augBodyW(m.noteSize) + n.grTailW
@@ -2245,28 +2406,27 @@ export function layoutScore(
         for (let b = row.start; b < row.end; b++) {
           extraWByBar[b] = Math.max(0, slotOuter - (segNatW[b] + barOuter[b]))
         }
-      } else if (refRelMeasureW) {
-        /**
-         * adj925（**越界是硬约束** —— 与 `adj601` 在多声部那一侧显式做过的取舍**同一口径**）：
-         * "对齐上一行对应小节"（adj355）**只能加宽、不会收窄** ⇒ 当"上一行小节少、本行小节多"时，
-         * 逐小节对齐会把整行推到页面右界之外。本轮口径把**非末行一律撑满**之后，上一行的每小节宽变大，
-         * 这件事立刻变成真问题：实测（`Q: <40 个十六分音符> | <16 个> | <16 个> |`，阈值 4）
-         * 上一行被撑满到 `544.80`，本行两小节的末线落到 `x=678.00`，而**页内容右界只有 545.28**
-         * （纸宽 595.28）⇒ 内容画到纸外 **132.72px**；旧口径下同一谱是 `512.60`（放得下、不越界）。
-         * 故先**整体试算**一遍 `Σ max(本行自然宽, 上一行对应小节宽) + 非时值占位`：
-         * 超过本行可用宽（`rowAvailW`）就**整体放弃对齐**、退回自然宽
-         * （对齐是"尽量"，越界是硬约束）。
-         */
-        let alignedTotal = nonDurPad
+      } else if (refLineX) {
+        // adj940：逐小节反解——让"第 i 根线"落在上一行第 i 根线的位置（末根贴右内容界）
+        const rightContentX = page.width - config.margin_right
+        const plan: number[] = new Array(segs.length).fill(0)
+        let cursor = config.margin_left // 本小节内容左缘（绝对 x）；与放置处 `curX` 同一口径
         for (let b = row.start; b < row.end; b++) {
-          const refW = refRelMeasureW[b - row.start]
-          alignedTotal += refW !== undefined ? Math.max(segNatW[b], refW) : segNatW[b]
-        }
-        if (alignedTotal <= rowAvailW + 0.01) {
-          for (let b = row.start; b < row.end; b++) {
-            const refW = refRelMeasureW[b - row.start]
-            if (refW !== undefined && refW > segNatW[b]) extraWByBar[b] = refW - segNatW[b]
+          const off = lineOffOf(b)
+          const outer = lineOuterOf(b)
+          const natAdv = segNatW[b] + nondurByBar[b]
+          const refX = refLineX[b - row.start]
+          let adv = natAdv
+          if (refX !== undefined) {
+            const aim = b === row.end - 1 ? Math.min(refX, rightContentX - lineHalfOf(b)) : refX
+            adv = Math.max(natAdv, aim - cursor - off)
           }
+          plan[b] = adv - natAdv
+          cursor += adv + outer
+        }
+        // 越界闸门（adj925 的口径保留）：整行右缘必须落在页内容区里，否则整体放弃对齐
+        if (cursor <= config.margin_left + availW + 0.01) {
+          for (let b = row.start; b < row.end; b++) extraWByBar[b] = plan[b]
         }
       }
     }
@@ -2430,8 +2590,12 @@ export function layoutScore(
     let curX = config.margin_left
     let barCursor = 0
     let noteCursor = 0
-    // adj355: 本行各小节「内容宽」（供下一行自然宽对齐）——按行内相对下标
-    const measureContentW: number[] = new Array(row.end - row.start).fill(0)
+    /**
+     * adj940（取代 adj355 的 `measureContentW`）：本行各小节的**小节线实位**（按行内相对下标）——
+     * 交给下一行当对齐基准。记的是**实际算出来的 `lineX`**（不是"内容宽 + 假设偏移"），
+     * 所以本行的线组是什么类型、间距被怎么调过，下一行都不会错。
+     */
+    const rowLineX: (number | undefined)[] = new Array(row.end - row.start).fill(undefined)
     for (let b = row.start; b < row.end; b++) {
       const seg = segs[b]
       const isEmptyLead = leadingEmpty === 1 && b === row.start
@@ -2475,7 +2639,6 @@ export function layoutScore(
             }
             // adj396：带增时线/附点的后倚音排在**增时线/附点之后**——占位接在尾部（渲染同位置）
             xCursor += n.grTailW
-            measureContentW[b - row.start] += xCursor - curX
             // 音符实际占位宽（不含括号）：音符块段（含附点三段留空）+ 增时线 + 尾部倚音
             const actualW = xCursor - curX
             const rightX = xCursor // 音符实际占位右端
@@ -2554,6 +2717,8 @@ export function layoutScore(
           width: r1(m.barlineWidth),
         })
         barCounter++
+        // adj940：把**实际**线位记下来（未取整的原值 —— 下一行按它反解，取整会造成 0.05px 漂移）
+        rowLineX[b - row.start] = lineX
         curX += gapL + barlineTotalW(bk.bar.type) + gapR
         barCursor++
       }
@@ -2564,7 +2729,7 @@ export function layoutScore(
     for (const s of resolveHairpins(dynEvents, (i) => dynAnchors[i], config.margin_left + BAR_PAD, curX)) {
       page.dynamics.push({ x1: r1(s.x1), x2: r1(s.x2), y: r1(dynY), type: s.type, plus: s.plus })
     }
-    return measureContentW
+    return rowLineX
   }
 
   /**
@@ -2670,10 +2835,11 @@ export function layoutScore(
       // `align_min_bars` 阈值；本组是整份谱最后一个排版单元**且**这是它的最后一行才是末行。
       const isLastRow = isLastGroup && ri === rows.length - 1
       if (isSpace) {
-        const mws = placeMusicRowSpace(segs, row, groupIndex, voice, y, lyricMaps, geciSize, sp, rowSlots[ri], prevRowMeasW, singleRowOfScore, isLastRow, ord)
-        if (mws !== undefined) prevRowMeasW = mws
+        // adj940：上一行的**小节线实位**（跨组、跨页都不清空）当基准
+        const lineX = placeMusicRowSpace(segs, row, groupIndex, voice, y, lyricMaps, geciSize, sp, rowSlots[ri], prevRowLineX, singleRowOfScore, isLastRow, ord)
+        if (lineX !== undefined) prevRowLineX = lineX
       } else {
-        const pb = placeMusicRow(segs, row, groupIndex, voice, y, lyricMaps, geciSize, sp, rowSlots[ri], refPerBeat, singleRowOfScore, isLastRow, ord)
+        const pb = placeMusicRow(segs, row, groupIndex, voice, y, lyricMaps, geciSize, sp, rowSlots[ri], refPerBeat, prevRowLineX, singleRowOfScore, isLastRow, ord)
         if (row.kind === 'bars' && pb !== undefined) refPerBeat = pb
       }
       y += rowH + segDown
