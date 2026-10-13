@@ -38,8 +38,6 @@ import { canOpenWithDefaultApp, openUrlExternally, openWithDefaultApp } from './
 import { computeGuideLines, cropRectFor, guideLimits, guidePlacement, type CropRect, type GuideLine } from './guides'
 // adj915：墨迹量的**坐标归位 + 与页面求交**（纯函数，浏览器/Node 都能跑；见该文件头）
 import { boxInRoot, boxRangeText, clipBoxToPage, elementLabelOf, pageBoxOf, rootMatrixOf, unionBox, type CropBox } from './cropBox'
-// adj917：嵌入块 / 代码块 与**同上下文段落文字**的"左对齐 + 同宽"（量缩进的纯函数 + 计算样式读取）
-import { paragraphIndentOf } from './paraIndent'
 import { GUIDES_CHANGED, SETTINGS_CHANGED } from './main'
 import type IJipuPlugin from './main'
 // adj873：导出范围的**缺省值**只有一处定义（`types.ts`）——菜单打勾 / 设置页 / 解析都读它
@@ -360,34 +358,6 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
   }
 
   /**
-   * adj917（用户报「jps嵌入块与其它段落的对齐不一致，请调整嵌入块与其它段落的左对齐、宽度一致」）：
-   * 让面板**跟随同上下文段落文字的左缩进** —— 左缘与段落文字首行同一条线、右缘仍贴段落盒右缘
-   * （于是宽度 = 文字那一行的宽度）。
-   *
-   * 为什么需要它：我们的容器是**块级盒**（`.ijipu-embed { display: block }`，宿主也有
-   * `.internal-embed:not(.image-embed) { display: block }`），而 `text-indent` 是**可继承但只作用于行盒**
-   * 的属性 ⇒ 段落文字被缩进时我们的块**不动**。实测（真实 app.css + 用户库的「首行缩进」片段）：
-   * 段落文字首行从 x=64 起、段落盒 x=32 宽 895 ⇒ 我们的块比文字**左出 32px、宽出 32px** ✗。
-   *
-   * 值从计算样式读（`paraIndent.ts`），**只走"类 + `setCssProps`"**（审核
-   * `no-static-styles-assignment` 禁止直接写内联样式 ✗）。量到 0（= 上下文没有缩进，绝大多数
-   * 主题/库都是）就**摘掉类与变量** ⇒ 一行样式都不动 ⇒ 对其它环境零影响。
-   */
-  let paraIndentPx = 0
-  const applyParaIndent = (): void => {
-    const px = paragraphIndentOf(container)
-    if (px === paraIndentPx) return
-    paraIndentPx = px
-    if (px > 0) {
-      container.setCssProps({ '--ijipu-para-indent': `${px}px` })
-      container.addClass('ijipu-para-indent')
-      return
-    }
-    container.removeClass('ijipu-para-indent')
-    container.setCssProps({ '--ijipu-para-indent': '' })
-  }
-
-  /**
    * adj740（用户报「编辑视图下工具条还是不可见」）：**把所有"会裁剪"的祖先逐层放开**（滚动容器除外）。
    *
    * 为什么不能只处理 `.cm-embed-block`：实时预览里我们的面板外面还有一整套 CM6 容器
@@ -680,12 +650,6 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
 
     if (host.embedded) container.addClass('ijipu-embedded')
     markHostWidget()
-    /**
-     * adj917：与同上下文段落文字左对齐。实时预览的块级 widget 可能是**先脱离文档搭好、再插进文档**的
-     * （见 `embed.ts` 里那段说明）⇒ 那一刻量不到上下文，**下一帧**容器已在文档里，再确认一次。
-     */
-    applyParaIndent()
-    window.requestAnimationFrame(() => applyParaIndent())
 
     const source = host.getSource()
     // adj738：优先级 = 默认 < 插件设置 < 源内 `# jps-config`（笔记 frontmatter 那一层已删除）
@@ -1022,11 +986,6 @@ toolbar.dataset.ijipuPane = String(paneId)
        * 被裁才贴回块内）。工具条现在允许遮挡其它元素（用户明确接受），所以外侧优先即可。
        */
       decidePlacement(el)
-      /**
-       * adj917：面板可能刚被宿主搬进新的容器/上下文（实时预览会重建 widget 元素）⇒
-       * 每次显示都把"同上下文段落的缩进"这一事实重新确认一遍（与上面 `markHostWidget` 同一姿势：幂等）。
-       */
-      applyParaIndent()
       /**
        * adj793：外侧落位 ⇒ 用 `position: fixed` 贴到块的实测上方（绕开"被相邻 CM6 行盖住"与裁剪）。
        * 同时挂上跟随监听（滚动/尺寸变化时重算），收起时由 `revealToolbar(false)` 统一清理。

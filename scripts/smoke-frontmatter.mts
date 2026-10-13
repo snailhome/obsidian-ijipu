@@ -9,7 +9,7 @@ import { defaultPageConfig, dragDelta, formatJps, formatLine, instrumentColorMap
 import type { PageConfig } from '@ijipu/engine'
 import { existsSync, globSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
-// adj917：**无头浏览器实测**（嵌入块与段落文字的左/右缘）—— 起浏览器进程、拿 `--dump-dom` 的文本
+// adj920：**无头浏览器实测**（嵌入块与段落盒/段落文字的左缘、右缘）—— 起浏览器进程、拿 `--dump-dom` 的文本
 import { execFileSync } from 'node:child_process'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -108,8 +108,8 @@ import { DEFAULT_IMAGE_SCALE } from '../src/types'
 // adj915：谱面「墨迹盒」量取的**纯几何**（与页面求交 + 并集）—— 直接跑纯函数逐项断言，
 // 不靠字符串匹配（能跑的一律跑，与 adj862/adj912 同一姿势）
 import { clipBoxToPage, unionBox, type CropBox } from '../src/cropBox'
-// adj917：嵌入块/代码块**跟随同上下文段落文字的左缩进**（纯函数，冒烟直接跑 `indentPxOf` 逐项断言）
-import { indentPxOf, paragraphIndentOf } from '../src/paraIndent'
+// ⚠ adj920：原来这里 import 的 `./paraIndent`（adj917「嵌入块跟随段落首行缩进」的纯函数）**已整条删除**
+//   —— 用户 2026-10-13 裁定「嵌入块保持全宽」⇒ 回退（见下面 adj920 区块；零残留由源码级断言守着）。
 
 let pass = 0
 let fail = 0
@@ -1374,7 +1374,15 @@ console.log('[adj452] playhead blocks follow playVoice / instrument / engine bou
     nextJpsFileName([], '我的曲子'),
   )
 
-  // 模板：与应用「新建」模板同口径（描述头 + 一行示例 + 页面设置占位），且**引擎解析 0 错 0 警**
+  // 模板：与应用「新建」模板同口径（**最小**描述头 + 曲词主体 + 页面设置占位），且**引擎解析 0 错 0 警**
+  //
+  // adj920（用户 2026-10-13 拍板，承接应用仓库 adj919 的同口径处置）：模板**不含**描述头 `S:` 行 ——
+  //   新口径 = 「新建」空白谱只带最小描述头（版本/标题/署名/调号/拍号）+ 谱面主体 + 页面设置块，
+  //   不自带「本乐谱使用…编制」这类自述说明；用户想在谱尾写说明，自己加 `S:` 即可。
+  //   旧口径（"模板**必须含** `S: 本乐谱使用「爱记谱 …」编制`"）**作废** —— 这不是功能回归：
+  //   同组「解析 0 错 0 警 / LF 结尾 / 能正常排版」三条都绿，新建出来的谱依然是一份合法谱。
+  //   `S:` 里的 URL **渲染成可点链接**这个功能照旧，由**应用仓库** `scripts/smoke.mts` 的 `adj652`
+  //   守着（它已把样本换成就地构造的最小源码，不再依赖模板）⇒ 插件侧不重复守、也不放空。
   const tplParsed = parseJps(NEW_JPS_TEMPLATE)
   check(
     '新建 JPS 模板：引擎解析**零错误零告警**（新建出来立刻是一份合法谱）',
@@ -1382,8 +1390,8 @@ console.log('[adj452] playhead blocks follow playVoice / instrument / engine bou
     JSON.stringify(tplParsed.errors.map((e) => e.message)),
   )
   check(
-    '新建 JPS 模板：描述头 + 曲词主体 + 页面设置占位齐备（V/B/Z/D/P/S、Q、C、`# jps-config:{}`）',
-    ['V: 1.0', 'B: ', 'Z: ', 'D: C', 'P: 4/4', 'S: ', 'Q: ', 'C: '].every((k) => NEW_JPS_TEMPLATE.includes(k)) &&
+    '新建 JPS 模板：描述头 + 曲词主体 + 页面设置占位齐备（V/B/Z/D/P、Q、C、`# jps-config:{}`）',
+    ['V: 1.0', 'B: ', 'Z: ', 'D: C', 'P: 4/4', 'Q: ', 'C: '].every((k) => NEW_JPS_TEMPLATE.includes(k)) &&
       NEW_JPS_TEMPLATE.includes('# jps-config:{}') &&
       NEW_JPS_TEMPLATE.includes('#===========描述头定义===========') &&
       NEW_JPS_TEMPLATE.includes('#==========以下为简谱主体==========') &&
@@ -1395,10 +1403,20 @@ console.log('[adj452] playhead blocks follow playVoice / instrument / engine bou
     NEW_JPS_TEMPLATE.endsWith('\n') && !NEW_JPS_TEMPLATE.includes('\r'),
     JSON.stringify(NEW_JPS_TEMPLATE.slice(-12)),
   )
+  /**
+   * 用户裁定（2026-10-13）：模板**不得**再自带那句自述说明。
+   * 判据按**描述头行**写（`/^S:/m`），不是"随便搜 `S: ` 子串"——模板里那句说明现在完全不存在。
+   * 负对照 = 把那行加回去（**必须**判假；否则这条闸门是空的）。
+   */
+  const hasSHead920 = (tpl: string): boolean => /^S:/m.test(tpl)
   check(
-    '新建 JPS 模板：谱尾说明 `S:` 带官网链接（与应用「新建」模板同一句，别只写「爱记谱」）',
-    NEW_JPS_TEMPLATE.includes('S: 本乐谱使用「爱记谱 https://ijipu.pages.dev」编制'),
-    JSON.stringify(NEW_JPS_TEMPLATE.split('\n').filter((l) => l.startsWith('S: '))),
+    'adj920 新建 JPS 模板：**不含**描述头 `S:` 行（旧口径「必须含 `S: 本乐谱使用…编制`」作废 —— 用户 2026-10-13 要求去掉）',
+    !hasSHead920(NEW_JPS_TEMPLATE),
+    JSON.stringify(NEW_JPS_TEMPLATE.split('\n').filter((l) => /^S:/.test(l))),
+  )
+  check(
+    'adj920 负对照：把 `S: 本乐谱使用「爱记谱 https://ijipu.pages.dev」编制` 加回模板 ⇒ 上面那条判假',
+    hasSHead920(NEW_JPS_TEMPLATE + '\nS: 本乐谱使用「爱记谱 https://ijipu.pages.dev」编制\n') === true,
   )
   const tplLayout = layoutScore(tplParsed, defaultPageConfig)
   check(
@@ -5584,118 +5602,107 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
 }
 
 /**
- * ---- adj917：**嵌入块 / 代码块 与同上下文段落文字"左对齐 + 同宽"** ----
+ * ---- adj920（回退 adj917）：**嵌入块 / 代码块「保持全宽」** ----
  *
- * 用户报：「jps嵌入块与其它段落的对齐不一致，请调整嵌入块与其它段落的左对齐、宽度一致」。
+ * **用户 2026-10-13 拍板（两条裁定）**：
+ *  ① 「**嵌入块保持全宽**」⇒ 撤掉 adj917 的"块跟随同上下文段落首行缩进"行为 ✗；
+ *  ② 「现在看嵌入块和代码块观感是一样的」⇒ 代码块那 **2px 内边距保持现状不动** ✗（别去统一、别动 adj725 的口径）。
  *
- * **真因**（读码 + 真实 `app.css` + 无头浏览器实测）：我们的容器是**块级盒**
- * （`styles.css` 的 `.ijipu-embed { display: block }`；宿主 `app.css:12315` 也有
- * `.internal-embed:not(.image-embed) { display: block }`），而 `text-indent` 是
- * **可继承、但只作用于行盒**的属性 ⇒ 段落文字被缩进时我们的块**不动**。
- * 用户库里启用的片段 `首行缩进.css` 把文字右移 2em ⇒ 实测（视图宽 974）：
- * 段落盒 `x=32 宽=895`（右缘 927）、**文字首行 `x=64`**，我们的块 `x=32 宽=895`
- * ⇒ 比文字**左出 32px、宽出 32px**（用户看到的就是这个）。
+ * **新口径**：嵌入块 / 代码块 = **块级盒，占满段落盒** ——
+ * 左缘 == **段落盒**左缘、右缘 == **段落盒**右缘，**不跟随**段落文字的 `text-indent`
+ * （`text-indent` 只作用于行盒，块级盒本来就不受它影响 ⇒ 这是 adj917 **之前**的行为，**不是新特性**）。
  *
- * **修法**：块跟随"同上下文段落文字的缩进"（`paraIndent.ts` 量、`scorePane.ts` 打
- * `.ijipu-para-indent` 类 + `setCssProps` 写 `--ijipu-para-indent`、`styles.css` 消费）——
- * 左缘与文字首行同线、右缘仍贴段落盒右缘 ⇒ 宽度 = 文字那一行的宽度 ✓。
- * **上下文没有缩进就不加类**（默认 0）⇒ 对其它主题/库零影响 ✓。
+ * **adj917 当时做了什么**（为什么现在要撤）：它让块跟随"同上下文段落文字的缩进"
+ * （`paraIndent.ts` 量、`scorePane.ts` 打 `.ijipu-para-indent` 类 + `setCssProps` 写
+ * `--ijipu-para-indent`、`styles.css` 消费）—— 左缘与文字首行同线、块收窄 2em。
+ * 用户看过实际效果后**不要这个效果** ⇒ **整条撤回**（`src/paraIndent.ts` 删除、
+ * `scorePane.ts` 里的 `applyParaIndent` 删除、`styles.css` 的 `.ijipu-para-indent` 规则删除）。
  *
- * 本块三组判据，每组都带负对照：① 纯函数（真跑）② 源码级（真规则 + 真判定 + 只此一处）
- * ③ **无头浏览器实测**（仿 Obsidian 的宿主规则 + **真的** `styles.css`）。
+ * **adj917 保留下来的一处**：删掉那条**从来没命中过**的死规则 `.ijipu-embed .ijipu-score`
+ * （`.ijipu-score` 与 `.ijipu-embed` 加在**同一个元素**上，后代选择器永远匹配不到 ⇒ 它写的
+ * `margin/padding: 0.2em` 从未生效，查问题时差点被它带偏）。用户没反对，**保持删除** ✓。
+ *
+ * 本块两组判据，都带负对照：① 源码级（回退零残留：文件已删 / 代码零残留 / CSS 规则已删
+ * + 死规则仍删除 + 那 2px 没被动）② **无头浏览器实测**（量"不缩进"这个新口径）。
  */
 {
-  const pane917 = String(readFileSync('src/scorePane.ts', 'utf8'))
-  const para917 = String(readFileSync('src/paraIndent.ts', 'utf8'))
-  const css917 = String(readFileSync('styles.css', 'utf8'))
-  const main917 = String(readFileSync('src/main.ts', 'utf8'))
-  const view917 = String(readFileSync('src/fileView.ts', 'utf8'))
-  const embed917 = String(readFileSync('src/embed.ts', 'utf8'))
+  const pane920 = String(readFileSync('src/scorePane.ts', 'utf8'))
+  const css920 = String(readFileSync('styles.css', 'utf8'))
+  const main920 = String(readFileSync('src/main.ts', 'utf8'))
+  const view920 = String(readFileSync('src/fileView.ts', 'utf8'))
+  const embed920 = String(readFileSync('src/embed.ts', 'utf8'))
 
-  // —— ① 纯函数：`getComputedStyle().textIndent` ⇒ px（真跑，不靠字符串匹配） ——
-  check('adj917 `indentPxOf`：`32px` ⇒ 32（`text-indent: 2em` 的计算值就是 `32px`，Chrome 实测）',
-    indentPxOf('32px', 800) === 32 && indentPxOf(' 32px ', 800) === 32)
-  check('adj917 `indentPxOf`：`%` 是**唯一**没被绝对化的形态 ⇒ 按上下文宽折算（`10%` / 800 ⇒ 80）',
-    indentPxOf('10%', 800) === 80 && indentPxOf('10%', 0) === 0)
-  check('adj917 负对照：把 `%` 当 px 算（`10%` / 800 ⇒ 10）⇒ 上面那条判假',
-    indentPxOf('10%', 800) !== 10)
-  check('adj917 `indentPxOf`：悬挂缩进（负值）/ 认不出的写法 / 不足 1px 一律 0（**宁可不偏移，也不猜**）',
-    indentPxOf('-32px', 800) === 0 && indentPxOf('0px', 800) === 0 && indentPxOf('0.4px', 800) === 0 &&
-      indentPxOf('1px', 800) === 1 && indentPxOf('2em', 800) === 0 && indentPxOf('normal', 800) === 0 &&
-      indentPxOf('', 800) === 0 && indentPxOf('abc', 800) === 0 && indentPxOf('NaNpx', 800) === 0)
-  check('adj917 `paraIndent.ts` **不引入任何依赖**（纯几何 + 计算样式读取；浏览器与 Node 冒烟跑同一份）',
-    !/^\s*import\s/m.test(para917), para917.split('\n').filter((l) => /^\s*import\s/.test(l)).join('｜'))
-
+  // —— ① 源码级：回退做到零残留（三处证据：文件已删 / 代码零残留 / CSS 规则已删） ——
+  // ⚠ 判据一律**先剥注释**：代码走现成的 `codeOf`（adj775），CSS 走下面的 `stripCssComments`。
+  //   实测踩过两次（本轮）：负对照字符串里那行解释性注释含 `paragraphIndentOf`、以及本段自己的注释里
+  //   写出"看起来像注释的 CSS 片段"— 都让判据**永远为真**（负对照因此判假 ✗）。⇒ 注释里不要复述被断言的关键词。
+  const stripCssComments = (src: string): string => src.replace(/\/\*[\s\S]*?\*\//g, '')
+  const indentLeft920 = (src: string): boolean =>
+    /paraIndent|paragraphIndentOf|--ijipu-para-indent|ijipu-para-indent/.test(codeOf(src))
+  check('adj920 回退①：`src/paraIndent.ts` **已删除**（adj917 的纯函数连同 `indentPxOf` 一起没了）',
+    !existsSync('src/paraIndent.ts'))
+  check('adj920 回退②：`scorePane.ts` 里 `applyParaIndent` / `paragraphIndentOf` / `ijipu-para-indent` **零残留**（剥注释后看代码；三处入口共用同一个 `mountScorePane`）',
+    !indentLeft920(pane920) && !indentLeft920(main920) && !indentLeft920(view920) && !indentLeft920(embed920) &&
+      /export function mountScorePane\(/.test(pane920) &&
+      /mountScorePane\(/.test(main920) && /mountScorePane\(/.test(view920) && /mountScorePane\(/.test(embed920))
+  const negSrc920 = pane920 + "\n// adj917：跟随段落缩进\nconst px = paragraphIndentOf(container)\n"
+  const negSrc920b = pane920 + "\ncontainer.setCssProps({ '--ijipu-para-indent': '32px' })\n"
   /**
-   * —— ①之二 **实时预览那条路**（容器是 `.cm-content` 的兄弟 ⇒ **继承不到**段落缩进，
-   * 必须回头看同级最靠前的"段落样"元素）—— 在 Node 里用**极小假 DOM** 真跑 `paragraphIndentOf`。
-   * 只 stub `window.getComputedStyle`（冒烟本来就有 stub 全局的先例，如 `fetch`），跑完还原。
+   * ⚠ 负对照的极性（本轮自己先写反过一次，记下来）：上面那条判据是
+   * `!indentLeft920(...)` —— **"有残留"时判据返回 true**，所以负对照要断言的是
+   * `indentLeft920(塞回去的源码) === true`（判据**确实能看见**那段残留），
+   * 而不是 `=== false`。写成 false 的话红的是负对照自己（实测就是这样，白折腾一轮 ✗）。
    */
-  const fakeEl917 = (ownIndent: string, scopeIndents: string[] | null): HTMLElement => {
-    const scope = scopeIndents === null
-      ? null
-      : {
-          clientWidth: 800,
-          querySelectorAll: () => scopeIndents.map((textIndent) => ({ textIndent })),
-        }
-    return { textIndent: ownIndent, closest: () => scope, parentElement: scope } as unknown as HTMLElement
+  check('adj920 回退②负对照：把 adj917 那段（`// adj917：跟随段落缩进` + `const px = paragraphIndentOf(container)`）加回去 ⇒ **同一条判据判假（返回 true）**',
+    indentLeft920(negSrc920) === true)
+  check('adj920 回退②负对照之二：只把 CSS 变量名 `--ijipu-para-indent` 漏回去（那种"看不出调用"的残留）⇒ **同一条判据也判假（返回 true）**',
+    indentLeft920(negSrc920b) === true)
+  /**
+   * ⚠ 判据只看**剥掉注释后的 CSS**（含 `--ijipu-para-indent` 也不行）—— 注释里留着
+   * "这里原来有一条 `.ijipu-para-indent` 规则，已删除"是允许的（用户裁定里明确"注释可留"）。
+   */
+  const cssCode920 = stripCssComments(css920)
+  const rule920 = (src: string): boolean =>
+    /\.ijipu-para-indent\s*\{[^}]*margin-inline-start:\s*var\(--ijipu-para-indent,\s*0px\)/.test(stripCssComments(src))
+  check('adj920 回退③：`styles.css` 里 `跟随段落缩进` 那条规则**已整条删除**（剥注释后连 `--ijipu-para-indent` 变量一起；注释里提到它是允许的）',
+    !rule920(css920) && !cssCode920.includes('--ijipu-para-indent') && !/!important\s*;/.test(cssCode920))
+  check('adj920 回退③负对照：把那条规则原样塞回 `styles.css` ⇒ 上面那条判假',
+    rule920(css920 + '\n.ijipu-para-indent {\n  margin-inline-start: var(--ijipu-para-indent, 0px);\n}\n'))
+  check('adj917 保留的一处（用户没反对，**保持删除**）：那条**从来没命中过**的死规则 `.ijipu-embed .ijipu-score` 不在 `styles.css` 里（`.ijipu-score` 与 `.ijipu-embed` 是**同一个元素**）',
+    !/\.ijipu-embed \.ijipu-score \{/.test(cssCode920) && /container\.addClass\('ijipu-score'\)/.test(pane920))
+  check('adj917 保留的一处负对照：把死规则加回去 ⇒ 上面那条判假',
+    /\.ijipu-embed \.ijipu-score \{/.test(stripCssComments(css920 + '\n.ijipu-embed .ijipu-score {\n  padding: 0.2em;\n}\n')))
+  /**
+   * 用户裁定 ②：「嵌入块和代码块观感一样」⇒ **那 2px 保持现状不动**（adj725 的口径）。
+   * 这条断言把"现状"钉死（`.ijipu-score` 的 `padding: 2px` + `.ijipu-embed` 的 `padding: 2px 0`），
+   * 免得下一次有人"顺手统一一下"把它改掉 ✗。
+   */
+  const padRule920 = (src: string, sel: string): string | null => {
+    const re = new RegExp('(?:^|\\n)' + sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' \\{\\n([\\s\\S]*?)\\n\\}')
+    const m = re.exec(src)
+    if (!m) return null
+    const p = /padding:\s*([^;]+);/.exec(m[1])
+    return p ? p[1].trim() : null
   }
-  const withFakeWindow917 = <T,>(fn: () => T): T => {
-    const g = globalThis as unknown as { window?: unknown }
-    const saved = g.window
-    g.window = { getComputedStyle: (el: { textIndent?: string }) => ({ textIndent: el.textIndent ?? '0px' }) }
-    try {
-      return fn()
-    } finally {
-      if (saved === undefined) delete g.window
-      else g.window = saved
-    }
-  }
-  check('adj917 `paragraphIndentOf`：容器**自己**继承到缩进（阅读视图：容器就在 `<p>` 内）⇒ 直接用它',
-    withFakeWindow917(() => paragraphIndentOf(fakeEl917('32px', ['0px']))) === 32)
-  check('adj917 `paragraphIndentOf`：自己量不到（**实时预览**：容器是 `.cm-content` 的兄弟）⇒ 回看同级段落样元素，**跳过缩进为 0 的那些**',
-    withFakeWindow917(() => paragraphIndentOf(fakeEl917('0px', ['0px', '32px', '0px']))) === 32)
-  check('adj917 负对照：同级全是 0 / 量不到上下文 ⇒ 0（不偏移是默认，偏移才是例外）',
-    withFakeWindow917(() => paragraphIndentOf(fakeEl917('0px', ['0px', '0px']))) === 0 &&
-      withFakeWindow917(() => paragraphIndentOf(fakeEl917('0px', null))) === 0 &&
-      withFakeWindow917(() => paragraphIndentOf(fakeEl917('-32px', ['-32px']))) === 0)
-
-  // —— ② 源码级：规则在、判定在、且只有这一处（三处入口共用同一个 `mountScorePane`） ——
-  const rule917 = (src: string): boolean =>
-    /\.ijipu-para-indent \{\n  margin-inline-start: var\(--ijipu-para-indent, 0px\);/.test(src)
-  check('adj917 `styles.css`：`跟随段落缩进`的规则在（类 + 自定义属性），且**不是** `!important` 声明（adj772 全文件 0 处）',
-    rule917(css917) && !/!important\s*;/.test(css917))
-  check('adj917 负对照：把那条规则改回"没有偏移"（`margin-inline-start: 0px`）⇒ 同一条判据判假',
-    rule917(css917.replace('margin-inline-start: var(--ijipu-para-indent, 0px);', 'margin-inline-start: 0px;')) === false)
-  check('adj917 删掉了那条**从来没命中过**的死规则 `.ijipu-embed .ijipu-score`（`.ijipu-score` 与 `.ijipu-embed` 是**同一个元素**）',
-    !/\.ijipu-embed \.ijipu-score \{/.test(css917) && /container\.addClass\('ijipu-score'\)/.test(pane917))
-  check('adj917 负对照：把死规则加回去 ⇒ 上面那条判假',
-    /\.ijipu-embed \.ijipu-score \{/.test(css917 + '\n.ijipu-embed .ijipu-score {\n  padding: 0.2em;\n}\n'))
-  const gated917 = (src: string): boolean =>
-    /const px = paragraphIndentOf\(container\)/.test(src) &&
-    /if \(px > 0\) \{/.test(src) &&
-    /container\.setCssProps\(\{ '--ijipu-para-indent'/.test(src) &&
-    /container\.addClass\('ijipu-para-indent'\)/.test(src) &&
-    /container\.removeClass\('ijipu-para-indent'\)/.test(src)
-  check('adj917 `scorePane.ts`：量到 >0 才**加类 + 写变量**；量到 0（绝大多数环境）就**摘掉** ⇒ 零影响；值走 `setCssProps`（不写内联样式）',
-    gated917(pane917))
-  check('adj917 负对照：把「量到 0 就摘掉」去掉（无条件加类）⇒ 同一条判据判假',
-    gated917(pane917.replace('if (px > 0) {', 'if (true) {')) === false)
-  const singleSite917 = (p: string, m: string, v: string, e: string): boolean =>
-    /paragraphIndentOf/.test(p) && !/paragraphIndentOf/.test(m) &&
-      !/paragraphIndentOf/.test(v) && !/paragraphIndentOf/.test(e)
-  check('adj917 只此一处：`paragraphIndentOf` 只在**共用的** `scorePane.ts` 里被调用（代码块 / 文件页 / 嵌入三处不各写一份）',
-    singleSite917(pane917, main917, view917, embed917) &&
-      /export function mountScorePane\(/.test(pane917) &&
-      /mountScorePane\(/.test(main917) && /mountScorePane\(/.test(view917) && /mountScorePane\(/.test(embed917))
-  check('adj917 负对照：往 `embed.ts` 里塞一份自己的 `paragraphIndentOf(` 调用（= 入口分叉）⇒ 同一条判据判假',
-    singleSite917(pane917, main917, view917, embed917 + '\nconst own = paragraphIndentOf(el)\n') === false)
+  /** 把某条规则块内的 `padding` 换成给定值（负对照用；只动那一条规则，不误伤别处同值声明） */
+  const setPad920 = (src: string, sel: string, value: string): string =>
+    src.replace(
+      new RegExp('((?:^|\\n)' + sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' \\{\\n[\\s\\S]*?\\n\\})'),
+      (block) => block.replace(/padding:\s*[^;]+;/, 'padding: ' + value + ';'),
+    )
+  check('adj920 用户裁定②：`.ijipu-score` 的 `padding: 2px`（adj725 每边 2px 留白）**保持现状**——"嵌入块与代码块观感一样"这件事用户说不用改',
+    padRule920(css920, '.ijipu-score') === '2px', String(padRule920(css920, '.ijipu-score')))
+  check('adj920 用户裁定②：`.ijipu-embed` 的 `padding: 2px 0`（**无水平分量**）也没动',
+    padRule920(css920, '.ijipu-embed') === '2px 0', String(padRule920(css920, '.ijipu-embed')))
+  check('adj920 用户裁定②负对照：把 `.ijipu-score` 自己那条规则的 `padding` 改成 0（= "顺手统一"）⇒ 上面那条判假',
+    padRule920(setPad920(css920, '.ijipu-score', '0'), '.ijipu-score') === '0')
 
   /**
-   * —— ③ 无头浏览器实测 ——
+   * —— ② 无头浏览器实测（**新口径**：量"不缩进"）——
    *
-   * 为什么要真起浏览器：本轮的判据是**几何**（左缘/右缘的 px），源码级断言只能证明"规则在"，
-   * 证明不了"盒真的动了、而且动的量与段落文字的缩进一样"。
+   * 为什么要真起浏览器：判据是**几何**（左缘/右缘的 px），源码级断言只能证明"那条规则不在"，
+   * 证明不了"盒真的还是全宽"（例如宿主 `app.css` 给 `.internal-embed` 的定调、或我们别的规则
+   * 顺手给它加了水平外边距，都只有实测能看出来）。
    *
    * 夹具口径（照抄真实宿主规则，逐条注明来源）：
    *  · `.markdown-preview-view { padding: 32px }` —— app.css:2260 的 `--file-margins` 默认（32px）；
@@ -5703,28 +5710,34 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
    *  · `.markdown-preview-section p { text-indent: 2em }` —— **用户库里启用的 `首行缩进.css`**（逐字）；
    *  · `<div class="el-p"><p><span class="internal-embed …">` —— 用户诊断实测的祖先链；
    *  · 样式表里注入的是**真的 `styles.css`** ⇒ 顺带守住"`.ijipu-embed` 的 padding 不许加水平分量"。
-   * 两个变体只差一件事：**给不给 `.ijipu-para-indent` 类与 `--ijipu-para-indent` 变量**
-   * （`fix=1` = 现在的实现；`fix=0` = 改回旧写法）⇒ 后者就是这条实测判据的**负对照**。
+   * 两个变体只差一件事：**给不给容器加那段 2em 的左缩进**（`live=1` = 现在的实现；
+   * `live=0` = 人为把 adj917 那条规则塞回来）⇒ 后者就是这条实测判据的**负对照**。
+   *
+   * ⚠ 夹具里**保留** `text-indent: 2em`（用户的真实环境）—— 它是"块没动"的**前提**：
+   * 没有它，量到的全宽说明不了任何事（夹具自检因此要求段落文字确实被右移 ≥30px）。
    *
    * 起不来浏览器（机器上没有 Chrome/Edge、或被沙箱挡住）就**跳过并说明**（不当成红）；
    * 起来了但读不出测量行 ⇒ **判红**（那说明夹具/CSS 真出问题了，不该被吞掉）。
    */
   const INDENT_EM = 2 // = 用户片段里的 2em（真因数据：2em = 32px）
-  const html917 = (fix: boolean): string =>
-    '<!doctype html>\n<html lang="zh-CN"><head><meta charset="utf-8" /><title>adj917</title>\n' +
+  const html920 = (live: boolean): string =>
+    '<!doctype html>\n<html lang="zh-CN"><head><meta charset="utf-8" /><title>adj920</title>\n' +
     '<style>\n' +
     'body { margin: 0; font-family: system-ui, sans-serif; font-size: 16px; background: #fff; }\n' +
     '.markdown-preview-view { padding: 32px; }\n' +
     '.internal-embed:not(.image-embed) { display: block; }\n' +
     '.markdown-preview-section p { text-indent: ' + INDENT_EM + 'em; }\n' +
-    '</style>\n<style>\n' + css917 + '\n</style>\n' +
-    (fix ? '<style>\n.ijipu-embed { --ijipu-para-indent: ' + INDENT_EM + 'em; }\n</style>\n' : '') +
+    '</style>\n<style>\n' + css920 + '\n</style>\n' +
+    /**
+     * ⚠ 负对照 = "**把 adj917 已经撤掉的那条规则人为塞回来**"（原样一条）——
+     * 比"随便改个别的量"更贴题：它正是被用户否掉的那个效果。
+     */
+    (live ? '' : '<style>\n.ijipu-embed { margin-inline-start: ' + INDENT_EM + 'em; }\n</style>\n') +
     '</head><body>\n' +
     '<div class="markdown-reading-view"><div class="markdown-preview-view markdown-rendered">\n' +
     '<div class="markdown-preview-sizer markdown-preview-section">\n' +
     '<div class="el-p"><p dir="auto"><span id="paraText">半山听雨 -G 调伴奏（普通段落文字，用来当对齐基准）</span></p></div>\n' +
-    '<div class="el-p"><p dir="auto"><span id="embed" class="internal-embed ijipu-embed is-loaded ijipu-score ijipu-embedded' +
-    (fix ? ' ijipu-para-indent' : '') + '" src="半山听雨.jps"></span></p></div>\n' +
+    '<div class="el-p"><p dir="auto"><span id="embed" class="internal-embed ijipu-embed is-loaded ijipu-score ijipu-embedded" src="半山听雨.jps"></span></p></div>\n' +
     '</div></div></div>\n<pre id="out"></pre>\n' +
     /**
      * ⚠ 嵌入块的子树**必须用 DOM API 搭**（不能写成 HTML 字面量）：`<div>` 出现在 `<p>` 里时
@@ -5749,7 +5762,7 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
     '  row("embedSvg", sv.getBoundingClientRect())\n' +
     '].join("\\n");\n' +
     '</script>\n</body></html>\n'
-  const BROWSER917 = [
+  const BROWSER920 = [
     process.env.IJIPU_CHROME,
     'C:/Program Files/Google/Chrome/Application/chrome.exe',
     'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
@@ -5760,21 +5773,21 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
     '/usr/bin/chromium-browser',
     '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
   ].find((p): p is string => typeof p === 'string' && existsSync(p))
-  type Rows917 = { paraBox: [number, number]; paraText: [number, number]; embed: [number, number]; embedSvg: [number, number] }
+  type Rows920 = { paraBox: [number, number]; paraText: [number, number]; embed: [number, number]; embedSvg: [number, number] }
   /** `skip` = 环境不允许（没浏览器/起不来）⇒ 跳过；`bad` = 起来了却读不到测量行 ⇒ **判红** */
-  type Probe917 = Rows917 | { skip: string } | { bad: string }
-  const rows917 = (fix: boolean): Probe917 => {
-    if (!BROWSER917) return { skip: '本机没有 Chrome/Edge' }
+  type Probe920 = Rows920 | { skip: string } | { bad: string }
+  const rows920 = (live: boolean): Probe920 => {
+    if (!BROWSER920) return { skip: '本机没有 Chrome/Edge' }
     mkdirSync('dist-smoke', { recursive: true })
-    const rel = 'dist-smoke/embed-align-' + (fix ? 'fix' : 'raw') + '.html'
-    writeFileSync(rel, html917(fix), 'utf8')
+    const rel = 'dist-smoke/embed-align-920-' + (live ? 'live' : 'neg') + '.html'
+    writeFileSync(rel, html920(live), 'utf8')
     let dom = ''
     try {
       dom = execFileSync(
-        BROWSER917,
+        BROWSER920,
         [
           '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
-          '--user-data-dir=' + resolve('dist-smoke/chrome-adj917'),
+          '--user-data-dir=' + resolve('dist-smoke/chrome-adj920'),
           '--window-size=1000,900', '--virtual-time-budget=4000',
           '--dump-dom', pathToFileURL(resolve(rel)).href,
         ],
@@ -5791,40 +5804,47 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       const m = /^(paraBox|paraText|embed|embedSvg) (-?[\d.]+) (-?[\d.]+)$/.exec(line.trim())
       if (m) out[m[1]] = [Number(m[2]), Number(m[3])]
     }
-    const r = out as Partial<Rows917>
+    const r = out as Partial<Rows920>
     return r.paraBox && r.paraText && r.embed && r.embedSvg
-      ? (r as Rows917)
+      ? (r as Rows920)
       : { bad: '测量行读不出来（夹具/样式真出问题了）' }
   }
-  // 判据：左缘与段落文字首行同线、右缘仍贴段落盒右缘、SVG（白纸）左缘也贴文字左缘、且确实收窄了
-  const ok917 = (r: Rows917): boolean =>
-    Math.abs(r.embed[0] - r.paraText[0]) <= 1 &&
+  /**
+   * **adj920 新口径**（用户 2026-10-13「嵌入块保持全宽」）—— 三条：
+   *  ① 嵌入块左缘 == **段落盒**左缘（±1px）⇒ 块**不跟随**段落文字的 `text-indent`；
+   *  ② 嵌入块右缘 == **段落盒**右缘（±1px）⇒ 块是**全宽**（①+②合起来就是"全宽"）；
+   *  ③ 白纸（`svg`）左缘 == 嵌入块左缘（±1px）⇒ 块里也没有横向偏移。
+   * ⚠ 注意**不再**要求"== 段落文字左缘"（那是被撤销的 adj917 旧口径）。
+   */
+  const fullWidth920 = (r: Rows920): boolean =>
+    Math.abs(r.embed[0] - r.paraBox[0]) <= 1 &&
     Math.abs(r.embed[1] - r.paraBox[1]) <= 1 &&
-    Math.abs(r.embedSvg[0] - r.paraText[0]) <= 1 &&
-    r.embed[1] - r.embed[0] < r.paraBox[1] - r.paraBox[0] - 8
-  const fixed917 = rows917(true)
-  const raw917 = rows917(false)
-  const skipped917 = 'skip' in fixed917 || 'skip' in raw917
-  const why917 =
-    'skip' in fixed917 ? fixed917.skip
-      : 'skip' in raw917 ? raw917.skip
-        : 'bad' in fixed917 ? fixed917.bad
-          : 'bad' in raw917 ? raw917.bad
+    Math.abs(r.embedSvg[0] - r.embed[0]) <= 1
+  const live920 = rows920(true)
+  const neg920 = rows920(false)
+  const skipped920 = 'skip' in live920 || 'skip' in neg920
+  const why920 =
+    'skip' in live920 ? live920.skip
+      : 'skip' in neg920 ? neg920.skip
+        : 'bad' in live920 ? live920.bad
+          : 'bad' in neg920 ? neg920.bad
             : ''
-  const fx = 'skip' in fixed917 || 'bad' in fixed917 ? null : fixed917
-  const rw = 'skip' in raw917 || 'bad' in raw917 ? null : raw917
-  if (skipped917) console.log('   （跳过 adj917 的无头浏览器实测：' + why917 + '）')
-  const fmt917 = (r: Rows917 | null): string =>
+  const lv920 = 'skip' in live920 || 'bad' in live920 ? null : live920
+  const ng920 = 'skip' in neg920 || 'bad' in neg920 ? null : neg920
+  if (skipped920) console.log('   （跳过 adj920 的无头浏览器实测：' + why920 + '）')
+  const fmt920 = (r: Rows920 | null): string =>
     r === null
-      ? '（未测：' + why917 + '）'
+      ? '（未测：' + why920 + '）'
       : '段落盒 ' + r.paraBox[0] + '~' + r.paraBox[1] + '｜文字 ' + r.paraText[0] + '｜嵌入块 ' +
         r.embed[0] + '~' + r.embed[1] + '｜SVG ' + r.embedSvg[0]
-  check('adj917 实测（无头浏览器 + **真的** `styles.css` + 用户片段）：嵌入块左缘 == 段落文字左缘、右缘 == 段落盒右缘、白纸左缘 == 文字左缘（±1px）',
-    skipped917 ? true : fx !== null && ok917(fx), (skipped917 ? '跳过：' + why917 + '｜' : '') + fmt917(fx))
-  check('adj917 实测负对照：不给 `.ijipu-para-indent` 类与变量（= 改回旧写法）⇒ **同一条判据判假**，且差值就是那段缩进（≥8px）',
-    skipped917 ? true : rw !== null && !ok917(rw) && rw.paraText[0] - rw.embed[0] >= 8, fmt917(rw))
-  check('adj917 实测夹具自检：段落文字确实被 `text-indent: ' + INDENT_EM + 'em` 右移（≥30px）——否则上面两条是空的',
-    skipped917 ? true : rw !== null && rw.paraText[0] - rw.paraBox[0] >= 30, fmt917(rw))
+  check('adj920 实测（无头浏览器 + **真的** `styles.css` + 用户片段）：嵌入块左缘 == 段落盒左缘、右缘 == 段落盒右缘、白纸左缘 == 嵌入块左缘（±1px）——**保持全宽**',
+    skipped920 ? true : lv920 !== null && fullWidth920(lv920), (skipped920 ? '跳过：' + why920 + '｜' : '') + fmt920(lv920))
+  check('adj920 实测负对照：把 adj917 那条 `.ijipu-embed { margin-inline-start: 2em }` 人为塞回来 ⇒ **同一条判据判假**，且差值就是那段缩进（≥8px）',
+    skipped920 ? true : ng920 !== null && !fullWidth920(ng920) && ng920.embed[0] - ng920.paraBox[0] >= 8, fmt920(ng920))
+  check('adj920 实测夹具自检：段落文字确实被 `text-indent: ' + INDENT_EM + 'em` 右移（≥30px）——以此证明"块没动"不是夹具没生效',
+    skipped920 ? true : lv920 !== null && lv920.paraText[0] - lv920.paraBox[0] >= 30, fmt920(lv920))
+  check('adj920 实测补一刀：嵌入块左缘 **≠** 段落文字左缘（差 ≥30px）——旧 adj917 的"跟随首行缩进"确实没有回来',
+    skipped920 ? true : lv920 !== null && lv920.paraText[0] - lv920.embed[0] >= 30, fmt920(lv920))
 }
 
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。
