@@ -5847,6 +5847,269 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
     skipped920 ? true : lv920 !== null && lv920.paraText[0] - lv920.embed[0] >= 30, fmt920(lv920))
 }
 
+/**
+ * ---- adj922（用户报）：**设置页「说明」页签里、赞赏图后面多出「嵌入版」页签的内容** ----
+ *
+ * 用户原话：「插件的设置页面里说明页签下面赞赏图后面多出了嵌入版页签里的内容」。
+ *
+ * **根因**（`src/settings.ts` 的页签分派 `paintActive`）：那里原来是**两句** if ——
+ *     if (this.activeTab === '说明') this.renderAbout(panel)
+ *     if (this.activeTab === '诊断') this.renderDiagnostics(panel)
+ *     else this.renderEmbed(panel)          // ← 这个 else 挂在**第二句**上
+ * ⇒ 停在「说明」时：第一句成立 ⇒ `renderAbout` 跑；第二句不成立 ⇒ 走它自己的 `else` ⇒
+ *   `renderEmbed` 又把**整个嵌入版**追加到**同一个 `panel`** 上。
+ *   （「嵌入版」与「诊断」两页各自只命中一支，所以只有「说明」看起来是坏的 —— 正是用户看到的。）
+ *
+ * **修法**：改成 `if / else if / else` **一条链**（与 `configDialog.ts` 的页签分派同款）——
+ * 三个页签只能命中一支。**不碰宿主选择器、不加 `!important`、不写内联样式。**
+ *
+ * 这一节守三件事（都配负对照）：
+ *  ① 源码：分派是**一条链**（缺 `else` 就被判假）；
+ *  ② 源码：三个页签的构建函数**只往自己的 `host` 追加**，不碰共享的 `containerEl`；
+ *  ③ 实测（无头浏览器 + **真的** `src/settings.ts`）：三页签的 item **两两不交叉**，
+ *     且「说明」面板里**赞赏图是最后一个子元素**（= 用户看到的那串"多出来的"不在了）。
+ *     负对照 = 只把那条 `else` 去掉重新打包，同一条判据必须判假。
+ */
+{
+  const settingsSrc922 = String(readFileSync('src/settings.ts', 'utf8'))
+  const settingsCode922 = codeOf(settingsSrc922)
+
+  /** 取「页签分派」那一段（`paintActive` 的函数体）——判据与负对照共用同一段提取 */
+  const dispatch922 = (src: string): string => {
+    const i = src.indexOf('const paintActive = (): void => {')
+    if (i < 0) return ''
+    const j = src.indexOf('\n    }', i)
+    return j < 0 ? '' : src.slice(i, j)
+  }
+  /**
+   * 判据①：三个页签的分派必须是**一条链**。
+   * ⚠ 必须"整条链按顺序出现"才抓得住这个 bug —— 分成三条 `includes` 是抓不住的
+   *   （本 bug 里 `if (诊断) … else renderEmbed` 那两句**各自都还在**，只是少了连词）。
+   */
+  const chainOk922 = (src: string): boolean =>
+    /if \(this\.activeTab === '说明'\) this\.renderAbout\(panel\)\s*\n\s*else if \(this\.activeTab === '诊断'\) this\.renderDiagnostics\(panel\)\s*\n\s*else this\.renderEmbed\(panel\)/.test(
+      dispatch922(src),
+    )
+  /** 取某个 `private xxx(host: HTMLElement): void {` 的函数体（到方法结尾的 `\n  }`） */
+  const fnBody922 = (src: string, name: string): string => {
+    const sig = `private ${name}(host: HTMLElement): void {`
+    const i = src.indexOf(sig)
+    if (i < 0) return ''
+    const j = src.indexOf('\n  }', i + sig.length)
+    return j < 0 ? '' : src.slice(i + sig.length, j)
+  }
+  /**
+   * 判据②：三个页签的构建函数**只往自己的 `host` 追加**，不往整页的 `containerEl` 追加
+   * （`containerEl` 只该由 `display()` 用来建品牌头 / 页签栏 / `panel`：页签内容一律进 `host`）。
+   */
+  const hostOnly922 = (src: string): boolean =>
+    ['renderEmbed', 'renderAbout', 'renderDiagnostics'].every((n) => {
+      const body = fnBody922(src, n)
+      return body.length > 0 && /\bhost\b/.test(body) && !/this\.containerEl|containerEl\.(create|append)/.test(body)
+    })
+
+  check('adj922 源码：设置页三页签的分派是**一条 if / else if / else 链**（说明 │ 诊断 │ 其余=嵌入版，互斥）——缺 else 就会一次建两页',
+    chainOk922(settingsCode922))
+  check("adj922 源码负对照：把 `else if (this.activeTab === '诊断')` 改回**缺 else 的两句**（= 用户报障时的原样）⇒ **同一条判据判假**",
+    !chainOk922(settingsCode922.replace("else if (this.activeTab === '诊断')", "if (this.activeTab === '诊断')")))
+  check('adj922 源码：renderEmbed / renderAbout / renderDiagnostics 都**只往自己的 host 追加**，一处都不碰共享 containerEl',
+    hostOnly922(settingsCode922))
+  check('adj922 源码负对照：往 renderAbout 里塞一句 `this.containerEl.createDiv(…)`（= append 到共享容器的形态）⇒ **同一条判据判假**',
+    !hostOnly922(settingsCode922.replace('this.renderAboutTail(host)', "this.containerEl.createDiv({ cls: 'x' })\n    this.renderAboutTail(host)")))
+
+  /**
+   * —— ③ 无头浏览器实测：把**真的 `src/settings.ts`** 打进浏览器包，在"仿 Obsidian 设置页"的
+   * 夹具里跑 `display()`、**点一下目标页签的按钮**，再数那个页签面板里的 item。
+   *
+   * 为什么非得起浏览器：用户报的是**视觉上的串页**（"说明"里多出嵌入版那一串），
+   * 只有真的建一遍 DOM 才能证明修好了；源码级判据只能证明"分派是一条链"。
+   *
+   * 夹具只换宿主、**不动 `settings.ts` 一个字**：
+   *  · `scripts/settingsDomShim.ts` = 浏览器内的 `obsidian` 替身（`Setting` 真的建 element）；
+   *  · `scripts/settingsDomProbe.ts` = 动作（建页 → 点页签 → 按 DOM 顺序取名与子元素）。
+   * 起不来浏览器（没装 Chrome/Edge）⇒ **跳过并说明**；打包失败 / 量不出结果 ⇒ **判红**（那是我们自己的问题）。
+   */
+  type Row922 = { tab: string; buttons: string[]; panelChildren: string[]; itemCount: number; names: string[]; qr: number }
+  const BROWSER922 = [
+    process.env.IJIPU_CHROME,
+    'C:/Program Files/Google/Chrome/Application/chrome.exe',
+    'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
+    'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
+    'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
+    '/usr/bin/google-chrome',
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  ].find((p): p is string => typeof p === 'string' && existsSync(p))
+
+  /** 判据③（实测）：三页签的 item **两两不交叉**；且「说明」里赞赏图是该面板的**最后一个**子元素 */
+  const noCross922 = (rows: Row922[]): boolean => {
+    if (rows.length !== 3) return false
+    const about = rows.find((r) => r.tab === '说明')
+    const embed = rows.find((r) => r.tab === '嵌入版')
+    const diag = rows.find((r) => r.tab === '诊断')
+    if (!about || !embed || !diag) return false
+    const inter = (a: string[], b: string[]): string[] => a.filter((x) => b.includes(x))
+    const qrIdx = about.panelChildren.indexOf('ijipu-donate-qr-wrap')
+    return (
+      inter(about.names, embed.names).length === 0 &&
+      inter(about.names, diag.names).length === 0 &&
+      inter(embed.names, diag.names).length === 0 &&
+      about.qr === 1 &&
+      qrIdx >= 0 &&
+      qrIdx === about.panelChildren.length - 1
+    )
+  }
+  const probe922 = (variant: 'live' | 'buggy'): Row922[] | { skip: string } | { bad: string } => {
+    if (!BROWSER922) return { skip: '本机没有 Chrome/Edge' }
+    mkdirSync('dist-smoke', { recursive: true })
+    /**
+     * 负对照的源码 = **同一份 `settings.ts`**，只做两件事：① 把那条 `else` 去掉（= 用户报障时的原样）；
+     * ② 把 `'./xxx'` 的相对导入改写成 `'../src/xxx'`（这份副本放在 `dist-smoke/` 下）——**别的字符一字不动**。
+     */
+    const buggy922 = settingsSrc922
+      .replace("else if (this.activeTab === '诊断')", "if (this.activeTab === '诊断')")
+      .replace(/from '\.\//g, "from '../src/")
+    if (!buggy922.includes("if (this.activeTab === '诊断') this.renderDiagnostics(panel)"))
+      return { bad: '源码里找不到那条 `else if (诊断)`（判据要跟着改）' }
+    writeFileSync('dist-smoke/_tmp_922_buggy.ts', buggy922, 'utf8')
+    const entry922 = (from: string): string =>
+      `import { IJipuSettingTab } from '${from}'\n` +
+      "import { runSettingsProbe } from '../scripts/settingsDomProbe'\n" +
+      'runSettingsProbe(IJipuSettingTab)\n'
+    writeFileSync('dist-smoke/_tmp_922_entry_live.ts', entry922('../src/settings'), 'utf8')
+    writeFileSync('dist-smoke/_tmp_922_entry_buggy.ts', entry922('./_tmp_922_buggy'), 'utf8')
+    try {
+      execFileSync(
+        process.execPath,
+        [
+          resolve('node_modules/esbuild/bin/esbuild'),
+          `dist-smoke/_tmp_922_entry_${variant}.ts`,
+          '--bundle', '--platform=browser', '--format=iife', '--target=chrome110',
+          '--alias:obsidian=./scripts/settingsDomShim.ts',
+          '--alias:@ijipu/engine=./vendor/engine/index.ts',
+          '--loader:.png=dataurl',
+          `--outfile=dist-smoke/_tmp_922_${variant}.js`,
+          '--log-level=warning',
+        ],
+        { stdio: ['ignore', 'pipe', 'pipe'], timeout: 240_000 },
+      )
+    } catch (e) {
+      const se = e as { stderr?: { toString: () => string }; message?: string }
+      const msg = (se.stderr ? se.stderr.toString() : '') || se.message || String(e)
+      return { bad: '夹具打包失败：' + msg.split('\n').filter((l) => l.trim()).slice(0, 3).join(' ').slice(0, 200) }
+    }
+    writeFileSync(
+      `dist-smoke/_tmp_922_${variant}.html`,
+      '<!doctype html>\n<html lang="zh-CN"><head><meta charset="utf-8" /></head><body>\n' +
+        '<pre id="out"></pre>\n<script src="_tmp_922_' + variant + '.js"></script>\n</body></html>\n',
+      'utf8',
+    )
+    let dom = ''
+    try {
+      dom = execFileSync(
+        BROWSER922,
+        [
+          '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
+          '--user-data-dir=' + resolve('dist-smoke/chrome-adj922'),
+          '--window-size=1000,900', '--virtual-time-budget=5000',
+          '--dump-dom', pathToFileURL(resolve(`dist-smoke/_tmp_922_${variant}.html`)).href,
+        ],
+        { encoding: 'utf8', timeout: 120_000, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024 },
+      )
+    } catch (e) {
+      return { skip: '浏览器起不来：' + (e instanceof Error ? e.message.split('\n')[0].slice(0, 90) : String(e)) }
+    }
+    const i = dom.indexOf('<pre id="out">')
+    if (i < 0) return { bad: '没有 <pre id="out">（夹具没跑起来？）' }
+    const body = dom.slice(i + '<pre id="out">'.length, dom.indexOf('</pre>', i))
+    try {
+      /** `--dump-dom` 给的是**序列化后的 HTML**：JSON 里的引号/& 已被转义，读回来要还原 */
+      const rows = JSON.parse(
+        body.replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>'),
+      ) as Row922[]
+      return Array.isArray(rows) && rows.length === 3 ? rows : { bad: '量到的不是三个页签：' + JSON.stringify(rows).slice(0, 120) }
+    } catch (e) {
+      return { bad: '量到的 JSON 解析不了：' + (e instanceof Error ? e.message : String(e)) + '｜' + body.slice(0, 120) }
+    }
+  }
+
+  const live922 = probe922('live')
+  const neg922 = probe922('buggy')
+  const skip922 = 'skip' in live922 ? live922.skip : 'skip' in neg922 ? neg922.skip : ''
+  const bad922 = 'bad' in live922 ? live922.bad : 'bad' in neg922 ? neg922.bad : ''
+  if (skip922) console.log('   （跳过 adj922 的无头浏览器实测：' + skip922 + '）')
+  const lv922 = Array.isArray(live922) ? live922 : null
+  const ng922 = Array.isArray(neg922) ? neg922 : null
+  const namesOf922 = (rows: Row922[] | null, tab: string): string[] =>
+    rows === null ? [] : (rows.find((r) => r.tab === tab)?.names ?? [])
+  const fmt922 = (rows: Row922[] | null): string =>
+    rows === null
+      ? '（未测：' + (skip922 || bad922) + '）'
+      : rows.map((r) => `${r.tab} ${r.itemCount} 项[${r.names.join('｜')}]`).join('；')
+  /** 跳过 / 夹具异常 / 正常 三种情形的统一取值（**夹具异常 ⇒ 判红**，不静默放过） */
+  const judged922 = (ok: boolean, detail: string): [boolean, string] =>
+    skip922 ? [true, '跳过：' + skip922] : bad922 ? [false, '夹具异常：' + bad922 + '｜' + detail] : [ok, detail]
+  /** 负对照里「说明」比正片**多出来**的 item（应当正好是嵌入版那几条） */
+  const extra922 = namesOf922(ng922, '说明').filter((n) => !namesOf922(lv922, '说明').includes(n))
+  const itemsOf922 = (rows: Row922[] | null, tab: string): number =>
+    rows === null ? -1 : (rows.find((r) => r.tab === tab)?.itemCount ?? -1)
+  /** 把量到的条数打进输出：通过时也能一眼看到"每页几项、负对照多出哪几条"（不是只有失败才说） */
+  const counts922 = (rows: Row922[] | null): string =>
+    rows === null ? '（未测）' : rows.map((r) => r.tab + '=' + r.itemCount).join(' / ')
+  if (!skip922 && !bad922)
+    console.log(
+      '   adj922 实测：正片 ' + counts922(lv922) + '；负对照（去掉那条 else）' + counts922(ng922) +
+        '；负对照「说明」多出 ' + extra922.length + ' 条：' + extra922.join('｜'),
+    )
+
+  const [c922a, d922a] = judged922(
+    lv922 !== null && noCross922(lv922),
+    fmt922(lv922),
+  )
+  check('adj922 实测（无头浏览器 + **真的** `src/settings.ts`）：三页签的 item **两两不交叉**，且「说明」面板里赞赏图是**最后一个**子元素（= 用户看到的那串"多出来的"不在了）',
+    c922a, d922a)
+  const [c922b, d922b] = judged922(
+    ng922 !== null && !noCross922(ng922) && extra922.length >= 5,
+    '负对照「说明」= ' + itemsOf922(ng922, '说明') + ' 项（正片 ' + itemsOf922(lv922, '说明') + ' 项）；比正片多出 ' +
+      extra922.length + ' 条：' + extra922.join('｜'),
+  )
+  check("adj922 实测负对照：**只把那条 `else` 去掉**（= 用户报障时的原样）重新打包 ⇒ 同一条判据**判假**，且「说明」里确实多出嵌入版那几条",
+    c922b, d922b)
+  const [c922c, d922c] = judged922(
+    extra922.length > 0 && extra922.every((n) => namesOf922(ng922, '嵌入版').includes(n)),
+    '多出来的逐条 = ' + extra922.join('｜'),
+  )
+  check('adj922 实测：多出来的那几条**正是「嵌入版」页签自己的 item**（逐条比对，不是"多了一点东西"）', c922c, d922c)
+  const [c922d, d922d] = judged922(
+    lv922 !== null &&
+      lv922.length === 3 &&
+      lv922.every((r) => r.itemCount >= 1) &&
+      namesOf922(lv922, '说明').length >= 1 &&
+      (lv922.find((r) => r.tab === '说明')?.qr ?? 0) === 1 &&
+      (lv922[0]?.buttons ?? []).join(',') === '嵌入版,说明,诊断',
+    fmt922(lv922),
+  )
+  check('adj922 实测夹具自检：三个页签按钮都在、每页都真的建出了 item、「说明」里也有赞赏图 —— 免得"没跑到"被当成"没问题"',
+    c922d, d922d)
+  const [c922e, d922e] = judged922(
+    !namesOf922(lv922, '说明').includes('嵌入版通道（导出图片 / MIDI 需要）'),
+    '「说明」= ' + namesOf922(lv922, '说明').join('｜'),
+  )
+  check("adj922 实测：用户看到的那条标签（`嵌入版通道（导出图片 / MIDI 需要）`）**不在**「说明」页签里", c922e, d922e)
+  const inter922 = (a: string[], b: string[]): string[] => a.filter((x) => b.includes(x))
+  const [c922f, d922f] = judged922(
+    lv922 !== null &&
+      inter922(namesOf922(lv922, '诊断'), namesOf922(lv922, '嵌入版')).length === 0 &&
+      inter922(namesOf922(lv922, '诊断'), namesOf922(lv922, '说明')).length === 0 &&
+      inter922(namesOf922(lv922, '嵌入版'), namesOf922(lv922, '说明')).length === 0 &&
+      inter922(namesOf922(lv922, '嵌入版'), namesOf922(lv922, '诊断')).length === 0,
+    '诊断 = ' + namesOf922(lv922, '诊断').join('｜') + '；嵌入版 = ' + namesOf922(lv922, '嵌入版').join('｜'),
+  )
+  check('adj922 实测两个方向都查过：「诊断」页签没有混进别人的 item，「嵌入版」页签也没有反向混入（含"诊断 ↔ 说明"一对）',
+    c922f, d922f)
+}
+
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。
 //   实测踩过：一次编辑顺手把它删掉，套件仍以退出码报错，但输出里再也看不到 `N passed, M failed`。
 console.log(`\n${pass} passed, ${fail} failed`)

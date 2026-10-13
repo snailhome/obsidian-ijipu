@@ -84,9 +84,19 @@ export class IJipuSettingTab extends PluginSettingTab {
     const paintActive = (): void => {
       for (const [id, btn] of tabs) btn.toggleClass('is-active', id === this.activeTab)
       panel.empty()
-      // adj724b：只剩两页——排版/音色设置统一在**嵌入版 iJipu**里改（避免两处重复）
+      /**
+       * adj922（用户报「说明页签里、赞赏图后面多出了『嵌入版』页签的内容」）：**三个页签必须是
+       * 一条 if / else if / else 链、一支命中**。原来是 `if (this.activeTab === '说明') …` 下面
+       * **另起一句** `if (this.activeTab === '诊断') … else this.renderEmbed(panel)` ⇒ 停在「说明」时
+       * 两句都成立：先 `renderAbout`、紧接着又 `renderEmbed`，把整个嵌入版**追加到同一个 `panel`** 上
+       * （用户看到的就是这一串：赞赏图之后跟着嵌入版的 5 个设置项和那句尾注）。
+       *
+       * 写法与 `configDialog.ts` 的页签分派同款（那里是 `if … else …`）——页签只能命中一支。
+       *
+       * adj724b：排版/音色设置**只在嵌入版 iJipu 里改**，本页不重复提供（这里只管本页怎么分派）。
+       */
       if (this.activeTab === '说明') this.renderAbout(panel)
-    if (this.activeTab === '诊断') this.renderDiagnostics(panel)
+      else if (this.activeTab === '诊断') this.renderDiagnostics(panel)
       else this.renderEmbed(panel)
     }
     for (const id of SETTINGS_TABS) {
