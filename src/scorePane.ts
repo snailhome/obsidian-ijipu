@@ -2097,22 +2097,24 @@ toolbar.dataset.ijipuPane = String(paneId)
          * （本项目"数值口径必须同源"的老坑，见 AGENTS §六之二·4）。
          */
         /**
-         * adj911d（**用户要求**）：「显示端…显示目前按这个方式」—— 显示端**正好裁到墨迹、不留白**（`pad: 0`）。
+         * adj911e（**用户最终裁定**）：「这版的**谱面四周要 +2px 的留白**」⇒ 显示端**回到引擎缺省口径**
+         * （`pad` 不传 = `RANGE_PAD_DEFAULT` = 每边 2px），与**导出 / 复制 / CLI 完全同一份** ✓。
          *
-         * ⚠ 用户同时明确：「**不要因为这个谱做大的改动**，如果有发现多个谱这种情况再来改」⇒
-         * 墨迹盒**仍用原来那套**（DOM 量取 `contentBoxOf`），不为个别谱改成引擎口径、也不加"夹紧/排除"
-         * 那几层（`adj911`/`adj911b`/`adj911c` 已按此**回退**）✓；若将来**多份谱**都出现
-         * "墨迹盒被撑宽 ⇒ 右侧留白"，再照 `docs/TODO.md` 第 2 条查那个隐形的越界元素。
-         * **导出 / 复制 / CLI 仍是每边 2px** ✓（另一套口径，保留不动）。
+         * 期间的两条用户裁定也都落在这里，便于日后回看：
+         *  · 「**不要因为这个谱做大的改动**，如果有发现多个谱这种情况再来改」⇒ 墨迹盒**用原来那套**
+         *    （DOM 量取 `contentBoxOf`），不为个别谱换成引擎口径、也不加"夹紧/排除"那几层
+         *    （`adj911`/`adj911b`/`adj911c` 已按此**回退**）✓；
+         *  · 那份谱的墨迹盒仍会被某个"看不见却有 bbox"的元素撑宽（实测 952 vs 页宽 595）⇒ 谱面视图
+         *    右侧会留白；**等将来多份谱都这样**再照 `docs/TODO.md` 第 2 条查根因 ✓。
          */
-        const out = rangeBox({ range: 'score', pageW: w, pageH: h, ink: b, minInk: minInkFor(noteInkH), pad: 0 })
+        const out = rangeBox({ range: 'score', pageW: w, pageH: h, ink: b, minInk: minInkFor(noteInkH) })
         if (out.ok) {
           svgEl.setAttribute('viewBox', `${out.box.x} ${out.box.y} ${out.box.w} ${out.box.h}`)
           publishZoomW(out.box.w)
           // 回传给插件，供设置页显示（运行期诊断；见 IJipuPlugin.lastCropInfo 的说明）
           noteCrop(
             `按墨迹裁剪 ${out.box.w.toFixed(0)}×${out.box.h.toFixed(0)}（墨迹 ${Math.round(b?.w ?? 0)}×${Math.round(b?.h ?? 0)}` +
-              ` + 每边 0px（显示端：不留白；导出/复制仍按每边 ${RANGE_PAD_DEFAULT}px）；整页 ${Math.round(w)}×${Math.round(h)}，高度只剩 ${(((b?.h ?? 0) / h) * 100).toFixed(0)}%）`,
+              ` + 每边 ${RANGE_PAD_DEFAULT}px（显示端与导出/复制同一口径）；整页 ${Math.round(w)}×${Math.round(h)}，高度只剩 ${(((b?.h ?? 0) / h) * 100).toFixed(0)}%）`,
           )
         } else {
           /**
