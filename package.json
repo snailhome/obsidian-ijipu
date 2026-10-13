@@ -7,7 +7,7 @@
     "gen:info": "node scripts/gen-build-info.mjs",
     "dev": "npm run gen:info && tsc -noEmit -skipLibCheck && node esbuild.config.mjs",
     "build": "npm run gen:info && tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
-    "smoke": "npm run gen:info && esbuild scripts/smoke-frontmatter.mts --bundle --platform=node --format=esm --target=node20 --log-level=warning --alias:@ijipu/engine=./vendor/engine/index.ts --alias:obsidian=./scripts/obsidianStub.ts --outfile=dist-smoke/smoke.mjs && node dist-smoke/smoke.mjs"
+    "smoke": "npm run gen:info && esbuild scripts/smoke-frontmatter.mts --bundle --platform=node --format=esm --target=node20 --log-level=warning --alias:@ijipu/engine=./vendor/engine/index.ts --alias:obsidian=./scripts/obsidianStub.ts --alias:electron=./scripts/fakeElectron.ts --outfile=dist-smoke/smoke.mjs && node dist-smoke/smoke.mjs"
   },
   "keywords": [
     "obsidian",

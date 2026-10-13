@@ -27,7 +27,14 @@ export type EmbedTargetKind = 'right-sidebar' | 'new-tab' | 'replace-source'
 export interface EmbedPlan {
   /** 要执行的动作 */
   kind: EmbedTargetKind
-  /** 开完之后是否要关掉"来源页签"（Obsidian 为 `.jps` 创建的那个中间页签） */
+  /**
+   * 开完之后要不要**收尾"来源页签"**（Obsidian 为 `.jps` 创建的那个）。
+   *
+   * ⚠ adj926：**取值口径没变**（右栏/新页签=true、当前页签=false），但**执行方式变了** ——
+   * 从前是 `detach()`（关掉），现在是 `planSourceLeafDisposal()`（**还回去**：
+   * 有上一份视图就 `back()`，没有才 detach）。因为那个 leaf **就是用户自己那个页签**，
+   * 关掉它就是"用户的笔记没了 / 页签数变了"（用户实测报的就是这个）。
+   */
   detachSource: boolean
 }
 
@@ -161,4 +168,60 @@ export function planJpsInitialView(o: JpsInitialViewInput): JpsInitialView {
   if (!o.isDesktop) return 'preview'
   if (o.mode === 'defaultApp') return 'preview+external'
   return 'embed'
+}
+
+/**
+ * adj926（用户要求 ①③）：**那个"中间页签"该怎么收尾**。
+ *
+ * ## 真因（在 `obsidian.asar` 1.13.7 里逐行核对过，不是猜的）
+ *
+ * 用户实测「打开方式 = 右侧栏 / 默认应用时，当前打开状态被改了」「= 新的页签时，
+ * 还是在**当前页签**里打开」。三条其实是**同一个**原因：
+ *
+ *  ① 点文件管理器里的 `.jps` ⇒ 宿主的 `FileExplorerView.onSelfClick()`：
+ *     `t.getLeaf(Keymap.isModEvent(e)).openFile(this.file)`；普通左键时 `isModEvent` 为假 ⇒
+ *     `getLeaf(false)` ⇒ `getUnpinnedLeaf()` ⇒ **"活动 leaf 只要 canNavigate 就返回它"**
+ *     ⇒ 那句 `openFile` 是**就地换掉用户当前页签的视图**（把原来那份笔记推进该 leaf 的历史）。
+ *     ⚠ 所以"中间页签"**不是**多出来的一个叶子，**它就是用户自己那个页签**。
+ *  ② 于是旧写法 `sourceLeaf.detach()` = **把用户的页签关掉**（笔记消失；该组若空了，
+ *     宿主还会补一个空页签 ⇒ 用户看到"多出一个新页签"）。
+ *  ③ 「新的页签」档：`getLeaf('tab')` ⇒ `createLeafInTabGroup()` 把新 leaf 插在
+ *     **当前页签紧后面**，再把当前页签 detach ⇒ 页签栏**数量与位置都没变**，
+ *     只是标题从笔记换成了嵌入版 ⇒ 用户眼里就是"还是在当前页签里打开"。
+ *     （⇒ 上游"多半是取 leaf 用错了"的判断**被推翻**：`getLeaf('tab')` 确实新建了叶子。）
+ *
+ * ## 修法：**不关，还回去**
+ *
+ * 让那个 leaf **回到它上一步的视图** —— 用的就是 Obsidian 自己页签栏上「← 后退」那一套
+ * （`WorkspaceLeaf.history`：`back()` / `backHistory`；`getViewState()` 里**不含 `active`**，
+ * 所以 `back()` 只换视图、**不会**抢走活动页签 —— 这一点也已在 asar 里核对）。
+ *
+ * 本函数只决定"怎么收尾"：`back`（有可还原的上一份视图）还是 `detach`（没有 ⇒ 原来就是空页签，
+ * 关掉它宿主会补回一个空页签，状态同样是"没变"）。
+ *
+ * ## 为什么要跳过自己的 `.jps` 历史项
+ *
+ * 历史栈里可能压着**本插件自己的 `.jps` 视图**（例如上次嵌入版起不来、页签留在预览上，
+ * 用户又点了另一份谱）。若把它还原出来，那个视图会**再路由一次**，把用户刚点的谱覆盖掉 ⇒
+ * 所以把栈尾属于本插件视图的历史项**丢掉**（`dropCount`），只还原到真正的"上一份视图"。
+ */
+export interface SourceLeafDisposal {
+  /** `back` = 让这个页签回到上一份视图（**不关掉它**）；`detach` = 关掉它（没有可还原的上一份视图） */
+  action: 'back' | 'detach'
+  /** 收尾前要从 `backHistory` 栈尾丢掉的条目数（都是插件自己的 `.jps` 视图） */
+  dropCount: number
+}
+
+/**
+ * @param historyTypes 该 leaf 的历史栈（栈尾 = 最近一步），元素是各步的视图类型
+ * @param ownViewType 本插件的 `.jps` 视图类型（`VIEW_TYPE_IJIPU`）
+ */
+export function planSourceLeafDisposal(
+  historyTypes: readonly (string | undefined)[],
+  ownViewType: string,
+): SourceLeafDisposal {
+  let usable = historyTypes.length
+  while (usable > 0 && historyTypes[usable - 1] === ownViewType) usable -= 1
+  const dropCount = historyTypes.length - usable
+  return usable > 0 ? { action: 'back', dropCount } : { action: 'detach', dropCount }
 }

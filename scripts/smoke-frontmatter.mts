@@ -74,7 +74,16 @@ import {
   pickRightSidebarLeaf,
   planEmbedTarget,
   planJpsInitialView,
+  planSourceLeafDisposal,
 } from '../src/embed/openPlan'
+// adj926：「默认应用」那条外开链路（**真的调用**）
+import { canOpenWithDefaultApp, openUrlExternally, openWithDefaultApp } from '../src/openExternal'
+import {
+  FileSystemAdapter as StubFileSystemAdapter,
+  Platform as StubPlatform,
+  notices as stubNotices,
+} from './obsidianStub'
+import { shell as fakeShell, shellCalls as fakeShellCalls } from './fakeElectron'
 // 新建 JPS 文件（文件夹右键菜单 + 点击未解析链接 + 默认模板）
 import {
   NEW_JPS_BASE,
@@ -529,7 +538,12 @@ console.log('[3g] adj631 设置面板：多页签 / 收藏音色分类列表 / �
           main905z,
         ))
     const editSeg = /async openJpsForSourceEdit[\s\S]{0,1600}?\n {2}\}/.exec(main905z)?.[0] ?? ''
-    const embedSeg = /async openEmbedLeaf[\s\S]{0,6000}?\n {2}\}/.exec(main905z)?.[0] ?? ''
+    /**
+     * ⚠ adj926：这个窗口原来是 6000 字符；本轮在 `openEmbedLeaf` 末尾把"关掉来源页签"改成
+     * `restoreSourceLeaf()`（并加了说明注释），方法变长了 ⇒ 窗口跟着放大。
+     * 匹配是**惰性**的（`[\s\S]{0,12000}?`），只要窗口够大到包住方法体，就不会多吞后面的方法。
+     */
+    const embedSeg = /async openEmbedLeaf[\s\S]{0,12000}?\n {2}\}/.exec(main905z)?.[0] ?? ''
     check('adj905z 之二 **两条打开路径**（手机端源码编辑 / 桌面端嵌入版）都做这次清理',
       sweepCall.test(codeOf(editSeg)) && sweepCall.test(codeOf(embedSeg)),
       `手机端段=${editSeg.length}｜桌面端段=${embedSeg.length}`)
@@ -1323,11 +1337,30 @@ console.log('[adj452] playhead blocks follow playVoice / instrument / engine bou
     '',
   )
 
+  /**
+   * ⚠ adj926：这条判据原来钉的是 `shell.openPath(getFullPath(...))`（adj772 的形态）——
+   * 那个写法在**渲染进程里必然失败**（原生动态 import 不会被 esbuild 转成 `require()`，
+   * 见 `src/electronShell.ts` 与本文件 adj926 一节），而它**正是**用户实测
+   * 「打开方式=默认应用，提示错误，无法使用默认的外部应用打开」的真因。
+   * ⇒ 判据跟着实现改成"宿主 API + 公开兜底"，并钉住"**这条路上不再有 electron**"。
+   */
+  const pullsElectronAp = (src: string): boolean =>
+    /(?:from|require\(|import\()\s*['"]electron['"]|electron\.shell/.test(
+      src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1'),
+    )
   check(
-    '应用打开：走系统默认应用（shell.openPath）且把库内相对路径换算成绝对路径；失败必须 Notice',
-    openExtSrc.includes('shell.openPath') &&
-      openExtSrc.includes('getFullPath(filePath)') &&
-      openExtSrc.includes('new Notice(`用默认应用打开失败'),
+    '应用打开（adj926 改口径）：走**宿主自己的** `App.openWithDefaultApp(库内路径)`（= Obsidian 文件菜单「Open in default app」同一条），兜底才是公开 API `getFilePath()` + `window.open(…, \'_external\')`；失败必须把原文 Notice 出来',
+    openExtSrc.includes('host.openWithDefaultApp(filePath)') &&
+      openExtSrc.includes("window.open(adapter.getFilePath(filePath), '_external')") &&
+      openExtSrc.includes('new Notice(`用默认应用打开失败') &&
+      !pullsElectronAp(openExtSrc),
+    '',
+  )
+  check(
+    '应用打开负对照（**旧写法真的喂进去**：`await import(\'electron\')` + `shell.openPath(getFullPath(…))`）⇒ 上面那条"不再有 electron"的判据判假',
+    pullsElectronAp(
+      "const electron = await import('electron')\nconst err = await electron.shell.openPath(adapter.getFullPath(filePath))",
+    ),
     '',
   )
 
@@ -1753,8 +1786,9 @@ console.log('[adj452] playhead blocks follow playVoice / instrument / engine bou
     '',
   )
   check(
-    'adj652 桌面端走 `electron.shell.openExternal`（系统浏览器打开），非桌面端退回 `window.open`；失败弹 Notice',
-    /electron\.shell\.openExternal/.test(openExtSrc652) &&
+    'adj652 桌面端走 electron 的 `shell.openExternal`（**按需加载** `./electronShell` —— 静态 import 必须放那边，adj926 修掉了"原生动态 import 在渲染进程必失败"），非桌面端退回 `window.open`；失败弹 Notice',
+    /await import\('\.\/electronShell'\)/.test(openExtSrc652) &&
+      /await shell\.openExternal\(target\)/.test(openExtSrc652) &&
       /Platform\.isDesktopApp/.test(openExtSrc652) &&
       /window\.open\(target, '_blank'/.test(openExtSrc652) &&
       /new Notice\(`打开链接失败/.test(openExtSrc652),
@@ -6033,6 +6067,9 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
           `dist-smoke/_tmp_922_entry_${variant}.ts`,
           '--bundle', '--platform=browser', '--format=iife', '--target=chrome110',
           '--alias:obsidian=./scripts/settingsDomShim.ts',
+          // adj926：`settings.ts` → `openExternal.ts` → `electronShell.ts` 会静态 import electron
+          // ⇒ 这个夹具（在无头浏览器里跑）也必须把它换成替身，否则打包直接失败
+          '--alias:electron=./scripts/fakeElectron.ts',
           '--alias:@ijipu/engine=./vendor/engine/index.ts',
           '--loader:.png=dataurl',
           `--outfile=dist-smoke/_tmp_922_${variant}.js`,
@@ -6363,6 +6400,359 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       planEmbedTarget('tab', true).detachSource === true &&
       planEmbedTarget('right', true).kind === 'right-sidebar' &&
       planEmbedTarget('right', true).detachSource === true)
+}
+
+/**
+ * ---- adj926（用户 2026-10-13 的三条实测反馈，全都关于"点文件管理器里的 `.jps` 之后发生什么"）----
+ *
+ * ① 「打开方式 = **右侧栏**，点 jps 打开时**不要打开一个新标签页**，即**当前的打开状态不要变**」
+ * ② 「打开方式 = **默认应用**，打开时也是同样的操作（不新开页签 / 当前状态不变），
+ *    目前测试**提示错误，无法使用默认的外部应用打开**」
+ * ③ 「打开方式 = **新的页签**，现在还是**在当前页签里打开** ✗，应该在**新的页签**打开嵌入应用」
+ * （基准：「当前页签」档是**正确**的，一行不许改坏；手机端一行不改；左侧 ribbon 图标不挪。）
+ *
+ * ## 三条真因（都在 `obsidian.asar` 1.13.7 里逐行核对，不是猜的）
+ *
+ * · **①③ 同一个根**：点文件管理器里的 `.jps`，宿主 `FileExplorerView.onSelfClick()` 走的是
+ *   `workspace.getLeaf(Keymap.isModEvent(e)).openFile(file)`；普通左键 `isModEvent` 为假 ⇒
+ *   `getLeaf(false)` ⇒ `getUnpinnedLeaf()`：**"活动 leaf 只要 canNavigate 就返回它"**
+ *   ⇒ 那句 `openFile` 是**就地换掉用户当前页签的视图**（原视图进该 leaf 的历史）。
+ *   所以"来源页签"**就是用户自己那个页签**。旧写法 `sourceLeaf.detach()` = 把用户的页签关掉
+ *   （笔记没了；该组若空了宿主还会补一个空页签 ⇒ 用户看到"多出一个新页签、当前状态被改"）。
+ *   「新的页签」档更隐蔽：`getLeaf('tab')` ⇒ `createLeafInTabGroup()` 把新 leaf 插在
+ *   **当前页签紧后面**，再把当前页签 detach ⇒ 页签栏数量与位置**都没变**，用户看到的就是
+ *   "还是在当前页签里打开"。（⇒ 上游"多半是取 leaf 用错了"的判断被**推翻**：新 leaf 真的建了。）
+ * · **②**：不是路径问题（`file.path` 早就经 `getFullPath()` 换成绝对路径了），而是 adj772 起那句
+ *   `await import('electron')` —— **原生动态 import 在渲染进程里必然失败**（`adj778` 对 `node:http`
+ *   记下的同一个坑：`main.js` 里此前确实残留着 `import("electron")`）。
+ *
+ * ## 这一节怎么"真跑"，以及它**不能**证明什么
+ *
+ * · ①③ 用**假 workspace**（只记 leaf 增删 + 每个 leaf 的视图类型与历史栈）**真的跑**本仓库承重的
+ *   两个纯函数：`planEmbedTarget()`（开在哪，分档没动）与 `planSourceLeafDisposal()`（收尾方式，新增）。
+ *   `oldWay = true` = **把 adj926 之前那一行 `sourceLeaf.detach()` 真的跑一遍**。
+ * · ② 直接**调用** `openWithDefaultApp()` / `openUrlExternally()`（`electron` 已被
+ *   `--alias:electron=./scripts/fakeElectron.ts` 换成记录的替身），逐条核对"到底把什么交了出去、
+ *   有没有弹报错"，并加**产物闸门**（`main.js` 里不得再有 `import("electron")`）。
+ * · ⚠ **证明不了"在真 Obsidian 里点一下就是这样"**：本机跑不了 Obsidian ——
+ *   夹具里的 workspace / electron / App 都是假的。最终要**用户在 Obsidian 里重载亲眼看**。
+ */
+{
+  const main926 = String(readFileSync('src/main.ts', 'utf8'))
+  const fv926 = String(readFileSync('src/fileView.ts', 'utf8'))
+  const oe926 = String(readFileSync('src/openExternal.ts', 'utf8'))
+  const es926 = String(readFileSync('src/electronShell.ts', 'utf8'))
+  /** `.jps` 视图类型：从源码里读（不 import `fileView.ts` —— 它会把 scorePane 整条链拉进冒烟包） */
+  const jpsViewType926 = /export const VIEW_TYPE_IJIPU = '([^']+)'/.exec(fv926)?.[1] ?? ''
+  /**
+   * 嵌入版视图类型：同样从源码里读（`appViewType926` 在 `embed/appView.ts`）。
+   * 不 import 它的原因：那个模块 `import { ItemView } from 'obsidian'` 并 `extends` 它，
+   * 冒烟的 obsidian 替身里没有这个类 ⇒ 把整条 appView 依赖链拉进套件得不偿失。
+   */
+  const appViewType926 =
+    /export const VIEW_TYPE_IJIPU_APP = '([^']+)'/.exec(String(readFileSync('src/embed/appView.ts', 'utf8')))?.[1] ?? ''
+
+  // ───────────────── ①③ 夹具：假 workspace，真的跑两个纯函数 ─────────────────
+
+  /** 夹具里的 leaf：视图类型 + 历史栈（栈尾 = 最近一步）+ 在哪个组 */
+  type SimLeaf = { id: string; view: string; back: string[]; detached: boolean; group: 'main' | 'right' }
+  type SimResult = {
+    mainCount: number
+    mainViews: string[]
+    placeholderLeft: number
+    rightAppCount: number
+    appInMain: number
+  }
+
+  /**
+   * 模拟"点一次文件管理器里的 `.jps`"，返回主编辑区的最终样子。
+   * @param o.oldWay  `true` = **adj926 之前的行为**（来源页签一律 `detach()`，右栏/默认应用档不做任何还原）
+   * @param o.externalOk 仅「默认应用」档用：外开成功才还原
+   * @param o.planOverride 仅负对照用：强行换一份 plan（模拟"取错了 leaf"那类改坏）
+   */
+  const simulateClick926 = (
+    mode: 'right' | 'tab' | 'current' | 'defaultApp',
+    o: { oldWay?: boolean; externalOk?: boolean; planOverride?: { kind: string; detachSource: boolean } } = {},
+  ): SimResult => {
+    const oldWay = o.oldWay === true
+    /** ① 用户当前页签里原本是一份笔记 */
+    const note: SimLeaf = { id: 'note', view: 'markdown', back: [], detached: false, group: 'main' }
+    const leaves: SimLeaf[] = [note]
+    /** ② 宿主把 `.jps` **就地**开在这个页签里（`getLeaf(false).openFile()` ⇒ 原视图进历史） */
+    note.back.push(note.view)
+    note.view = jpsViewType926
+    const plan = o.planOverride ?? planEmbedTarget(mode, true)
+    let target: SimLeaf | null = null
+    if (mode === 'defaultApp') {
+      // 「默认应用」档在 `openIjipuFile()` 里提前 return ⇒ **站内一个 leaf 都不新建**
+      target = null
+    } else if (plan.kind === 'replace-source') {
+      target = note
+    } else if (plan.kind === 'right-sidebar') {
+      const rightSplit = { side: 'right' }
+      const picked = pickRightSidebarLeaf(
+        leaves.filter((l) => l.group === 'right' && !l.detached),
+        rightSplit,
+        () => {
+          const made: SimLeaf = { id: 'right#1', view: 'empty', back: [], detached: false, group: 'right' }
+          leaves.push(made)
+          return made
+        },
+      )
+      target = picked.leaf
+    } else {
+      // `getLeaf('tab')` ⇒ 宿主 `createLeafInTabGroup()`：新 leaf 插在**当前页签紧后面**
+      const made: SimLeaf = { id: 'tab#1', view: 'empty', back: [], detached: false, group: 'main' }
+      leaves.splice(leaves.indexOf(note) + 1, 0, made)
+      target = made
+    }
+    if (target) target.view = appViewType926
+    /** ③ 收尾"来源页签"：新写法 = `planSourceLeafDisposal()`（真的跑）；旧写法 = 一律 `detach()` */
+    const shouldFinish =
+      mode === 'defaultApp' ? !oldWay && o.externalOk !== false : plan.detachSource && target !== note
+    if (shouldFinish) {
+      const disposal = planSourceLeafDisposal(note.back, jpsViewType926)
+      if (!oldWay && disposal.action === 'back') {
+        for (let i = 0; i < disposal.dropCount; i += 1) note.back.pop()
+        note.view = note.back.pop() ?? 'empty' // = 宿主页签栏那枚「← 后退」
+      } else {
+        leaves.splice(leaves.indexOf(note), 1)
+        note.detached = true
+        // 宿主不会让 tab 组空着：关掉最后一个 leaf 会补一个空页签（用户看到的"多出来一个页签"）
+        if (!leaves.some((l) => l.group === 'main' && !l.detached)) {
+          leaves.push({ id: 'empty#1', view: 'empty', back: [], detached: false, group: 'main' })
+        }
+      }
+    }
+    const main = leaves.filter((l) => l.group === 'main' && !l.detached)
+    return {
+      mainCount: main.length,
+      mainViews: main.map((l) => l.view),
+      placeholderLeft: leaves.filter((l) => !l.detached && l.view === jpsViewType926).length,
+      rightAppCount: leaves.filter((l) => l.group === 'right' && !l.detached && l.view === appViewType926).length,
+      appInMain: main.filter((l) => l.view === appViewType926).length,
+    }
+  }
+
+  /** 判据 A（右侧栏 / 默认应用档）：**主编辑区 leaf 数不变、内容回到原来那份笔记、没有残留占位页签** */
+  const mainUnchanged926 = (s: SimResult): boolean =>
+    s.mainCount === 1 && s.mainViews[0] === 'markdown' && s.placeholderLeft === 0
+  /** 判据 B（新的页签档）：**真的多出一个页签**，且新页签里是嵌入版；原来那份笔记仍在 */
+  const newTab926 = (s: SimResult): boolean =>
+    s.mainCount === 2 && s.appInMain === 1 && s.mainViews.includes('markdown') && s.placeholderLeft === 0
+
+  const rightNew926 = simulateClick926('right')
+  const rightOld926 = simulateClick926('right', { oldWay: true })
+  const defNew926 = simulateClick926('defaultApp')
+  const defOld926 = simulateClick926('defaultApp', { oldWay: true })
+  const tabNew926 = simulateClick926('tab')
+  const tabOld926 = simulateClick926('tab', { oldWay: true })
+  const cur926 = simulateClick926('current')
+  console.log(
+    '   adj926 夹具实测（假 workspace + 真的 `planEmbedTarget`/`planSourceLeafDisposal`）：\n' +
+      `     右侧栏 新写法 主编辑区=${rightNew926.mainViews.join(',') || '（空）'} 占位残留=${rightNew926.placeholderLeft}｜` +
+      `旧写法 主编辑区=${rightOld926.mainViews.join(',') || '（空）'} 占位残留=${rightOld926.placeholderLeft}\n` +
+      `     默认应用 新写法 主编辑区=${defNew926.mainViews.join(',') || '（空）'}｜旧写法=${defOld926.mainViews.join(',') || '（空）'}\n` +
+      `     新的页签 新写法 主编辑区=${tabNew926.mainViews.join(',')}（共 ${tabNew926.mainCount} 个）｜` +
+      `旧写法 主编辑区=${tabOld926.mainViews.join(',')}（共 ${tabOld926.mainCount} 个）\n` +
+      `     当前页签（基准）主编辑区=${cur926.mainViews.join(',')}（共 ${cur926.mainCount} 个）`,
+  )
+
+  check('adj926 ① 夹具实测（打开方式=**右侧栏**）：主编辑区 leaf 数**不变**（1）、内容回到原来那份笔记、**没有残留的占位页签**',
+    mainUnchanged926(rightNew926) && rightNew926.rightAppCount === 1,
+    `主编辑区=${rightNew926.mainViews.join(',')} 占位残留=${rightNew926.placeholderLeft} 右栏嵌入版=${rightNew926.rightAppCount}`)
+  check('adj926 ① 负对照（**旧写法真的跑一遍** `sourceLeaf.detach()`）：用户的页签被关掉 ⇒ 上面那条判据判假',
+    !mainUnchanged926(rightOld926) && rightOld926.mainViews.includes('empty'),
+    `旧写法主编辑区=${rightOld926.mainViews.join(',')}`)
+
+  check('adj926 ② 夹具实测（打开方式=**默认应用**）：同样**主编辑区 leaf 数不变、内容不变、无残留占位页签**，且站内不新建 leaf',
+    mainUnchanged926(defNew926),
+    `主编辑区=${defNew926.mainViews.join(',')} 占位残留=${defNew926.placeholderLeft}`)
+  check('adj926 ② 负对照（**旧行为真的跑一遍**：外开成功后不做任何还原）⇒ 页签留在 `.jps` 预览上、判据判假',
+    !mainUnchanged926(defOld926) && defOld926.placeholderLeft === 1,
+    `旧行为主编辑区=${defOld926.mainViews.join(',')} 占位残留=${defOld926.placeholderLeft}`)
+
+  check('adj926 ③ 夹具实测（打开方式=**新的页签**）：**真的多出一个页签**（主编辑区 2 个）、新页签里是**嵌入版**、原来那份笔记还在',
+    newTab926(tabNew926),
+    `主编辑区=${tabNew926.mainViews.join(',')} 共 ${tabNew926.mainCount} 个`)
+  check('adj926 ③ 负对照（**旧写法真的跑一遍**：新页签 + 把来源页签 detach）⇒ 页签栏还是 1 个、标题换成嵌入版 —— 正是用户报的"还是在当前页签里打开"',
+    !newTab926(tabOld926) && tabOld926.mainCount === 1 && tabOld926.appInMain === 1,
+    `旧写法主编辑区=${tabOld926.mainViews.join(',')} 共 ${tabOld926.mainCount} 个`)
+
+  check('adj926 基准保护（打开方式=**当前页签**）：仍是**就地替换**（1 个页签，里面就是嵌入版），不还原、不关闭',
+    cur926.mainCount === 1 && cur926.appInMain === 1 && cur926.mainViews[0] === appViewType926 &&
+      planEmbedTarget('current', true).kind === 'replace-source' && planEmbedTarget('current', true).detachSource === false,
+    `主编辑区=${cur926.mainViews.join(',')} 共 ${cur926.mainCount} 个`)
+  check('adj926 基准保护负对照（上游怀疑的"取错了 leaf"若真发生：当前页签档改成 `getLeaf(\'tab\')`）⇒ 页签数变 2、判据判假',
+    !(simulateClick926('current', { planOverride: { kind: 'new-tab', detachSource: true } }).mainCount === 1))
+
+  check('adj926 另三档的"开在哪里"分档本身**一行没动**（`planEmbedTarget` 四方式 × 有/无来源页签仍是老结果）',
+    planEmbedTarget('current', true).kind === 'replace-source' &&
+      planEmbedTarget('tab', true).kind === 'new-tab' &&
+      planEmbedTarget('right', true).kind === 'right-sidebar' &&
+      planEmbedTarget('current', true).detachSource === false &&
+      planEmbedTarget('tab', true).detachSource === true &&
+      planEmbedTarget('right', true).detachSource === true)
+
+  // ───────────────── 收尾逻辑：纯函数逐条断言（含"跳过自己的 .jps 历史"） ─────────────────
+
+  const JPS = jpsViewType926
+  check('adj926 收尾判据（纯函数）：栈尾是别的视图 ⇒ `back`（**还原，不关页签**）；栈空 ⇒ `detach`（原来就是空页签）',
+    planSourceLeafDisposal(['markdown'], JPS).action === 'back' &&
+      planSourceLeafDisposal([], JPS).action === 'detach' &&
+      planSourceLeafDisposal(['markdown'], JPS).dropCount === 0)
+  check('adj926 收尾判据：栈尾压着**本插件自己的 `.jps` 视图** ⇒ 先丢掉它再 `back`（否则还原出来会再路由一次、覆盖用户刚点的谱）',
+    planSourceLeafDisposal(['markdown', JPS], JPS).action === 'back' &&
+      planSourceLeafDisposal(['markdown', JPS], JPS).dropCount === 1 &&
+      planSourceLeafDisposal([JPS, JPS], JPS).action === 'detach' &&
+      planSourceLeafDisposal([JPS, JPS], JPS).dropCount === 2)
+  check('adj926 收尾判据负对照：**不跳过**自己的历史项（栈尾是 `.jps` 也照还原）⇒ `dropCount` 恒为 0，上面那条判假',
+    ((): boolean => {
+      /** 旧判据（只看"栈里有没有东西"，不看栈尾是不是本插件自己的视图） */
+      const broken926 = (types: readonly string[]): { action: string; dropCount: number } =>
+        types.length > 0 ? { action: 'back', dropCount: 0 } : { action: 'detach', dropCount: 0 }
+      const judge926 = (d: { action: string; dropCount: number }): boolean => d.action === 'back' && d.dropCount === 1
+      return judge926(planSourceLeafDisposal(['markdown', JPS], JPS)) && !judge926(broken926(['markdown', JPS]))
+    })())
+
+  // ───────────────── 接线：main.ts 里那两处（不许再 detach 来源页签 / 右栏把活动页签还回去） ─────────────────
+
+  const restoreJudge926 = (src: string): boolean => {
+    const seg = /if \(plan\.detachSource && !isSameLeaf && sourceLeaf\) \{([\s\S]*?)\n    \} else if \(isSameLeaf\)/.exec(src)?.[1] ?? ''
+    const code = codeOf(seg)
+    return code.length > 0 && /await this\.restoreSourceLeaf\(sourceLeaf\)/.test(code) && !/sourceLeaf\.detach\(\)/.test(code)
+  }
+  check('adj926 接线：`openEmbedLeaf` 的收尾改成了 `restoreSourceLeaf(sourceLeaf)`，那段里**不再有** `sourceLeaf.detach()`',
+    restoreJudge926(main926))
+  check('adj926 接线负对照：把那一行改回 `sourceLeaf.detach()` ⇒ 上面那条判假',
+    !restoreJudge926(
+      main926.replace('const disposal = await this.restoreSourceLeaf(sourceLeaf)', 'sourceLeaf.detach()'),
+    ))
+  check('adj926 右栏档：还原成功后**把活动页签还给来源页签**（`revealLeaf`/`setViewState({active})` 会把活动页签挪到右栏 ⇒ 用户要求"当前活动页签不变"）',
+    /plan\.kind === 'right-sidebar' && disposal === 'back'[\s\S]{0,160}?setActiveLeaf\(sourceLeaf, \{ focus: true \}\)/.test(main926))
+  check('adj926 「默认应用」档：外开**成功**才还原来源页签（失败时留着谱面预览 + Notice 带失败原文）',
+    /const opened = await openWithDefaultApp\(this\.app, file\.path\)[\s\S]{0,200}?if \(opened && sourceLeaf\) await this\.restoreSourceLeaf\(sourceLeaf\)/.test(main926))
+  check('adj926 手机端**一行没改**：四种打开方式仍一律 `preview`（先预览、再其它操作）⇒ 根本不进路由、页签不动',
+    (['right', 'tab', 'current', 'defaultApp'] as const).every(
+      (m) => planJpsInitialView({ mode: m, isDesktop: false, embedded: false, embedEnabled: true }) === 'preview',
+    ) &&
+      /if \(!Platform\.isDesktopApp\) \{[\s\S]{0,140}?new Notice\('完整编辑器（嵌入版 iJipu）仅桌面端可用[\s\S]{0,120}?return/.test(main926),
+    `jpsViewType=${JPS || '（没读到！）'}`)
+  check('adj926 手机端负对照：去掉平台那条判据（手机端也进路由）⇒ 上面那条判假',
+    !planJpsInitialView({ mode: 'right', isDesktop: false, embedded: false, embedEnabled: true })
+      .startsWith('embed'))
+  check('adj926 左侧 ribbon 图标没挪：仍是 `addRibbonIcon(\'music\', \'打开爱记谱\')`（本轮一行未动）',
+    /addRibbonIcon\('music', '打开爱记谱'/.test(main926))
+  check('adj926 ribbon 负对照：换掉那个图标名/文案 ⇒ 上面那条判假',
+    !/addRibbonIcon\('music', '打开爱记谱'/.test(main926.replace("addRibbonIcon('music', '打开爱记谱'", "addRibbonIcon('piano', '打开发记谱')")))
+
+  // ───────────────── ② 默认应用：**真的调用**外开链路（electron 已被换成记录的替身） ─────────────────
+
+  /** 夹具 adapter：只实现 openWithDefaultApp 兜底那条路用到的两个换算（都按宿主的语义返回绝对路径） */
+  class FakeAdapter926 extends StubFileSystemAdapter {
+    private root = 'D:/蜗居笔记/悟乐居杂记'
+    getFilePath(p: string): string {
+      return `file:///${this.root}/${p}`
+    }
+    getFullPath(p: string): string {
+      return `${this.root}/${p}`
+    }
+  }
+  type AppLike926 = Parameters<typeof openWithDefaultApp>[0]
+  /** 夹具里的 `window`（Node 下没有）：记下 `window.open(url, name)` 的每一次调用 */
+  const winOpens926: [string, string][] = []
+  const g926 = globalThis as unknown as { window?: { open: (u?: string, t?: string) => unknown } }
+  const savedWindow926 = g926.window
+  g926.window = { open: (u, t) => (winOpens926.push([String(u), String(t)]), null) }
+  try {
+    // ① 首选路径：宿主自己的 `App.openWithDefaultApp(path)`
+    {
+      const hostCalls926: string[] = []
+      const appWithHost926 = {
+        vault: { adapter: new FakeAdapter926() },
+        openWithDefaultApp: (p: string) => void hostCalls926.push(p),
+      }
+      fakeShellCalls.length = 0
+      const mark926 = stubNotices.length
+      const ok926 = await openWithDefaultApp(appWithHost926 as unknown as AppLike926, '曲谱集/小星星.jps')
+      const fresh926 = stubNotices.slice(mark926)
+      check('adj926 ② 实测：走**宿主自己的** `App.openWithDefaultApp()`（= Obsidian 文件菜单「Open in default app」同一条），传的是库内相对路径 `TFile.path`',
+        ok926 === true && hostCalls926.length === 1 && hostCalls926[0] === '曲谱集/小星星.jps',
+        `返回=${String(ok926)} 参数=${hostCalls926.join('|')}`)
+      check('adj926 ② 实测：这条路上**没有任何报错 Notice**（用户报的"提示错误"消失），且**完全不碰 electron**',
+        fresh926.every((n) => !/失败/.test(n)) && fakeShellCalls.length === 0,
+        `notices=${JSON.stringify(fresh926)} shellCalls=${JSON.stringify(fakeShellCalls)}`)
+      check('adj926 ② 前置闸门 `canOpenWithDefaultApp()`：本地库 + 桌面端 ⇒ 真（界面据此显示入口）',
+        canOpenWithDefaultApp(appWithHost926 as unknown as AppLike926) === true)
+    }
+    // ② 兜底路径（宿主 API 取不到的老版本）：公开 API `getFilePath()` ⇒ 绝对 `file://` + 宿主自己的 `_external`
+    {
+      const appNoHost926 = { vault: { adapter: new FakeAdapter926() } }
+      winOpens926.length = 0
+      const mark926 = stubNotices.length
+      const ok926 = await openWithDefaultApp(appNoHost926 as unknown as AppLike926, '曲谱集/小星星.jps')
+      const [url926, name926] = winOpens926[0] ?? ['', '']
+      check('adj926 ② 实测（兜底）：宿主 API 取不到时走 `window.open(getFilePath(path), \'_external\')` —— 交出去的是**绝对 file:// 路径**、无报错',
+        ok926 === true && /^file:\/\/\//.test(url926) && url926.endsWith('/曲谱集/小星星.jps') && name926 === '_external' &&
+          stubNotices.slice(mark926).every((n) => !/失败/.test(n)),
+        `open(${url926}, ${name926})`)
+      const isAbsolute926 = (p: string): boolean => /^[A-Za-z]:[\\/]/.test(p) || p.startsWith('file://') || p.startsWith('/')
+      check('adj926 ② 负对照：判据本身真的在判"绝对路径"（喂进库内相对路径 ⇒ 判假）',
+        !isAbsolute926('曲谱集/小星星.jps') && isAbsolute926(url926))
+    }
+    // ③ 外链（同一个"动态 import electron"的坑，adj772 起也一直坏着）：**真的调用**一次
+    {
+      fakeShellCalls.length = 0
+      const mark926 = stubNotices.length
+      await openUrlExternally('https://ijipu.pages.dev')
+      check('adj926 ② 顺带修复：`openUrlExternally()` 现在能真的走到 `shell.openExternal`（按需加载 `./electronShell` ⇒ `require("electron")`），无报错',
+        fakeShellCalls.length === 1 && fakeShellCalls[0].fn === 'openExternal' &&
+          fakeShellCalls[0].arg === 'https://ijipu.pages.dev' &&
+          stubNotices.slice(mark926).every((n) => !/失败/.test(n)),
+        `shellCalls=${JSON.stringify(fakeShellCalls)}`)
+    }
+    // ④ 手机端：`openWithDefaultApp` 一条都不碰
+    {
+      StubPlatform.isDesktopApp = false
+      fakeShellCalls.length = 0
+      const mark926 = stubNotices.length
+      const ok926 = await openWithDefaultApp({ vault: { adapter: new FakeAdapter926() } } as unknown as AppLike926, '曲谱集/小星星.jps')
+      const fresh926 = stubNotices.slice(mark926)
+      StubPlatform.isDesktopApp = true
+      check('adj926 ② 手机端一行没改：`openWithDefaultApp()` 直接拒绝（`「应用打开」只在桌面端可用`），不碰 electron、不建页签',
+        ok926 === false && fresh926.some((n) => n.includes('只在桌面端可用')) && fakeShellCalls.length === 0,
+        `notices=${JSON.stringify(fresh926)}`)
+    }
+  } finally {
+    if (savedWindow926 === undefined) delete g926.window
+    else g926.window = savedWindow926
+    StubPlatform.isDesktopApp = true
+  }
+
+  // ───────────────── electron 的加载形态（源码 + 产物）：这正是"默认应用报错"的真因 ─────────────────
+
+  const electronJudge926 = (src: string): boolean =>
+    /import \{ shell \} from 'electron'/.test(src) && !/import\('electron'\)/.test(codeOf(src))
+  check('adj926 源码：`electron` 只以**静态 import** 出现在独立模块 `electronShell.ts` 里（编译成 `require(...)`、且只在真正调用时执行）',
+    electronJudge926(es926) && !/import\('electron'\)/.test(codeOf(oe926)) && /await import\('\.\/electronShell'\)/.test(codeOf(oe926)),
+    `electronShell.ts=${es926.length} 字符`)
+  check('adj926 源码负对照：把它改回 adj772 的 `await import(\'electron\')` ⇒ 上面那条判假',
+    !electronJudge926(es926.replace("import { shell } from 'electron'", "const { shell } = await import('electron')")))
+
+  if (existsSync('main.js')) {
+    const bundle926 = readFileSync('main.js', 'utf8')
+    const bundleJudge926 = (s: string): boolean => !/import\("electron"\)/.test(s) && /require\("electron"\)/.test(s)
+    const dyn926 = [...bundle926.matchAll(/import\("electron"\)/g)].map((m) => m[0])
+    check('adj926 产物：`main.js` 里**不再有** `import("electron")`（那正是用户看到的报错形态），只以 `require("electron")` 出现（惰性、仅桌面端执行）',
+      bundleJudge926(bundle926),
+      dyn926.length ? `残留 ${dyn926.join(',')}` : '')
+    check('adj926 产物负对照（把产物改回动态形态 ⇒ 上面那条判假）',
+      !bundleJudge926(bundle926.replace('require("electron")', 'import("electron")')))
+  } else {
+    console.log('[smoke] main.js 未构建 ⇒ 跳过 adj926 的产物形态检查')
+    check('adj926 产物：`main.js` 里不再有 `import("electron")`', true, 'skipped：未构建产物')
+    check('adj926 产物负对照', true, 'skipped：未构建产物')
+  }
 }
 
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。

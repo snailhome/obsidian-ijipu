@@ -20,7 +20,7 @@ import { DEFAULT_EMBED_CHANNEL, DEFAULT_EMBED_OPEN_MODE, DEFAULT_EXPORT_RANGE, D
 // adj912：「保存为 PNG / SVG」的**落点与文件名**全在这份纯函数里（`.jps` 同目录 + 主名，同名不覆盖就加序号）
 import { fileNameOf, uniqueNameIn } from './savePath'
 import { IJipuBridge } from './embed/bridge'
-import { embedEditLeavesObsidian, pickRightSidebarLeaf, planEmbedTarget } from './embed/openPlan'
+import { embedEditLeavesObsidian, pickRightSidebarLeaf, planEmbedTarget, planSourceLeafDisposal } from './embed/openPlan'
 /**
  * adj741（用户决定：按 P0"一版多端"做，见任务 1）—— **嵌入版 iJipu 的本地服务必须按需加载**。
  *
@@ -1415,7 +1415,19 @@ export default class IJipuPlugin extends Plugin {
         await this.openEmbedLeaf(file, 'right', sourceLeaf)
         return
       }
-      await openWithDefaultApp(this.app, file.path)
+      /**
+       * adj926（用户要求 ②）：「打开方式 = 默认应用，打开时也是同样的操作
+       * （**不新开页签 / 当前状态不变**），目前测试提示错误，无法使用默认的外部应用打开」。
+       *
+       * 这一段有两件事：
+       *  · **真的打开**：`openWithDefaultApp()` 已改为走宿主自己的 API（不再动态 import electron，
+       *    见 `src/openExternal.ts` 的说明）；返回值 `opened` 告诉我们文件到底交出去没有。
+       *  · **当前状态不变**：`.jps` 是**就地**开在用户当前页签里的（宿主 `openFile` 的语义），
+       *    所以这里要像另两档一样，**把那个页签还回去**（`restoreSourceLeaf`）——
+       *    成功才还：万一外开失败，页签留在**谱面预览**上比留个空白更有用（Notice 里带着失败原文）。
+       */
+      const opened = await openWithDefaultApp(this.app, file.path)
+      if (opened && sourceLeaf) await this.restoreSourceLeaf(sourceLeaf)
       return
     }
     await this.openEmbedLeaf(file, mode, sourceLeaf)
@@ -1841,13 +1853,33 @@ export default class IJipuPlugin extends Plugin {
       }
     }
     /**
-     * 关掉中间页签（Obsidian 因 `registerExtensions` 为 `.jps` 必然创建的那个）。
-     * 放在**最后**、且与"目标 leaf"分开判断：这一步此前因调度顺序没生效，
-     * 用户看到的现象是"多余页签还在 / 像开在新页签"。
+     * adj926（用户要求 ①③）：**收尾"来源页签"** —— 从 `detach()` 改为 `restoreSourceLeaf()`。
+     *
+     * 用户原话：①「打开方式=**右侧栏**，在点击 jps 打开时，**不要打开一个新标签页**，
+     * 即**当前的打开状态不要变**」；③「打开方式=**新的页签**，现在还是**在当前页签里打开** ✗，
+     * 应该在**新的页签**打开嵌入应用」。
+     *
+     * 真因（在 `obsidian.asar` 里核对过，见 `embed/openPlan.ts` 的 `planSourceLeafDisposal`）：
+     * 点文件管理器里的 `.jps` 是**就地换掉用户当前页签的视图**（那段 `openFile` 的语义），
+     * 所以 `sourceLeaf` **就是用户自己那个页签**：
+     *  · 旧写法 `detach()` ⇒ 用户的页签/笔记**没了**（该组空了宿主还会补个空页签 ⇒
+     *    用户看到"多出来一个新页签、当前状态变了"）；
+     *  · 「新的页签」档更隐蔽：新 leaf 插在当前页签**紧后面**、再把当前页签关掉 ⇒
+     *    页签栏数量位置都没变 ⇒ 用户看到的就是"还是在当前页签里打开"。
+     * ⇒ 现在**不关**，让这个 leaf 回到上一份视图（Obsidian 自己的「← 后退」同一套）。
      */
     if (plan.detachSource && !isSameLeaf && sourceLeaf) {
-      console.info(`[iJipu] 打开方式=${mode}：已在新位置打开，关闭中间页签（${sourceLeaf.getViewState().type}）`)
-      sourceLeaf.detach()
+      const disposal = await this.restoreSourceLeaf(sourceLeaf)
+      /**
+       * 「右侧栏」档是"在旁边**揭开**那个实例"：`revealLeaf(target)` 会把右栏那个 leaf 变成活动
+       * 页签（`focusLeaf` + `setViewState({active:true})` 都会 `setActiveLeaf`）⇒
+       * 主编辑区的"当前活动页签"就跟着变了 ✗。用户要求的是"当前活动页签与内容不变"，
+       * 所以还原成功后**把活动页签还给来源页签**（桌面端 `focusLeaf` 不会收折侧栏，
+       * 只有手机端才会 —— 而这条路本来就在 `Platform.isDesktopApp` 之后）。
+       */
+      if (plan.kind === 'right-sidebar' && disposal === 'back') {
+        workspace.setActiveLeaf(sourceLeaf, { focus: true })
+      }
     } else if (isSameLeaf) {
       console.info(`[iJipu] 打开方式=${mode}：就地替换来源页签（不关）`)
     }
@@ -1857,6 +1889,54 @@ export default class IJipuPlugin extends Plugin {
      * `sweepToolbarsAfterNavigation()`）。放在**最后**：那时页签的增删/替换都已经落定。
      */
     this.sweepToolbarsAfterNavigation()
+  }
+
+  /**
+   * adj926：**把"来源页签"还给用户**（从前这里是 `sourceLeaf.detach()`）。
+   *
+   * ## 为什么不能 detach
+   *
+   * 点文件管理器里的 `.jps`，宿主走的是 `getLeaf(false).openFile(file)` ⇒
+   * **活动 leaf 的视图被就地换掉**（原视图进入该 leaf 的历史）。所以"来源页签"
+   * **就是用户自己那个页签**（不是多出来的临时页签）——`detach()` 等于把用户的笔记页签关掉。
+   *
+   * ## 做法：走宿主自己的"后退"
+   *
+   * `leaf.history.back()`（= 页签栏上那枚「←」）会**弹出** `backHistory` 栈尾的状态并
+   * `setViewState` 回去。两条关键事实已在 `obsidian.asar`（1.13.7）里核对：
+   *  · `WorkspaceLeaf.getViewState()` 返回 `{type, state, pinned?, icon?, title?}` —— **不含 `active`**
+   *    ⇒ `back()` 只换视图，**不会**抢走活动页签；
+   *  · `history.back()` 在 `backHistory` 为空时是**空操作**（`go(-1)` 里 `n === t` 直接跳过）
+   *    ⇒ 所以"有没有可还原的"必须我们自己先判（`planSourceLeafDisposal`）。
+   *
+   * 没有可还原的上一份视图（例如用户是从一个空页签点开 `.jps` 的）⇒ 才 `detach()`：
+   * 那种情况下"关掉"恰好等于"恢复原状"（宿主的 tab 组不会空着，会补一个空页签）。
+   *
+   * @returns `'back'` = 已还原（页签还在）；`'detach'` = 关掉了（页签已不在）
+   */
+  private async restoreSourceLeaf(leaf: WorkspaceLeaf): Promise<'back' | 'detach'> {
+    /** 只取用到的那两样：`backHistory`（判据）与 `back()`（动作）—— 都是宿主内部字段，故做能力检测 */
+    type HistEntry = { state?: { type?: string } }
+    type LeafHistory = { backHistory?: HistEntry[]; back?: () => Promise<void> }
+    const hist = (leaf as unknown as { history?: LeafHistory }).history
+    const rawHistory = hist?.backHistory
+    const backHistory: HistEntry[] = Array.isArray(rawHistory) ? rawHistory : []
+    const disposal = planSourceLeafDisposal(
+      backHistory.map((entry) => entry?.state?.type),
+      VIEW_TYPE_IJIPU,
+    )
+    if (disposal.action === 'back' && hist && typeof hist.back === 'function') {
+      // 丢掉栈尾属于**本插件 `.jps` 视图**的历史项：还原它们会再路由一次、覆盖用户刚点的谱
+      for (let i = 0; i < disposal.dropCount; i += 1) backHistory.pop()
+      await hist.back()
+      console.info(
+        `[iJipu] 来源页签已**还原**（回到上一份视图，不关掉它；丢掉 ${disposal.dropCount} 条本插件 .jps 历史）`,
+      )
+      return 'back'
+    }
+    console.info('[iJipu] 来源页签没有可还原的上一份视图 ⇒ 关掉它（原来就是空页签，宿主会补回一个）')
+    leaf.detach()
+    return 'detach'
   }
 
   /** 释放嵌入版服务（关掉开关 / 卸载插件时） */

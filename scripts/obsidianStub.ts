@@ -22,8 +22,15 @@ export class Setting {
   addToggle() { return this }
   addButton() { return this }
 }
+/**
+ * adj926：冒烟要断言"「默认应用」这条路**不再弹报错**"，所以把每一条 Notice 的原文记下来
+ * （纯追加，不改变任何调用方的行为）。断言前 `notices.length = 0` 即可只看这一段的提示。
+ */
+export const notices: string[] = []
 export class Notice {
-  constructor(..._args: unknown[]) {}
+  constructor(...args: unknown[]) {
+    notices.push(args.map((a) => String(a)).join(' '))
+  }
 }
 export class Modal {
   constructor(..._args: unknown[]) {}
