@@ -36,6 +36,8 @@ import { layoutIcon, modeIcon, settingsIcon, linkIcon, playIcon, stopIcon, appOp
 import { buildScoreMenu, scoreMenuIds, toolbarPolicy, type ScoreMenuActionId } from './scoreMenu'
 import { canOpenWithDefaultApp, openUrlExternally, openWithDefaultApp } from './openExternal'
 import { computeGuideLines, cropRectFor, guideLimits, guidePlacement, type CropRect, type GuideLine } from './guides'
+// adj915：墨迹量的**坐标归位 + 与页面求交**（纯函数，浏览器/Node 都能跑；见该文件头）
+import { boxInRoot, boxRangeText, clipBoxToPage, elementLabelOf, pageBoxOf, rootMatrixOf, unionBox, type CropBox } from './cropBox'
 import { GUIDES_CHANGED, SETTINGS_CHANGED } from './main'
 import type IJipuPlugin from './main'
 // adj873：导出范围的**缺省值**只有一处定义（`types.ts`）——菜单打勾 / 设置页 / 解析都读它
@@ -1956,13 +1958,32 @@ toolbar.dataset.ijipuPane = String(paneId)
      * 取并集（而不是只取内容 `<g>`）是为了稳妥：引擎的顶层结构可能变化（段层/替换谱层各自包 `<g>`），
      * 逐个求并集对"元素直接挂在 svg 下"和"包在若干 `<g>` 里"都成立。
      *
+     * ⚠ **adj915（用户 2026-10：「多个 .jps 文件会有这种情况」，裁定走"修 DOM 量取"）**：
+     * 逐个 `getBBox()` 求并集本身有两个坑，此前都会让墨迹盒量歪 ⇒ 谱面**某一侧一大块空白**：
+     *
+     *  ① **坐标系没归位**：`getBBox()` 给的是**元素自身坐标系**里的盒，**不含自己的 `transform`**。
+     *     引擎的矢量记号正是这种结构（`glyphMarkup()` ⇒ `<g transform="translate(tx ty) scale(0.006831)">`，
+     *     盒是字形源坐标里的 `951.6×349.91`；上/下装饰记号 ⇒ `<text transform="translate(cx,y) scale(0.75,1)">`，
+     *     盒从 `-4.63` 起）⇒ 直接并集会把墨迹盒撑到 951.6 宽（页宽仅 595.28）或让 x 变负。
+     *     ⇒ 每个盒先经 `boxInRoot()`（`svg.getCTM()⁻¹ · el.getCTM()`）换算到**根 svg 的 viewBox 坐标系**。
+     *     ⚠ 只乘 `el.getCTM()` 不行 —— 它含「viewBox → CSS 像素」那层视口缩放，盒会随容器宽变 ✗。
+     *
+     *  ② **页面外的元素照样算进并集**：零宽/零高的笔画、被画到纸外的记号，`getBBox()` 一样给有效值
+     *     ⇒ 并集超出页面 ⇒ 同样是"某一侧空白"。⇒ 与**整页矩形**求交（`clipBoxToPage()`）：
+     *     完全在页外就丢掉，跨界只算页内那一截；最后再把并集夹一次（浮点/边距余量）。
+     *
+     * 被丢掉 / 被截断的元素写成一句诊断记在 `svgEl.dataset.cropNotes`（`applyViewBox` 拼进设置页那行），
+     * 便于日后回看"到底是谁在捣乱"（本轮元凶点名见 `docs/TODO.md` 与提交信息）。
+     *
      * 返回 `null` 表示量不出来（无子元素 / 元素不可见 / 过程中报错）——调用方据此退回"按边距裁"。
      */
-    function measureContentBox(svgEl: SVGSVGElement): { x: number; y: number; w: number; h: number } | null {
-      let x0 = Infinity
-      let y0 = Infinity
-      let x1 = -Infinity
-      let y1 = -Infinity
+    function measureContentBox(svgEl: SVGSVGElement): CropBox | null {
+      /** 整页矩形（进裁剪前的 viewBox）；读不到 ⇒ null ⇒ **不求交**（宁可不裁，也不误伤 ✓） */
+      const page = pageBoxOf(svgEl)
+      const invRoot = rootMatrixOf(svgEl)
+      let acc: CropBox | null = null
+      const dropped: string[] = []
+      const cut: string[] = []
       for (const child of Array.from(svgEl.children)) {
         const el = child as SVGGraphicsElement
         if (el.getAttribute('data-page-bg')) continue // 整页白底：不是"内容"
@@ -1974,13 +1995,34 @@ toolbar.dataset.ijipuPane = String(paneId)
           continue // 未渲染/不可见元素取不到盒，跳过
         }
         if (!(b.width > 0) && !(b.height > 0)) continue
-        if (b.x < x0) x0 = b.x
-        if (b.y < y0) y0 = b.y
-        if (b.x + b.width > x1) x1 = b.x + b.width
-        if (b.y + b.height > y1) y1 = b.y + b.height
+        /**
+         * ① 归位：元素自身坐标系 → 根 svg 的 viewBox 坐标系。
+         * 没有 `transform` 的元素这一步是恒等变换（`invRoot · own = I`），所以口径只有一条 ✓。
+         */
+        const box = boxInRoot(el, { x: b.x, y: b.y, w: b.width, h: b.height }, invRoot)
+        /** ② 求交：完全在页面外 ⇒ 丢掉；跨界 ⇒ 只并页内那一截 */
+        const inPage = page === null ? box : clipBoxToPage(box, page)
+        if (inPage === null) {
+          if (dropped.length < 3) dropped.push(`${elementLabelOf(el)}@${boxRangeText(box)}`)
+          continue
+        }
+        if (cut.length < 3 && (inPage.x !== box.x || inPage.y !== box.y || inPage.w !== box.w || inPage.h !== box.h)) {
+          cut.push(`${elementLabelOf(el)}@${boxRangeText(box)}`)
+        }
+        acc = unionBox(acc, inPage)
       }
-      if (!Number.isFinite(x0) || !Number.isFinite(y0) || x1 <= x0 || y1 <= y0) return null
-      return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
+      /** 保险：并集仍可能因浮点/边距略微超出页面 ⇒ 夹一下（这一条是 `adj911` 的止血做法，保留 ✓） */
+      const box = page === null ? acc : (acc === null ? null : clipBoxToPage(acc, page) ?? acc)
+      if (box === null || !(box.w > 0) || !(box.h > 0)) {
+        delete svgEl.dataset.cropNotes
+        return null
+      }
+      const notes: string[] = []
+      if (dropped.length > 0) notes.push(`已忽略页面外元素 ${dropped.join('、')}`)
+      if (cut.length > 0) notes.push(`已截到页面内 ${cut.join('、')}`)
+      if (notes.length > 0) svgEl.dataset.cropNotes = notes.join('；')
+      else delete svgEl.dataset.cropNotes
+      return box
     }
 
     /** 取元素上缓存的内容包围盒（`mountScorePane` 插入 DOM 后量过一次） */
@@ -2145,13 +2187,19 @@ toolbar.dataset.ijipuPane = String(paneId)
          *    右侧会留白；**等将来多份谱都这样**再照 `docs/TODO.md` 第 2 条查根因 ✓。
          */
         const out = rangeBox({ range: 'score', pageW: w, pageH: h, ink: b, minInk: minInkFor(noteInkH) })
+        /**
+         * adj915：把**量取时被丢掉/被截断的元素**拼进这行诊断（有才拼）——
+         * 用户半年后回看设置页时，"某一侧又空了"能直接看到是谁在捣乱 ✓（当前只求"修好显示" ✓）。
+         */
+        const notes = svgEl.dataset.cropNotes ?? ''
         if (out.ok) {
           svgEl.setAttribute('viewBox', `${out.box.x} ${out.box.y} ${out.box.w} ${out.box.h}`)
           publishZoomW(out.box.w)
           // 回传给插件，供设置页显示（运行期诊断；见 IJipuPlugin.lastCropInfo 的说明）
           noteCrop(
             `按墨迹裁剪 ${out.box.w.toFixed(0)}×${out.box.h.toFixed(0)}（墨迹 ${Math.round(b?.w ?? 0)}×${Math.round(b?.h ?? 0)}` +
-              ` + 每边 ${RANGE_PAD_DEFAULT}px（显示端与导出/复制同一口径）；整页 ${Math.round(w)}×${Math.round(h)}，高度只剩 ${(((b?.h ?? 0) / h) * 100).toFixed(0)}%）`,
+              ` + 每边 ${RANGE_PAD_DEFAULT}px（显示端与导出/复制同一口径）；整页 ${Math.round(w)}×${Math.round(h)}，高度只剩 ${(((b?.h ?? 0) / h) * 100).toFixed(0)}%）` +
+              (notes ? `；${notes}` : ''),
           )
         } else {
           /**
@@ -2165,7 +2213,7 @@ toolbar.dataset.ijipuPane = String(paneId)
           const mb = c.margin_bottom ?? 0
           svgEl.setAttribute('viewBox', `${ml} ${mt} ${Math.max(1, w - ml - mr)} ${Math.max(1, h - mt - mb)}`)
           publishZoomW(Math.max(1, w - ml - mr))
-          noteCrop(`退回按边距裁剪 —— ${out.reason ?? '量取不可靠'}`)
+          noteCrop(`退回按边距裁剪 —— ${out.reason ?? '量取不可靠'}${notes ? `；${notes}` : ''}`)
           /**
            * adj780（用户实测）：「PC 端 jps 代码块，点排版→调整虚线→再点排版关闭虚线时，
            * **视图回到谱面视图，但墨迹四周空白没被及时消除**」。

@@ -101,6 +101,9 @@ import {
 import { fileNameOf, normExt, saveTargetOf, scoreBaseName, uniqueNameIn } from '../src/savePath'
 // adj912：图片分辨率的**默认值只有一处定义**（`types.ts`）——设置页、菜单打勾、复制/保存出口都读它
 import { DEFAULT_IMAGE_SCALE } from '../src/types'
+// adj915：谱面「墨迹盒」量取的**纯几何**（与页面求交 + 并集）—— 直接跑纯函数逐项断言，
+// 不靠字符串匹配（能跑的一律跑，与 adj862/adj912 同一姿势）
+import { clipBoxToPage, unionBox, type CropBox } from '../src/cropBox'
 
 let pass = 0
 let fail = 0
@@ -5366,6 +5369,212 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
     paneOps912(pane912))
   check('adj912 负对照：删掉 `case \'save-svg\'` 那一支 ⇒ 同一条判据判假（新增菜单项必须真的接上路由）',
     !paneOps912(pane912.replace("case 'save-svg':\n          void plugin.saveScoreSvg(source, paneRange, saveTarget)", '')))
+}
+
+/**
+ * ============================ adj915 ============================
+ * 谱面「墨迹盒」量取修 DOM：**坐标归位 + 与页面求交**（用户 2026-10 裁定「修 dom 的方式」）
+ *
+ * 现象（用户原话）：`.jps` 文件页的「谱面」视图下，谱面**某一侧留一大块空白**，
+ * 且「**有多个 jps 文件会有这种情况**」（此前按用户裁定"不为个别谱做改动"搁置过，见 adj911e 注释）。
+ *
+ * 元凶（**无头 Chrome 实测 55 张真谱 SVG**，方法见下面断言里的真实数字）：
+ *  · 引擎把矢量记号画成 `<g transform="translate(tx ty) scale(0.006831)">`（`glyphMarkup()`，波音/滑音/延长记号）
+ *    与 `<text transform="translate(cx,symY) scale(0.75,1)">`（上/下装饰记号）；
+ *  · `getBBox()` 返回的是**元素自身坐标系**里的盒（**不含自己的 transform**）⇒
+ *    前者的盒恒为 `(36.2,327.15) 951.6×349.91`（字形源坐标，与画在哪儿无关），后者从 `x=-4.63` 起；
+ *  · 直接并集 ⇒ 墨迹盒被撑到 951.6 宽（页宽 595.28 ⇒ **右侧多出 392.5**）或 x 变负（**左侧多出**）⇒
+ *    viewBox 跟着变宽/偏移 ⇒ 谱面视图某一侧一大块空白 ✗。
+ *
+ * 修法（**只动显示端量取**，导出/复制/CLI 的"±2px + 两道闸"一律没动 ✗）：
+ *  ① 每个盒先经 `boxInRoot()`（`svg.getCTM()⁻¹ · el.getCTM()`）换算到**根 svg 的 viewBox 坐标系**；
+ *  ② 再与**整页矩形**求交（完全在页外丢掉、跨界只算页内那一截），最后把并集夹一次；
+ *  ③ 被丢掉/被截断的元素记进 `svgEl.dataset.cropNotes`，由 `applyViewBox` 拼进设置页那行诊断。
+ *
+ * 断言分四层，**每层都配负对照**（把关键那步删掉/换成旧写法 ⇒ 判据必须为假）：
+ *  · 纯函数（求交 / 并集）——浏览器与 Node 跑同一份代码；
+ *  · 源码骨架（`measureContentBox` 里"先归位、再求交、后并集"的顺序）；
+ *  · 诊断（记下来 + 拼进去）；
+ *  · 边界（三处入口共用一份量取；导出路径没被碰）。
+ */
+{
+  /**
+   * 浏览器里量的都是浮点（`595.28 − 36.2 = 559.08000000000004`），断言统一走容差。
+   * 容差 0.01px：远在亚像素以下，但足够挡住"少做一步"这类量级错误（几十~几百 px）。
+   */
+  const near915 = (a: number, b: number): boolean => Math.abs(a - b) <= 0.01
+  /** 页面框（A4，单位 = 页面坐标 = viewBox 单位；与真实谱渲染产物逐字一致） */
+  const page915: CropBox = { x: 0, y: 0, w: 595.28, h: 841.89 }
+
+  // —— ① 纯函数：与页面求交（`clipBoxToPage`） ——
+  {
+    const inside = clipBoxToPage({ x: 10, y: 20, w: 30, h: 40 }, page915)
+    check('adj915 `clipBoxToPage`：完全在页面内 ⇒ **原样返回**',
+      inside !== null && near915(inside.x, 10) && near915(inside.y, 20) && near915(inside.w, 30) && near915(inside.h, 40),
+      JSON.stringify(inside))
+
+    const outLeft = clipBoxToPage({ x: -812, y: 10, w: 172, h: 40 }, page915)
+    check('adj915 `clipBoxToPage`：完全在左外（x=-812、右缘 -640）⇒ `null`（不可能是内容）',
+      outLeft === null, JSON.stringify(outLeft))
+
+    const crossing = clipBoxToPage({ x: -50, y: 10, w: 100, h: 40 }, page915)
+    check('adj915 `clipBoxToPage`：**跨界**（x=-50、w=100）⇒ 只算页内那一截 `{x:0,w:50}`',
+      crossing !== null && near915(crossing.x, 0) && near915(crossing.y, 10) && near915(crossing.w, 50) && near915(crossing.h, 40),
+      JSON.stringify(crossing))
+
+    const outRight = clipBoxToPage({ x: 540, y: 10, w: 100, h: 40 }, page915)
+    check('adj915 `clipBoxToPage`：右越界（x=540、w=100）⇒ 截到页右缘（w=55.28）',
+      outRight !== null && near915(outRight.x, 540) && near915(outRight.w, 55.28),
+      JSON.stringify(outRight))
+
+    /**
+     * 零面积笔画**不能丢**：引擎里小节线的竖（w=0）、减时线的横（h=0）都是合法内容，
+     * 且它们常常正好定义墨迹盒的边界（丢一条竖线就可能把右边界裁掉）⇒ 只"擦到页边"仍保留。
+     */
+    const zeroW = clipBoxToPage({ x: 595.28, y: 100, w: 0, h: 20 }, page915)
+    check('adj915 `clipBoxToPage`：零宽笔画贴页边 ⇒ **保留**（引擎里竖线 w=0 / 横线 h=0 是合法内容，丢了会裁掉边界）',
+      zeroW !== null && near915(zeroW.x, 595.28) && near915(zeroW.w, 0),
+      JSON.stringify(zeroW))
+
+    /** 负对照：**不做求交**（直接拿原盒并集 = 旧口径）⇒ 上面"跨界截断"那条判据必须判假 */
+    const clipOk915 = (f: (b: CropBox, p: CropBox) => CropBox | null): boolean => {
+      const c = f({ x: -50, y: 10, w: 100, h: 40 }, page915)
+      return c !== null && near915(c.x, 0) && near915(c.w, 50) && f({ x: -812, y: 10, w: 172, h: 40 }, page915) === null
+    }
+    check('adj915 负对照：**去掉"与页面求交"**（直接用原盒）⇒ 上面"跨界只算页内那一截"的判据判假',
+      !clipOk915((b) => b) && clipOk915(clipBoxToPage))
+  }
+
+  // —— ② 纯函数：并集（`unionBox`） ——
+  {
+    const unionOk915 = (f: (a: CropBox | null, b: CropBox | null) => CropBox | null): boolean => {
+      const u = f({ x: 10, y: 10, w: 20, h: 20 }, { x: 50, y: 40, w: 10, h: 10 })
+      if (u === null || !near915(u.x, 10) || !near915(u.y, 10) || !near915(u.w, 50) || !near915(u.h, 40)) return false
+      // `null` 是单位元（空并集 ∪ 盒 = 盒；盒 ∪ 空并集 = 盒）
+      const a = f(null, { x: 1, y: 2, w: 3, h: 4 })
+      const b = f({ x: 1, y: 2, w: 3, h: 4 }, null)
+      return a !== null && b !== null && near915(a.x, 1) && near915(a.w, 3) && near915(b.x, 1) && near915(b.h, 4)
+    }
+    check('adj915 `unionBox`：两个盒 ⇒ 正确外接矩形（{10,10,20,20} ∪ {50,40,10,10} ⇒ {10,10,50,40}），且 `null` 是单位元',
+      unionOk915(unionBox))
+    check('adj915 负对照：把并集写成"只取第一个盒"/"取两个盒的交集" ⇒ 同一条判据判假',
+      !unionOk915((a) => a) && !unionOk915((a, b) => (a && b ? clipBoxToPage(a, b) : (a ?? b))) && unionOk915(unionBox))
+  }
+
+  // —— ③ 口径锁：无头 Chrome 实测的真实数字（防止有人"只求交、不归位"就以为修好了） ——
+  {
+    /**
+     * 实测来源：`node <app>/packages/ijipu-cli/dist/ijipu.cjs render -t svg --crop page 花又期二重奏.jps`
+     * 后用无头 Chrome 逐顶层子元素取 `getBBox()`（脚本 `scripts/_tmp_crop_probe.mts`，用后已删）。
+     *  · 元凶元素：`<g transform="translate(123.33 177.1) scale(0.006831)">`（矢量修饰符字形）
+     *    —— 它的 `getBBox()` 恒为 `(36.2,327.15) 951.6×349.91`，**与它画在页面哪儿无关**；
+     *  · 原样并集 = `{36.2, 40.99} 951.6×749.71`（右缘 987.8 ⇒ **超出页右缘 392.52**）；
+     *  · 只求交 = 559.08 宽（**仍然错**：右缘被钉到页右缘，右边还留 ~49px 空白）；
+     *  · 归位后真墨迹 = `{50.64, 40.99} 495.63×749.71`（右缘 546.27，与左边距 50.64 / 右边距 49.01 对称 ✓）。
+     */
+    const glyph915: CropBox = { x: 36.2, y: 327.15, w: 951.6, h: 349.91 }
+    const clipped = clipBoxToPage(glyph915, page915)
+    check('adj915 口径锁（花又期二重奏.jps 实测）：字形组原样盒 951.6 宽、右缘 987.8（**超页右缘 392.52**）；只求交仍有 559.08 宽（≠ 归位后的真墨迹 495.63 ⇒ **归位那一步是承重的**）',
+      near915(glyph915.w, 951.6) && near915(glyph915.x + glyph915.w - page915.w, 392.52) &&
+        clipped !== null && near915(clipped.w, 559.08) && near915(546.27 - 50.64, 495.63) && 559.08 - 495.63 > 40,
+      `原样=${JSON.stringify(glyph915)} 求交=${JSON.stringify(clipped)}`)
+
+    /**
+     * 端到端（Node 侧）：把实测墨迹喂给**引擎真函数 `rangeBox()`**，看最终落到 viewBox 的盒子
+     * —— 量取与"±2px + 两道闸"这条链路一起验，避免"量对了、下游又漂"（本项目老坑）。
+     */
+    const old915 = rangeBox({ range: 'score', pageW: 595.28, pageH: 841.89, ink: { x: 36.2, y: 40.99, w: 951.6, h: 749.71 }, minInk: 6 })
+    const new915 = rangeBox({ range: 'score', pageW: 595.28, pageH: 841.89, ink: { x: 50.64, y: 40.99, w: 495.64, h: 749.71 }, minInk: 6 })
+    check('adj915 最终 viewBox（引擎真函数 `rangeBox`）：旧口径 955.6 宽（**页宽的 1.6 倍 ⇒ 一侧 48% 空白**）⇒ 新口径 499.64 宽（左右各 ~49px 页边距，不再有空白）',
+      old915.ok && new915.ok && near915(old915.box.w, 955.6) && near915(new915.box.w, 499.64) &&
+        near915(old915.box.x, 34.2) && near915(new915.box.x, 48.64) && old915.box.w - new915.box.w > 390,
+      `旧=${JSON.stringify(old915.box)} 新=${JSON.stringify(new915.box)}`)
+  }
+
+  // —— ④ 源码骨架：`measureContentBox` 里"先归位 → 再求交 → 后并集" ——
+  const pane915 = codeOf(String(readFileSync('src/scorePane.ts', 'utf8')))
+  const crop915 = codeOf(String(readFileSync('src/cropBox.ts', 'utf8')))
+  const main915 = codeOf(String(readFileSync('src/main.ts', 'utf8')))
+  const view915 = codeOf(String(readFileSync('src/fileView.ts', 'utf8')))
+  const embed915 = codeOf(String(readFileSync('src/embed.ts', 'utf8')))
+  /** 取函数体：按**这一层的缩进**收口（`measureContentBox` 在 `mountScorePane` 里 ⇒ 4 空格） */
+  const fnBody915 = (src: string, name: string): string =>
+    new RegExp(`(?:^|\\n)([ \\t]*)(?:export )?function ${name}\\([\\s\\S]*?\\n\\1\\}`).exec(src)?.[0] ?? ''
+  const order915 = (src: string): boolean => {
+    const b = fnBody915(src, 'measureContentBox')
+    const iRoot = b.indexOf('boxInRoot(')
+    const iClip = b.indexOf('clipBoxToPage(')
+    const iUnion = b.indexOf('unionBox(')
+    return iRoot >= 0 && iClip > iRoot && iUnion > iClip && /const inPage = page === null \? box : clipBoxToPage\(box, page\)/.test(b)
+  }
+  check('adj915 `measureContentBox` 的取盒顺序是「① 归位 `boxInRoot` → ② 与页面求交 `clipBoxToPage` → ③ 并集 `unionBox`」',
+    order915(pane915), fnBody915(pane915, 'measureContentBox').slice(0, 120))
+  check('adj915 负对照 A：把"与页面求交"那一步删掉（直接用归位后的盒并集）⇒ 同一条顺序判据判假',
+    order915(pane915.replace(/const inPage = page === null \? box : clipBoxToPage\(box, page\)/, 'const inPage = box')) === false)
+  check('adj915 负对照 B：把"坐标归位"那一步删掉（直接拿 `getBBox()` 的原盒）⇒ 同一条顺序判据判假',
+    order915(pane915.replace(/const box = boxInRoot\([\s\S]*?invRoot\)/, 'const box = { x: b.x, y: b.y, w: b.width, h: b.height }')) === false)
+
+  /** `boxInRoot` 乘的必须是 `svg.getCTM()⁻¹ · el.getCTM()`（只乘 `el.getCTM()` 会带上 CSS 视口缩放） */
+  const norm915 = (src: string): boolean =>
+    /inverse\(\)/.test(fnBody915(src, 'rootMatrixOf')) && /invRoot\.multiply\(own\)/.test(fnBody915(src, 'boxInRoot'))
+  check('adj915 `boxInRoot` 的矩阵是 `svg.getCTM()⁻¹ × el.getCTM()`（**只乘 `el.getCTM()` 会带上「viewBox → CSS 像素」那层视口缩放** ⇒ 盒随容器宽变：实测容器 595px 时 a=0.9995、800px 时 a=1.3439）',
+    norm915(crop915))
+  check('adj915 负对照：把矩阵换成直接用 `own`（= `el.getCTM()`）⇒ 同一条判据判假',
+    norm915(crop915.replace('const m = invRoot.multiply(own)', 'const m = own')) === false)
+  check('adj915 `pageBoxOf` 读 `data-orig-vb` 优先、兜底当前 `viewBox`，**读不到就返回 null** ⇒ 调用方不求交（宁可不裁也不误伤）',
+    /svgEl\.dataset\.origVb \?\? svgEl\.getAttribute\('viewBox'\)/.test(fnBody915(crop915, 'pageBoxOf')) &&
+      /return null/.test(fnBody915(crop915, 'pageBoxOf')) &&
+      /page === null \? box : clipBoxToPage\(box, page\)/.test(fnBody915(pane915, 'measureContentBox')))
+  check('adj915 `cropBox.ts` **不引入任何依赖**（纯几何 + DOM 读取，浏览器与 Node 冒烟跑同一份）',
+    !/^\s*import\s/m.test(crop915), crop915.split('\n').filter((l) => /^\s*import\s/.test(l)).join('｜'))
+
+  // —— ⑤ 诊断：谁被丢掉 / 被截断，要能在设置页那行里看到 ——
+  {
+    const b = fnBody915(pane915, 'measureContentBox')
+    check('adj915 量取时把"被丢掉 / 被截断的元素"记进 `svgEl.dataset.cropNotes`（`标签@x左~x右`，最多各 3 个）',
+      /dataset\.cropNotes = notes\.join/.test(b) && /已忽略页面外元素/.test(b) && /已截到页面内/.test(b) &&
+        /elementLabelOf\(el\)/.test(b) && /boxRangeText\(box\)/.test(b) && /dropped\.length < 3/.test(b) && /cut\.length < 3/.test(b))
+    /**
+     * 这行诊断是**给半年后的自己看**的：`+tf` 标记"这个元素自带 transform"——
+     * 本轮两个元凶正是这一类（否则诊断里只有一堆 `g` / `text`，认不出是谁）。
+     */
+    check('adj915 诊断里的元素短名带 `+tf` 标记（自带 `transform` 的元素 —— 本轮元凶就是这一类）',
+      /getAttribute\('transform'\) \? '\+tf'/.test(fnBody915(crop915, 'elementLabelOf')))
+    const append915 = (src: string): boolean => {
+      const vb = fnBody915(src, 'applyViewBox')
+      return (vb.match(/notes \? `；\$\{notes\}` : ''/g) ?? []).length >= 2 && /const notes = svgEl\.dataset\.cropNotes \?\? ''/.test(vb)
+    }
+    check('adj915 `applyViewBox` 把这份记录拼进设置页那行 `noteCrop`（**成功与"退回按边距裁"两支都拼**）',
+      append915(pane915))
+    check('adj915 负对照：两支都不拼 `notes`（诊断又退回"看不出是谁"）⇒ 同一条判据判假',
+      append915(pane915.replace(/\(notes \? `；\$\{notes\}` : ''\)/g, '')) === false)
+  }
+
+  // —— ⑥ 边界：**共用量取**（不按入口分叉）；导出/复制的口径一个字没动 ——
+  {
+    /**
+     * 用户 2026-10 拍板：「**那还是统一 dom 方式吧**」⇒ 修在**共用**的量取里，
+     * 代码块 / `.jps` 文件页 / `![[x.jps]]` 嵌入三处**一起生效**（不许"只有文件页才求交"）。
+     * 实测三者今天本就同一条路：都调 `mountScorePane`（`src/scorePane.ts`），
+     * `getBBox()` 量取只此一份 ⇒ 同一份谱两种入口不会出现两种留白结果 ✓。
+     */
+    const shared915 = (m: string, v: string, e: string): boolean =>
+      /export function mountScorePane\(/.test(pane915) &&
+      /mountScorePane\(/.test(m) && /mountScorePane\(/.test(v) && /mountScorePane\(/.test(e) &&
+      /getBBox\(\)/.test(pane915) && !/getBBox\(\)/.test(m) && !/getBBox\(\)/.test(v) && !/getBBox\(\)/.test(e)
+    check('adj915 三处入口（代码块 `main.ts` / `.jps` 文件页 `fileView.ts` / 嵌入 `embed.ts`）都走同一个 `mountScorePane` ⇒ **量取只有一份**（不按入口分叉）',
+      shared915(main915, view915, embed915))
+    check('adj915 负对照：往 `fileView.ts` 里塞一份自己的 `getBBox()` 量取（= 入口分叉）⇒ 同一条判据判假',
+      shared915(main915, view915 + '\nconst ownBox = svg.getBBox()\n', embed915) === false)
+    /**
+     * 用户之前明确：**导出/复制保持每边 2px**（`rangeBox` 的"±2px + 两道闸"不动）⇒
+     * 本轮新增的 `clipBoxToPage` / `boxInRoot` **不许出现在导出的那条路上**（`main.ts`）。
+     */
+    check('adj915 只动显示端量取：`main.ts`（导出/复制的 `resolveRangeBox` / `applyExportRange`）里**没有** `clipBoxToPage` / `boxInRoot` ⇒ 导出/复制/CLI 口径没被改',
+      !/clipBoxToPage|boxInRoot/.test(main915))
+    check('adj915 负对照：往 `main.ts` 里塞一句 `clipBoxToPage(`（= 把新口径漏进导出路径）⇒ 同一条判据判假',
+      /clipBoxToPage|boxInRoot/.test(main915 + '\nconst z = clipBoxToPage(a, b)\n'))
+  }
 }
 
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。
