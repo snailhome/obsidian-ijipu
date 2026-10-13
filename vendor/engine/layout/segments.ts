@@ -30,7 +30,7 @@ import {
   lowDotY,
   NOTE_BASELINE_RATIO,
   SEGMENT_LAYER_CLEARANCE,
-  SLUR_SAG_MAX,
+  SLUR_SAG,
 } from './spacing'
 
 /** 计时 token 联合（音符 / 休止符 / 节奏符）——由下方 isDurational 收窄 */
@@ -233,7 +233,13 @@ export function segmentMinGap(
     }
   }
   if (hasSlur) {
-    lowerTop = Math.max(lowerTop, noteSize * DIGIT_HEIGHT_RATIO + LAYER_GAP * s + (SLUR_W * s) / 2 + SLUR_SAG_MAX + SLUR_W / 2)
+    /**
+     * adj929：预留量 = `SLUR_SAG`（= 2×弧顶高，默认 9，与旧 `SLUR_SAG_MAX` 同值）。
+     * 弧线现在的弧顶是**常量**（与跨度无关）⇒ 预留再不需要"按最大跨度估"，但仍按**垂度**
+     * （控制点偏移）留而不是按弧顶留：这是既有的**保守**口径（宁可略松），
+     * 且数值不变 ⇒ 既有 `{dsb}` 行高一字不动（`S5` 断言依赖这条下限）。
+     */
+    lowerTop = Math.max(lowerTop, noteSize * DIGIT_HEIGHT_RATIO + LAYER_GAP * s + (SLUR_W * s) / 2 + SLUR_SAG + SLUR_W / 2)
   }
   return upperBottom + lowerTop + clearance
 }
@@ -266,8 +272,8 @@ export function segmentRowExtra(
   gapOf: (type: 'bz' | 'dsb' | 'tp') => number,
 ): SegmentRowExtra {
   const s = noteScaleOf(noteSize)
-  /** 段层连音线画在段层音符**上方**时额外占的高度（弧垂度上限 + 层距 + 描边） */
-  const slurExtra = LAYER_GAP * s + (SLUR_W * s) / 2 + SLUR_SAG_MAX + SLUR_W / 2
+  /** 段层连音线画在段层音符**上方**时额外占的高度（垂度 + 层距 + 描边；adj929 起垂度是常量） */
+  const slurExtra = LAYER_GAP * s + (SLUR_W * s) / 2 + SLUR_SAG + SLUR_W / 2
   let up = 0
   let botInk = 0
   let gap = 0

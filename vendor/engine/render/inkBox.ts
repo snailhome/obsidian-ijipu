@@ -15,7 +15,8 @@
  *   **有附点 / 增时线才延伸到块右端**（`x + width`）；隐藏休止符 `8` 不占墨迹 ✓。
  * - **纵向**：数字用 `digitTopY`/`digitBottomY`；有高八度点抬到 `octaveTopY`；
  *   有减时线压到 `beamBottomY`；有低八度点压到 `lowDotY(...) + DOT_R`（与布局 `layout/index.ts` 同口径）✓。
- * - **连音线按弧顶**（`slurApexY` = `y − 垂度/2`）、渐强渐弱 `±DYN_HALF_H`、小节线按 `yTop..yBottom`、
+ * - **连音线按弧顶**（`slurApexY` = 弦 `y − SLUR_APEX_H`，adj929 起是**常量**、与跨度无关）、
+ *   渐强渐弱 `±DYN_HALF_H`、小节线按 `yTop..yBottom`、
  *   `&zkh/&ykh/&hx` 按 `x ± width/2`、段层大括号按 `braceTop..braceBottom`、方框小节序号按框高 ✓。
  *
  * ## ⚠ 这是**估算**，与浏览器 `getBBox()` 有差（写在明面上）
@@ -45,7 +46,8 @@ import {
   noteScaleOf,
   notesRowBaseline,
   octaveTopY,
-  slurSagOf,
+  slurApexY,
+  SLUR_SAG,
 } from '../layout/spacing'
 
 /**
@@ -167,9 +169,13 @@ export function inkBoxOfLayout(layout: ScoreLayout, pageIndex = 0): RangeBox | n
   for (const b of page.barlines) addBarlineInk(a, b, ns)
   for (const l of page.lyrics) addLyricInk(a, l, cfg)
   for (const s of page.slurs) {
-    const sag = slurSagOf(Math.abs(s.x2 - s.x1))
-    const y0 = s.below === true ? s.y : s.y - sag / 2
-    add(a, Math.min(s.x1, s.x2), y0, Math.abs(s.x2 - s.x1), sag)
+    /**
+     * adj929：盒顶 = **弧顶**（`slurApexY` = 弦 − 常量弧顶高，与渲染端同源；朝下拱时就是弦本身）。
+     * 盒高按 `SLUR_SAG`（= 2×弧顶高）：这是**估算**盒，方向是"宁多不少"
+     * （AGENTS §五.9 的墨迹盒只要求不裁内容；多出的一点与四周 `INK_ESTIMATE_SLACK` 同一性质）。
+     */
+    const y0 = s.below === true ? s.y : slurApexY(s.y)
+    add(a, Math.min(s.x1, s.x2), y0, Math.abs(s.x2 - s.x1), SLUR_SAG)
   }
   for (const d of page.dynamics) {
     add(a, Math.min(d.x1, d.x2), d.y - DYN_HALF_H, Math.abs(d.x2 - d.x1), DYN_HALF_H * 2)
