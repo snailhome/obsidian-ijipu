@@ -67,8 +67,11 @@ export interface BridgeHost {
    * 应用在 `welcome` 里拿到它，就不必自己下载/缓存 32 MB ——
    * 插件目录里那份是**唯一权威副本**（随文库一起同步）。
    * 返回空对象表示"还没有这份音源"，应用照旧走自己的缓存/下载路径。
+   *
+   * adj950：改成"可以异步"且**只公布磁盘上真有的那几份**（原来无条件给全部库编地址 ⇒
+   * 应用以为宿主有、拉一次 404 再退回联网下载 ⇒ 文件在却提示下载）。
    */
-  bankUrls?: () => Record<string, string>
+  bankUrls?: () => Record<string, string> | Promise<Record<string, string>>
   /**
    * adj729：**由插件弹文件选择器导入音源**（应用「导入音色文件」在嵌入环境里走这里）。
    * 32 MB 不跨窗口搬，插件直接写进自己的目录。
@@ -212,8 +215,11 @@ export class IJipuBridge {
    * 处理一条来自 iframe 的消息。
    *
    * 返回 `true` 表示"这条消息属于本桥"（调用方据此决定是否阻止其它监听者）。
+   *
+   * adj950：改成 `async` —— `welcome` 里的音源地址要**先看磁盘上有没有**
+   * （`bankUrls()` 现在是异步的），其余分支仍是同步判定（调用方 `void` 掉即可）。
    */
-  handle(event: MessageEvent): boolean {
+  async handle(event: MessageEvent): Promise<boolean> {
     const data = event.data as BridgeRequest | undefined
     if (!data || typeof data !== 'object' || data.ch !== BRIDGE_CHANNEL) return false
     // ① 来源必须是**已登记**的 iframe（可能同时有多个：应用页签 + 各文件页签）
@@ -239,7 +245,8 @@ export class IJipuBridge {
         root: this.host.root,
         capabilities: { write: true, rename: true, remove: true, trash: true },
         // adj729：音色库的取用地址（插件目录里的那份；应用优先用它，见 HostWelcome 的说明）
-        bankUrls: this.host.bankUrls?.() ?? {},
+        // adj950：可能是异步的（要先看磁盘上有没有）——本函数已是 async，直接 await
+        bankUrls: (await this.host.bankUrls?.()) ?? {},
       })
       return true
     }

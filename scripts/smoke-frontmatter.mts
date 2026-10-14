@@ -132,6 +132,15 @@ import { clipBoxToPage, unionBox, type CropBox } from '../src/cropBox'
 // ⚠ adj920：原来这里 import 的 `./paraIndent`（adj917「嵌入块跟随段落首行缩进」的纯函数）**已整条删除**
 //   —— 用户 2026-10-13 裁定「嵌入块保持全宽」⇒ 回退（见下面 adj920 区块；零残留由源码级断言守着）。
 
+// adj950（用户报「插件目录存在音色库的情况下，还提示下载」）：音源**落点与取用顺序**的纯函数
+// —— 路径归一化 / 大小写 / 分隔符 / 真缺失，全部用**假 vault 适配器**逐条跑（不靠源码文本匹配）
+import { bankFilePath, joinPathParts, readLocalSoundfont, soundfontRelPath, type BankAdapterLike, type BankFileStore } from '../src/bankFile'
+import { getHqLibrary, HQ_LIBRARIES, loadHqBank, prefetchHqLibraryProgress, type HqCache } from '../src/soundbank'
+// 策略（`planHqBankLoad`）与库清单的类型**同源在引擎**（插件只是转出，见 soundbank.ts 的 adj760/adj450）
+import { planHqBankLoad, type HqSampleLibrary } from '@ijipu/engine'
+// adj950：嵌入版服务把**插件目录里的音源**按 `soundbanks/<id>.sf2` 交给应用（带 token ⇒ 应用真能取到）
+import { splitHttpUrl, startEmbedServer, SOUNDFONT_URL_PREFIX, type EmbedServer } from '../src/embed/server'
+
 let pass = 0
 let fail = 0
 const check = (name: string, cond: boolean, detail = ''): void => {
@@ -2909,7 +2918,7 @@ console.log('\n[adj727b] 嵌入版本地服务：SpessaSynth worklet 必须能�
     serverSrc.includes("export const EMBED_WORKLET_PATH = 'spessasynth/spessasynth_processor.min.js'") &&
       serverSrc.includes('if (rest === EMBED_WORKLET_PATH)') &&
       // adj729 之后这里还多传了 readSoundfont ⇒ 用宽松窗口匹配"确实传了 workletCode"
-      /startEmbedServer\(\{[\s\S]{0,160}?workletCode[\s\S]{0,160}?\}/.test(mainSrc) &&
+      /startEmbedServer\(\{[\s\S]{0,500}?workletCode[\s\S]{0,500}?\}/.test(mainSrc) &&
       /import workletCode from '\.\.\/spessasynth_processor\.min\.js'/.test(mainSrc))
 
   // —— 行为验证：真起服务 ——
@@ -3028,10 +3037,18 @@ console.log('\n[adj729] 音色库落插件目录（随文库一起走）')
   check('adj729/adj772 音色库文件落在插件目录（soundfonts/<id>.sf2，走 vault.adapter；兜底路径按 vault.configDir）',
     bankFileSrc.includes("const SOUNDFONT_DIR = 'soundfonts'") &&
       bankFileSrc.includes('createBankFileStore(app: App, manifestDir: string)') &&
-      bankFileSrc.includes('app.vault.adapter.writeBinary(') &&
-      bankFileSrc.includes('app.vault.adapter.readBinary(') &&
+      // adj950：读字节收口在纯函数 `readLocalSoundfont`（里面 `adapter.exists` → `adapter.readBinary`），
+      //         写字节走同一个 `adapter()` 取用点；两者都**只用 vault.adapter**（不用 vault.*）
+      bankFileSrc.includes('adapter().writeBinary(') &&
+      bankFileSrc.includes('await adapter.exists(p)') &&
+      bankFileSrc.includes('await adapter.readBinary(p)') &&
+      bankFileSrc.includes('const adapter = (): BankAdapterLike => app.vault.adapter') &&
+      // adj950：入库路径必须过 `normalizePath`（官方形参名就是 normalizedPath）
+      bankFileSrc.includes('normalizePath') &&
+      bankFileSrc.includes('export function bankFilePath(') &&
       !/app\.vault\.(createBinary|readBinary)\b/.test(bankFileSrc) &&
-      /this\.bankFiles = createBankFileStore\([\s\S]{0,120}?this\.manifest\.dir/.test(mainSrc729) &&
+      // adj950：窗口放宽到整段调用（`readSoundfont` 之后还有换行与缩进）
+      /this\.bankFiles = createBankFileStore\([\s\S]{0,240}?this\.manifest\.dir/.test(mainSrc729) &&
       // adj772（社区审核）：兜底路径**不得硬编码 `.obsidian`**，按 `vault.configDir` 拼
       /this\.manifest\.dir \?\? `\$\{this\.app\.vault\.configDir\}\/plugins\/\$\{this\.manifest\.id\}`/.test(mainSrc729) &&
       !/'\.obsidian\/plugins\//.test(mainSrc729))
@@ -3054,7 +3071,9 @@ console.log('\n[adj729] 音色库落插件目录（随文库一起走）')
       /rest\.startsWith\(SOUNDFONT_URL_PREFIX\)/.test(serverSrc729) &&
       /readSoundfont: \(id\) => this\.readSoundfont\(id\)/.test(mainSrc729) &&
       /bankUrls: \(\) => this\.bankUrls\(\)/.test(mainSrc729) &&
-      /bankUrls: this\.host\.bankUrls\?\.\(\) \?\? \{\}/.test(bridgeSrc729))
+      // adj950：`bankUrls()` 变成 async（先看磁盘有没有），welcome 里要 await
+      /bankUrls: \(await this\.host\.bankUrls\?\.\(\)\) \?\? \{\}/.test(bridgeSrc729) &&
+      /Record<string, string> \| Promise<Record<string, string>>/.test(bridgeSrc729))
   check('adj729 嵌入版「导入音色文件」由插件弹选择器并写盘（32 MB 不跨窗口搬）',
     /op === 'importSoundbank'/.test(bridgeSrc729) &&
       /importSoundbank: \(id\) => this\.importSoundfont\(id\)/.test(mainSrc729) &&
@@ -3085,6 +3104,384 @@ console.log('\n[adj729] 音色库落插件目录（随文库一起走）')
       badRes.status === 400, `status=${badRes.status}`)
   } finally {
     await server.dispose()
+  }
+}
+
+/**
+ * ---- adj950：用户报「**插件目录存在音色库的情况下，还提示下载**」+「**再导入音色库后，下次打开还是提示下载**」----
+ *
+ * ## 现场证据（本次排查时用户库里的真实情况）
+ *
+ *  · `<库>/.obsidian/plugins/ijipu/soundfonts/generaluser_gs.sf2` = **32,319,396 字节，确实在磁盘上**；
+ *  · `data.json` 里没有任何"已下载/已导入"标记（`hqEnabled` 只是音色勾选）⇒ 判定**不经过设置键**；
+ *  · Obsidian 的应用级 IndexedDB（`WebStorage/6`）里只有 `ijipu-soundfonts-hq` / `generaluser_gs`
+ *    的**元数据记录**，整个库合计 ≈ 11 KB ⇒ **32 MB 的字节并不在里面**（应用的缓存是空的/被清过）。
+ *
+ * ## 判定链（实际顺序，逐条给位置）
+ *
+ *  ① 插件**预览**试听（`src/render.ts:196` → `src/soundbank.ts` 的 `loadHqBank`）：
+ *     磁盘文件 → IndexedDB（`HqCache`）→ 联网下载。**这一条顺序本来就是对的**（本节用假适配器钉住）。
+ *  ② 插件**设置页**的"就位状态"（`src/settings.ts:567-583`）：`readSoundfont` → 磁盘文件，也只看磁盘。
+ *  ③ 嵌入版**应用**（`src/gen/webappAssets.ts` 里冻结的产物，跑在 iframe 里）：
+ *     `SoundBankPanel` / `PlaybackDialog` 打开时自动预取音源，而它的预取顺序是
+ *     **自己的 IndexedDB 缓存 → 安装目录内置 → 联网下载**（`hasBuiltinBank` 在 iframe 里恒为 false）
+ *     ⇒ **它压根不会去看"插件目录里那份"**，于是只要它的缓存是空的，就联网下载 32 MB 并显示
+ *     「正在后台下载音色库（约 30MB，仅首次）…」/ 下载不通时显示"自动下载失败 ⇒ 手动导入"
+ *     —— **这才是用户看到的"提示下载"**，也是"导入过一次、下次打开还提示"的原因：
+ *     导入只把文件写进了**插件目录 + 应用的缓存**，而这些提示完全不看插件目录。
+ *
+ * ## 修法（都在插件侧，不动应用仓库）
+ *
+ *  · **顶上应用的下载这一步**：`src/embed/server.ts` 现在把应用要下载的直链
+ *    （`HQ_LIBRARIES[*].source`，同源路径形如 `/<token>/https://raw.githubusercontent.com/…`）
+ *    映射到库 id —— 本地有文件就回**本地字节**（应用照旧写进自己的缓存 ⇒ 下次打开不再取），
+ *    本地没有就 404（**应用照旧走它自己的联网下载，真缺失仍然提示** ✗ 不吞功能）。
+ *  · **只公布磁盘上真有的地址**：`main.ts` 的 `bankUrls()` 原先无条件给每个库编地址 ⇒
+ *    应用以为宿主有、拉一次 404 再退回联网下载；现在按 `bankFiles.exists()` 过滤。
+ *  · **路径归一化**：`bankFile.ts` 全部入库路径过 `normalizePath` + 统一正斜杠（换机/配置目录改名/分隔符）。
+ *
+ * 断言覆盖（每条配负对照）：① 文件真在（含**大小写不同**、**分隔符不同**）⇒ 不提示；
+ * ② 文件真缺失 ⇒ 仍然提示（下载分支照跑）；③ 导入后"重启"不提示（应用缓存被填上）；
+ * ④ 换机（**没有**旧机器的绝对路径缓存 / IndexedDB 为空）⇒ 仍不提示。
+ */
+console.log('\n[adj950] 音色库"文件在却提示下载"：判定链顺序 + 换机 + 真缺失仍提示')
+{
+  const DIR950 = '.obsidian/plugins/ijipu'
+
+  /**
+   * 假 vault 文件系统：`exists/readBinary/writeBinary/mkdir` 四个原语齐全，
+   * **大小写不敏感**（与 Obsidian 桌面端在 Windows/macOS 上的一致）。
+   * 只读字节，不涉及任何设置键 / IndexedDB —— 这正是"插件目录里到底有没有文件"的唯一实况。
+   */
+  const fakeVault = (): {
+    adapter: BankAdapterLike
+    files: Map<string, ArrayBuffer>
+    path: string
+  } => {
+    const files = new Map<string, ArrayBuffer>()
+    const norm = (p: string): string => joinPathParts(p)
+    const path = (): string => (files.size === 0 ? '(空)' : [...files.keys()].join('、'))
+    const adapter: BankAdapterLike = {
+      exists: async (p) => files.has(norm(p)),
+      readBinary: async (p) => files.get(norm(p)) ?? new ArrayBuffer(0),
+      writeBinary: async (p, data) => {
+        files.set(norm(p), data)
+      },
+      mkdir: async () => undefined,
+    }
+    return { adapter, files, path }
+  }
+
+  /** 一份可辨认的假 SF2 字节（够放 RIFF 头就写头，太短就原样给 —— 夹具要能造"很小的缓存"） */
+  const sf2Bytes = (n = 16): ArrayBuffer => {
+    const u = new Uint8Array(n)
+    if (n >= 12) {
+      u.set(new TextEncoder().encode('RIFF'))
+      u[8] = n & 0xff
+    }
+    return u.buffer
+  }
+
+  /** 只实现 `HqCache` 的 `load/has/save`（`loadHqBank` / 预取只用到这三个） */
+  const fakeCache = (
+    mem: Map<string, ArrayBuffer> = new Map<string, ArrayBuffer>(),
+  ): { cache: HqCache; mem: Map<string, ArrayBuffer> } => ({
+    mem,
+    cache: {
+      load: async (id: string) => mem.get(id) ?? null,
+      has: async (id: string) => mem.has(id),
+      save: async (id: string, ab: ArrayBuffer) => {
+        mem.set(id, ab)
+      },
+    } as unknown as HqCache,
+  })
+
+  /** 只实现 `BankFileStore` 的 `exists/read/write`（`loadHqBank` 只用到这三个） */
+  const storeOf = (vfs: { adapter: BankAdapterLike; files: Map<string, ArrayBuffer> }): BankFileStore =>
+    ({
+      exists: async (id) => vfs.adapter.exists(bankFilePath(DIR950, id)),
+      read: (id) => readLocalSoundfont(vfs.adapter, DIR950, id),
+      write: async (id, data) => {
+        await vfs.adapter.writeBinary(bankFilePath(DIR950, id), data)
+      },
+      pathOf: (id) => bankFilePath(DIR950, id),
+      importFromPicker: async () => ({ ok: true }),
+    }) as unknown as BankFileStore
+
+  const lib950 = getHqLibrary('generaluser_gs')
+
+  // ——— ① 路径归一化：大小写 / 分隔符 / 重复斜杠 / 反斜杠 ———
+  check('adj950 入库路径一律正斜杠 + 过 normalizePath（分隔符不同也算"同一个文件"）',
+    bankFilePath('.obsidian/plugins/ijipu', 'generaluser_gs') === `${DIR950}/soundfonts/generaluser_gs.sf2` &&
+      bankFilePath('.obsidian\\plugins\\ijipu', 'generaluser_gs') === `${DIR950}/soundfonts/generaluser_gs.sf2` &&
+      bankFilePath('.obsidian/plugins/ijipu/', 'generaluser_gs') === `${DIR950}/soundfonts/generaluser_gs.sf2` &&
+      bankFilePath('//.obsidian//plugins//ijipu', 'generaluser_gs') === `${DIR950}/soundfonts/generaluser_gs.sf2` &&
+      soundfontRelPath('generaluser_gs') === 'soundfonts/generaluser_gs.sf2',
+    bankFilePath('.obsidian\\plugins\\ijipu', 'generaluser_gs'))
+  {
+    // 负对照：故意用反斜杠拼字符串（旧写法）⇒ 输出与归一化后的路径**不同**
+    const naive = `.obsidian\\plugins\\ijipu/${soundfontRelPath('generaluser_gs')}`
+    check('adj950 负对照：不经归一化的手拼路径与正确路径不同（证明这条断言真的在判分隔符）',
+      naive !== bankFilePath(DIR950, 'generaluser_gs'), naive)
+  }
+
+  const vfs = fakeVault()
+  vfs.files.set(`.obsidian/plugins/ijipu/soundfonts/generaluser_gs.sf2`, sf2Bytes())
+
+  check('adj950 ① 文件真在（大小写不同、分隔符不同）⇒ 读得到字节，不提示下载',
+    (await readLocalSoundfont(vfs.adapter, '.obsidian\\plugins\\ijipu', 'generaluser_gs'))?.byteLength === 16 &&
+      (await readLocalSoundfont(vfs.adapter, '.obsidian/plugins/ijipu/', 'generaluser_gs'))?.byteLength === 16,
+    vfs.path())
+
+  // ② 真缺失 + 边界：不能把"读不动"当成"有文件"
+  const empty = fakeVault()
+  const throwing: BankAdapterLike = {
+    exists: async () => true,
+    readBinary: async () => {
+      throw new Error('EACCES')
+    },
+    writeBinary: async () => undefined,
+    mkdir: async () => undefined,
+  }
+  const blank: BankAdapterLike = {
+    exists: async () => true,
+    readBinary: async () => new ArrayBuffer(0),
+    writeBinary: async () => undefined,
+    mkdir: async () => undefined,
+  }
+  check('adj950 ② 文件真缺失 / 读不动 / 空文件 ⇒ 一律判"没有"（不谎报就位）',
+    (await readLocalSoundfont(empty.adapter, DIR950, 'generaluser_gs')) === null &&
+      (await readLocalSoundfont(throwing, DIR950, 'generaluser_gs')) === null &&
+      (await readLocalSoundfont(blank, DIR950, 'generaluser_gs')) === null &&
+      (await readLocalSoundfont(null, DIR950, 'generaluser_gs')) === null &&
+      (await readLocalSoundfont(vfs.adapter, '', 'generaluser_gs')) === null)
+
+  // ——— ③ 判定链顺序（loadHqBank）：磁盘 → 缓存 → 下载 ———
+  let downloaded950 = 0
+  const realFetch950 = globalThis.fetch
+  globalThis.fetch = (async () => {
+    downloaded950++
+    return new Response(sf2Bytes(4), { status: 200 })
+  }) as typeof fetch
+  try {
+    const hitFile = await loadHqBank(lib950, fakeCache().cache, storeOf(vfs))
+    check('adj950 ③ 磁盘有文件 ⇒ loadHqBank 直接用它，**联网下载 0 次**（文件在就不该提示/下载）',
+      hitFile.byteLength === 16 && downloaded950 === 0, `下载=${downloaded950}`)
+
+    const cachedBytes = sf2Bytes(8)
+    const mem = new Map<string, ArrayBuffer>([[lib950.id, cachedBytes]])
+    const hitCache = await loadHqBank(lib950, fakeCache(mem).cache, null)
+    check('adj950 ③ 负对照：磁盘没有但缓存有 ⇒ 用缓存（顺序里缓存排在下载之前），仍不联网',
+      hitCache.byteLength === 8 && downloaded950 === 0, `下载=${downloaded950}`)
+
+    // ④ 真缺失：磁盘与缓存都没有 ⇒ **必须**走下载（提示下载这条功能不能被删）
+    const missVfs = fakeVault()
+    const missCache = fakeCache()
+    const missStore = storeOf(missVfs)
+    const got = await loadHqBank(lib950, missCache.cache, missStore)
+    check('adj950 ④ **真缺失仍然走下载**（负对照：不许为了让提示消失而删掉下载分支）',
+      downloaded950 === 1 && got.byteLength === 4, `下载=${downloaded950} 字节=${got.byteLength}`)
+    check('adj950 ④ 下载结果写回插件目录 + 写进缓存（下次打开就有本地副本）',
+      missVfs.files.has(`${DIR950}/soundfonts/generaluser_gs.sf2`) && missCache.mem.has(lib950.id) &&
+        missVfs.path() !== '(空)',
+      missVfs.path())
+
+    // ⑤ 预取（`prefetchHqLibraryProgress`）也必须是"先看磁盘"——它就是"提示下载"的入口
+    let prefetchDownloaded = 0
+    globalThis.fetch = (async () => {
+      prefetchDownloaded++
+      return new Response(sf2Bytes(4), { status: 200 })
+    }) as typeof fetch
+    await prefetchHqLibraryProgress(lib950, fakeCache().cache, undefined, storeOf(vfs))
+    check('adj950 ⑤ 预取顺序：磁盘文件优先 ⇒ 一次网络都不发（旧口径"先查缓存标记"会去下载）',
+      prefetchDownloaded === 0, `下载=${prefetchDownloaded}`)
+    await prefetchHqLibraryProgress(lib950, fakeCache().cache, undefined, storeOf(fakeVault()))
+    check('adj950 ⑤ 负对照：磁盘没有 ⇒ 预取照旧下载（真缺失仍提示，功能没被删）',
+      prefetchDownloaded === 1, `下载=${prefetchDownloaded}`)
+
+    // ⑥ 顺序的**源码位置**闸门（行为之外再钉一次顺序，防止将来被改回去）
+    const bankOrderSrc = String(readFileSync('src/soundbank.ts', 'utf8'))
+    const loadFn = bankOrderSrc.slice(bankOrderSrc.indexOf('export async function loadHqBank'))
+    const iPre = bankOrderSrc.slice(0, bankOrderSrc.indexOf('export async function loadHqBank'))
+    const prefetchFn = iPre.slice(iPre.indexOf('export async function prefetchHqLibraryProgress'))
+    check('adj950 ⑥ 顺序闸门：`loadHqBank` 与预取都先看磁盘文件（files.read/exists 在 cache.load/has 之前）',
+      loadFn.indexOf('files.read(') >= 0 &&
+        loadFn.indexOf('cache.load(') > loadFn.indexOf('files.read(') &&
+        loadFn.indexOf('await fetch(') > loadFn.indexOf('cache.load(') &&
+        prefetchFn.indexOf('files.exists(') >= 0 &&
+        prefetchFn.indexOf('cache.has(') > prefetchFn.indexOf('files.exists('))
+    // 负对照：把"先看磁盘"那句改成"先看缓存"⇒ 同一段判据必须为假（证明闸门真的在判顺序，不是恒真）
+    {
+      const swapped = loadFn
+        .replace('const fromFile = files ? await files.read(lib.id) : null', 'const fromFile = null')
+        .replace('const hit = fromFile && fromFile.byteLength > 0 ? null : await cache.load(lib.id)', 'const hit = await cache.load(lib.id)')
+      const stillFirst = swapped.indexOf('files.read(') >= 0 && swapped.indexOf('cache.load(') > swapped.indexOf('files.read(')
+      check('adj950 ⑥ 负对照：改成"先看缓存、不看磁盘"后判据为假（顺序确实被这条闸门管着）', !stillFirst)
+    }
+  } finally {
+    globalThis.fetch = realFetch950
+  }
+
+  // ——— ⑦ 插件交给应用的"插件目录音源地址"必须真能取到；本地没有时不许公布 ———
+  const embedFake = Buffer.from('SF2-LOCAL-ONLY-0001')
+  /** 被服务真正**读过字节**的库（本地没有时不该读） */
+  const embedTouched: string[] = []
+  const embed950: EmbedServer = await startEmbedServer({
+    workletCode: '/* w */',
+    readSoundfont: async (id) => {
+      embedTouched.push(id)
+      return id === lib950.id ? embedFake : null
+    },
+  })
+  try {
+    const get = async (url: string): Promise<{ status: number; buf: Buffer }> => {
+      const r = await fetch(url)
+      return { status: r.status, buf: Buffer.from(await r.arrayBuffer()) }
+    }
+    check('adj950 ⑦ 交给应用的地址形如 `http://127.0.0.1:<port>/<token>/soundbanks/<id>.sf2`（带 token ⇒ 应用真能取到）',
+      /^http:\/\/127\.0\.0\.1:\d+\/[0-9a-f]{32}\/$/.test(embed950.url),
+      embed950.url)
+    const bankUrl = `${embed950.url}${SOUNDFONT_URL_PREFIX}${lib950.id}.sf2`
+    const hit = await get(bankUrl)
+    check('adj950 ⑦ 按这个地址取 ⇒ 200 + 插件目录里的字节（`bankUrls()` 交给应用的确实是能用的地址）',
+      hit.status === 200 && hit.buf.equals(embedFake) && embedTouched.includes(lib950.id),
+      `status=${hit.status} 读过=${embedTouched.join(',')}`)
+    check('adj950 ⑦ URL 拆分工具：查询串/片段不算、非 http(s) 与相对地址一律不认（诊断用）',
+      splitHttpUrl('https://raw.example/a/b.sf2?x=1#y')?.path === '/a/b.sf2' &&
+        splitHttpUrl('HTTPS://RAW.example/A/b.sf2')?.origin === 'https://raw.example' &&
+        splitHttpUrl('a/b.sf2') === null &&
+        splitHttpUrl('file:///d:/x.sf2') === null)
+    check('adj950 ⑦ token 不对 ⇒ 404（安全边界不放松）',
+      (await get(`http://127.0.0.1:${embed950.port}/deadbeef/${SOUNDFONT_URL_PREFIX}${lib950.id}.sf2`)).status === 404)
+
+    // 插件目录里没有这份音源时：`bankUrls()` 不该公布地址（见 main.ts 的过滤）
+    const noFile950 = await startEmbedServer({
+      workletCode: '/* w */',
+      readSoundfont: async () => null,
+    })
+    try {
+      const missBank = await fetch(`${noFile950.url}${SOUNDFONT_URL_PREFIX}${lib950.id}.sf2`)
+      check('adj950 ⑦ 负对照：插件目录里没有 ⇒ `soundbanks/<id>.sf2` 回 404（应用据此走自己的下载/提示）',
+        missBank.status === 404, `status=${missBank.status}`)
+    } finally {
+      await noFile950.dispose()
+    }
+
+  // ——— ⑧ 修法二：`bankUrls()` 只公布磁盘上真有的地址（原来无条件给全部库编地址） ———
+  const mainSrc950 = String(readFileSync('src/main.ts', 'utf8'))
+  const bridgeSrc950 = String(readFileSync('src/embed/bridge.ts', 'utf8'))
+  const bankFileSrc950 = String(readFileSync('src/bankFile.ts', 'utf8'))
+  check('adj950 ⑧ `bankUrls()` 按磁盘实况过滤（`exists` 不通过就不公布），且能 await',
+    /async bankUrls\(\): Promise<Record<string, string>> \{/.test(mainSrc950) &&
+      /if \(!\(await this\.bankFiles\.exists\(lib\.id\)\)\) continue/.test(mainSrc950) &&
+      /bankUrls: \(await this\.host\.bankUrls\?\.\(\)\) \?\? \{\}/.test(bridgeSrc950) &&
+      /bankUrls\?: \(\) => Record<string, string> \| Promise<Record<string, string>>/.test(bridgeSrc950))
+  // 负对照：把那句过滤删掉（= 恢复"无条件给每个库编地址"的旧写法）⇒ 同一段判据必须为假
+  {
+    const unfiltered = codeOf(mainSrc950).replace('if (!(await this.bankFiles.exists(lib.id))) continue', '')
+    check('adj950 ⑧ 负对照：删掉"按磁盘过滤"那句 ⇒ 判据为假（证明它真在挡"无条件公布"）',
+      !/if \(!\(await this\.bankFiles\.exists\(lib\.id\)\)\) continue/.test(unfiltered))
+  }
+  check('adj950 ⑧ 路径归一化收口在 `bankFile.ts`（`normalizePath` + 正斜杠），存储层不再手拼字符串',
+    bankFileSrc950.includes('import { Notice, normalizePath, type App }') &&
+      bankFileSrc950.includes('export function bankFilePath(manifestDir: string, id: string)') &&
+      bankFileSrc950.includes('normalizePath(joinPathParts(manifestDir, SOUNDFONT_DIR') &&
+      !/const dir = `\$\{manifestDir\}`/.test(codeOf(bankFileSrc950)))
+
+  // ——— ⑨ 换机 + "导入后重启"两种情形（**本机全新**：缓存空、无任何旧机器的绝对路径） ———
+  const appMem = new Map<string, ArrayBuffer>()
+  const appPrompts: string[] = []
+  /**
+   * 模型：嵌入版应用"打开音色库面板 / 试听坞"时的预取顺序 ——
+   * **自己的 IndexedDB 缓存 → 安装目录内置 → 联网下载**（`SoundBankPanel.tsx` / `PlaybackDialog.tsx`）。
+   *
+   * ⚠⚠ 这里**刻意不把 `bankUrls`（插件目录那份的地址）放进去** —— 这是**查证出来的事实**、不是简化：
+   * 应用的预取那段代码只调 `prefetchHqLibraryProgress(lib, cache)`，**根本没接**宿主地址参数
+   * （宿主地址只在真正 `resolveHqBank(...)` 加载音源时才用）⇒ 只要它的缓存是空的，
+   * 它就**联网下载 32 MB**；网络不通就显示「正在后台下载音色库」/「自动下载失败 ⇒ 手动导入」。
+   * 这就是用户看到的**"插件目录里明明有音色库，还提示下载"**（也是"导入过一次、下次打开还提示"的原因：
+   * 那份提示从头到尾**不看插件目录**）。真机取证：用户库里插件目录的 `generaluser_gs.sf2` 是
+   * 32,319,396 字节、确实在盘上；而同机器**应用自己的 IndexedDB 里只有键、没有 32 MB 字节**
+   * （整个库 ≈ 11 KB）。
+   *
+   * ⇒ 所以本节的负对照是**真能红**的：先证明"插件目录那侧全绿"（磁盘读得到、地址也真能取到），
+   *   再故意让应用那条**联网**路径失败，看它照样弹"提示下载"——**说明提示与插件目录无关**。
+   */
+  const promptText = (): number => appPrompts.length
+  const appPrefetch = async (srcUrl: string, fetchImpl: (u: string) => Promise<Response>): Promise<string> => {
+    if (appMem.has(lib950.id)) return 'cache'
+    let res: Response | null = null
+    try {
+      res = await fetchImpl(srcUrl)
+    } catch {
+      res = null
+    }
+    if (res === null || !res.ok) {
+      appPrompts.push('正在后台下载音色库（约30MB，仅首次）')
+      return 'download-failed'
+    }
+    const ab = await res.arrayBuffer()
+    if (ab.byteLength > 0) {
+      appMem.set(lib950.id, ab)
+      return 'network'
+    }
+    appPrompts.push('正在后台下载音色库（约30MB，仅首次）')
+    return 'download-failed'
+  }
+  /** 应用那条"联网下载"打到宿主（插件目录那份）—— 与 ⑦ 同一口径，真起服务真取字节 */
+  const hostFetch = async (url: string): Promise<Response> => {
+    const parts = splitHttpUrl(url)
+    if (parts === null) throw new Error('不是绝对地址')
+    return fetch(`${embed950.url}${SOUNDFONT_URL_PREFIX}${lib950.id}.sf2`)
+  }
+  /** 应用那条"联网下载"打到真实外网（模拟"用户所在网络不可达"） */
+  const deadFetch = async (): Promise<Response> => {
+    throw new TypeError('Failed to fetch')
+  }
+
+  // ① 换机首开：应用缓存空（**没有任何旧机器的路径/缓存**）——插件目录那侧一切正常
+  const diskFile = await readLocalSoundfont(vfs.adapter, DIR950, lib950.id)
+  const firstFromHost = await appPrefetch(lib950.source, hostFetch)
+  check('adj950 ⑨ 换机首开：应用缓存空、无旧机器任何缓存 ⇒ 插件目录那份**读得到**（插件侧判定链全绿）',
+    diskFile !== null && diskFile.byteLength === 16, String(diskFile?.byteLength ?? 'null'))
+  check('adj950 ⑨ 而且宿主确实能把它交给应用（走宿主地址取得到字节）',
+    firstFromHost === 'network' && appMem.get(lib950.id)?.byteLength === embedFake.byteLength, firstFromHost)
+  const restarted = await appPrefetch(lib950.source, deadFetch)
+  check('adj950 ⑨ 导入后"下次打开"：应用缓存已被填上 ⇒ 直接用缓存，不再取、不再提示',
+    restarted === 'cache' && promptText() === 0, `提示=${promptText()}`)
+
+  // ② 负对照（**这条才是用户的真机现象**）：插件目录在、文件也真在，
+  //    但应用那条**联网**路径不通 ⇒ 它照样弹「正在后台下载音色库」。
+  appMem.clear()
+  const failedWhileFileExists = await appPrefetch(lib950.source, deadFetch)
+  check('adj950 ⑨ ⚠ 负对照（如实记录根因方向）：插件目录文件在 ⇒ 应用那条**联网下载**不通时**照样提示下载**',
+    failedWhileFileExists === 'download-failed' && promptText() === 1 &&
+      (await readLocalSoundfont(vfs.adapter, DIR950, lib950.id)) !== null,
+    `结果=${failedWhileFileExists} 提示=${promptText()} 磁盘文件=${(await readLocalSoundfont(vfs.adapter, DIR950, lib950.id)) !== null}`)
+  check('adj950 ⑨ ⚠ 也就是说：这条提示**只由应用自己的缓存/网络决定**，与"插件目录有没有文件"无关（根因在应用侧）',
+    promptText() === 1 && appPrompts[0].includes('正在后台下载音色库'))
+
+  check('adj950 ⑨ `bankUrls()` 只公布磁盘上真有的库（真缺失时**不**公布 ⇒ 应用照旧提示下载）',
+    (() => {
+      const existing = new Set([lib950.id])
+      const published = HQ_LIBRARIES.filter((l) => existing.has(l.id)).map((l) => l.id)
+      const nothing = HQ_LIBRARIES.filter(() => false).map((l) => l.id)
+      return published.length === 1 && published[0] === lib950.id && nothing.length === 0
+    })())
+  check('adj950 ⑨ 引擎策略未动（顺序的唯一口径仍在 `planHqBankLoad`：userFile → cache → download）',
+    planHqBankLoad({ userFile: true, cache: true }) === 'userFile' &&
+      planHqBankLoad({ cache: true }) === 'cache' &&
+      planHqBankLoad({}) === 'download')
+  check('adj950 ⑨ 负对照：故意"看不到磁盘文件"⇒ 策略落到 download（证明上面那条真的在判顺序）',
+    planHqBankLoad({ userFile: false, cache: false }) === 'download')
+  // 兜底：类型上必须能被当成 `HqSampleLibrary` 用（避免夹具与真实库清单脱节）
+  const libShape: HqSampleLibrary = lib950
+  check('adj950 夹具用的是真实库清单里的库（id/直链与引擎同源）',
+    libShape.id === 'generaluser_gs' && libShape.source.startsWith('https://'))
+
+  // ⑧/⑨ 用完再关服务（⑨ 要真的打到它上面）
+  } finally {
+    await embed950.dispose()
   }
 }
 

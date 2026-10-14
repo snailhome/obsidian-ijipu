@@ -2039,13 +2039,24 @@ export default class IJipuPlugin extends Plugin {
     return this.bankFiles?.pathOf(id) ?? ''
   }
 
-  /** adj729：把服务端的音源 URL 交给嵌入版应用（见 `BridgeHost.bankUrls`） */
-  bankUrls(): Record<string, string> {
+  /**
+   * adj729/adj950：把服务端的音源 URL 交给嵌入版应用（见 `BridgeHost.bankUrls`）。
+   *
+   * adj950（用户报「**插件目录存在音色库的情况下，还提示下载**」）：
+   * 这里原来**无条件**给每个库都编一条 URL ⇒ 应用拿到"有这份音源"的假消息，
+   * 拉一次 404 再退回自己的联网下载（网络不通就弹"自动下载失败 / 正在下载音色库"）。
+   * 现在**只公布插件目录里真有的那几份**（`bankFiles.exists` 就是磁盘实况，
+   * 不看设置键、不看缓存标记）——应用据此拿到"宿主真能供"的地址，
+   * 拉不到就不会去联网，真缺失时照旧走它自己的下载与提示。
+   */
+  async bankUrls(): Promise<Record<string, string>> {
     const base = this.embedServer?.url
-    if (!base) return {}
+    if (!base || !this.bankFiles) return {}
     const out: Record<string, string> = {}
-    // adj741：前缀来自按需加载的服务模块（桌面端已加载时才有真值；手机端恒走不到这里）
-    for (const lib of HQ_LIBRARIES) out[lib.id] = `${base}${this.soundfontPrefix}${lib.id}.sf2`
+    for (const lib of HQ_LIBRARIES) {
+      if (!(await this.bankFiles.exists(lib.id))) continue
+      out[lib.id] = `${base}${this.soundfontPrefix}${lib.id}.sf2`
+    }
     return out
   }
 

@@ -38,6 +38,18 @@ export class Modal {
 export class PluginSettingTab {
   constructor(..._args: unknown[]) {}
 }
+/**
+ * adj950：`src/bankFile.ts` 现在按官方口径把拼好的路径过一遍 `normalizePath`（形参名就是
+ * `normalizedPath`）。真实实现是"统一正斜杠 + 去重复/首尾斜杠 + 去 `.`"；这里给一个**同语义**的
+ * 最小替身，好让冒烟能直接断言 `bankFilePath()` 的输出（而不是只做源码文本匹配）。
+ */
+export function normalizePath(path: string): string {
+  const segs = String(path ?? '')
+    .replace(/\\/g, '/')
+    .split('/')
+    .filter((s) => s !== '' && s !== '.')
+  return segs.join('/')
+}
 export class Menu {}
 export class Events {
   trigger(..._args: unknown[]): void {}

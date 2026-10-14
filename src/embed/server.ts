@@ -106,6 +106,23 @@ export const EMBED_WORKLET_PATH = 'spessasynth/spessasynth_processor.min.js'
 export const SOUNDFONT_URL_PREFIX = 'soundbanks/'
 
 /**
+ * 把一个**绝对** `http(s)` 地址拆成"主机 + 路径"两段（查询串/片段丢弃）。
+ *
+ * 为什么需要它（adj950 排查留下的工具）：要断言"插件交给应用的音源地址"是**真能取到的**，
+ * 就得把绝对地址按"量"拆开比对；相对地址 / 非 http(s) 一律返回 null。
+ */
+export function splitHttpUrl(url: string | undefined): { origin: string; path: string } | null {
+  if (typeof url !== 'string' || url === '') return null
+  try {
+    const u = new URL(url)
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null
+    return { origin: u.origin, path: u.pathname }
+  } catch {
+    return null
+  }
+}
+
+/**
  * 启动服务。**幂等**：同一个插件实例只起一个（调用方负责缓存返回的 Promise）。
  *
  * 端口策略：先试 `PREFERRED_PORT`（让 origin 稳定 ⇒ 浏览器侧的 `localStorage` 得以延续），
@@ -118,7 +135,10 @@ export const SOUNDFONT_URL_PREFIX = 'soundbanks/'
  *   读不到返回 null（服务回 404，应用会退回它自己的缓存/下载路径）。
  */
 export async function startEmbedServer(
-  opts: { workletCode?: string; readSoundfont?: (id: string) => Promise<Buffer | null> } = {},
+  opts: {
+    workletCode?: string
+    readSoundfont?: (id: string) => Promise<Buffer | null>
+  } = {},
 ): Promise<EmbedServer> {
   // adj778：Node 模块改为**静态导入**（见文件头的说明：动态 import('node:http') 在渲染进程里
   // 会被当成浏览器模块请求 ⇒ 实测报 `Failed to fetch dynamically imported module: node:http`）。

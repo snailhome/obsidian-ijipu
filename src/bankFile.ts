@@ -22,10 +22,81 @@
  * 插件目录文件 → IndexedDB（老用户的存量缓存）→ 内置资源（桌面随包）→ 联网下载；
  * **下载或导入成功后写进插件目录**（同时留一份在 IndexedDB，作为降级读取路径）。
  */
-import { Notice, type App } from 'obsidian'
+import { Notice, normalizePath, type App } from 'obsidian'
 
-/** 音源文件在插件目录里的子目录名 */
+/**
+ * 音源文件在插件目录里的子目录名。
+ *
+ * adj950：这里以及下面所有拼给 `vault.adapter` 的路径，**一律先过 `normalizePath`**
+ * —— 官方 API 的形参名就是 `normalizedPath`（`obsidian.d.ts` 的 `DataAdapter.exists/readBinary/…`），
+ * 手拼的字符串在"库从别的机器拷过来 + 配置目录改过名 / manifest.dir 为空"这类情况下
+ * 可能与适配器的索引对不上 ⇒ `exists()` 返回 false ⇒ **文件明明在却判成缺失、又提示下载**。
+ */
 const SOUNDFONT_DIR = 'soundfonts'
+
+/**
+ * 音源文件在插件目录里的**相对**路径（`soundfonts/<id>.sf2`）。
+ *
+ * 只用于"跨平台逐字节一致"的断言与诊断显示（入库路径一律走 `bankFilePath`）。
+ */
+export function soundfontRelPath(id: string): string {
+  return `${SOUNDFONT_DIR}/${id}.sf2`
+}
+
+/**
+ * 拼接插件目录里音源文件的路径。
+ *
+ * 三件事，缺一样就会"文件在却判缺失"：
+ *  ① 统一正斜杠（`manifest.dir` / 用户填的配置目录在 Windows 上可能是反斜杠）；
+ *  ② 去掉重复/首尾多余的斜杠；
+ *  ③ 走 Obsidian 的 `normalizePath`。
+ */
+export function bankFilePath(manifestDir: string, id: string): string {
+  return normalizePath(joinPathParts(manifestDir, SOUNDFONT_DIR, `${id}.sf2`))
+}
+
+/** 把若干路径片段拼起来：统一正斜杠、丢空片段与 `.`、去掉首尾多余斜杠 */
+export function joinPathParts(...parts: string[]): string {
+  const segs: string[] = []
+  for (const raw of parts) {
+    for (const seg of String(raw ?? '').replace(/\\/g, '/').split('/')) {
+      if (seg === '' || seg === '.') continue
+      segs.push(seg)
+    }
+  }
+  return segs.join('/')
+}
+
+/**
+ * adj950：**"磁盘上文件真的在"就返回字节** —— 不看任何设置键、不看缓存标记。
+ *
+ * 为什么单独抽成纯函数（不入 `BankFileStore` 的闭包）：
+ * 判定链的顺序（磁盘文件 → IndexedDB → 下载）是本轮 bug 的核心，
+ * 它必须能在冒烟里用**假适配器**逐条跑（存在 / 大小写不同 / 分隔符不同 / 真缺失 / 读不动）。
+ */
+export async function readLocalSoundfont(
+  adapter: BankAdapterLike | null | undefined,
+  dir: string,
+  id: string,
+): Promise<ArrayBuffer | null> {
+  if (!adapter || dir === '') return null
+  const p = bankFilePath(dir, id)
+  try {
+    if (!(await adapter.exists(p))) return null
+    const ab = await adapter.readBinary(p)
+    return ab && ab.byteLength > 0 ? ab : null
+  } catch {
+    return null
+  }
+}
+
+/** `readLocalSoundfont` / 存储层只用到这几个原语（便于冒烟用假适配器） */
+export interface BankAdapterLike {
+  exists(path: string): Promise<boolean>
+  readBinary(path: string): Promise<ArrayBuffer>
+  writeBinary(path: string, data: ArrayBuffer): Promise<void>
+  mkdir(path: string): Promise<void>
+}
 
 /** 音源文件存储（插件目录）——`soundbank.ts` 只依赖这个接口，不依赖 Obsidian */
 export interface BankFileStore {
@@ -51,35 +122,35 @@ export interface BankFileStore {
 
 /** 用 Obsidian 的 `vault.adapter` 实现（`manifestDir` = 插件目录，如 `.obsidian/plugins/ijipu`） */
 export function createBankFileStore(app: App, manifestDir: string): BankFileStore {
-  const dir = `${manifestDir}/${SOUNDFONT_DIR}`
-  const pathOf = (id: string): string => `${dir}/${id}.sf2`
+  /**
+   * adj950：`dir` 存**归一化后**的插件目录（见 `bankFilePath` 的说明）；
+   * 每次取路径都现算 —— `normalizePath` 很便宜，而"捕获成常量"正是上一版漏掉归一化的地方。
+   */
+  const dir = normalizePath(joinPathParts(manifestDir))
+  const adapter = (): BankAdapterLike => app.vault.adapter as unknown as BankAdapterLike
+  const pathOf = (id: string): string => bankFilePath(dir, id)
 
   const ensureDir = async (): Promise<void> => {
-    const adapter = app.vault.adapter
-    if (!(await adapter.exists(dir))) await adapter.mkdir(dir)
+    if (dir === '') return
+    if (!(await adapter().exists(dir))) await adapter().mkdir(dir)
   }
 
   return {
     pathOf,
     async exists(id) {
+      // 只看文件在不在（`exists` 不读字节 —— 32 MB 不该为了"看一眼"读进来）
       try {
-        return await app.vault.adapter.exists(pathOf(id))
+        return await adapter().exists(pathOf(id))
       } catch {
         return false
       }
     },
     async read(id) {
-      try {
-        const p = pathOf(id)
-        if (!(await app.vault.adapter.exists(p))) return null
-        return await app.vault.adapter.readBinary(p)
-      } catch {
-        return null
-      }
+      return readLocalSoundfont(adapter(), dir, id)
     },
     async write(id, data) {
       await ensureDir()
-      await app.vault.adapter.writeBinary(pathOf(id), data)
+      await adapter().writeBinary(pathOf(id), data)
     },
     importFromPicker(id) {
       return new Promise((resolve) => {
@@ -104,7 +175,7 @@ export function createBankFileStore(app: App, manifestDir: string): BankFileStor
             .then(async (ab) => {
               try {
                 await ensureDir()
-                await app.vault.adapter.writeBinary(pathOf(id), ab)
+                await adapter().writeBinary(pathOf(id), ab)
                 new Notice(`已导入音色数据 → ${file.name}（已保存到插件目录，随文库一起走）`, 5000)
                 finish({ ok: true })
               } catch (e) {
