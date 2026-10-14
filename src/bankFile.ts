@@ -71,7 +71,7 @@ export function joinPathParts(...parts: string[]): string {
  * adj950：**"磁盘上文件真的在"就返回字节** —— 不看任何设置键、不看缓存标记。
  *
  * 为什么单独抽成纯函数（不入 `BankFileStore` 的闭包）：
- * 判定链的顺序（磁盘文件 → IndexedDB → 下载）是本轮 bug 的核心，
+ * 判定链的顺序（磁盘文件 → IndexedDB → 下载）与"文件在却判缺失"是本轮问题的核心，
  * 它必须能在冒烟里用**假适配器**逐条跑（存在 / 大小写不同 / 分隔符不同 / 真缺失 / 读不动）。
  */
 export async function readLocalSoundfont(
