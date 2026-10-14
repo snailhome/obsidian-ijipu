@@ -266,11 +266,65 @@ let paneSeq = 0
  * 判据成立、直接移除 ✓；而"点编辑的那一刻"记账那套要跟视图切换的时序赛跑，不如这条稳。
  */
 const livePanes = new Map<number, HTMLElement>()
-export function sweepOrphanBodyToolbars(): void {
+/**
+ * adj952（**本轮实测出来的真凶**）：上面那条判据里"**它的容器已经不在文档里**"要加宽限期 ✗➜✓。
+ *
+ * 用户报：「嵌入块、编辑模式下点击嵌入块预览区，**显示一下工具条，马上又消失**」「每点一次都闪一下」。
+ *
+ * 判定链（`scripts/toolbarDomProbe.ts` 的无头浏览器夹具里量到的，见冒烟 adj952）：
+ *  ① 点击预览区 ⇒ `onContainerClick` ⇒ 工具条 `is-revealed` + **搬到 `document.body`**（外侧落位）；
+ *  ② 实时预览里宿主**同一瞬间在重建这块 widget** —— 我们的容器**短暂脱离文档**
+ *     （`embed.ts` 里就写着这个事实："block widget 就是先在脱离文档的容器里跑完 post-processors，
+ *      再由 CodeMirror 插进文档"）；
+ *  ③ 而"脱离文档"这一刻，`owner.isConnected === false` ⇒ **本函数判定它是孤儿、把它从 body 上删掉** ✗✗；
+ *  ④ 观感 = 工具条出现一帧、随即消失；`toolbarShown` 还是 true ⇒ **下一次点击走"隐藏"分支（屏幕上没变化）**，
+ *     再下一次才又显示 ⇒ 用户说的"**每点一次都闪一下**" ✓✓。
+ * 阅读模式没有"宿主重建 widget"这一步 ⇒ 同样的点击不闪（这正是用户只报编辑模式的原因 ✓）。
+ *
+ * ⇒ 只有**连续脱离文档超过 `ORPHAN_GRACE_MS`** 才当成真孤儿移除；`destroy()` 正常跑到时走上面
+ * 第一条（id 已从 `livePanes` 里删掉）⇒ **立刻**移除，不拖延（adj794f 那条兜底不受影响）。
+ */
+const ORPHAN_GRACE_MS = 1500
+/** 面板 id → **第一次看到它脱离文档**的时刻（adj952：给宿主的重建留出宽限期） */
+const detachedSince = new Map<number, number>()
+/**
+ * 清掉 `document.body` 上**没人认领**的工具条（外侧落位时它们被挂在那儿，见 adj793c/adj794e/adj794f）。
+ *
+ * @param force `true` = **不许等宽限期**，现在就把"容器已不在文档里"的那条移除。
+ *   只有"用户主动离开这份笔记"的场景该用它（`main.ts` 打开 `.jps` 前那一次检查，见 adj905z 之二）——
+ *   那时承载嵌入块的页签必然被换掉，容器**真的**回不来了 ⇒ 等宽限期纯属拖延。
+ *   常规调用（挂载、每次摆到外侧）一律用缺省值：**宿主重建 widget 的一瞬容器也会脱离文档**，
+ *   那时若按孤儿清掉，用户点开的工具条就被我们自己删了（adj952 的真凶）。
+ */
+export function sweepOrphanBodyToolbars(force = false): void {
+  const now = Date.now()
   for (const el of Array.from(document.body.querySelectorAll<HTMLElement>('.ijipu-score-toolbar[data-ijipu-pane]'))) {
     const id = Number(el.dataset.ijipuPane)
     const owner = Number.isFinite(id) ? livePanes.get(id) : undefined
-    if (!owner || !owner.isConnected) el.remove()
+    if (!owner) {
+      // `destroy()` 已经跑过（它自己也摘一条，这里是兜底）⇒ 立刻移除
+      detachedSince.delete(id)
+      el.remove()
+      continue
+    }
+    if (owner.isConnected) {
+      detachedSince.delete(id)
+      continue
+    }
+    if (force) {
+      detachedSince.delete(id)
+      el.remove()
+      continue
+    }
+    const since = detachedSince.get(id)
+    if (since === undefined) {
+      // 第一次看到它脱离文档：先登记，**不**当孤儿（宿主可能马上把它插回去）
+      detachedSince.set(id, now)
+      continue
+    }
+    if (now - since < ORPHAN_GRACE_MS) continue
+    detachedSince.delete(id)
+    el.remove()
   }
 }
 
@@ -323,6 +377,29 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
    * 记下来是为了 `destroy()` 时能原样摘掉，不去动别的插件/别的块。
    */
   let hostWidgetEl: HTMLElement | null = null
+
+  /**
+   * adj952（用户报「嵌入块、编辑模式下点预览区，工具条显示一下又马上消失」）——
+   * **`paint()` 的"代"**：`paint()` 从第 631 行一直到本函数末尾，**工具条元素、全部按钮、
+   * 全部监听器与全部交互状态（`toolbarShown` / `toolbarPinned` / `hiddenByViewport`）都在它里面**
+   * ⇒ 每重画一次就**重建一整套闭包**，而旧的监听器**并没有被摘掉**（箭头函数每次都是新引用，
+   * `addEventListener` 会当成不同的监听器再加一个）✗。
+   *
+   * 两个后果，都要在这里挡掉：
+   *  · **旧一代的点击处理器**照样会被同一次点击触发 ⇒ 一次点击切换好几下（净效果取决于
+   *    各代状态是否同步）⇒ 正是用户说的「**每点一次都闪一下**」；
+   *  · 旧一代的 `focusout` / 3 秒定时器 / 滚动跟随监听会去收**新一代**的工具条 ✗。
+   *
+   * ⇒ 用 `paintGen` 记住"现在是第几代"，只有**最新一代**的处理器能改显隐/落位（见各处 `myGen` 守卫）。
+   *   `paintGen` 必须声明在 `paint()` **之外**（在里面就等于每代从 0 开始，白记）。
+   */
+  let paintGen = 0
+  /**
+   * adj952：本面板当前那条 `document` 级"点块外就关"的处理器。
+   * 同理必须在 `paint()` 之外：① 每代换一条时先摘掉上一代（不然 document 上会越挂越多 ✗）；
+   * ② `destroy()` 在 `paint()` 之外，需要能摘掉它（见那里那段说明）。
+   */
+  let docClickHandler: ((e: MouseEvent) => void) | null = null
 
   /**
    * adj740：被我们加了「放开裁剪」类的祖先元素（销毁时逐个摘掉，不去污染宿主的 DOM）。
@@ -637,6 +714,20 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     pageFitObserver?.disconnect()
     pageFitObserver = null
     container.empty()
+    /**
+     * adj952：本次重画是"**第几代**"（见 `paintGen` 那段说明）。
+     * 本代创建的所有处理器都带这个编号，只有最新一代能改显隐/落位。
+     */
+    const myGen = (paintGen += 1)
+    /**
+     * adj952：**先把上一次"搬到 body"的那条工具条收掉**。
+     *
+     * 显示态下工具条被挂到 `document.body`（adj793c，为摆脱祖先裁剪/层叠）⇒ 上面那句
+     * `container.empty()` 清不到它 ✗ ⇒ 本代再造一条、再搬一次 ⇒ body 上同时有**两条** ✗
+     * （用户实测过"残留两条工具条"，见 adj794f）。判据与 `destroy()` 里那条**同一个选择器**
+     * （带本面板 id，不去碰别的面板）。
+     */
+    document.body.querySelector(`[data-ijipu-pane="${paneId}"]`)?.remove()
     container.addClass('ijipu-score')
     /**
      * adj785（用户要求，推翻 adj782 的"块内预留空带"）：
@@ -853,6 +944,30 @@ toolbar.dataset.ijipuPane = String(paneId)
      */
     let hiddenByViewport = false
     /**
+     * adj952（用户报：「**嵌入块、编辑模式下，点击嵌入块预览区，显示一下工具条，马上又消失**，
+     * 不是要求的显/隐开关的行为」，追问答复：「**每点一次都闪一下**」「工具条都消失了，
+     * 移动/移出不都没效果」）—— 根因链（详见 fix 处那几段注释）里有两条与"状态放哪儿"有关：
+     *
+     *  ① **显示态原本只活在"这一次 paint 造出来的那个工具条元素"上**（`is-revealed` 类）——
+     *     而 `paint()` 每次 `container.empty()` 后**重新**造一个工具条 ✗ ⇒ 任何一次重画
+     *     （`refresh()` / 设置变更 / 宿主重建 widget）都会把"刚点开的"抹掉；
+     *  ② 面板被宿主重建（实时预览里 CM6 换块容器、嵌入重挂）时，`toolbarShown` 这个**闭包里的
+     *     `let` 也一起没了** ⇒ 新面板从"未显示"起步 ⇒ 下一次点击又走"显示"分支
+     *     ⇒ **每点一次都闪一下**（这正是用户追问答复里的现象）。
+     *
+     * ⇒ 把"**用户要求显示**"这件事记在**容器元素**上（`dataset`）—— 它能跨 `paint()`、
+     *    也能跨"宿主在同一容器上重建面板"活下来；面板初始化时读回来（见 `toolbarShown` 那行）。
+     *    ⚠ 存的是**用户意图**（`toolbarPinned`），不是"当前可见"——隐式隐藏（滚出视界/焦点离开）
+     *    不该改掉"用户点开过"这件事。
+     */
+    const restoredToolbarShown = container.dataset.ijipuToolbarShown === '1'
+    /**
+     * adj952：**"这是用户点开的"** —— 用户意图优先于一切隐式收起来源
+     * （视口判定 / 失焦延迟收起 / 3 秒自动收起）。只有**用户自己**能取消：
+     * 再点一次预览区，或点**真正的块外**（后者见 `onDocClick`）。
+     */
+    let toolbarPinned = restoredToolbarShown
+    /**
      * adj797：**块是否真的在视口里**（有尺寸、且与视口相交）。
      * 外侧落位靠它决定"该不该显示"：块还没排版（0×0）或滚出视口时，不该有一条工具条飘在那里 ✗。
      */
@@ -881,6 +996,8 @@ toolbar.dataset.ijipuPane = String(paneId)
      * ⇒ 该辅助函数已删除（上一版用它算坐标；现在坐标就是视口坐标）。
      */
     const positionOutsideFixed = (el: HTMLElement): void => {
+      // adj952：只有**最新一代**能摆位（旧一代的滚动跟随监听可能还在，见 `paintGen` 那段）
+      if (myGen !== paintGen) return
       // adj794f：每次摆到外侧都顺手清一次孤儿（不依赖销毁回调）
       sweepOrphanBodyToolbars()
       /**
@@ -894,18 +1011,43 @@ toolbar.dataset.ijipuPane = String(paneId)
        * 代码块与嵌入共用本函数 ⇒ 两处一起修好 ✓。
        */
       if (!containerInViewport()) {
-        hiddenByViewport = true
-        revealToolbar(false)
         /**
-         * adj797b（用户报告的决定性一行：`id=7 … userHidden=**N** visibility=visible opacity=1` ✗）：
+         * adj952 ①：**"容器脱离文档"不等于"滚出视界"** ✗ —— 这是用户那个"闪一下"的直接触发点。
          *
-         * 手机端 CSS 会**强制常显**（`.is-mobile .ijipu-score-toolbar { opacity: 1 }`）⇒
-         * 光调 `revealToolbar(false)`（只摘 `is-revealed`）**挡不住它** ✗ ⇒ 于是"块还没进视界，
-         * 工具条却先显示 3 秒"（3 秒后首开定时器补上 `is-user-hidden` 才消失 ✓✓）。
-         * 所以这里必须**同时**打上"主动隐藏"标记 —— 与点击收起、首开收起同一口径（且只在手机端需要）。
+         * 实时预览里宿主重建这块 widget 时，我们的容器会**短暂脱离文档**
+         * （`embed.ts` 里就写着这个事实：「Live Preview 的 block widget 就是先在**脱离文档**的容器里
+         * 跑完 post-processors / 嵌入解析，再由 CodeMirror 插进文档」）—— 那一瞬量到的矩形是 0×0
+         * ⇒ 原来会走进这个分支 ⇒ 把**刚点开的**工具条当场收掉（`toolbarShown` 也翻回 false）
+         * ⇒ 观感就是「**显示一下，马上又消失**」，而且**每点一次都闪一下** ✓✓。
+         *
+         * ⇒ 这里**什么都不做**：不隐藏（那正是要修的 bug），也**不摆位** —— 0×0 的矩形会把
+         *   `fixed` 坐标算到 (0, −h)，看着像窗口左上角凭空多一条 ✗。
+         *   容器插回文档后，`revealToolbar(true)` 里那两个复查（下一帧 + 50ms）与
+         *   滚动/尺寸跟随监听会把位置补上 ✓。
          */
-        if (Platform.isMobile) liveToolbar().addClass('is-user-hidden')
-        return
+        if (!container.isConnected) return
+        /**
+         * adj952 ②：**用户点开的，隐式路径一律不许收**。
+         *
+         * 用户口径：点一下要"出现并**保持**"，只有"再点一次"或"点真正的块外"才关。
+         * 视口判定是给**隐式显示**（滚动回来、键盘唤醒）当闸门用的，不能拿来抹掉用户刚点开的那一次。
+         * 注意这里**只是不隐藏**：下面的摆位照做（坐标由块矩形算出）⇒ 块真的滚出视口时，
+         * 工具条跟着出去，**不会**悬在别的内容上 ✓。
+         */
+        if (!toolbarPinned) {
+          hiddenByViewport = true
+          revealToolbar(false)
+          /**
+           * adj797b（用户报告的决定性一行：`id=7 … userHidden=**N** visibility=visible opacity=1` ✗）：
+           *
+           * 手机端 CSS 会**强制常显**（`.is-mobile .ijipu-score-toolbar { opacity: 1 }`）⇒
+           * 光调 `revealToolbar(false)`（只摘 `is-revealed`）**挡不住它** ✗ ⇒ 于是"块还没进视界，
+           * 工具条却先显示 3 秒"（3 秒后首开定时器补上 `is-user-hidden` 才消失 ✓✓）。
+           * 所以这里必须**同时**打上"主动隐藏"标记 —— 与点击收起、首开收起同一口径（且只在手机端需要）。
+           */
+          if (Platform.isMobile) liveToolbar().addClass('is-user-hidden')
+          return
+        }
       }
       // 又回到视界里了 ⇒ 重新显示（用户口径：块出现在视界后才显示）
       if (hiddenByViewport) hiddenByViewport = false
@@ -956,12 +1098,26 @@ toolbar.dataset.ijipuPane = String(paneId)
     let followToolbar: (() => void) | null = null
 
     const revealToolbar = (on: boolean): void => {
+      // adj952：只有**最新一代**能改显隐（旧一代的定时器/监听还在，见 `paintGen` 那段）
+      if (myGen !== paintGen) return
       const el = liveToolbar()
       // adj777：把"显式状态"与**所有**显隐入口同步（hover / focus / 点击都走这里）——
       // 否则状态会漂移，点击切换就可能出现"点一下没反应"。
       toolbarShown = on
       // ① 先显示：这一步绝不依赖下面的落位判定
       el.toggleClass('is-revealed', on)
+      /**
+       * adj952：把"**用户的显隐意图**"记到**容器元素**上 —— 这是本次修复的核心落点。
+       *
+       * 为什么不能只靠上面那个变量（`toolbarShown`）与工具条上的 `is-revealed` 类：
+       *  · `is-revealed` 挂在**这一次 `paint()` 造出来的那个工具条元素**上，而 `paint()` 每次都会
+       *    `container.empty()` 后重建工具条 ⇒ 任何一次重画都会把类丢掉（见 `paint()` 末尾的补挂）；
+       *  · `toolbarShown` / `toolbarPinned` 是**这个闭包里的 `let`** —— 宿主重建面板（实时预览里
+       *    CM6 换块容器、嵌入重挂，走的还是**同一个容器元素**）时，新面板从零起步 ⇒
+       *    用户"点开过"这件事就没了 ⇒ 下一次点击又走"显示"分支 ⇒ **每点一次都闪一下** ✗。
+       * 记到容器上则两者都能活下来：`paint()` 末尾按它补挂，新面板初始化时按它接回状态 ✓。
+       */
+      container.dataset.ijipuToolbarShown = toolbarPinned ? '1' : ''
       // adj773：显示时清掉"用户主动收起"的标记（它用来压过"移动端常显"那条 CSS 规则）
       if (on) el.removeClass('is-user-hidden')
       if (!on) {
@@ -1065,6 +1221,11 @@ toolbar.dataset.ijipuPane = String(paneId)
         hideTimer = 0
         if (hoveringToolbar()) return
         if (focusInToolbar()) return
+        /**
+         * adj952：**用户点开的**不许被"失焦延迟收起"抹掉 —— 这条路径正是"显示一下、马上又消失"
+         * 的另一半成因（实时预览重建 widget 时会带出焦点进出事件）。用户的显隐意图优先。
+         */
+        if (toolbarPinned) return
         revealToolbar(false)
       }, 240)
     }
@@ -1174,8 +1335,21 @@ toolbar.dataset.ijipuPane = String(paneId)
      *  · 记一条**诊断**（`lastToolbarClick`，显示在设置页「说明」）—— 万一某平台仍不生效，
      *    用户能一眼看出"到底有没有收到这次点击、命中了什么元素"。
      */
-    let toolbarShown = Platform.isMobile
+    /**
+     * adj952：显式状态的**初值**多了一档 —— 宿主若在**同一个容器**上重建了面板（实时预览里很常见），
+     * "用户点开过"这件事要从容器上读回来（见 `restoredToolbarShown` 那段），
+     * 否则新面板从"未显示"起步 ⇒ 用户再点一下又是一次"显示 ⇒ 被收掉"的闪 ✗。
+     * （手机端初值仍是"显示"：那条常显是 CSS 干的，见 `paint()` 末尾为什么不按 `toolbarShown` 补挂。）
+     */
+    let toolbarShown = Platform.isMobile || restoredToolbarShown
     const onContainerClick = (e: MouseEvent): void => {
+      /**
+       * adj952：**同一次点击只由最新一代切换一次** —— 老一代的同类监听还在这个容器上
+       * （`paint()` 里每次都是新箭头函数，`addEventListener` 视为不同监听器 ⇒ 越挂越多 ✗）。
+       * 不挡它们的话，一次点击会被切换好几下（净效果看各代状态是否同步）⇒ 用户看到的
+       * 「**每点一次都闪一下**」。本代是唯一权威（状态也从容器上读回来，见 `restoredToolbarShown`）。
+       */
+      if (myGen !== paintGen) return
       /**
        * adj779b（用户发来的诊断写的是「命中=?」）：判据要从 `HTMLElement` 放宽到 `Element` ✗➜✓。
        *
@@ -1187,6 +1361,12 @@ toolbar.dataset.ijipuPane = String(paneId)
       if (target?.closest('.ijipu-score-toolbar')) return
       if (target?.closest('a.jp-link')) return
       toolbarShown = !toolbarShown
+      /**
+       * adj952：这一下是**用户自己**按的开关 ⇒ 同步"用户意图"（`toolbarPinned`）：
+       * 点开 ⇒ 钉住（此后视口判定 / 失焦 / 自动收起都不许收它）；再点 ⇒ 松开（收起）。
+       * ⚠ 必须在 `revealToolbar` **之前**落定：那个函数会把意图写进 `container.dataset`（跨重画/重建的落点）。
+       */
+      toolbarPinned = toolbarShown
       revealToolbar(toolbarShown)
       /**
        * 主动收起：只有**手机端**需要这个标记 —— 它的唯一用途是压过
@@ -1198,10 +1378,55 @@ toolbar.dataset.ijipuPane = String(paneId)
       if (!toolbarShown && Platform.isMobile) liveToolbar().addClass('is-user-hidden')
       plugin.lastToolbarClick =
         `点击预览区 ⇒ ${toolbarShown ? '显示' : '隐藏'}工具条（平台=${Platform.isMobile ? '手机' : '桌面'}；` +
-        `命中=${target?.tagName ?? '?'}${target?.className ? '.' + String(target.className).slice(0, 40) : ''}）`
+        `命中=${target?.tagName ?? '?'}${target?.className ? '.' + String(target.className).slice(0, 40) : ''}；` +
+        // adj952：多记一位"用户意图"—— 下次再出"闪一下"时，这一位能区分
+        // "点了但没钉住（= 又被隐式路径收走了）"与"压根没收到这次点击"
+        `用户钉住=${toolbarPinned ? '是' : '否'}）`
     }
     // ⚠ 捕获阶段（第三个参数 true）：任何子元素的 stopPropagation 都拦不住这次切换
     container.addEventListener('click', onContainerClick, true)
+
+    /**
+     * adj952（用户口径里的第 4 条：「**点真正的块外 ⇒ 关闭**」）：**唯一**的"点外面就关"入口。
+     *
+     * 为什么必须新加（而不是"保留现状"）：查遍本仓库，此前**没有任何**"点外面就关"的监听
+     * （`grep addEventListener('click'` 只有：容器上这一条切换、`a.jp-link` 外开、菜单/dialog 内部）。
+     * 用户之所以觉得"点块外会关"，是因为编辑模式下点别处会让宿主重建 widget、顺带把工具条收走 ——
+     * 那属于**副作用**，不是设计（也正是本次要修的"闪一下"的同一批成因）✗。
+     *
+     * 判据（三条缺一不可，否则就会重演用户那个 bug）：
+     *  · 挂在 **`document` 的捕获阶段**：宿主（CM6 / 编辑器）在任何一层 `stopPropagation` 都拦不掉它；
+     *  · 点在**工具条自身**上 ⇒ 不算"块外"（工具条显示时被搬到 `document.body`，不在容器里 ✗）；
+     *  · 点在**预览区（容器内）**⇒ 不算"块外"（那一下由上面的 `onContainerClick` 负责切换）。
+     *  ⚠ 正是这两条包含判断，保证了"**打开的那一次点击**"绝不会被自己当成"点外面"而立刻关掉。
+     *
+     * 另外两处不算"块外"（否则会变成"用一次就没了"的新毛病）：
+     *  · 宿主自己的弹层（`Menu` / 模态 / 建议框）—— 工具条上的「⋯ 更多」点开菜单后，点菜单项不该把工具条收掉；
+     *  · 容器已经不在文档里（面板正在被销毁/重建）—— 那时收起没有意义，也容易把新面板的工具条误关。
+     */
+    const onDocClick = (e: MouseEvent): void => {
+      // adj952：同为最新一代才能关（旧一代的处理器若还留着，会去操作新一代的工具条 ✗）
+      if (myGen !== paintGen) return
+      if (!toolbarShown) return
+      if (!container.isConnected) return
+      const t = e.target instanceof Element ? e.target : null
+      if (t === null) return
+      if (t.closest('.ijipu-score-toolbar')) return
+      if (container.contains(t)) return
+      if (t.closest('.menu, .menu-container, .modal-container, .prompt, .suggestion-container')) return
+      toolbarPinned = false
+      revealToolbar(false)
+      if (Platform.isMobile) liveToolbar().addClass('is-user-hidden')
+      plugin.lastToolbarClick = `点击块外 ⇒ 收起工具条（命中=${t.tagName}${t.className ? '.' + String(t.className).slice(0, 40) : ''}）`
+    }
+    /**
+     * adj952：换代时先把**上一代**那条摘掉 —— 否则 `document` 上的监听会随每次重画越挂越多 ✗
+     * （`paint()` 里的箭头函数每次都是新引用，`addEventListener` 认不出"这是同一个"）。
+     * 本代这条记进 `docClickHandler`，供 `destroy()` 摘除。
+     */
+    if (docClickHandler !== null) document.removeEventListener('click', docClickHandler, true)
+    docClickHandler = onDocClick
+    document.addEventListener('click', onDocClick, true)
 
     /**
      * adj785（用户要求 a）：「笔记中的预览区（嵌入 jps 文件或 jps 代码块）**首开时先显示一下工具条，
@@ -1238,6 +1463,11 @@ toolbar.dataset.ijipuPane = String(paneId)
         autoHideTimer = 0
         if (focusInToolbar()) return
         if (!toolbarShown) return
+        /**
+         * adj952：**用户点开的**不自动收起（用户口径："点一下出现，并**保持**"）。
+         * 自动收起只服务于"隐式显示"（滚回视界 / 键盘唤醒）那一档，别把它甩到用户头上 ✗。
+         */
+        if (toolbarPinned) return
         toolbarShown = false
         revealToolbar(false)
         // adj792b：只有手机端需要这个"压过常显"的标记（桌面端有默认 opacity:0）
@@ -1246,6 +1476,15 @@ toolbar.dataset.ijipuPane = String(paneId)
     }
     const syncToolbarVisibility = (): void => {
       if (!containerInViewport()) {
+        /**
+         * adj952：**容器脱离文档 ≠ 离开视界**（与 `positionOutsideFixed` 里那条同一个判据）。
+         * 宿主重建 widget 的一瞬会派发滚动/尺寸事件，若在这里按"离开视界"处理 ⇒
+         * 刚点开的工具条又被收掉（`toolbarShown` 翻回 false）⇒ "每点一次都闪一下" ✗。
+         */
+        if (!container.isConnected) {
+          clearAutoHide()
+          return
+        }
         if (toolbarShown) {
           hiddenByViewport = true
           revealToolbar(false)
@@ -2514,6 +2753,21 @@ toolbar.dataset.ijipuPane = String(paneId)
       pageFitObserver = new ResizeObserver(() => onSizeChanged())
       pageFitObserver.observe(svgWrap)
     }
+    /**
+     * adj952：**重画之后把"用户点开的"补回来**（这是"不许被重绘抹掉"的那一半）。
+     *
+     * 为什么必须在这里补：`paint()` 开头 `container.empty()` ⇒ 刚造出来的工具条元素**没有**
+     * `is-revealed` 类（显隐是**元素上的类**，不是 `paint()` 会读的状态）⇒ 任何一次重画
+     * （`refresh()` / 设置变更 / 指南开关 / 拖拽排版落定）都会把工具条"抹掉" ✗ ——
+     * 用户口径里的"不许被重绘抹掉"指的正是这件事。
+     *
+     * 放在**函数末尾**：此时尺寸/模式/虚线都已定稿（`setMode` → `rebuildGuides`），
+     * 落位坐标量到的才是最终值。
+     * ⚠ 条件用 `toolbarPinned`（用户意图）而不是 `toolbarShown`：手机端初始"常显"是**靠 CSS**
+     *   实现的（`toolbarShown` 初值为 true，但并没有 `is-revealed` 类）⇒ 若无条件补挂，
+     *   会把手机端那条 CSS 常显路径悄悄换成"移植到 body + 走落位判定"这条完全不同的路径 ✗。
+     */
+    if (toolbarPinned) revealToolbar(true)
   }
 
   // 插件设置 / 排版虚线开关变化 → 本面板重画
@@ -2563,6 +2817,19 @@ toolbar.dataset.ijipuPane = String(paneId)
       // ⚠ `destroy()` 看不到 `paint()` 内那个局部 `toolbar`（写成 `toolbar` 会解析到浏览器全局 ✗）
       // ⇒ 按面板 id 在 body 上精确找它并移除（外侧落位时它被挂到 body，见 adj793c/adj794e）
       document.body.querySelector(`[data-ijipu-pane="${paneId}"]`)?.remove()
+      /**
+       * adj952：**面板自己的 document 级监听必须在这里摘掉** —— 这正好是本文件反复记过的那条教训
+       * （见上面 `plugin.register(...)` 那段："那个回调只在**插件卸载**时跑，面板销毁根本不会触发 ✗"）。
+       *
+       * 为什么这条泄漏特别有害：容器元素在宿主重建 widget 时**是同一个** ⇒ 旧面板留下的监听
+       * 会在"点块外"时去操作**新面板**的工具条（`liveToolbar()` 查容器，拿到的是新的那个）
+       * ⇒ 新面板的"用户钉住"意图被旧面板清掉（`container.dataset` 被写成 ''）⇒ 又回到"点一下就没了" ✗。
+       * 注意这里动的是**面板级**的 `docClickHandler`（`onDocClick` 在 `paint()` 里，销毁时看不到它 ✗）。
+       */
+      if (docClickHandler !== null) {
+        document.removeEventListener('click', docClickHandler, true)
+        docClickHandler = null
+      }
       livePanes.delete(paneId)
       container.empty()
     },

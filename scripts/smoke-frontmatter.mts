@@ -549,8 +549,14 @@ console.log('[3g] adj631 设置面板：多页签 / 收藏音色分类列表 / �
     const pane905z = String(readFileSync('src/scorePane.ts', 'utf8'))
     const sweepCall = /sweepToolbarsAfterNavigation\(\)/
     check('adj905z 之二 残留工具条兜底：`sweepOrphanBodyToolbars` 已导出，且入口是"现在 + 下一帧"各清一次',
-      /export function sweepOrphanBodyToolbars\(\): void \{/.test(pane905z) &&
-        /private sweepToolbarsAfterNavigation\(\): void \{[\s\S]{0,400}?sweepOrphanBodyToolbars\(\)[\s\S]{0,200}?requestAnimationFrame\(\(\) => sweepOrphanBodyToolbars\(\)\)/.test(
+      /**
+       * ⚠ adj952：这个函数多了个 `force` 参数 —— 常规清理要给"宿主重建 widget 时容器**短暂**脱离文档"
+       * 留一个宽限期（否则会把用户刚点开的工具条当孤儿删掉，那正是"点一下闪一下"的真凶），
+       * 而"**用户已经离开这份笔记**"这一路（打开 `.jps` 前那次检查）**必须立刻清**。
+       * 判据跟着改成"带缺省值的形式"，并**额外**要求这条导航入口传 `true`。
+       */
+      /export function sweepOrphanBodyToolbars\(force = false\): void \{/.test(pane905z) &&
+        /private sweepToolbarsAfterNavigation\(\): void \{[\s\S]{0,400}?sweepOrphanBodyToolbars\(true\)[\s\S]{0,200}?requestAnimationFrame\(\(\) => sweepOrphanBodyToolbars\(true\)\)/.test(
           main905z,
         ))
     const editSeg = /async openJpsForSourceEdit[\s\S]{0,1600}?\n {2}\}/.exec(main905z)?.[0] ?? ''
@@ -569,8 +575,8 @@ console.log('[3g] adj631 设置面板：多页签 / 收藏音色分类列表 / �
         return !(sweepCall.test(codeOf(broken)) && sweepCall.test(codeOf(embedSeg)))
       })())
     check('adj905z 之二 负对照：把入口改成"只清一次"（去掉下一帧那次）⇒ 判据为假（它真的在守这个组合）',
-      !/private sweepToolbarsAfterNavigation\(\): void \{[\s\S]{0,400}?sweepOrphanBodyToolbars\(\)[\s\S]{0,200}?requestAnimationFrame\(\(\) => sweepOrphanBodyToolbars\(\)\)/.test(
-        main905z.replace(/window\.requestAnimationFrame\(\(\) => sweepOrphanBodyToolbars\(\)\)/, 'void 0'),
+      !/private sweepToolbarsAfterNavigation\(\): void \{[\s\S]{0,400}?sweepOrphanBodyToolbars\(true\)[\s\S]{0,200}?requestAnimationFrame\(\(\) => sweepOrphanBodyToolbars\(true\)\)/.test(
+        main905z.replace(/window\.requestAnimationFrame\(\(\) => sweepOrphanBodyToolbars\(true\)\)/, 'void 0'),
       ))
   }
   /**
@@ -8078,6 +8084,419 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       !/\.history\.back\s*=[^=]/.test(codeOf(main934)) &&
       !/\.working\s*=[^=]/.test(codeOf(main934)),
     '（这条判据守的是"不许为了少一帧去硬改宿主行为"）')
+}
+
+/**
+ * ---- adj952（用户实报）：嵌入块工具条「点一下闪一下」 ----
+ *
+ * 用户原话：「**嵌入块，编辑模式下，点击嵌入块预览区，显示一下工具条，马上又消失**，
+ * 不是要求的显/隐开关的行为」；两条追问答复：①「是**每点一次都闪一下**」
+ * ②「工具条都消失了，**移动/移出不都没效果，都不显示了**」。
+ *
+ * ## 根因（本轮由下面这个夹具**实测**出来，不是猜的）
+ *
+ * 判定链（编辑模式）：
+ *  ① 点预览区 ⇒ `onContainerClick` ⇒ 工具条 `is-revealed` + **搬到 `document.body`**（外侧落位，adj793c）；
+ *  ② 实时预览里宿主**同一瞬间在重建这块 widget** ⇒ 我们的容器**短暂脱离文档**
+ *     （`src/embed.ts` 里就写着这个事实："block widget 就是先在**脱离文档**的容器里跑完
+ *      post-processors，再由 CodeMirror 插进文档"）；
+ *  ③ `revealToolbar` 里那两个复查（下一帧 + 50ms）会在这段时间调 `positionOutsideFixed`
+ *     ⇒ 它**先**调 `sweepOrphanBodyToolbars()`；而那个函数的判据原来是"**容器不在文档里**就是孤儿"
+ *     ⇒ **把我们自己刚点开的工具条从 body 上删掉** ✗✗；
+ *  ④ 于是"显示一下、马上又消失"；`toolbarShown` 还是 true ⇒ **下一次点击走"隐藏"分支（屏幕上没变化）**，
+ *     再下一次才又显示 ⇒ 用户说的"**每点一次都闪一下**" ✓✓；工具条不在 DOM 里 ⇒
+ *     移动/移出当然什么都不显示 ✓（本来也没有"悬停显示"这回事）。
+ *  ⑤ 另有两条同源的结构性缺陷，本轮一并收口：
+ *     · `paint()` 每次都 `container.empty()` 后**重建**工具条元素与一整套交互闭包
+ *       ⇒ `is-revealed` 与 `toolbarShown` 一起被丢掉（"被重绘抹掉"）；而重画期间旧的
+ *       `document.body` 上那条还没人收（会变成两条）；
+ *     · `paint()` 里每次都是**新的箭头函数** ⇒ `addEventListener` 认为"又来了一个新监听器"
+ *       ⇒ 同一次点击被好几代监听器各切换一遍（净效果取决于各代状态是否同步）；
+ *       旧的 `window` 跟随监听还会去摆自己那条**已经被丢弃**的工具条 ⇒ 文档里出现两条。
+ *
+ * ## 判据怎么做的
+ *
+ *  · **实测**（下面 ②）：把**真的** `src/scorePane.ts` 用 esbuild 打进无头浏览器
+ *    （`scripts/toolbarDomShim.ts` 换掉 `obsidian`），挂在仿"实时预览的 `![[x.jps]]`"的 DOM 上，
+ *    用**真实事件**（完整手势：pointerdown → mousedown → pointerup → mouseup → click）驱动，
+ *    每一步量 `{revealed, where, vis, op, bars}`（`vis/op` 来自**真的 `styles.css`**，
+ *    所以"类在"与"看得见"是分开证的）；编辑模式与阅读模式**各走一遍**。
+ *  · **每条判据都配一个负对照**：把本轮某一处机制**改回去**再打一次包、再跑一遍，
+ *    同一条判据必须**判假**（`old` = 本轮全部机制都改回去 = 用户报障时的写法）。
+ *
+ * ⚠ **它证明不了"在真 Obsidian 里一定不闪了"**：夹具里的宿主是假的（容器脱离/重建的**时机**
+ *   是我们按 `embed.ts` 记下的事实摆的），真机时序只有用户重载后亲眼看。可复核的是：
+ *   代码路径与断言（含负对照）在这里全部是绿的。
+ */
+{
+  const pane952 = String(readFileSync('src/scorePane.ts', 'utf8'))
+
+  // ───────────────── ① 源码级闸门（快；负对照 = 改回去 ⇒ 同一条判据判假） ─────────────────
+
+  const judge952 = (s: string): boolean =>
+    // 显示态跨重画活下来：paint() 末尾按"用户意图"补挂
+    /if \(toolbarPinned\) revealToolbar\(true\)/.test(s) &&
+    // "用户意图"记在**容器元素**上（跨 paint、跨宿主在同一容器上重建面板）
+    /const restoredToolbarShown = container\.dataset\.ijipuToolbarShown === '1'/.test(s) &&
+    /let toolbarPinned = restoredToolbarShown/.test(s) &&
+    /container\.dataset\.ijipuToolbarShown = toolbarPinned \? '1' : ''/.test(s) &&
+    // 孤儿清理：**脱离文档不再是孤儿判据**（宽限期），force 只给"用户离开这份笔记"那一路
+    /const ORPHAN_GRACE_MS = \d+/.test(s) &&
+    /if \(now - since < ORPHAN_GRACE_MS\) continue/.test(s) &&
+    /export function sweepOrphanBodyToolbars\(force = false\)/.test(s) &&
+    // 视口判定：脱离文档 ≠ 离开视界；用户点开的不被隐式路径收走
+    /^        if \(!container\.isConnected\) return$/m.test(s) &&
+    /^        if \(!toolbarPinned\) \{$/m.test(s) &&
+    // 一次点击只由最新一代切换一次 + 换代理先摘掉上一代的 document 监听
+    /const myGen = \(paintGen \+= 1\)/.test(s) &&
+    /^      if \(myGen !== paintGen\) return$/m.test(s) &&
+    /if \(docClickHandler !== null\) document\.removeEventListener\('click', docClickHandler, true\)/.test(s) &&
+    // 点块外关闭：document 捕获 + 两条包含判断（工具条自身 / 预览区）
+    /document\.addEventListener\('click', onDocClick, true\)/.test(s) &&
+    /if \(t\.closest\('\.ijipu-score-toolbar'\)\) return/.test(s) &&
+    /if \(container\.contains\(t\)\) return/.test(s) &&
+    // 不引入悬停显隐
+    !/container\.addEventListener\('pointermove'/.test(s) &&
+    !/container\.addEventListener\('pointerout'/.test(s) &&
+    !/container\.addEventListener\('pointerleave'/.test(s)
+
+  check(
+    'adj952 源码：显示态能跨重画与"宿主在同一容器上重建面板"接回来（容器上的用户意图 + paint 末尾补挂 + 代数守卫 + 孤儿清理宽限期 + 点块外关闭 + 无悬停路径）',
+    judge952(pane952),
+    '',
+  )
+  const reverted952: [string, string][] = [
+    ['paint 末尾补挂', pane952.replace('    if (toolbarPinned) revealToolbar(true)\n', '')],
+    ['容器上的用户意图', pane952.replace("container.dataset.ijipuToolbarShown === '1'", 'false')],
+    ['孤儿清理宽限期', pane952.replace('    if (now - since < ORPHAN_GRACE_MS) continue\n', '')],
+    ['脱离文档 ≠ 离开视界', pane952.replace('        if (!container.isConnected) return\n', '')],
+    ['用户钉住的例外', pane952.replace('        if (!toolbarPinned) {\n', '        {\n')],
+    ['代数守卫', pane952.replace(/^      if \(myGen !== paintGen\) return\n/gm, '')],
+    ['换代理先摘旧 document 监听', pane952.replace("    if (docClickHandler !== null) document.removeEventListener('click', docClickHandler, true)\n", '')],
+    ['点块外关闭', pane952.replace("    document.addEventListener('click', onDocClick, true)\n", '')],
+  ]
+  for (const [what, broken] of reverted952)
+    check(
+      `adj952 源码负对照：只把「${what}」改回去 ⇒ 上面那条判据判假`,
+      broken !== pane952 && !judge952(broken),
+      broken === pane952 ? '（替换没生效 ⇒ 判据要跟着改）' : '',
+    )
+
+  // ───────────────── ② 无头浏览器实测：真的面板 + 真的 DOM + 真实事件 ─────────────────
+
+  type Step952 = { revealed: boolean; where: string; vis: string; op: string; bars: number }
+  type Scenario952 = {
+    steps: Record<string, Step952>
+    /** 销毁后**还留在文档里**的工具条（应当为空） */
+    leftovers: { pane: string; parent: string; id: string }[]
+    diag: { lastClick: string | null; lastInfo: string | null; log: string[] }
+    selfCheck: { svg: number; toolbarInDoc: number; hasCmBlock: boolean; containerRect: number[] }
+  }
+  type Result952 = { edit: Scenario952; read: Scenario952 } | { skip: string } | { bad: string }
+
+  const sub952 = (s: string, a: string, b: string): string => {
+    if (!s.includes(a)) throw new Error('夹具找不到：' + a.slice(0, 60))
+    return s.split(a).join(b)
+  }
+  const del952 = (s: string, a: string): string => sub952(s, a, '')
+
+  /** 每条负对照 = **一处**最小回退（都要真改到东西；改不到 ⇒ 抛错 ⇒ 夹具异常 ⇒ 判红） */
+  const variants952: Record<string, (s: string) => string> = {
+    live: (s) => s,
+    /** adj952 之前的样子：本轮加的机制**全部**退回去（= 用户报障时的写法） */
+    old: (s) => {
+      let out = del952(s, '    if (toolbarPinned) revealToolbar(true)\n')
+      out = sub952(out, "container.dataset.ijipuToolbarShown === '1'", 'false')
+      out = sub952(
+        out,
+        '    if (owner.isConnected) {\n      detachedSince.delete(id)\n      continue\n    }',
+        '    if (owner.isConnected) {\n      detachedSince.delete(id)\n      continue\n    }\n    el.remove()\n    continue',
+      )
+      out = sub952(out, '        if (!toolbarPinned) {\n', '        {\n')
+      out = del952(out, '        if (!container.isConnected) return\n')
+      out = out.replace(/^      if \(myGen !== paintGen\) return\n/gm, '')
+      out = del952(
+        out,
+        "    if (docClickHandler !== null) document.removeEventListener('click', docClickHandler, true)\n" +
+          '    docClickHandler = onDocClick\n' +
+          "    document.addEventListener('click', onDocClick, true)\n",
+      )
+      out = sub952(
+        out,
+        '    document.body.querySelector(`[data-ijipu-pane="${paneId}"]`)?.remove()\n    container.addClass(\'ijipu-score\')',
+        "    container.addClass('ijipu-score')",
+      )
+      return out
+    },
+    /** 孤儿清理照旧按"脱离文档即移除"（= 真凶那一条） */
+    noGrace: (s) =>
+      sub952(
+        s,
+        '    if (owner.isConnected) {\n      detachedSince.delete(id)\n      continue\n    }',
+        '    if (owner.isConnected) {\n      detachedSince.delete(id)\n      continue\n    }\n    el.remove()\n    continue',
+      ),
+    /** 视口判定退回旧写法（脱离文档当"不在视界"；不考虑"用户点开的"） */
+    noVpGuard: (s) => del952(sub952(s, '        if (!toolbarPinned) {\n', '        {\n'), '        if (!container.isConnected) return\n'),
+    /** 重画后不补挂（= 被重绘抹掉） */
+    noPaintReapply: (s) => del952(s, '    if (toolbarPinned) revealToolbar(true)\n'),
+    /** 不从容器读回"用户意图"（= 宿主重建面板后丢掉） */
+    noRestore: (s) => sub952(s, "container.dataset.ijipuToolbarShown === '1'", 'false'),
+    /** 去掉代数守卫（= 好几代监听器各切一遍、各自摆自己那条已丢弃的工具条） */
+    noGenGuard: (s) => s.replace(/^      if \(myGen !== paintGen\) return\n/gm, ''),
+    /** 永不关闭（点块外不收） */
+    neverClose: (s) => del952(s, "    document.addEventListener('click', onDocClick, true)\n"),
+    /** 加了悬停显隐（用户明确不要） */
+    hover: (s) =>
+      sub952(
+        s,
+        "    container.addEventListener('click', onContainerClick, true)",
+        "    container.addEventListener('click', onContainerClick, true)\n" +
+          "    container.addEventListener('pointermove', () => revealToolbar(true))\n" +
+          "    container.addEventListener('pointerout', () => revealToolbar(false))",
+      ),
+    /** 加回 adj779 之前那条 `pointerup` 兜底（一次点击被切换两下 ⇒ 净结果永远是隐藏） */
+    doublefire: (s) =>
+      sub952(
+        s,
+        "    container.addEventListener('click', onContainerClick, true)",
+        "    container.addEventListener('pointerup', () => { if (!toolbarShown) revealToolbar(true) }, true)\n" +
+          "    container.addEventListener('click', onContainerClick, true)",
+      ),
+  }
+
+  const BROWSER952 = [
+    process.env.IJIPU_CHROME,
+    'C:/Program Files/Google/Chrome/Application/chrome.exe',
+    'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
+    'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
+    'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
+    '/usr/bin/google-chrome',
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  ].find((p): p is string => typeof p === 'string' && existsSync(p))
+
+  /**
+   * 打一次包 + 跑一次无头浏览器，拿回 JSON。
+   * 夹具只换宿主：`scripts/toolbarDomShim.ts`（浏览器内的 `obsidian` 替身）+
+   * `scripts/toolbarDomProbe.ts`（搭 DOM、走真实事件、逐步量显隐）；
+   * `src/scorePane.ts` 是**同一份**，只把相对导入挪到 `../src/`、把 `./main`（只为两个事件名常量）
+   * 换成桩 —— 别的字符一字不动（照 adj922 的样板）。
+   */
+  const probe952 = (variant: string): Result952 => {
+    if (!BROWSER952) return { skip: '本机没有 Chrome/Edge' }
+    mkdirSync('dist-smoke', { recursive: true })
+    let patched = ''
+    try {
+      patched = variants952[variant](pane952)
+    } catch (e) {
+      return { bad: '负对照的源码改写失败：' + (e instanceof Error ? e.message : String(e)) }
+    }
+    const shifted = patched
+      .replace(/from '\.\/(?!main)/g, "from '../src/")
+      .replace(/from '\.\/main'/g, "from './_tmp_952_mainstub'")
+    writeFileSync('dist-smoke/_tmp_952_pane.ts', shifted, 'utf8')
+    writeFileSync(
+      'dist-smoke/_tmp_952_mainstub.ts',
+      "export const GUIDES_CHANGED = 'ijipu-guides-changed'\n" +
+        "export const SETTINGS_CHANGED = 'ijipu-settings-changed'\n" +
+        'export default class IJipuPlugin {}\n',
+      'utf8',
+    )
+    writeFileSync(
+      `dist-smoke/_tmp_952_entry_${variant}.ts`,
+      "import { mountScorePane, sweepOrphanBodyToolbars } from './_tmp_952_pane'\n" +
+        "import { runToolbarProbe } from '../scripts/toolbarDomProbe'\n" +
+        "import { DEFAULT_NEW_JPS_TEMPLATE } from '@ijipu/engine'\n" +
+        'void runToolbarProbe(mountScorePane, DEFAULT_NEW_JPS_TEMPLATE, sweepOrphanBodyToolbars)\n',
+      'utf8',
+    )
+    try {
+      execFileSync(
+        process.execPath,
+        [
+          resolve('node_modules/esbuild/bin/esbuild'),
+          `dist-smoke/_tmp_952_entry_${variant}.ts`,
+          '--bundle', '--platform=browser', '--format=iife', '--target=chrome110',
+          '--alias:obsidian=./scripts/toolbarDomShim.ts',
+          // `openExternal.ts` 静态 import electron（真宿主里桌面端才有）⇒ 同样换替身
+          '--alias:electron=./scripts/fakeElectron.ts',
+          '--alias:@ijipu/engine=./vendor/engine/index.ts',
+          '--loader:.png=dataurl',
+          `--outfile=dist-smoke/_tmp_952_${variant}.js`,
+          '--log-level=warning',
+        ],
+        { stdio: ['ignore', 'pipe', 'pipe'], timeout: 240_000 },
+      )
+    } catch (e) {
+      const se = e as { stderr?: { toString: () => string }; message?: string }
+      const msg = (se.stderr ? se.stderr.toString() : '') || se.message || String(e)
+      return { bad: '夹具打包失败：' + msg.split('\n').filter((l) => l.trim()).slice(0, 3).join(' ').slice(0, 200) }
+    }
+    /**
+     * 页面里注入的是**真的 `styles.css`** —— 这样量到的 `vis/op` 才有意义
+     * （证明"类在"真的等于"看得见"，而不是"类在但被别的规则压成 opacity:0"）。
+     */
+    const css952 = String(readFileSync('styles.css', 'utf8'))
+    writeFileSync(
+      `dist-smoke/_tmp_952_${variant}.html`,
+      '<!doctype html>\n<html lang="zh-CN"><head><meta charset="utf-8" />\n<style>\n' +
+        'body { margin: 0; font-family: system-ui, sans-serif; }\n' +
+        '#spacer { height: 150px; }\n' +
+        '#host { width: 900px; padding: 0 12px; }\n' +
+        '.internal-embed:not(.image-embed) { display: block; }\n' +
+        '</style>\n<style>\n' + css952 + '\n</style>\n</head><body>\n' +
+        '<div id="spacer">（占位，让嵌入块落在视口内）</div>\n<div id="host"></div>\n' +
+        '<pre id="out"></pre>\n<script src="_tmp_952_' + variant + '.js"></script>\n</body></html>\n',
+      'utf8',
+    )
+    let dom = ''
+    try {
+      dom = execFileSync(
+        BROWSER952,
+        [
+          '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
+          '--user-data-dir=' + resolve('dist-smoke/chrome-adj952'),
+          '--window-size=1000,900', '--virtual-time-budget=10000',
+          '--dump-dom', pathToFileURL(resolve(`dist-smoke/_tmp_952_${variant}.html`)).href,
+        ],
+        { encoding: 'utf8', timeout: 120_000, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024 },
+      )
+    } catch (e) {
+      return { skip: '浏览器起不来：' + (e instanceof Error ? e.message.split('\n')[0].slice(0, 90) : String(e)) }
+    }
+    const i = dom.indexOf('<pre id="out">')
+    if (i < 0) return { bad: '没有 <pre id="out">（夹具没跑起来？）' }
+    const body = dom.slice(i + '<pre id="out">'.length, dom.indexOf('</pre>', i))
+    try {
+      /** `--dump-dom` 给的是序列化后的 HTML：JSON 里的引号/& 已被转义，读回来要还原 */
+      const parsed = JSON.parse(
+        body.replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>'),
+      ) as Result952 | { error?: string; done?: boolean }
+      if ('error' in parsed && parsed.error) return { bad: '夹具内抛错：' + String(parsed.error).slice(0, 200) }
+      if (!('done' in parsed && parsed.done)) return { bad: '夹具没跑完（虚拟时钟提前 dump？）：' + body.slice(0, 120) }
+      return parsed as Result952
+    } catch (e) {
+      return { bad: '量到的 JSON 解析不了：' + (e instanceof Error ? e.message : String(e)) + '｜' + body.slice(0, 120) }
+    }
+  }
+
+  const results952: Record<string, Result952> = {}
+  for (const name of Object.keys(variants952)) results952[name] = probe952(name)
+
+  const skip952 = Object.values(results952).find((r): r is { skip: string } => 'skip' in r)?.skip ?? ''
+  const bad952 = Object.values(results952).find((r): r is { bad: string } => 'bad' in r)?.bad ?? ''
+  if (skip952) console.log('   （跳过 adj952 的无头浏览器实测：' + skip952 + '）')
+
+  const scen = (name: string, mode: 'edit' | 'read'): Scenario952 | null => {
+    const r = results952[name]
+    return r && 'edit' in r ? r[mode] : null
+  }
+  /** 某一步"真的显示出来了"：显示类在 + 计算样式 visible/opacity:1（后者来自真的 styles.css） */
+  const shown952 = (s: Scenario952 | null, ...steps: string[]): boolean =>
+    s !== null && steps.every((k) => s.steps[k]?.revealed === true && s.steps[k]?.vis === 'visible' && s.steps[k]?.op === '1')
+  const hidden952 = (s: Scenario952 | null, ...steps: string[]): boolean =>
+    s !== null && steps.every((k) => s.steps[k]?.revealed === false)
+  /** 文档里**只有一条**工具条（旧一代的监听会把它那条已丢弃的工具条又摆回 body 上 ✗） */
+  const single952 = (s: Scenario952 | null, ...steps: string[]): boolean =>
+    s !== null && steps.every((k) => s.steps[k]?.bars === 1)
+
+  const stepsName952 = ['init', 'click1', 'click1_frames', 'detach_0', 'detach_sweep', 'detach_sweep2', 'relayout', 't400', 'refresh', 'scroll', 'remount', 'hover_move', 'click2', 'click3', 'outside', 'afterDestroy']
+  const fmt952 = (name: string, mode: 'edit' | 'read'): string => {
+    const s = scen(name, mode)
+    if (s === null) return '（未测）'
+    return stepsName952.map((k) => `${k}=${s.steps[k]?.revealed ? 'Y' : 'n'}${(s.steps[k]?.bars ?? 1) > 1 ? `(+${s.steps[k].bars})` : ''}`).join(' ')
+  }
+  if (!skip952 && !bad952) {
+    for (const name of Object.keys(variants952))
+      console.log(`   adj952 ${name.padEnd(15)} 编辑：${fmt952(name, 'edit')}`)
+    console.log(`   adj952 ${'（阅读模式）'.padEnd(11)} live：${fmt952('live', 'read')}｜old：${fmt952('old', 'read')}`)
+  }
+
+  /** 跳过 / 夹具异常 / 正常 三种情形的统一取值（**夹具异常 ⇒ 判红**，不静默放过） */
+  const judged952 = (ok: boolean, detail: string): [boolean, string] =>
+    skip952 ? [true, '跳过：' + skip952] : bad952 ? [false, '夹具异常：' + bad952 + '｜' + detail] : [ok, detail]
+  /** "正片满足，且指定负对照不满足" —— 每条判据都要证明自己**真的在判** */
+  const withNeg952 = (
+    property: (s: Scenario952 | null) => boolean,
+    mode: 'edit' | 'read',
+    neg: string,
+  ): [boolean, string] => {
+    const live = property(scen('live', mode))
+    const negOk = property(scen(neg, mode))
+    return judged952(
+      live && !negOk,
+      `正片(${mode})=${live ? '满足' : '不满足'}｜负对照 ${neg}=${negOk ? '也满足（负对照失效！）' : '不满足 ✓'}｜live: ${fmt952('live', mode)}`,
+    )
+  }
+  /** 夹具自检：谱面真的画了、工具条真的在、容器真的有尺寸、编辑/阅读的宿主链对得上 */
+  const selfCheck952 = (mode: 'edit' | 'read'): boolean => {
+    const s = scen('live', mode)
+    if (s === null) return false
+    const c = s.selfCheck
+    return c.svg >= 1 && c.toolbarInDoc === 1 && c.containerRect[0] >= 2 && c.containerRect[1] >= 2 && c.hasCmBlock === (mode === 'edit')
+  }
+
+  const [c952a, d952a] = withNeg952(
+    (s) => shown952(s, 'click1', 'click1_frames'),
+    'edit',
+    'doublefire',
+  )
+  check('adj952 实测：编辑模式下**一次完整手势**点预览区 ⇒ 工具条显示并保持（若干帧后仍在；`vis=visible/op=1` 来自真的 styles.css）', c952a, d952a)
+  const [c952b, d952b] = judged952(
+    (() => {
+      const liveOk = shown952(scen('live', 'edit'), 'detach_0', 'detach_sweep', 'detach_sweep2', 'relayout', 't400') && single952(scen('live', 'edit'), 'relayout')
+      const graceOk = shown952(scen('noGrace', 'edit'), 'detach_sweep', 'detach_sweep2', 'relayout', 't400')
+      const vpOk = shown952(scen('noVpGuard', 'edit'), 'detach_sweep', 'detach_sweep2', 'relayout')
+      return liveOk && !graceOk && !vpOk
+    })(),
+    `正片=${fmt952('live', 'edit')}\n     孤儿清理(noGrace)：${fmt952('noGrace', 'edit')}\n     视口判定(noVpGuard)：${fmt952('noVpGuard', 'edit')}`,
+  )
+  check('adj952 实测（**本轮真凶**）：宿主重排让容器短暂脱离文档（含期间跑过孤儿清理）⇒ 工具条**不被自己清掉**、回到文档后仍在（负对照：noGrace / noVpGuard 两条各自都判假）', c952b, d952b)
+  const [c952c, d952c] = withNeg952((s) => shown952(s, 'refresh', 'scroll') && single952(s, 'refresh', 'scroll'), 'edit', 'noPaintReapply')
+  check('adj952 实测：同实例重画（`refresh()` = `paint()`，工具条元素被重建）之后**仍然显示**，且全文档**只有一条**工具条', c952c, d952c)
+  const [c952d, d952d] = withNeg952((s) => shown952(s, 'remount', 'hover_move'), 'edit', 'noRestore')
+  check('adj952 实测：宿主在**同一容器**上重建面板（destroy → empty → 重挂，照 `embed.ts` 的 `mount()`）之后**仍然显示**', c952d, d952d)
+  const [c952e, d952e] = withNeg952((s) => hidden952(s, 'click2') && shown952(s, 'click3'), 'edit', 'old')
+  check('adj952 实测：**再点一次 ⇒ 隐藏**（`click2` 隐藏、`click3` 又显示；状态不漂移 —— 负对照 `old` 正是用户报障时"下一次点击没反应/再下一次才显示"的漂移）', c952e, d952e)
+  const [c952f, d952f] = withNeg952((s) => shown952(s, 'click3') && hidden952(s, 'outside'), 'edit', 'neverClose')
+  check('adj952 实测：**点真正的块外 ⇒ 关闭**（负对照：neverClose「永不关闭」判假）', c952f, d952f)
+  const [c952g, d952g] = withNeg952((s) => hidden952(s, 'init') && shown952(s, 'remount') && shown952(s, 'hover_move'), 'edit', 'hover')
+  check('adj952 实测：**移动 / 移出既不开也不关**（`hover_move` 与它前一步同态；负对照：加了悬停显隐的 hover 判假）', c952g, d952g)
+  const [c952h, d952h] = judged952(
+    shown952(scen('live', 'read'), 'click1', 'relayout', 'refresh', 'remount', 'hover_move') &&
+      hidden952(scen('live', 'read'), 'click2') &&
+      single952(scen('live', 'read'), 'relayout', 'remount') &&
+      withNeg952((s) => shown952(s, 'refresh', 'remount'), 'read', 'old')[0],
+    `阅读模式 live：${fmt952('live', 'read')}｜阅读模式 old（负对照）：${fmt952('old', 'read')}`,
+  )
+  check('adj952 实测（**不许回退**）：阅读模式同一串步骤与编辑模式**表现一致**（点开保持 / 再点隐藏 / 点块外关闭 / 悬停不变；负对照 `old` 判假）', c952h, d952h)
+  const [c952i, d952i] = judged952(
+    single952(scen('live', 'edit'), 'init', 'click1', 'relayout', 'refresh', 'remount', 'click2') &&
+      scen('live', 'edit')?.steps.afterDestroy?.bars === 0 &&
+      scen('live', 'edit')?.steps.afterDestroy?.where === 'gone' &&
+      (scen('live', 'edit')?.leftovers.length ?? -1) === 0 &&
+      single952(scen('live', 'read'), 'init', 'click1', 'relayout', 'refresh', 'remount', 'click2') &&
+      scen('live', 'read')?.steps.afterDestroy?.bars === 0 &&
+      (scen('live', 'read')?.leftovers.length ?? -1) === 0,
+    `编辑 afterDestroy=${JSON.stringify(scen('live', 'edit')?.steps.afterDestroy)} leftovers=${JSON.stringify(scen('live', 'edit')?.leftovers)}｜` +
+      `阅读 afterDestroy=${JSON.stringify(scen('live', 'read')?.steps.afterDestroy)} leftovers=${JSON.stringify(scen('live', 'read')?.leftovers)}`,
+  )
+  check('adj952 实测：全过程（含重画/重建/隐藏）文档里**始终只有一条**工具条，销毁后**零残留**（负对照 noGenGuard 的"多条"判假）', c952i, d952i)
+  const [c952j, d952j] = judged952(selfCheck952('edit') && selfCheck952('read'), `edit=${JSON.stringify(scen('live', 'edit')?.selfCheck)}｜read=${JSON.stringify(scen('live', 'read')?.selfCheck)}`)
+  check('adj952 实测夹具自检：谱面真的画出来了（有 svg）、工具条真的存在、容器真的有尺寸、编辑/阅读的宿主链对得上 —— 免得"没跑到"被当成"没问题"', c952j, d952j)
+  const [c952k, d952k] = judged952(
+    (() => {
+      const log = scen('live', 'edit')?.diag.log ?? []
+      return (
+        log.some((l) => l.includes('点击预览区 ⇒ 显示工具条') && l.includes('用户钉住=是')) &&
+        log.some((l) => l.includes('点击预览区 ⇒ 隐藏工具条') && l.includes('用户钉住=否')) &&
+        log.some((l) => l.includes('点击块外 ⇒ 收起工具条'))
+      )
+    })(),
+    `live 点击诊断逐条=${JSON.stringify(scen('live', 'edit')?.diag.log ?? [])}`,
+  )
+  check('adj952 实测诊断：`lastToolbarClick` 逐次记下"点了哪里、命中什么、用户钉住=是/否"（下次真机若还闪，这一行能立刻区分"没收到点击 / 收到了但没钉住"）', c952k, d952k)
 }
 
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。

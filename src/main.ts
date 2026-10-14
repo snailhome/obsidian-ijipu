@@ -1491,10 +1491,15 @@ export default class IJipuPlugin extends Plugin {
    * 为什么还要"下一帧再清一次"：leaf 的内容替换与 DOM 断连**不一定在同一拍**完成
    * （Obsidian 内部还要走一轮 view 生命周期），所以**两次都做**：现在一次、下一帧一次。
    * 这个方法幂等、开销可忽略（只在"打开 .jps"这种低频动作里调用）。
+   *
+   * ⚠ adj952：这里传 `force = true` —— 常规清理会给"容器暂时脱离文档"（宿主重建 widget）留一个
+   * 宽限期（否则会把用户刚点开的工具条当成孤儿删掉，见 `sweepOrphanBodyToolbars` 那段），
+   * 而**本方法的语义正是"用户已经离开这份笔记、残留一定回不来了"** ⇒ 不许等宽限期，
+   * 否则上面那句"直接移除"就落空了（用户口径 adj905z 之二要求"打开 .jps 时顺手关掉残留"）。
    */
   private sweepToolbarsAfterNavigation(): void {
-    sweepOrphanBodyToolbars()
-    window.requestAnimationFrame(() => sweepOrphanBodyToolbars())
+    sweepOrphanBodyToolbars(true)
+    window.requestAnimationFrame(() => sweepOrphanBodyToolbars(true))
   }
 
   /**
