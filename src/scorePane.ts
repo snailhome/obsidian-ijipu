@@ -35,7 +35,7 @@ import {
 } from '@ijipu/engine'
 import { renderScoreFull, playScore, type PlayheadSeg } from './render'
 // adj965（方案 OVL，EP-09 插件侧）：代码块 / 文件视图的**取图**（相对本谱 + `[[双链]]` → data URI）
-import { overlayAssetsFor, clearOverlayAssetCache } from './overlayAssets'
+import { overlayAssetsFor } from './overlayAssets'
 // adj758（清单 B1）：色块的分组/定位/配色来自 **引擎**（应用与插件共用一份；此处只做绘制）
 // adj764（清单 B6）：时间轴推进用引擎时钟（与应用共用"推进/暂停续播/取消/到点一次"的语义）
 import { createPlaybackClock, instrumentColorMap, playheadBaseOf, playheadPosIn, trackKeysOf, type PlayheadPos } from '@ijipu/engine'
@@ -3085,13 +3085,17 @@ toolbar.dataset.ijipuPane = String(paneId)
       endDragListeners?.()
       endDragListeners = null
       /**
-       * adj965（EP-09 插件侧）：**把图片资源缓存清掉**。
+       * adj965g（用户 2026-10-15 实报："`Alt+滚轮` 调背景大小时，右上角信息显示一次，**背景就消失一次**，
+       * 再切换水印/背景后又显示回来"）：
        *
-       * 缓存键是"两张图的原始取值 + 承载它的文件"，**不含 mtime**（每帧去 stat 不值当）⇒
-       * 用户在会话中途把图换掉、或把图挪到别处时，缓存里那份会一直用到面板销毁。
-       * 销毁时清一次就够了：面板重建会重新读盘（同一份谱重开=重新取图）。
+       * **这里绝不能清图片缓存** ✗。原因正是 `adj965e` 那条链条 —— 一次手势落盘会 `writeSource()`
+       * 改代码块正文 ⇒ 宿主**重建面板** ⇒ 如果销毁时把缓存清掉，新面板的**第一帧**就只能按"没有图"画
+       * ⇒ 背景（或图形水印）**每调一步就消失一次**，等异步读盘回来才补上；用户滚一下看到的就是"闪一下没了"，
+       * 而"切换水印/背景"会触发重画、那时读盘已经完成 ⇒ 又显示回来 ✓（现象逐条对上）。
+       *
+       * 缓存键是"两张图的原始取值 + 承载它的文件"，**与本次手势改的那些数值无关** ⇒ 重建后本来就该命中。
+       * "图被换掉"那种失效改由 `main.ts` 的 `vault.on('modify')` 负责（只对图片扩展名清一次，见那里）。
        */
-      clearOverlayAssetCache()
       plugin.events.offref(settingsRef)
       plugin.events.offref(guidesRef)
       // adj725b：补量用的观察器要断开，否则会一直盯着已经被丢弃的 svg

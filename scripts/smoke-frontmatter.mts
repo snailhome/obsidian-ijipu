@@ -8847,6 +8847,9 @@ if (true) {
     error?: string
     chipFound?: boolean
     setup?: { svg?: number; guideLines?: number; hint?: boolean; chips?: number; active?: string; unsaved?: boolean; writes?: number }
+    assets?: { imageNow?: number; mounts?: number; firstPaint?: boolean[] }
+    assetsReady?: { ready?: boolean; imageNow?: number; mounts?: number }
+    assetsFinal?: { mounts?: number; firstPaint?: boolean[] }
     switchToWm?: { chips?: number; active?: string; chipTexts?: string[] }
     zoom?: { writes?: number; cfg?: Record<string, unknown>; unsaved?: boolean; active?: string; chips?: number }
     rotate?: { writes?: number; cfg?: Record<string, unknown> }
@@ -8952,6 +8955,40 @@ if (true) {
   check('adj965d 真浏览器：**落盘会重建面板**，重建之后「调整对象」还是「水印」（用户实报：这里会掉回背景）',
     ok965 && r965.zoom?.active === '水印',
     `重建后 active=${String(r965.zoom?.active)}（期望「水印」）`)
+  /**
+   * **用户 2026-10-15 实报的第二条**：`Alt+滚轮` 调背景大小时，**每调一步背景就消失一次**，
+   * 切换水印/背景后又显示回来。
+   *
+   * 根因：落盘 ⇒ 宿主重建面板 ⇒ 而 `destroy()` 当时把**图片缓存**清了 ⇒ 新面板第一帧按"没有图"画；
+   * 等异步读盘回来才补上（切换层会触发重画，那时已经读好了 ⇒ "又显示回来"）。现象逐条对上。
+   *
+   * 判据放在**源码层**：真浏览器夹具测不了这条（无头 + `--virtual-time-budget` 下
+   * `createEl('img').decode()` **不落地**，图永远解析不出来 ⇒ 任何"第一帧有没有 `<image>`"的判据
+   * 都恒真/恒假）。所以这里钉两条**结构性事实**，并配一条**真负对照**（把清缓存注入 destroy ⇒ 判据翻红）。
+   */
+  const paneSrc965g = String(readFileSync('src/scorePane.ts', 'utf8'))
+  const mainSrc965g = String(readFileSync('src/main.ts', 'utf8'))
+  /** 判据本体：destroy 里不许出现清缓存（抽成函数是为了让负对照能复用同一个判据） */
+  const destroyKeepsAssetCache = (src: string): boolean => {
+    const at = src.indexOf('    destroy: () => {')
+    if (at < 0) return false
+    /** destroy 的区间：到下一个顶层 `    },` 为止（本文件里 destroy 是 handle 的最后一个字段） */
+    const end = src.indexOf('\n    },\n  }\n}', at)
+    const body = src.slice(at, end < 0 ? src.length : end)
+    return !body.includes('clearOverlayAssetCache')
+  }
+  check('adj965g 源码：面板 `destroy()` **不许清图片缓存**（落盘会重建面板 ⇒ 清了就等于每调一步背景消失一次）',
+    destroyKeepsAssetCache(paneSrc965g) &&
+      !/from '\.\/overlayAssets'/.test(paneSrc965g.split('\n').filter((l) => l.includes('clearOverlayAssetCache')).join('\n')),
+    '')
+  check('adj965g 源码**负对照**：把 `clearOverlayAssetCache()` 注入 destroy ⇒ 同一条判据判假（不是恒真）',
+    destroyKeepsAssetCache(paneSrc965g.replace('    destroy: () => {', '    destroy: () => {\n      clearOverlayAssetCache()')) === false,
+    '')
+  check('adj965g 源码：清缓存的**唯一出口**是"图片文件被改写/删除"那两条 vault 监听（用引擎的扩展名白名单判定，笔记/.jps 改动不误清）',
+    /function clearOverlayAssetCache/.test(String(readFileSync('src/overlayAssets.ts', 'utf8'))) &&
+      /isAllowedAssetPath\(file\.path\)\)\s*clearOverlayAssetCache\(\)/.test(mainSrc965g) &&
+      /on\('delete'[\s\S]{0,200}?isAllowedAssetPath\(file\.path\)\)\s*clearOverlayAssetCache\(\)/.test(mainSrc965g),
+    '')
   check('adj965d 真浏览器：`Alt+Shift+滚轮` ⇒ 旋转写进谱面（`wmRotate`）',
     ok965 && r965.rotate?.writes === 2 && typeof r965.rotate?.cfg?.wmRotate === 'number',
     `writes=${r965.rotate?.writes ?? '—'} cfg=${JSON.stringify(r965.rotate?.cfg ?? {})}`)

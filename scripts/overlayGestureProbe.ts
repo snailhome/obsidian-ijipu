@@ -116,6 +116,14 @@ export async function runOverlayGestureProbe(mount: MountFn, baseSource: string)
       app: {
         vault: {
           configDir: '.obsidian',
+          /**
+           * adj965g：**这里刻意让图读不到**（`exists → false`）。
+           *
+           * 夹具测不了图片链（无头 + 虚拟时钟下 `img.decode()` 不落地，见 `doMount` 上面那段），
+           * 与其让它"看起来在测"而恒真，不如明确：图片资源的缓存语义由**源码层闸门**守
+           * （冒烟 `adj965g` 节：`destroy()` 里不许清缓存 + 负对照）。图读不到时弹的
+           * `Notice`（"未找到图片"）不在断言范围内，不影响别的判据。
+           */
           adapter: { exists: async () => false, readBinary: async () => new ArrayBuffer(0) },
         },
         metadataCache: { getFirstLinkpathDest: () => null },
@@ -178,8 +186,9 @@ export async function runOverlayGestureProbe(mount: MountFn, baseSource: string)
      * **面板内**保存的"调整对象"会在重建时回到默认（背景）⇒ 用户"切到水印再 Alt+拖动"
      * 动到的却是背景。夹具必须复刻"重建"这一步，否则这条链根本测不到。
      */
-    const doMount = (): PaneHandle =>
-      mount({
+    const imageAtMount: boolean[] = []
+    const doMount = (): PaneHandle => {
+      const h = mount({
         plugin: pluginStub,
         container,
         getSource: () => sourceNow,
@@ -196,8 +205,21 @@ export async function runOverlayGestureProbe(mount: MountFn, baseSource: string)
         onOpenFile: () => undefined,
         onEdit: () => undefined,
       })
+      imageAtMount.push(container.querySelectorAll('image').length > 0)
+      return h
+    }
     pane = doMount()
     await frames(3)
+    /**
+     * ⚠ **本夹具不测"图片资源"那条链**（`adj965g` 的缓存判据改在 `src` 层做，见冒烟的 `adj965g` 节）。
+     *
+     * 原因：无头 Chrome + `--virtual-time-budget` 下 `createEl('img').decode()` **不落地**
+     * （轮询 3 秒仍 `ready=false`，实测），图永远解析不出来 ⇒ 任何"第一帧有没有 `<image>`"的判据
+     * 都会**恒真/恒假**，是假闸门。真机（Obsidian）里这条链是好的（用户截图可见背景图与重复水印）。
+     * 这里只保留 `imageAtMount` 的**记录**，供失败时看上下文，不参与断言。
+     */
+    result.assetsNotExercised = { note: '图片链在本夹具里解析不出来（无头+虚拟时钟），改由 src 层闸门守', mounts: imageAtMount.length }
+    flush()
 
     const q = <T extends Element>(sel: string): T | null => container.querySelector<T>(sel)
     /**
@@ -219,7 +241,7 @@ export async function runOverlayGestureProbe(mount: MountFn, baseSource: string)
       ...hintState(),
       writes: writes.length,
     }
-    flush()
+    /** adj965g：这里只留个记录（见上面那段"本夹具不测图片链"的说明），不参与断言 */
 
     // ① 切到「水印」那一层（切换器点一下）——同时验"切换器真的在切"
     const chipWm = Array.from(container.querySelectorAll<HTMLElement>('.ijipu-overlay-chip')).find(
@@ -271,6 +293,7 @@ export async function runOverlayGestureProbe(mount: MountFn, baseSource: string)
     flush()
 
     pane.destroy()
+    result.assetsFinal = { mounts: imageAtMount.length, firstPaint: [...imageAtMount] }
     result.step = 'done'
     result.done = true
     flush()

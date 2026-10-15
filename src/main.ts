@@ -1,12 +1,14 @@
 import { Events, Keymap, MarkdownRenderChild, MarkdownView, Notice, Platform, Plugin, requestUrl, TFolder, TFile, type MarkdownSectionInformation, type WorkspaceLeaf } from 'obsidian'
 // adj749d：自动格式化（光标离开本行时格式化该行）用**引擎里那份应用自己的**逐行格式化器
-import { formatLine, applyRangeToSvg, rangeBox, readViewBoxOf, insertPngPhys, dpiForScale, RANGE_PAD_DEFAULT, type RangeBox } from '@ijipu/engine'
+import { formatLine, applyRangeToSvg, rangeBox, readViewBoxOf, insertPngPhys, dpiForScale, RANGE_PAD_DEFAULT, isAllowedAssetPath, type RangeBox } from '@ijipu/engine'
 // adj774：markdown 笔记里 ```jps 代码块的围栏扫描（着色/错误提示/自动格式化三处共用同一份口径）
 import { jpsBlockRanges, modeOfInfo, modeParamWarning, zoomOfInfo, zoomWrittenInInfo } from './jpsBlocks'
 import { createIjipuApi, type IjipuApi } from './api'
 import { createAppRequester, createEmbedRpc, type AppRequester, type EmbedRpc } from './embed/rpc'
 // adj807（B2）：RPC 的 `render.svg` 允许带 `pageConfig` 覆盖 ⇒ 这里只需要它的**类型**
 import type { PageConfig } from '@ijipu/engine'
+// adj965g：图片文件被改写时清一次缓存（见下面 vault.on('modify') 那段说明）
+import { clearOverlayAssetCache } from './overlayAssets'
 import { IJipuSettingTab } from './settings'
 import { mountScorePane, sweepOrphanBodyToolbars, type ScorePaneHandle } from './scorePane'
 import { registerJpsEmbeds } from './embed'
@@ -761,9 +763,26 @@ export default class IJipuPlugin extends Plugin {
      */
     this.registerEvent(
       this.app.vault.on('modify', (file) => {
+        /**
+         * adj965g（用户 2026-10-15 实报"`Alt+滚轮` 每调一步背景就消失一次"的**配套那一半**）：
+         *
+         * 图片缓存（`src/overlayAssets.ts`）不再在**面板销毁**时清 —— 一次手势落盘会重建面板，
+         * 那样等于每调一步都丢一次图（详见 `scorePane.ts` 里 destroy 那段）。所以"图被换掉了"
+         * 这件事改由**文件事件**负责：只有真的是图片文件被改写/替换时才清一次 ✓。
+         *
+         * 判据用引擎的 `isAllowedAssetPath`（扩展名白名单与应用、宿主桥同一份）⇒ 不会因为
+         * 笔记/`.jps` 的改动误清（那类改动很频繁，清了就又变成"每步闪一下"）。
+         */
+        if (file instanceof TFile && isAllowedAssetPath(file.path)) clearOverlayAssetCache()
         if (!this.embedEnabled) return
         if (!(file instanceof TFile) || file.extension !== JPS_EXTENSION) return
         this.bridge.broadcast('fileChanged', { path: file.path })
+      }),
+    )
+    this.registerEvent(
+      this.app.vault.on('delete', (file) => {
+        // adj965g：图被删掉时也要失效 —— 否则缓存里那份会一直画到重开（`modify` 不会为删除触发）
+        if (file instanceof TFile && isAllowedAssetPath(file.path)) clearOverlayAssetCache()
       }),
     )
   }
