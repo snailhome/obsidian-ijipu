@@ -2007,6 +2007,24 @@ console.log('\n[adj724b] community review: forbidden APIs / styles must stay fix
       /minInk: minInkFor\(noteInkH\)/.test(scorePaneSrc) &&
       /rangeBox\(\{ range: 'score'/.test(scorePaneSrc) &&
       !/minInk = Math\.max\(6, Math\.round\(noteInkH \* 0\.9\)\)/.test(scorePaneSrc))
+  /**
+   * adj965（方案 OVL，EP-11②）：**还要排除 `[data-overlay]`（水印层 / 背景层）**。
+   *
+   * 为什么必须（这是"引擎加了层就欠下的账"，不是可选项）：两层都按"整页可视"画
+   * （背景图常常铺满整页、重复水印更是铺满整页），一旦被算进内容并集，
+   * "只显示有内容的部分"就退化成整页 ⇒ **`'score'` 视图裁剪当场失效**；
+   * 而文本水印**在本插件里已经会画**（`vendor/engine` 已同步）⇒ 现在就踩得到。
+   * 判据与引擎给两层打的标记**同一个属性名**（`render/overlay.ts` 的 `data-overlay`）。
+   * 窗口匹配（`{0,2600}`）是为了钉住"这句在 `measureContentBox` **函数体里**"，
+   * 而不是"文件里随便哪儿出现过这个字符串"；下面配负对照。
+   */
+  const overlaySkipRe = /function measureContentBox\(svgEl: SVGSVGElement\)[\s\S]{0,2600}?getAttribute\('data-overlay'\)/
+  check('adj965 EP-11② 内容盒量取**排除水印层/背景层**（`[data-overlay]`），否则「谱面」视图裁剪失效',
+    overlaySkipRe.test(scorePaneSrc),
+    '')
+  check('adj965 EP-11② 负对照：把那一句去掉（＝修复前的写法）⇒ 同一条判据判红',
+    !overlaySkipRe.test(scorePaneSrc.replace(/[^\n]*getAttribute\('data-overlay'\)[^\n]*\n/, '')),
+    '')
   //    ③ 量到的盒**必须真的比整页小**（容差 2%）才用它 —— 防止 `getBBox()` 把整页白底算进来
   //       导致"裁剪等于没裁"（现象正是"谱面还是 A4 那么大空白"）；不满足则退回边距兜底。
   check('adj724b 裁剪以"实测内容盒"为主路径；不可信时**退回边距兜底**（两道闸由引擎判）',
@@ -8503,6 +8521,105 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
     `live 点击诊断逐条=${JSON.stringify(scen('live', 'edit')?.diag.log ?? [])}`,
   )
   check('adj952 实测诊断：`lastToolbarClick` 逐次记下"点了哪里、命中什么、用户钉住=是/否"（下次真机若还闪，这一行能立刻区分"没收到点击 / 收到了但没钉住"）', c952k, d952k)
+}
+
+/**
+ * adj965（方案 OVL，EP-09）：宿主的**读图 op**（`readAsset`）。
+ *
+ * 为什么必须**真跑**而不是只看源码：这是一道**安全边界**——
+ * `.jps` 是纯文本、可能来自别人，一句路径就能把库外的文件当"图片"读进应用的预览里。
+ * 所以用假 vault 走一遍真实链路（`normalizeVaultPath` → 白名单 → 上限 → base64 + mtime），
+ * 并给每条拒绝路径都留一条断言。
+ */
+{
+  const { IJipuBridge } = await import('../src/embed/bridge.ts')
+  const { MAX_ASSET_BYTES, toBase64 } = await import('@ijipu/engine')
+  /** 假 vault：只实现 `readAsset` 会用到的三个原语（`exists` / `readBinary` / `stat`） */
+  const files = new Map<string, ArrayBuffer>()
+  files.set('乐谱/img/图.png', new Uint8Array([1, 2, 3]).buffer)
+  files.set('乐谱/大图.png', new ArrayBuffer(MAX_ASSET_BYTES + 1))
+  files.set('乐谱/笔记.md', new Uint8Array([7]).buffer)
+  files.set('别处/图.png', new Uint8Array([9, 9]).buffer)
+  // 用来证明"绝对路径也没逃出库"：库内这个同名文件才是会被读到的那一份
+  files.set('乐谱/etc/passwd.png', new Uint8Array([5, 5, 5]).buffer)
+  const adapter = {
+    exists: async (p: string) => files.has(p),
+    readBinary: async (p: string) => files.get(p) ?? new ArrayBuffer(0),
+    stat: async (p: string) => (files.has(p) ? { mtime: 42 } : null),
+  }
+  const app = {
+    vault: { adapter },
+    metadataCache: { getFirstLinkpathDest: (link: string) => (link === '图.png' ? { path: '别处/图.png' } : null) },
+  }
+  const bridge = new IJipuBridge({
+    app,
+    token: 't',
+    root: '乐谱',
+    kv: { all: async () => ({}), get: () => null, set: () => {}, remove: () => {} },
+  } as never)
+  /** `exec` 是 private（运行期就是普通方法）——冒烟直接调它，不必起 iframe/postMessage */
+  const exec = (args: Record<string, unknown>) =>
+    (bridge as unknown as { exec(op: string, a: Record<string, unknown>): Promise<{ ok: boolean; result?: unknown; error?: string }> }).exec(
+      'readAsset',
+      args,
+    )
+  const res = (r: { ok: boolean; result?: unknown }) => r.result as { base64?: string; mime?: string; mtime?: number } | null
+
+  const ok = await exec({ path: 'img/图.png' })
+  check(
+    'adj965 EP-09 宿主读图：工作区相对路径（本谱目录 + 图片子目录）真读出来 ⇒ base64 + mime + mtime',
+    ok.ok === true &&
+      res(ok)?.base64 === toBase64(new Uint8Array([1, 2, 3])) &&
+      res(ok)?.mime === 'image/png' &&
+      res(ok)?.mtime === 42,
+    JSON.stringify(ok.ok ? { mime: res(ok)?.mime, mtime: res(ok)?.mtime } : ok),
+  )
+  const missing = await exec({ path: '没有.png' })
+  check(
+    'adj965 EP-09 宿主读图：**文件不在** ⇒ `ok:true, result:null`（不是错误——让应用报"未找到图片"）',
+    missing.ok === true && missing.result === null,
+    JSON.stringify(missing),
+  )
+  const linked = await exec({ link: '图.png', source: '乐谱/谱.jps' })
+  const linkedBad = await exec({ link: '不存在.png', source: '乐谱/谱.jps' })
+  check(
+    'adj965 EP-09 宿主读图：`[[双链]]` 走**宿主的链接解析**（可跨目录，与"相对本谱的路径"不是一回事）；解不到就明确报"未找到"',
+    linked.ok === true && res(linked)?.base64 === toBase64(new Uint8Array([9, 9])) && linkedBad.ok === false &&
+      String(linkedBad.error).includes('未找到图片'),
+    JSON.stringify(linked.ok ? { bytes: res(linked)?.base64 } : linked),
+  )
+  const svg = await exec({ path: 'img/a.svg' })
+  const md = await exec({ path: '笔记.md' })
+  check(
+    'adj965 EP-09 宿主读图**只收图片扩展名**：`svg`（可带脚本）与 `md` 都被明确拒绝（方案 §八.10）',
+    svg.ok === false && String(svg.error).includes('只允许图片') && md.ok === false && String(md.error).includes('只允许图片'),
+    `${svg.ok === false ? svg.error : 'svg 被放过了'} ｜ ${md.ok === false ? md.error : 'md 被放过了'}`,
+  )
+  const escape = await exec({ path: '../库外.png' })
+  const abs2 = await exec({ path: '/etc/passwd.png' })
+  check(
+    'adj965 EP-09 宿主读图**拒绝越界**：`..` 被判非法；绝对路径被剥成库内相对路径 ⇒ 读到的是**库内**那份（没逃出库）',
+    escape.ok === false &&
+      String(escape.error).includes('非法路径') &&
+      abs2.ok === true &&
+      // 关键：读出来的是"乐谱/etc/passwd.png"（库内），**不是**系统那个 /etc/passwd.png
+      res(abs2)?.base64 === toBase64(new Uint8Array([5, 5, 5])),
+    `${escape.ok === false ? escape.error : '越界被放过了'} ｜ abs=${JSON.stringify(abs2.ok ? { b64: res(abs2)?.base64 } : abs2)}`,
+  )
+  const big = await exec({ path: '大图.png' })
+  check(
+    'adj965 EP-09 宿主读图有**大小上限**（与应用同一份 `MAX_ASSET_BYTES`：改一处两端同时变）',
+    big.ok === false && String(big.error).includes('上限'),
+    big.ok === false ? big.error : '超限被放过了',
+  )
+  /** **负对照**：把白名单那一句从源码里去掉，同一条判据必须判红（证明它真的在量这句话） */
+  const bridgeSrc965 = String(readFileSync('src/embed/bridge.ts', 'utf8'))
+  check(
+    'adj965 EP-09 负对照：抹掉 `isAllowedAssetPath(target)` 那一句 ⇒ 上面的"只收图片"判据判红',
+    /isAllowedAssetPath\(target\)/.test(bridgeSrc965) &&
+      !/if \(!isAllowedAssetPath\(target\)\)/.test(bridgeSrc965.replace(/if \(!isAllowedAssetPath\(target\)\)[^\n]*\n/, '')),
+    '',
+  )
 }
 
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。

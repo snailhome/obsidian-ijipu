@@ -21,6 +21,8 @@
  * 事件：宿主 → 应用 `{ ch:'ijipu', type:'theme'|'openFile'|'vaultChanged', ... }`
  */
 import { normalizePath, type App } from 'obsidian'
+// adj965（方案 OVL，EP-09）：取图策略（白名单 / 大小上限 / mime / base64）与应用**同一份**（引擎）
+import { MAX_ASSET_BYTES, isAllowedAssetPath, mimeOf, toBase64 } from '@ijipu/engine'
 
 /** 握手令牌（与应用 URL 里的 token 同源） */
 export const BRIDGE_CHANNEL = 'ijipu'
@@ -357,6 +359,47 @@ export class IJipuBridge {
         const back = await adapter.read(target)
         if (back !== text) return { ok: false, error: '写入后回读校验不一致' }
         return { ok: true, result: {} }
+      }
+      case 'readAsset': {
+        /**
+         * adj965（方案 OVL，EP-09）：**读图片字节**（水印 / 背景图）。
+         *
+         * 为什么必须走桥：应用在 iframe 里（浏览器上下文），拿不到 vault 的二进制读；
+         * 而"相对本谱的路径"这条口径在嵌入版里就是"vault 里的路径"。
+         *
+         * 两种取值（与 `assetSource.ts` 的三类取值对应）：
+         *  · `link`（`[[图片.png]]` 双链）：走 Obsidian 的**链接解析**（vault 全域、可跨目录），
+         *    与"相对本谱的路径"是两套语义 ⇒ 由宿主自己解析，应用只把双链原文递过来；
+         *  · `path`（`img/图.png`）：工作区相对路径，经 `normalizeVaultPath` 拒 `..` 越界。
+         *
+         * 安全（方案 §八.10）：**只收图片扩展名**（拒 svg）、**大小上限**；
+         * 越界 / 类型不对 / 太大都**明确报错**（不静默少画一层）。
+         */
+        let target: string | null = null
+        const linkRaw = typeof args.link === 'string' ? args.link : ''
+        if (linkRaw !== '') {
+          const dest = this.host.app.metadataCache.getFirstLinkpathDest(linkRaw, String(args.source ?? ''))
+          target = dest === null ? null : dest.path
+          if (target === null) return { ok: false, error: `未找到图片：[[${linkRaw}]]` }
+        } else {
+          const relp = normalizeVaultPath(args.path)
+          if (relp === null || relp === '') return { ok: false, error: '非法路径' }
+          target = abs(relp)
+          if (target === null || target === '') return { ok: false, error: '非法路径' }
+        }
+        if (!isAllowedAssetPath(target)) {
+          return { ok: false, error: `只允许图片（png / jpg / jpeg / webp / gif / bmp）：${target}` }
+        }
+        if (!(await adapter.exists(target))) return { ok: true, result: null }
+        const buf = await adapter.readBinary(target)
+        if (buf.byteLength > MAX_ASSET_BYTES) {
+          return { ok: false, error: `图片超过 ${Math.round(MAX_ASSET_BYTES / 1024 / 1024)}MB 上限：${target}` }
+        }
+        const st = await adapter.stat(target).catch(() => null)
+        return {
+          ok: true,
+          result: { base64: toBase64(new Uint8Array(buf)), mime: mimeOf(target), mtime: st?.mtime ?? 0 },
+        }
       }
       case 'exists': {
         const target = abs(rel)

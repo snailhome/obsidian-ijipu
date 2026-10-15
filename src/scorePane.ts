@@ -2194,6 +2194,12 @@ toolbar.dataset.ijipuPane = String(paneId)
      * adj629n 注释）—— `getBBox()` 会把白底一起算进去，结果永远等于整页大小。
      * ⇒ 这里**排除 `data-page-bg`**，对其余元素逐个取 `getBBox()` 求并集。
      *
+     * ⚠ **adj965 起还要排除 `[data-overlay]`（水印层 / 背景层）**——那是本轮的 EP-11②：
+     * 两层都按"整页可视"来画（背景图常常铺满整页、水印平铺也铺满整页），
+     * 一旦被算进并集，"只显示有内容的部分"就退化成整页 ⇒ **`'score'` 视图的裁剪当场失效**。
+     * 它们也**不该**算进"内容"：按方案 §三.4，水印/背景不参与墨迹（铁律 §五.9 只管谱面元素）。
+     * 判据与引擎的层标记**同一个属性**（`render/overlay.ts` 给两层打的就是 `data-overlay`）。
+     *
      * 取并集（而不是只取内容 `<g>`）是为了稳妥：引擎的顶层结构可能变化（段层/替换谱层各自包 `<g>`），
      * 逐个求并集对"元素直接挂在 svg 下"和"包在若干 `<g>` 里"都成立。
      *
@@ -2226,6 +2232,7 @@ toolbar.dataset.ijipuPane = String(paneId)
       for (const child of Array.from(svgEl.children)) {
         const el = child as SVGGraphicsElement
         if (el.getAttribute('data-page-bg')) continue // 整页白底：不是"内容"
+        if (el.getAttribute('data-overlay')) continue // adj965 EP-11②：水印层/背景层：不是"内容"（否则 'score' 裁剪失效）
         if (typeof el.getBBox !== 'function') continue
         let b: DOMRect
         try {
