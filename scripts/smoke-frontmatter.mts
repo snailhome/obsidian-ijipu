@@ -8622,6 +8622,86 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
   )
 }
 
+/**
+ * adj965d（方案 OVL，EP-13）：插件代码块预览里的**水印 / 背景 Alt 手势**。
+ *
+ * 这里只能做**源码级**闸门：真派发鼠标事件需要一个真实的 Obsidian（CM6 + 完整 DOM）环境，
+ * 那一步由真机验证覆盖（与应用侧的做法不同——应用有 `verify:app-ui` 那套 CDP 真派发）。
+ * 所以这一组钉的是"**接线长什么样**"，而且每条都配负对照，防止"文件里随便出现过这个字符串"就通过。
+ */
+{
+  const pane = String(readFileSync('src/scorePane.ts', 'utf8'))
+  const css = String(readFileSync('styles.css', 'utf8'))
+  /** 用后即删的"抹掉某一句"负对照工具 */
+  const without = (src: string, re: RegExp): string => src.replace(re, '')
+
+  check(
+    'adj965d 插件手势**用引擎那一份**判定（与应用同源）：导入 activeOverlayLayer/applyOverlayWheel/applyOverlayDrag/overlayGestureBase，且**本地不再重写一套**',
+    /activeOverlayLayer,/.test(pane) &&
+      /applyOverlayWheel,/.test(pane) &&
+      /applyOverlayDrag,/.test(pane) &&
+      /overlayGestureBase,/.test(pane) &&
+      !/function applyOverlayWheel\(/.test(pane) &&
+      !/function activeOverlayLayer\(/.test(pane),
+    '',
+  )
+  check(
+    'adj965d 插件手势的前提三条齐了才算数（排版开 + 可写回 + 引擎判的"该层已启用/有内容"）',
+    /plugin\.showGuides && host\.writeSource \? activeOverlayLayer\(cfg, overlayEditLayer\) : null/.test(pane),
+    '',
+  )
+  check(
+    'adj965d 插件滚轮监听必须 `{ passive: false }`（被动监听里 preventDefault 被忽略 ⇒ 页面照滚）',
+    /container\.addEventListener\(\'wheel\', onOverlayWheel, \{ passive: false \}\)/.test(pane) &&
+      // 负对照：把 passive:false 抹掉 ⇒ 同一条判据判红
+      !/container\.addEventListener\('wheel', onOverlayWheel, \{ passive: false \}\)/.test(
+        without(pane, /container\.addEventListener\('wheel', onOverlayWheel, \{ passive: false \}\)[^\n]*\n/),
+      ),
+    '',
+  )
+  check(
+    'adj965d 插件手势**把手势监听挂在容器上、只挂一次**（不挂进 `paint()`：容器跨重画是同一个元素，挂进去就会每代多加一条）',
+    /container\.addEventListener\('pointerdown', onOverlayPointerDown\)/.test(pane) &&
+      // 两条监听都在 `const paint = ` **之前**（＝挂载期一次）
+      pane.indexOf("container.addEventListener('wheel', onOverlayWheel") < pane.indexOf('const paint = ') &&
+      pane.indexOf("container.addEventListener('pointerdown', onOverlayPointerDown)") < pane.indexOf('const paint = '),
+    '',
+  )
+  check(
+    'adj965d 插件手势落盘口径与应用同源：基线 `overlayGestureBase`（整层固化、不留半截）+ `mergeConfigEdits` + `writeJpsConfig` → `host.writeSource`',
+    /overlayBase = overlayGestureBase\(cfg, layer\)/.test(pane) &&
+      /mergeConfigEdits\(host\.getSource\(\), base, finalCfg\)/.test(pane) &&
+      /writeJpsConfig\(host\.getSource\(\), payload\)/.test(pane) &&
+      /host\.writeSource\(writeJpsConfig/.test(pane),
+    '',
+  )
+  check(
+    'adj965d `Alt+拖动` 优先于辅助虚线：虚线的 pointerdown **按住 Alt 时直接返回**（不 stopPropagation），让事件冒泡到容器上的手势',
+    /\n      if \(e\.altKey\) return\n/.test(pane) &&
+      // 负对照：抹掉那一句 ⇒ 同一条判据判红（证明它真的在量这一行）
+      !/\n      if \(e\.altKey\) return\n/.test(without(pane, /\n      if \(e\.altKey\) return\n/)),
+    '',
+  )
+  check(
+    'adj965d 插件角落提示：三层前提齐才渲染；**切换器只在两层都可调时出现**；该层没写进谱面时给红字提醒（只看源码层）',
+    /const hintLayer = overlayTargetOf\(cfg\)/.test(pane) &&
+      /if \(hintLayer !== null\) \{/.test(pane) &&
+      /const both = bothOverlayLayersVisible\(cfg\)/.test(pane) &&
+      /overlayLayerPersisted\(mergeJpsConfig\(host\.getSource\(\), null\), hintLayer\)/.test(pane) &&
+      /ijipu-overlay-unsaved/.test(pane),
+    '',
+  )
+  check(
+    'adj965d 插件手势的样式走 **CSS 类**（插件审核规则：`no-static-styles-assignment` 是 Error 级）——类在 styles.css 里，src 里不写内联样式',
+    /\.ijipu-overlay-hint \{/.test(css) &&
+      /\.ijipu-overlay-chip\.is-active \{/.test(css) &&
+      /\.ijipu-overlay-unsaved \{/.test(css) &&
+      // 负判定：新代码段里不得出现 `.style.` 赋值（整份文件的扫描另有 adj799 闸门兜底）
+      !/overlayHint.*\.style\./.test(pane),
+    '',
+  )
+}
+
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。
 //   实测踩过：一次编辑顺手把它删掉，套件仍以退出码报错，但输出里再也看不到 `N passed, M failed`。
 console.log(`\n${pass} passed, ${fail} failed`)

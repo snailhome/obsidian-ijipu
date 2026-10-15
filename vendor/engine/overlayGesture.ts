@@ -57,6 +57,14 @@ const SIZE_STEP_RATIO = 0.05
 export const OVERLAY_WHEEL_STEP_PX = 100
 /** 单次事件最多走几档：防"页"模式或异常 delta 把值一次拉飞（正常情况下远到不了这个数） */
 const OVERLAY_WHEEL_MAX_STEPS = 20
+/**
+ * 滚轮手势的**停顿落盘延时**（毫秒）——两端同源（应用预览区、插件代码块预览）。
+ *
+ * 拖动有"松手"可以判定一次手势结束，滚轮没有 ⇒ 只能按停顿判定：
+ * 连续滚动期间每次事件都重置这个定时器，停手约 0.4s 后把这一串改动**一次性**写进 `# jps-config`
+ * （于是"滚一下"和"滚十下"都是一条撤销，而不是十条）。
+ */
+export const OVERLAY_COMMIT_DELAY_MS = 400
 
 /** 滚轮（按住了 Alt）要做的事 */
 export type OverlayWheelMode = 'scale' | 'rotate'

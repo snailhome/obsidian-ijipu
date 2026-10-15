@@ -19,6 +19,7 @@ export {
   OVERLAY_ROTATE_RANGE,
   OVERLAY_TEXT_SIZE_RANGE,
   OVERLAY_WHEEL_STEP_PX,
+  OVERLAY_COMMIT_DELAY_MS,
   overlayLayerVisible,
   activeOverlayLayer,
   bothOverlayLayersVisible,

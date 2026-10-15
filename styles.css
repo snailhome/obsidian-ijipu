@@ -311,6 +311,52 @@
 .ijipu-page-svg {
   position: relative;
 }
+/**
+ * adj965d（方案 OVL，EP-13）：**角落的手势提示**（水印 / 背景层的 Alt 手势）。
+ *
+ * `position: sticky` 而不是 absolute：笔记视图本身是滚动容器，绝对定位会随内容滚走；
+ * sticky 让它在块可见时贴在**视口下沿**（与应用的预览区同一套做法）。右对齐用 `margin-left: auto`。
+ * 窄一点、可换行：它是提示，不该在窄栏里撑出横向滚动条。
+ */
+.ijipu-overlay-hint {
+  position: sticky;
+  bottom: 8px;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  max-width: 100%;
+  margin: 8px 0 0 auto;
+  padding: 5px 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background-color: var(--background-secondary);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+.ijipu-overlay-chip {
+  padding: 1px 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 999px;
+  background-color: transparent;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  cursor: pointer;
+  box-shadow: none;
+}
+.ijipu-overlay-chip.is-active {
+  border-color: var(--interactive-accent);
+  color: var(--interactive-accent);
+}
+.ijipu-overlay-unsaved {
+  color: var(--text-error);
+  overflow-wrap: anywhere;
+}
+.ijipu-overlay-keys {
+  overflow-wrap: anywhere;
+}
 .ijipu-guide-layer {
   position: absolute;
   inset: 0;

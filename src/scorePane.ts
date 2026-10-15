@@ -17,7 +17,22 @@
  * → `renderScoreToSvg`；试听走 `@ijipu/engine` 的 `buildPlaySequence` + SpessaSynth。
  */
 import { Menu, Notice, Platform, sanitizeHTMLToDom } from 'obsidian'
-import { writeJpsConfig, mergeConfigEdits, dragDelta, clamp, formatJps, type PageConfig } from '@ijipu/engine'
+import { writeJpsConfig, mergeConfigEdits, mergeJpsConfig, dragDelta, clamp, formatJps, type PageConfig } from '@ijipu/engine'
+// adj965d（方案 OVL，EP-13）：水印/背景层的 **Alt 手势**——判定与换算在引擎里（与应用预览区共用一份）
+import {
+  activeOverlayLayer,
+  applyOverlayDrag,
+  applyOverlayWheel,
+  bothOverlayLayersVisible,
+  overlayGestureBase,
+  overlayLayerPersisted,
+  overlayOffsetOf,
+  overlayWheelMode,
+  overlayWheelSteps,
+  wheelDeltaPx,
+  OVERLAY_COMMIT_DELAY_MS,
+  type OverlayLayer,
+} from '@ijipu/engine'
 import { renderScoreFull, playScore, type PlayheadSeg } from './render'
 // adj758（清单 B1）：色块的分组/定位/配色来自 **引擎**（应用与插件共用一份；此处只做绘制）
 // adj764（清单 B6）：时间轴推进用引擎时钟（与应用共用"推进/暂停续播/取消/到点一次"的语义）
@@ -703,6 +718,162 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
    */
   const onWindowResize = (): void => recomputeFit?.()
   window.addEventListener('resize', onWindowResize)
+
+  // ════════════ adj965d（方案 OVL，EP-13）：水印 / 背景层的 Alt 手势 ════════════
+  /**
+   * 与**应用预览区同一套口径**（判定与换算都在引擎 `overlayGesture.ts`，两端共用一份）：
+   *   `Alt+滚轮` 缩放该层（滚轮**累计约 100px 一档**）、`Alt+Shift+滚轮` 旋转该层、`Alt+左键拖动` 平移该层。
+   * 旋转绕元素自身中心——引擎 `render/overlay.ts` 的 `rotateAttr(θ, cx, cy)` 本来就是元素中心（裁定 9.1），
+   * 所以这里**只改角度值**。
+   *
+   * **三条前提缺一不动**：①「排版」开着（`plugin.showGuides`）②该层已启用 ③该层有内容
+   * （②③ 由引擎按层判，与应用同一份实现）。另外还要求 `host.writeSource`（只读上下文里手势没有意义）。
+   *
+   * ⚠ **监听器只挂这一次**（挂在这里、不挂进 `paint()`）：
+   * `container` 跨重画是同一个元素，而 `paint()` 每代都会重建一遍闭包——
+   * 挂进去就会"每代多加一条监听"（与 `adj952` 那个工具条老毛病同族）。
+   * 需要重画时走 `overlayRepaint`（`paint()` 末尾把它指向**当前那一代**的 `schedulePaint`）。
+   */
+  /** 「调整对象」：两层都可调时由用户在角落切换（会话内状态，不落盘） */
+  let overlayEditLayer: OverlayLayer = 'bg'
+  /** 重画入口（每代 `paint()` 覆盖它；见上面那条 ⚠） */
+  let overlayRepaint: () => void = () => {}
+  /** 本轮手势**开始前**的生效配置（基线里"该层自己的键"已置默认，见 `overlayGestureBase`） */
+  let overlayBase: PageConfig | null = null
+  /** 本轮手势调的是哪一层（落盘时要用它取基线） */
+  let overlayBaseLayer: OverlayLayer | null = null
+  /** 滚轮的"停顿落盘"定时器（滚轮没有松手事件，只能靠停顿判定一次手势结束） */
+  let overlayTimer: number | null = null
+  /** 滚轮位移的累计值（未满一档的余数留到下一次事件；详见引擎里 `OVERLAY_WHEEL_STEP_PX` 的说明） */
+  let overlayAcc = 0
+
+  /** 当前生效配置：拖拽草稿优先（与 `paint()` 里 `draft ?? resolved.config` 同一条口径） */
+  const overlayCfg = (): PageConfig => draft ?? resolvePageConfig(host.getSource(), plugin.settings).config
+
+  /** 手势能不能介入：前提① + 可写回；②③ 交给引擎按层判 */
+  const overlayTargetOf = (cfg: PageConfig): OverlayLayer | null =>
+    plugin.showGuides && host.writeSource ? activeOverlayLayer(cfg, overlayEditLayer) : null
+
+  /**
+   * 指针位移(px) → 谱面 pt 的换算系数（`显示宽 / 页宽`）。
+   * 与辅助虚线的 `scale`（`addGuideLayer` 里那个）**同一个量**，从当前第一页的 SVG 现量。
+   */
+  const overlayScaleOf = (): number => {
+    const svg = container.querySelector<SVGSVGElement>('.ijipu-svgs svg')
+    if (!svg) return 1
+    const vb = (svg.dataset.origVb || svg.getAttribute('viewBox') || '').split(/[\s,]+/).map(Number)
+    const pageW = vb[2]
+    const shown = svg.getBoundingClientRect().width
+    return pageW !== undefined && pageW > 0 && shown > 0 ? shown / pageW : 1
+  }
+
+  /** 落盘：把本轮手势的改动并进这份谱的 `# jps-config`（基线取"手势开始前"的那份快照） */
+  const overlayCommit = (): void => {
+    if (overlayTimer !== null) {
+      window.clearTimeout(overlayTimer)
+      overlayTimer = null
+    }
+    const base = overlayBase
+    const layer = overlayBaseLayer
+    const finalCfg = draft
+    overlayBase = null
+    overlayBaseLayer = null
+    overlayAcc = 0
+    draft = null
+    if (base === null || layer === null || finalCfg === null || !host.writeSource) return
+    /**
+     * 与应用同口径（`adj480` + `adj965d`）：
+     *  · `mergeConfigEdits(源码, 基线, 最新)` —— **只把本次改动并入源码层**，
+     *    插件设置带来的非默认项不会被顺手烧进谱面；
+     *  · 基线是 `overlayGestureBase(...)`（该层自己的键已置默认）⇒ **被调那一层整层固化**
+     *    （启用 + 内容 + 参数），不会在谱面里留下"只写了一个宽度值、层却是关的"这种半截配置。
+     */
+    const payload = mergeConfigEdits(host.getSource(), base, finalCfg)
+    const shown = overlayResultText(layer, finalCfg)
+    void Promise.resolve(host.writeSource(writeJpsConfig(host.getSource(), payload)))
+      .then(() => {
+        new Notice(shown, 2200)
+        overlayRepaint()
+      })
+      .catch((err) => {
+        new Notice(`水印/背景保存失败：${err instanceof Error ? err.message : String(err)}`, 6000)
+        overlayRepaint()
+      })
+  }
+
+  /** 落盘提示里那半句"调成了什么"（面向用户，就一句话） */
+  function overlayResultText(layer: OverlayLayer, cfg: PageConfig): string {
+    const who = layer === 'wm' ? '水印' : '背景'
+    const scale = layer === 'wm' && cfg.wmType !== 'image' ? `字号 ${cfg.wmSize}pt` : `宽度 ${layer === 'wm' ? cfg.wmScale : cfg.bgScale}%`
+    return `${who}已保存：${scale}，旋转 ${layer === 'wm' ? cfg.wmRotate : cfg.bgRotate}°，位置 ${layer === 'wm' ? cfg.wmOffsetX : cfg.bgOffsetX},${layer === 'wm' ? cfg.wmOffsetY : cfg.bgOffsetY}`
+  }
+
+  /** `Alt+滚轮`：缩放 / 旋转该层（`Shift` 在滚轮里切换这两种模式） */
+  const onOverlayWheel = (ev: WheelEvent): void => {
+    const mode = overlayWheelMode(ev)
+    if (mode === null) return
+    const cfg = overlayCfg()
+    const layer = overlayTargetOf(cfg)
+    if (layer === null) return
+    const deltaPx = wheelDeltaPx(ev, container.clientHeight)
+    if (deltaPx === 0) return
+    // 手上有这一层 ⇒ 滚轮归手势：**即使这一刻还没攒够一档也不滚页面**
+    ev.preventDefault()
+    const { steps, rest } = overlayWheelSteps(overlayAcc, deltaPx)
+    overlayAcc = rest
+    if (steps === 0) return
+    if (overlayBase === null) {
+      overlayBase = overlayGestureBase(cfg, layer)
+      overlayBaseLayer = layer
+    }
+    const sign = steps > 0 ? 1 : -1 // 正 = 向下滚 = 值变小
+    let next = cfg
+    for (let i = 0; i < Math.abs(steps); i += 1) next = applyOverlayWheel(next, layer, mode, sign)
+    draft = next
+    overlayRepaint()
+    if (overlayTimer !== null) window.clearTimeout(overlayTimer)
+    overlayTimer = window.setTimeout(() => overlayCommit(), OVERLAY_COMMIT_DELAY_MS)
+  }
+  /**
+   * ⚠ 必须 `{ passive: false }`：被动监听里的 `preventDefault()` 会被忽略
+   * ⇒ 手势照样生效、但页面同时跟着滚（这一条与应用侧同一个坑，同一句注释）。
+   */
+  container.addEventListener('wheel', onOverlayWheel, { passive: false })
+
+  /** `Alt+左键拖动`：平移该层（按住 `Shift` 吸附页面中心） */
+  const onOverlayPointerDown = (ev: PointerEvent): void => {
+    if (ev.altKey !== true) return
+    if (ev.pointerType === 'mouse' && ev.button !== 0) return
+    const cfg = overlayCfg()
+    const layer = overlayTargetOf(cfg)
+    if (layer === null) return
+    ev.preventDefault()
+    // 不让辅助虚线那一套（挂在后代上的 pointerdown）接手 —— 它就是"拖动即改设置"
+    ev.stopPropagation()
+    const start = overlayOffsetOf(cfg, layer)
+    overlayBase = overlayGestureBase(cfg, layer)
+    overlayBaseLayer = layer
+    const x0 = ev.clientX
+    const y0 = ev.clientY
+    const scale = overlayScaleOf()
+    const onMove = (m: PointerEvent): void => {
+      const dx = m.clientX - x0
+      const dy = m.clientY - y0
+      if (dx === 0 && dy === 0) return
+      draft = applyOverlayDrag(overlayCfg(), layer, start, dx, dy, scale, m.shiftKey)
+      overlayRepaint()
+    }
+    const onUp = (): void => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+      overlayCommit()
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+  }
+  container.addEventListener('pointerdown', onOverlayPointerDown)
 
   /** 全量重画（工具条 + 谱面 + 辅助虚线）；拖拽期间按帧节流 */
   const paint = (): void => {
@@ -2673,6 +2844,12 @@ toolbar.dataset.ijipuPane = String(paneId)
      */
     function startGuideDrag(e: MouseEvent, line: GuideLine, scale: number): void {
       if (line.readonly || !host.writeSource) return
+      /**
+       * adj965d：**按住 Alt 时让位给"调水印/背景层"那个手势**（挂在 `container` 上的那一条）。
+       * 虚线的监听挂在**后代**元素上（先于容器触发），若在这里 `stopPropagation` 就把手势掐断了
+       * ⇒ 直接返回、不拦事件，让它照常冒泡上去（与应用那边"手势优先、否则原样下传"同一口径）。
+       */
+      if (e.altKey) return
       e.preventDefault()
       e.stopPropagation()
       endDragListeners?.()
@@ -2749,6 +2926,51 @@ toolbar.dataset.ijipuPane = String(paneId)
      * （`setMode` 里已落地），这里量到的才是最终宽度，虚线才不会偏（见 `rebuildGuides`）。
      */
     rebuildGuides()
+    /**
+     * adj965d（EP-13）：**角落的手势提示**（与会话状态里的「调整对象」一起）。
+     *
+     * 放在这里而不是更早：要等 `setMode`/`rebuildGuides` 把尺寸与虚线层都定稿，
+     * 而且它只用 `cfg` 与容器（不依赖 svg 几何）。
+     *
+     * 显示条件 = 三条前提齐（排版开 + 该层已启用 + 有内容）；**切换器**只在两层都可调时出现
+     * （用户口径：单一层或都没有就不显示切换器）；该层还只活在草稿里时另加一句红字提醒。
+     */
+    {
+      overlayRepaint = schedulePaint // 让挂在容器上的手势监听能重画**当前这一代**
+      const hintLayer = overlayTargetOf(cfg)
+      if (hintLayer !== null) {
+        const both = bothOverlayLayersVisible(cfg)
+        const hint = container.createDiv({ cls: 'ijipu-overlay-hint' })
+        hint.createSpan({
+          cls: 'ijipu-overlay-hint-title',
+          text: both ? '调整对象' : `调整${hintLayer === 'wm' ? '水印' : '背景'}`,
+        })
+        if (both) {
+          for (const k of ['wm', 'bg'] as const) {
+            const chip = hint.createEl('button', {
+              cls: `ijipu-overlay-chip${hintLayer === k ? ' is-active' : ''}`,
+              text: k === 'wm' ? '水印' : '背景',
+            })
+            chip.setAttr('aria-pressed', String(hintLayer === k))
+            chip.addEventListener('click', () => {
+              overlayEditLayer = k
+              overlayRepaint()
+            })
+          }
+        }
+        // 「尚未写入谱面」：只看**源码层**（`mergeJpsConfig(source, null)`），插件设置那一层不算
+        if (!overlayLayerPersisted(mergeJpsConfig(host.getSource(), null), hintLayer)) {
+          hint.createSpan({
+            cls: 'ijipu-overlay-unsaved',
+            text: '⚠ 尚未写入谱面：点「保存」固化，或直接用手势调整（会自动写入）',
+          })
+        }
+        hint.createSpan({
+          cls: 'ijipu-overlay-keys',
+          text: 'Alt+滚轮 缩放 · Alt+Shift+滚轮 旋转 · Alt+拖动 平移',
+        })
+      }
+    }
     /**
      * adj871：整页拟合的**第二种重算时机** —— 容器尺寸变化（分栏拖动 / 刚进渲染树）。
      * 挂 `ResizeObserver` 而不是定时器：宿主"先建 DOM 再挂进文档"时，容器宽度从 0 变成真实值的那一瞬
