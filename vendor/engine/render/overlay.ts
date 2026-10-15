@@ -206,14 +206,19 @@ export function overlayLayers(
   page: ScorePage,
   assets?: RenderAssets,
 ): { defs: string; bg: string; wm: string } {
+  // adj965c（用户 2026-10-15）：两个总开关 —— 关掉就整层不画（**配置保留**，回头勾上即恢复）
   const bg =
-    config.bgImage !== '' && assets?.bg !== undefined && assets.bg.href !== '' ? imageLayer('bg', config, page, assets.bg) : ''
+    config.bgEnabled !== false && config.bgImage !== '' && assets?.bg !== undefined && assets.bg.href !== ''
+      ? imageLayer('bg', config, page, assets.bg)
+      : ''
   let wm = ''
-  if (config.wmType === 'image') {
-    // 图形水印：路径没解析出资源（文件不在/读不到）⇒ 不画；**提示由应用层负责**（方案优化 7：不静默降级）
-    wm = config.wmImage !== '' && assets?.wm !== undefined && assets.wm.href !== '' ? imageLayer('wm', config, page, assets.wm) : ''
-  } else {
-    wm = textLayer(config, page)
+  if (config.wmEnabled !== false) {
+    if (config.wmType === 'image') {
+      // 图形水印：路径没解析出资源（文件不在/读不到）⇒ 不画；**提示由应用层负责**（方案优化 7：不静默降级）
+      wm = config.wmImage !== '' && assets?.wm !== undefined && assets.wm.href !== '' ? imageLayer('wm', config, page, assets.wm) : ''
+    } else {
+      wm = textLayer(config, page)
+    }
   }
   const defs = bg !== '' || wm !== '' ? clipDef(page) : ''
   return { defs, bg, wm }

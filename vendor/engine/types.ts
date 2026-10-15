@@ -1132,6 +1132,15 @@ export interface PageConfig {
    *  · 旋转绕**自身中心**；
    *  · 文本水印的字号走**独立字段** `wmSize`（不共用 `wmScale`）。
    */
+  /**
+   * **启用水印**（用户 2026-10-15 要求：设置页开头给一个总开关，决定是否显示）。
+   *
+   * 默认 **false**（用户裁定："水印、背景启用默认关"）——**必须显式勾上才会画**；
+   * 取消勾选 = 不画，但下面那些配置全部保留（回头再勾上就恢复）。
+   * ⚠ 因为默认是 `false`，勾上后**会写进 `# jps-config`**（`"wmEnabled":true`）——这是必需的，
+   * 否则换台机器/发给别人打开就又不显示了。
+   */
+  wmEnabled: boolean
   wmType: 'text' | 'image'
   /** 水印文本（`wmType==='text'` 时用；空串 ⇒ 不画） */
   wmText: string
@@ -1164,6 +1173,11 @@ export interface PageConfig {
    * 空串 ⇒ 不画（默认即如此 ⇒ 不用这功能的谱，`# jps-config` 一个键都不会多）。
    */
   bgImage: string
+  /**
+   * **启用背景**（用户 2026-10-15 要求）：默认 **false**（用户裁定"启用默认关"）——
+   * 必须显式勾上才会画；取消勾选 = 不画但保留配置。
+   */
+  bgEnabled: boolean
   /** 背景图宽度占**页宽**的百分比（100 ⇒ 撑满页宽，高度按原图长宽比） */
   bgScale: number
   /** 背景图旋转角度（度；绕图片中心；渲染端钳 -180~180） */
@@ -1229,6 +1243,8 @@ export const defaultPageConfig: PageConfig = {
   barCountInterval: 4,
   lianyinxian_type: 0,
   // adj965：水印 / 背景（默认全为"不画"或"等于默认" ⇒ 差量写入不落任何键，既有谱零变化）
+  // adj965c（用户 2026-10-15 裁定）：两个"总开关"默认 **false**（必须显式勾上才画）
+  wmEnabled: false,
   wmType: 'text',
   wmText: '',
   wmImage: '',
@@ -1241,6 +1257,7 @@ export const defaultPageConfig: PageConfig = {
   wmOpacity: 25,
   wmOffsetX: 0,
   wmOffsetY: 0,
+  bgEnabled: false,
   bgImage: '',
   bgScale: 100,
   bgRotate: 0,

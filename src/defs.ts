@@ -98,23 +98,26 @@ export const DEFS: SettingDef[] = [
   // —— 水印 / 背景（adj965，同步主项目「谱面设置 → 水印 / 背景」两个子页签）——
   // 标签与应用 `PageConfigDialog` 的 `Row label=` 逐项对齐；默认值一律来自引擎（`getDefault`），插件不另立默认。
   // 字段是**谱面级 L2**（随 `# jps-config` 走）：插件设置里的值只是"新谱默认"，写进谱面才算数。
+  // ⚠ 两个总开关**默认关**（用户裁定）：不勾就不画，勾上会写进谱面。
+  { group: '水印', key: 'wmEnabled', label: '启用水印', type: 'toggle' },
   { group: '水印', key: 'wmType', label: '水印类型', type: 'select', options: [
     { label: '文字', value: 'text' },
     { label: '图形', value: 'image' } ] },
   { group: '水印', key: 'wmText', label: '水印文本', type: 'text' },
-  { group: '水印', key: 'wmImage', label: '水印图形文件（相对路径 / [[双链]]）', type: 'text' },
-  { group: '水印', key: 'wmSize', label: '水印字号(文本, pt)', type: 'number' },
-  { group: '水印', key: 'wmScale', label: '水印显示比率(图形, %)', type: 'number' },
+  { group: '水印', key: 'wmImage', label: '水印图形文件（相对本谱路径 / [[双链]]）', type: 'text' },
+  { group: '水印', key: 'wmSize', label: '水印文本字号(pt)', type: 'number' },
+  { group: '水印', key: 'wmScale', label: '水印图形宽度(%)', type: 'number' },
   { group: '水印', key: 'wmRotate', label: '水印旋转(°)', type: 'number' },
-  { group: '水印', key: 'wmRepeat', label: '重复铺满', type: 'toggle' },
+  { group: '水印', key: 'wmRepeat', label: '重复水印', type: 'toggle' },
   { group: '水印', key: 'wmRepeatGap', label: '平铺间隔(%)', type: 'number' },
   { group: '水印', key: 'wmOpacity', label: '水印透明度(0-100)', type: 'number' },
   { group: '水印', key: 'wmOffsetX', label: '水印位置 X(px)', type: 'number' },
   { group: '水印', key: 'wmOffsetY', label: '水印位置 Y(px)', type: 'number' },
-  { group: '背景', key: 'bgImage', label: '背景图形文件（相对路径 / [[双链]]）', type: 'text' },
+  { group: '背景', key: 'bgEnabled', label: '启用背景', type: 'toggle' },
+  { group: '背景', key: 'bgImage', label: '背景图形文件（相对本谱路径 / [[双链]]）', type: 'text' },
   { group: '背景', key: 'bgOffsetX', label: '背景位置 X(px)', type: 'number' },
   { group: '背景', key: 'bgOffsetY', label: '背景位置 Y(px)', type: 'number' },
-  { group: '背景', key: 'bgScale', label: '背景显示比率(%)', type: 'number' },
+  { group: '背景', key: 'bgScale', label: '背景宽度(%)', type: 'number' },
   { group: '背景', key: 'bgRotate', label: '背景旋转(°)', type: 'number' },
   { group: '背景', key: 'bgOpacity', label: '背景透明度(0-100)', type: 'number' },
 ]
