@@ -8848,7 +8848,7 @@ if (true) {
     chipFound?: boolean
     setup?: { svg?: number; guideLines?: number; hint?: boolean; chips?: number; active?: string; unsaved?: boolean; writes?: number }
     switchToWm?: { chips?: number; active?: string; chipTexts?: string[] }
-    zoom?: { writes?: number; cfg?: Record<string, unknown>; unsaved?: boolean }
+    zoom?: { writes?: number; cfg?: Record<string, unknown>; unsaved?: boolean; active?: string; chips?: number }
     rotate?: { writes?: number; cfg?: Record<string, unknown> }
     pan?: { writes?: number; cfg?: Record<string, unknown>; onGuideLine?: boolean }
     off?: { wrote?: number }
@@ -8942,6 +8942,16 @@ if (true) {
   check('adj965d 真浏览器：落盘之后「尚未写入谱面」提醒自己消失（保险不是恒亮的）',
     ok965 && r965.zoom?.unsaved === false,
     `unsaved=${String(r965.zoom?.unsaved)}`)
+  /**
+   * **用户 2026-10-15 实报的那条**：切到「水印」以后再 `Alt+拖动`，动的却是**背景**。
+   *
+   * 根因：一次落盘会 `writeSource` 改笔记里的代码块正文 ⇒ Obsidian **重渲染那个代码块** ⇒
+   * 面板 `destroy()` 后**重新挂载** ⇒ 而"调整对象"当时是**面板内变量** ⇒ 重建后回到默认（背景）。
+   * 夹具的 `writeSource` 现在按真机语义**重建面板**，所以这条能钉住它。
+   */
+  check('adj965d 真浏览器：**落盘会重建面板**，重建之后「调整对象」还是「水印」（用户实报：这里会掉回背景）',
+    ok965 && r965.zoom?.active === '水印',
+    `重建后 active=${String(r965.zoom?.active)}（期望「水印」）`)
   check('adj965d 真浏览器：`Alt+Shift+滚轮` ⇒ 旋转写进谱面（`wmRotate`）',
     ok965 && r965.rotate?.writes === 2 && typeof r965.rotate?.cfg?.wmRotate === 'number',
     `writes=${r965.rotate?.writes ?? '—'} cfg=${JSON.stringify(r965.rotate?.cfg ?? {})}`)

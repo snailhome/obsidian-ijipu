@@ -169,16 +169,25 @@ export async function runOverlayGestureProbe(mount: MountFn, baseSource: string)
     hostEl.appendChild(root)
 
     let pane: PaneHandle | null = null
+    /**
+     * ⚠ **宿主按真机语义重建面板**：`writeSource` 改的是笔记里的代码块正文 ⇒ Obsidian 会
+     * **重渲染那个代码块** ⇒ 面板被 `destroy()` 后**重新挂载**（`toolbarDomProbe` 的时间线里
+     * 也有"宿主重建面板"这一步，说明这是真机会发生的事）。
+     *
+     * 第一版这里只调了 `pane.refresh()`（同实例重画）⇒ 把用户实报的那个 bug 放过去了：
+     * **面板内**保存的"调整对象"会在重建时回到默认（背景）⇒ 用户"切到水印再 Alt+拖动"
+     * 动到的却是背景。夹具必须复刻"重建"这一步，否则这条链根本测不到。
+     */
     const doMount = (): PaneHandle =>
       mount({
         plugin: pluginStub,
         container,
         getSource: () => sourceNow,
-        // 真实宿主语义：写回源码 ⇒ 面板重画（此时那一层已经"在谱面里"了）
         writeSource: (next: string) => {
           writes.push(next)
           sourceNow = next
-          pane?.refresh()
+          pane?.destroy()
+          pane = doMount()
         },
         embedded: true,
         embedTitle: '半山听雨',
@@ -233,6 +242,10 @@ export async function runOverlayGestureProbe(mount: MountFn, baseSource: string)
     // ② `Alt+滚轮` ⇒ 缩放该层（文本水印缩的是字号；累计 120px ⇒ 正好一档）
     wheelOn(liveTarget(), -120, { alt: true })
     await wait(700) // 停顿落盘（引擎里 400ms）
+    /**
+     * 落盘会让宿主**重建面板**（见 `doMount` 上那条 ⚠）⇒ 这里同时量"选中的那一层还在不在"。
+     * 这一条就是用户实报的 bug：重建后回到默认（背景），于是下一次 `Alt+拖动` 动到了背景。
+     */
     result.zoom = { writes: writes.length, cfg: configOf(sourceNow), ...hintState() }
     flush()
 

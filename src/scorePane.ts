@@ -284,6 +284,21 @@ let paneSeq = 0
  */
 const livePanes = new Map<number, HTMLElement>()
 /**
+ * adj965e（用户 2026-10-15 实报：「切换水印后，Alt+点按拖动时，又切回背景了」）：
+ * **「调整对象」必须放在模块级**，不能放在 `mountScorePane` 的闭包里。
+ *
+ * 根因链：一次手势落盘会 `host.writeSource()` **改笔记里的代码块正文** ⇒ Obsidian **重渲染那个代码块**
+ * ⇒ 面板 `destroy()` 后**重新挂载**（`toolbarDomProbe` 的时间线里就有"宿主重建面板"这一步）。
+ * 这个变量原先在闭包内 ⇒ 重建后回到初始值 `'bg'` ⇒ 用户选好的「水印」被悄悄换回「背景」，
+ * 下一次 `Alt+拖动` 动的是背景 ✗（真浏览器夹具 `overlayGestureProbe` 现已按真机语义重建面板钉住它）。
+ *
+ * ⚠ 同一族问题的第三次露面（`adj952` 工具条、`adj794f` 残留工具条、这里是"选择"）：
+ * **凡是"要跨宿主重建活下来"的状态，都不能放在面板闭包里** ——
+ * 要么模块级（这里）、要么写 `container.dataset`（工具条的"用户钉住"）、要么进插件设置。
+ * 反过来，**每次重建都该重置**的东西（手势基线、滚轮累计余数、落盘定时器、面板 id）就留在闭包里 ✓。
+ */
+let overlayEditLayer: OverlayLayer = 'bg'
+/**
  * adj952（**本轮实测出来的真凶**）：上面那条判据里"**它的容器已经不在文档里**"要加宽限期 ✗➜✓。
  *
  * 用户报：「嵌入块、编辑模式下点击嵌入块预览区，**显示一下工具条，马上又消失**」「每点一次都闪一下」。
@@ -736,8 +751,10 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
    * 挂进去就会"每代多加一条监听"（与 `adj952` 那个工具条老毛病同族）。
    * 需要重画时走 `overlayRepaint`（`paint()` 末尾把它指向**当前那一代**的 `schedulePaint`）。
    */
-  /** 「调整对象」：两层都可调时由用户在角落切换（会话内状态，不落盘） */
-  let overlayEditLayer: OverlayLayer = 'bg'
+  /**
+   * 「调整对象」`overlayEditLayer` 是**模块级**的（见文件上方 `livePanes` 之后那段说明）：
+   * 落盘会触发宿主重建面板，闭包里的状态活不过重建 ✗。
+   */
   /** 重画入口（每代 `paint()` 覆盖它；见上面那条 ⚠） */
   let overlayRepaint: () => void = () => {}
   /** 本轮手势**开始前**的生效配置（基线里"该层自己的键"已置默认，见 `overlayGestureBase`） */
@@ -748,6 +765,14 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
   let overlayTimer: number | null = null
   /** 滚轮位移的累计值（未满一档的余数留到下一次事件；详见引擎里 `OVERLAY_WHEEL_STEP_PX` 的说明） */
   let overlayAcc = 0
+  /**
+   * adj965e：面板**已销毁**的标记。
+   *
+   * 为什么必须有它：`destroy()` 之后再进来的事件（宿主重建期间那一小段、或已排队的一帧）
+   * 不许再改草稿、更不许落盘 —— 否则旧面板会把**上一代的值**写回笔记（覆盖新面板刚写的）✗。
+   * 这条是夹具用"真机语义重建面板"跑出来的（写回次数本该 1 次/手势，实测 2~4 次）。
+   */
+  let paneDead = false
 
   /** 当前生效配置：拖拽草稿优先（与 `paint()` 里 `draft ?? resolved.config` 同一条口径） */
   const overlayCfg = (): PageConfig => draft ?? resolvePageConfig(host.getSource(), plugin.settings).config
@@ -771,6 +796,7 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
 
   /** 落盘：把本轮手势的改动并进这份谱的 `# jps-config`（基线取"手势开始前"的那份快照） */
   const overlayCommit = (): void => {
+    if (paneDead) return
     if (overlayTimer !== null) {
       window.clearTimeout(overlayTimer)
       overlayTimer = null
@@ -812,6 +838,7 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
 
   /** `Alt+滚轮`：缩放 / 旋转该层（`Shift` 在滚轮里切换这两种模式） */
   const onOverlayWheel = (ev: WheelEvent): void => {
+    if (paneDead) return
     const mode = overlayWheelMode(ev)
     if (mode === null) return
     const cfg = overlayCfg()
@@ -834,16 +861,25 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     draft = next
     overlayRepaint()
     if (overlayTimer !== null) window.clearTimeout(overlayTimer)
-    overlayTimer = window.setTimeout(() => overlayCommit(), OVERLAY_COMMIT_DELAY_MS)
+    // adj965e：定时器到点时**再查一次**面板是否还活着（销毁到定时器触发之间隔 400ms，够宿主重建一轮）
+    overlayTimer = window.setTimeout(() => {
+      if (!paneDead) overlayCommit()
+    }, OVERLAY_COMMIT_DELAY_MS)
   }
   /**
    * ⚠ 必须 `{ passive: false }`：被动监听里的 `preventDefault()` 会被忽略
    * ⇒ 手势照样生效、但页面同时跟着滚（这一条与应用侧同一个坑，同一句注释）。
+   *
+   * ⚠ adj965e：这两条挂在 `container` 上（`container` **跨宿主重建是同一个元素**）⇒
+   * `destroy()` 里**必须逐条摘掉**。不摘的后果夹具当场量到了：宿主重建面板之后容器上留着
+   * 旧面板的监听 ⇒ 一次手势被**两个面板各处理一遍** ⇒ 落盘次数从 1 次变成 2~4 次 ✗
+   * （与 `adj952` 工具条那条"每代多加一条监听"是同一族病）。
    */
   container.addEventListener('wheel', onOverlayWheel, { passive: false })
 
   /** `Alt+左键拖动`：平移该层（按住 `Shift` 吸附页面中心） */
   const onOverlayPointerDown = (ev: PointerEvent): void => {
+    if (paneDead) return
     if (ev.altKey !== true) return
     if (ev.pointerType === 'mouse' && ev.button !== 0) return
     const cfg = overlayCfg()
@@ -869,8 +905,11 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
       window.removeEventListener('pointercancel', onUp)
-      overlayCommit()
+      if (endDragListeners === onUp) endDragListeners = null
+      if (!paneDead) overlayCommit()
     }
+    // adj965e：拖到一半面板被宿主重建掉时，`destroy()` 要能把这两个 window 监听摘掉（照虚线的写法）
+    endDragListeners = onUp
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
     window.addEventListener('pointercancel', onUp)
@@ -3024,6 +3063,24 @@ toolbar.dataset.ijipuPane = String(paneId)
      */
     refresh: () => paint(),
     destroy: () => {
+      /**
+       * adj965e（夹具量到的两个真缺陷，都属于"宿主重建面板"这一族）：
+       *
+       * ① **容器上的手势监听要逐条摘掉**：`container` 跨宿主重建是**同一个元素** ⇒ 不摘的话
+       *    重建之后容器上留着旧面板的那对监听 ⇒ 一次 `Alt+滚轮` 被**两个面板各处理一遍**、
+       *    各自落一次盘（夹具实测：本该 1 次/手势，实际 2~4 次）✗；
+       * ② **停掉还没到点的"停顿落盘"定时器**，并置 `paneDead`：滚轮手势的落盘是 400ms 后的定时器，
+       *    面板可能在这 400ms 里就已经被销毁 ⇒ 旧面板会把**上一代的值**写回笔记（盖掉新面板刚写的）✗。
+       */
+      paneDead = true
+      if (overlayTimer !== null) {
+        window.clearTimeout(overlayTimer)
+        overlayTimer = null
+      }
+      // ⚠ `removeEventListener` 只认 `capture`（`passive` 不在 `EventListenerOptions` 里）——
+      // 挂的时候是 `{ passive: false }` 即 `capture: false`，所以这里省略第三参就对得上 ✓
+      container.removeEventListener('wheel', onOverlayWheel)
+      container.removeEventListener('pointerdown', onOverlayPointerDown)
       stopRuntime()
       endDragListeners?.()
       endDragListeners = null
