@@ -110,6 +110,14 @@ function expectDescOf(key: string, v: unknown): string | null {
     }
     case 'noteSpaceLayout':
       return v === 'space' || v === 'duration' ? null : '"space"（空间优先）或 "duration"（时值优先）'
+    /**
+     * adj965（EP-02）：水印类型是**枚举** ⇒ 必须显式校验。
+     * ⚠ 不写这条的话会落到下面的 `default` 分支，那里对"默认值是字符串"的键只检查 `typeof v === 'string'`
+     * ⇒ 手改的 `{"wmType":"bogus"}` 会被**原样接受**，渲染时按"既不是 text 也不是 image"静默什么都不画 ✗
+     * （同类的枚举项 page / noteSpaceLayout / lianyinxian_type 都各自写了 case，理由一样）。
+     */
+    case 'wmType':
+      return v === 'text' || v === 'image' ? null : '"text" 或 "image"'
     case 'lianyinxian_type':
       return v === 0 || v === 1 || v === 2 ? null : '0 / 1 / 2'
     case 'lyricShrink':

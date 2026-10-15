@@ -1120,6 +1120,50 @@ export interface PageConfig {
   metaPos?: Record<string, { x: number; y: number }>
   /** 连音线样式：0 自动 | 1 圆弧 | 2 平顶 */
   lianyinxian_type: 0 | 1 | 2
+  // ─────────── adj965：水印层与背景层（用户需求；完整方案见 docs/OVERLAY-PLAN.md「OVL」）───────────
+  /**
+   * **水印层**（画在曲谱层之下、背景层之上；每页都画、以本页页面矩形裁剪）。
+   *
+   * 层序由 `renderPage` 的拼装顺序保证：白底 rect → 背景层 → 水印层 → 曲谱 body。
+   *
+   * 四条口径（都是用户裁定，见规格 §二）：
+   *  · **显示比率以「页宽」为 100%**：图形宽度 = 页宽 × `wmScale/100`，高度按原图长宽比推算；
+   *  · **位置 = 元素中心相对页面中心的偏移**（`(0,0)` ⇒ 居中）；
+   *  · 旋转绕**自身中心**；
+   *  · 文本水印的字号走**独立字段** `wmSize`（不共用 `wmScale`）。
+   */
+  wmType: 'text' | 'image'
+  /** 水印文本（`wmType==='text'` 时用；空串 ⇒ 不画） */
+  wmText: string
+  /** 水印图形（`wmType==='image'` 时用；相对 .jps 的路径 / 插件的 `[[双链]]` / `data:` URI；空串 ⇒ 不画） */
+  wmImage: string
+  /** 文本水印字号（pt；渲染端钳 6~400） */
+  wmSize: number
+  /** 图形水印宽度占**页宽**的百分比（100 ⇒ 宽度撑满页宽；渲染端钳 10~1000） */
+  wmScale: number
+  /** 水印旋转角度（度；渲染端钳 -180~180） */
+  wmRotate: number
+  /** 水印不透明度（0~100；100 = 完全不透明） */
+  wmOpacity: number
+  /** 水印中心相对**页面中心**的横向偏移（pt） */
+  wmOffsetX: number
+  /** 水印中心相对**页面中心**的纵向偏移（pt；正数向下） */
+  wmOffsetY: number
+  /**
+   * **背景层**（最底层；每页都画、以本页页面矩形裁剪 ⇒ "走出页面的部分不显示"）。
+   * 空串 ⇒ 不画（默认即如此 ⇒ 不用这功能的谱，`# jps-config` 一个键都不会多）。
+   */
+  bgImage: string
+  /** 背景图宽度占**页宽**的百分比（100 ⇒ 撑满页宽，高度按原图长宽比） */
+  bgScale: number
+  /** 背景图旋转角度（度；绕图片中心；渲染端钳 -180~180） */
+  bgRotate: number
+  /** 背景图不透明度（0~100；100 = 完全不透明） */
+  bgOpacity: number
+  /** 背景图中心相对**页面中心**的横向偏移（pt） */
+  bgOffsetX: number
+  /** 背景图中心相对**页面中心**的纵向偏移（pt；正数向下） */
+  bgOffsetY: number
   /** 按页覆盖的行距（key: 页码；[quci, cici, ciqu, shengbu, ciquLyric?]，adj79 末位可选兼容旧存储） */
   heights?: Record<string, [number, number, number, number, number?]>
 }
@@ -1174,6 +1218,22 @@ export const defaultPageConfig: PageConfig = {
   showBarCount: true,
   barCountInterval: 4,
   lianyinxian_type: 0,
+  // adj965：水印 / 背景（默认全为"不画"或"等于默认" ⇒ 差量写入不落任何键，既有谱零变化）
+  wmType: 'text',
+  wmText: '',
+  wmImage: '',
+  wmSize: 36,
+  wmScale: 100,
+  wmRotate: 45,
+  wmOpacity: 25,
+  wmOffsetX: 0,
+  wmOffsetY: 0,
+  bgImage: '',
+  bgScale: 100,
+  bgRotate: 0,
+  bgOpacity: 100,
+  bgOffsetX: 0,
+  bgOffsetY: 0,
 }
 
 /** 纸张尺寸（mm → 渲染用 pt，1pt = 25.4/72 mm） */

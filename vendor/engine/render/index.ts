@@ -80,19 +80,17 @@ import { accidentalBodyW } from '../layout/spaceLayout'
 import { accidentalGap } from '../layout/spacing'
 // adj458：波音/滑音改用**用户提供的矢量修饰符**（生成文件，见 scripts/gen-modifier-glyphs.mjs）
 import { MODIFIER_GLYPHS, glyphMarkup, type ModifierGlyphKey } from './modifierGlyphs'
+/**
+ * adj965：`xmlEsc` / `r1n` / `r2n` 抽到 `render/svgUtil.ts`（水印/背景层 `render/overlay.ts` 也要用，
+ * 而"同一个格式化口径只允许一处定义"是项目铁律）。本文件不再自带这两份定义。
+ */
+import { r1n, r2n, xmlEsc } from './svgUtil'
+// adj965（方案「OVL」）：水印层与背景层（纯函数；资源由宿主解析好传进来）
+import { overlayLayers, type RenderAssets } from './overlay'
 
 // ============================================================
 // 工具
 // ============================================================
-
-function xmlEsc(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;')
-}
 
 /**
  * adj652（用户要求："允许将预览页面里的链接文本自动转换为链接，点击即可打开链接"）：
@@ -317,6 +315,14 @@ export type RenderFontMeta = {
   /** `♩` 实测宽（adj629v：节拍行 = 号左缘基准） */
   wTempo?: number
 }
+/**
+ * adj965（方案「OVL」）：`renderScoreToSvg` / `renderPage` 的选项 = 宿主实测的字体度量 **+ 宿主解析好的图片资源**。
+ *
+ * 两者是同一类东西：**引擎零 DOM（闸门 `adj770`）** ⇒ 字体宽度要用 canvas 量、图片要读字节并量宽高，
+ * 都只能由宿主做完传进来（既有先例就是 `RenderFontMeta`，见 `src/preview/fontMeta.ts`）。
+ * `assets` 缺省 ⇒ 不画水印/背景层，产物与改动前**逐字节相同**。
+ */
+export type RenderOpts = RenderFontMeta & { assets?: RenderAssets }
 /**
  * adj627c（用户要求）：把**调名**画成与描述头 `1 = Ab` 完全同一套效果——
  * 字母 + **左上角 ♯/♭ 角标**（角标字号 = 字母 3/4、上移 0.35×字号；adj638 起两者**内联**排版，
@@ -1819,9 +1825,7 @@ function computeBeams(notes: PlacedToken[], noteSize = 18): Beam[] {
   return beams
 }
 
-const r1n = (v: number) => Math.round(v * 10) / 10
-/** adj638：角标净距是**亚像素**量（13px 调号下 0.2px、16px 下 0.25px），必须保留 2 位小数，否则被舍成同一个值 */
-const r2n = (v: number) => Math.round(v * 100) / 100
+// adj965：`r1n` 已移到 `render/svgUtil.ts`（与 overlay 共用一份口径）
 
 /** 供冒烟测试：计算减时线横线组 */
 export function computeBeamsForTest(notes: PlacedToken[], noteSize = 18): Beam[] {
@@ -1955,7 +1959,7 @@ function renderSegmentBracket(b: PlacedSegmentBracket, config: PageConfig): stri
   return brace(b.x1, -1) + brace(b.x2, 1)
 }
 
-function renderPage(page: ScorePage, config: PageConfig, pageCount: number, opts?: RenderFontMeta): string {
+function renderPage(page: ScorePage, config: PageConfig, pageCount: number, opts?: RenderOpts): string {
   const { width, height } = page
   const body: string[] = []
 
@@ -2051,22 +2055,34 @@ function renderPage(page: ScorePage, config: PageConfig, pageCount: number, opts
     }
   }
 
+  /**
+   * adj965（方案「OVL」）：水印层与背景层。
+   *
+   * 层序 = 拼接顺序（后画的在上）：白底 rect → **背景层** → **水印层** → 曲谱 body
+   * ⇒ 视觉上"曲谱 > 水印 > 背景" ✓ 正是用户要的层级。
+   *
+   * ⚠ 三个都为空串时**一个字节都不插**（`<defs>` 也不插）⇒ 不用这功能的谱，产物与改动前**逐字节相同**。
+   */
+  const ovl = overlayLayers(config, page, opts?.assets)
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
-    /**
-     * adj629n：页面白底 rect 带 `data-page-bg` 标记——宿主（预览层）需要把它透明化时
-     * **必须按这个标记选**，不能用 `rect:first-child`：
-     * 段层（`{bz}`/`{dsb}`/`{tp}`）整层被包在一个 `<g>` 里，而那个 `<g>` 的**第一个子元素
-     * 正是该层的第一条减时线 rect** ⇒ `rect:first-child` 会把它一起选中、fill 变透明
-     * （用户报「伴奏里的 `0/ 2/` 预览里下面没有减时线」——同层第二条线却正常）。
-     */
-    `<rect data-page-bg="1" x="0" y="0" width="100%" height="100%" fill="#ffffff"/>` +
-    body.join('\n') +
-    `</svg>`
+      (ovl.defs === '' ? '' : `<defs>${ovl.defs}</defs>`) +
+      /**
+       * adj629n：页面白底 rect 带 `data-page-bg` 标记——宿主（预览层）需要把它透明化时
+       * **必须按这个标记选**，不能用 `rect:first-child`：
+       * 段层（`{bz}`/`{dsb}`/`{tp}`）整层被包在一个 `<g>` 里，而那个 `<g>` 的**第一个子元素
+       * 正是该层的第一条减时线 rect** ⇒ `rect:first-child` 会把它一起选中、fill 变透明
+       * （用户报「伴奏里的 `0/ 2/` 预览里下面没有减时线」——同层第二条线却正常）。
+       */
+      `<rect data-page-bg="1" x="0" y="0" width="100%" height="100%" fill="#ffffff"/>` +
+      ovl.bg +
+      ovl.wm +
+      body.join('\n') +
+      `</svg>`
   )
 }
 
-/** 将排版结果渲染为 SVG 页面数组；opts 提供浏览器实测的 "1 = " 宽与 ♯ 宽（按字体实际宽度摆放角标） */
-export function renderScoreToSvg(layout: ScoreLayout, opts?: RenderFontMeta): string[] {
+/** 将排版结果渲染为 SVG 页面数组；opts 提供浏览器实测的 "1 = " 宽与 ♯ 宽（按字体实际宽度摆放角标）与图片资源 */
+export function renderScoreToSvg(layout: ScoreLayout, opts?: RenderOpts): string[] {
   return layout.pages.map((p) => renderPage(p, layout.config, layout.pages.length, opts))
 }
