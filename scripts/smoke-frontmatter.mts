@@ -421,6 +421,58 @@ console.log('[3c] adj629q 设置口径与应用一致（字段集 / 标签 / 范
     /resolveOverlayAssetsFor\(this\.app, cfg, from\)/.test(mainSrc965j) &&
       /getActiveFile\(\)\?\.path \?\? ''/.test(mainSrc965j),
     '')
+  /**
+   * ---- adj965k：**同一个缺陷剩下的出口 + 清理**（用户 2026-10-15 交办第 2 条）----
+   *
+   * 背景：`adj965j` 只把**两条位图出口**（复制图片 / 保存为 PNG，走桥）接上了 `assets`；
+   * 而**插件自己引擎**那条线上还有三个出口 —— 「复制 SVG 文本」（`copyScoreSvg`）、
+   * 「保存为 SVG」（`saveScoreSvg`）、命令「导出当前谱面为 SVG 文件」——
+   * 它们当时靠"把图内联成 `data:` URI 写进临时源码"糊过去，**用户实测证明没用**（引擎只认 `assets`）。
+   * 现在三处一律改成"宿主解析好 ⇒ 当 `api.renderSvg` 第三个参数递进去"，并**删掉** `inlineAssetsInSource`。
+   *
+   * 判据分三组，**每组都配负对照**（AGENTS §六之二·5：禁止靠放宽判据换绿灯）：
+   *  ① API 面：`renderSvg` 有第三个参数、且真的转给 `renderScore(source, cfg, assets)`；
+   *  ② 三个引擎出口都递了 `assets`；
+   *  ③ 已废的 `inlineAssetsInSource` **声明与调用**都不在（⚠ 只认"声明/调用"形态，不认光秃秃的词 ——
+   *     本文件与源码的注释里**故意**留着它的名字说明"为什么删"，拿词当判据会把自己的注释判红，
+   *     这是 `E-2026-443` 记过的坑）。
+   */
+  const apiSrc965k = String(readFileSync('src/api.ts', 'utf8'))
+  const overlaySrc965k = String(readFileSync('src/overlayAssets.ts', 'utf8'))
+  /** 判据本体①（抽出来给负对照复用）：API 面第三个参数存在、且真的转给引擎 */
+  const apiForwardsAssets = (api: string): boolean =>
+    /renderSvg\(source: string, pageConfig\?: Partial<PageConfig>, assets\?: RenderAssets\): IjipuRenderResult/.test(api) &&
+    /const renderSvg = \(source: string, pageConfig\?: Partial<PageConfig>, assets\?: RenderAssets\)/.test(api) &&
+    /const \{ svgs, error, warnings \} = renderScore\(source, cfg, assets\)/.test(api)
+  /** 判据本体②（抽出来给负对照复用）：三个"插件自己引擎"的出口都把宿主资源递进去 */
+  const svgExitsPassAssets = (main: string): boolean =>
+    /const r = this\.api\.renderSvg\(source, undefined, assets\)/.test(main) &&
+    (main.match(/this\.api\.renderSvg\([^)]*undefined, await this\.exportAssets\(/g) ?? []).length >= 2
+  check('adj965k ① `api.renderSvg` 第三个参数 `assets` 真的转给了引擎（`renderScore(source, cfg, assets)`）',
+    apiForwardsAssets(apiSrc965k),
+    '')
+  check('adj965k ① **负对照**：把第三个参数从 `renderScore` 调用里去掉（＝退回"渲染端拿不到图"那版）⇒ 同一条判据判假',
+    apiForwardsAssets(apiSrc965k.replace('renderScore(source, cfg, assets)', 'renderScore(source, cfg)')) === false,
+    '')
+  check('adj965k ② 三个"插件自己引擎"的 SVG 出口（复制 SVG 文本 / 保存为 SVG / 导出 SVG 命令）都把宿主资源递进去了',
+    svgExitsPassAssets(mainSrc965j),
+    '')
+  check('adj965k ② **负对照**：抹掉其中一个出口的 assets（`renderSvg(source, undefined, assets)` → `renderSvg(source)`）⇒ 同一条判据判假',
+    svgExitsPassAssets(mainSrc965j.replace('const r = this.api.renderSvg(source, undefined, assets)', 'const r = this.api.renderSvg(source)')) === false,
+    '')
+  /**
+   * ③ 清理：`inlineAssetsInSource` 的**声明**与**调用**都不在。
+   * ⚠ 判据刻意不写"文件里不许出现这个词"：注释里正说明着"它为什么被删"（见上），
+   *    那种判据会把自己的说明判红（`E-2026-443` 的坑）。
+   */
+  const inlineHackGone = (overlay: string, main: string): boolean =>
+    !/export function inlineAssetsInSource\s*\(/.test(overlay) && !/inlineAssetsInSource\(/.test(main)
+  check('adj965k ③ 已废的 `inlineAssetsInSource`（把图内联进源码那版）**声明与调用都不在**了',
+    inlineHackGone(overlaySrc965k, mainSrc965j),
+    '')
+  check('adj965k ③ **负对照**：把它的调用形态塞回去（`= inlineAssetsInSource(source, cfg, assets)`）⇒ 同一条判据判假',
+    inlineHackGone(overlaySrc965k, `${mainSrc965j}\nconst x = inlineAssetsInSource(source, cfg, assets)\n`) === false,
+    '')
 }
 
 console.log('[3f] adj629z 插件默认值/字段集/文档 与 iJipu 应用逐项同步')
@@ -4724,10 +4776,13 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       // ③ 白名单（与插件侧 APP_METHODS 对应的**可实现子集**）
       /export const APP_BRIDGE_METHODS = \['render\.svg', 'render\.png', 'export\.midi'\] as const/.test(b810) &&
       /if \(!\(APP_BRIDGE_METHODS as readonly string\[\]\)\.includes\(method\)\)/.test(b810) &&
-      // ④ 参数校验
-      // ④ 参数校验（**adj965j 更新**：上限 500000 → 8000000 —— 宿主导出前会把水印/背景图内联成
-      //    `data:` URI 写进这份临时源码，几百 KB 的图 base64 后就有几十万字符，旧上限会误拒合法请求）
-      /typeof source !== 'string' \|\| source\.length > 8_000_000/.test(b810) &&
+      // ④ 参数校验（**adj965k 新口径：上限收回 500000**）——
+      //    adj965j 曾放宽到 8 000 000，那是为"宿主把水印/背景图内联成 `data:` URI 写进这份源码"服务的；
+      //    那条做法**被用户实测证伪**（引擎渲染图片只认 `params.assets`，源码里写路径没用）⇒ 已删除，
+      //    源码不再因图片变长 ⇒ 上限收回即收紧，不留一个"为废掉的做法而放宽"的口子 ✗
+      /typeof source !== 'string' \|\| source\.length > 500_000/.test(b810) &&
+      //    负对照：把它改回 adj965j 那个 8 000 000 ⇒ 本条判假（证明判据真的盯着这个数字，不是恒真）
+      !/typeof source !== 'string' \|\| source\.length > 500_000/.test(b810.replace(/> 500_000/, '> 8_000_000')) &&
       /scaleRaw >= 1 && scaleRaw <= 4/.test(b810) &&
       // ⑤ 诚实降级（四种错误码都在）
       /notFound: -32601/.test(b810) &&
@@ -6013,12 +6068,19 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
   check('adj912 负对照：删掉保存路径的 `params.crop`（= 悄悄存成整页）/ 不补 pHYs ⇒ 同一条判据判假',
     !savePng912(main912.replace(/if \(ranged\.box !== null\) params\.crop = ranged\.box/g, '')) &&
       !savePng912(main912.replace(/const withDpi = insertPngPhys\(bytes, dpi\)/g, 'const withDpi = bytes')))
-  /** `saveScoreSvg` 是**同步引擎**渲染后的写文件（没有 await 的 renderSvg），函数体单独取出来查"不许碰分辨率" */
+  /**
+   * `saveScoreSvg` 是**引擎**渲染后的写文件，函数体单独取出来查"不许碰分辨率"。
+   *
+   * ⚠ **adj965k 新口径**：渲染那一句由 `renderSvg(source)`（**不带图**）改为
+   * `renderSvg(source, undefined, await this.exportAssets(source))`（带上宿主解析好的水印/背景资源）。
+   * 为什么：用户实测「PNG 已经带背景了，SVG 还不能」—— 不带 `assets` 的矢量出口必然缺背景；
+   * 这是**口径变更**、不是放宽：分辨率那条禁令原样保留（矢量依然不碰 scale/DPI/pHYs）。
+   */
   const saveSvg912 = (src: string): boolean => {
     const body = bodyOf912(src, 'saveScoreSvg')
     return (
       body !== '' &&
-      /this\.api\.renderSvg\(source\)/.test(body) &&
+      /this\.api\.renderSvg\(source, undefined, await this\.exportAssets\(source\)\)/.test(body) &&
       /this\.applyExportRange\(source, r\.svgs, pane\)/.test(body) &&
       /await this\.app\.vault\.create\(path, svg\)/.test(body) &&
       // 矢量 ⇒ **与分辨率无关**（用户裁定 ④）：这个方法里不许出现 scale / DPI / pHYs
@@ -6027,8 +6089,18 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
   }
   check('adj912 `saveScoreSvg`：走插件自己的引擎（`renderSvg` + `applyExportRange`，与「复制 SVG 文本」**同一份几何**），出口改成写 vault 文件；**与分辨率无关**（矢量无分辨率）',
     saveSvg912(main912))
+  /**
+   * 负对照：往 `saveScoreSvg` 里塞一句读分辨率的代码 ⇒ 判据判假。
+   * ⚠ 另加一道**自检**：替换目标必须真的匹配上源码 —— 否则这条负对照会**空转成真** ✗
+   * （本轮就踩到了：正口径从 `renderSvg(source)` 变成带 `assets` 之后，旧替换目标失配、负对照白绿）。
+   */
+  const swapped912 = main912.replace(
+    /const r = this\.api\.renderSvg\(source, undefined, await this\.exportAssets\(source\)\)/g,
+    'const s = this.settings.imageScale\n    const r = this.api.renderSvg(source, undefined, await this.exportAssets(source))',
+  )
   check('adj912 负对照：往 `saveScoreSvg` 里塞一句读分辨率的代码 ⇒ 同一条判据判假（矢量出口不许碰分辨率）',
-    !saveSvg912(main912.replace(/const r = this\.api\.renderSvg\(source\)/g, 'const s = this.settings.imageScale\n    const r = this.api.renderSvg(source)')))
+    swapped912 !== main912 && !saveSvg912(swapped912),
+    swapped912 === main912 ? '负对照失效：替换目标没匹配上源码（口径又变了？）' : '')
   const namingViaPure912 = (src: string): boolean =>
     /uniqueNameIn\(saveDir, saveBase, '\.png',/.test(src) && /uniqueNameIn\(saveDir, saveBase, '\.svg',/.test(src) &&
     !/\$\{saveBase\} \$\{/.test(src)
@@ -6046,8 +6118,9 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
 
   // —— ⑧ 视图（导出范围）对**四个**出口都生效（用户裁定 ④；分辨率只对位图两项生效） ——
   /**
-   * adj912 的范围口径（**adj965j 更新**）：范围盒仍按**原源码**量（几何只依赖页面配置 ✓）；
-   * 位图出口的图片资源则随请求单独递（`assets`），不再改动源码 —— 见 `adj965j`。
+   * adj912 的范围口径（**adj965k 更新**）：范围盒仍按**原源码**量（几何只依赖页面配置 ✓）；
+   * 图片资源一律**单独当参数递**（位图出口走桥的 `params.assets`、SVG 出口走 `api.renderSvg` 第三个参数），
+   * **不再改动源码** —— 早先那版"把图内联进源码"已被用户实测证伪并删除，见 `adj965k`。
    */
   const rangeOk912 = (src: string): boolean =>
     /this\.resolveRangeBox\(source, probe\.svgs, pane\)/.test(bodyOf912(src, 'copyScoreImage')) &&

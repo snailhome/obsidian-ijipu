@@ -24,7 +24,7 @@
  * }
  * ```
  */
-import { formatJps, parseJps, splitParseIssues, type PageConfig } from '@ijipu/engine'
+import { formatJps, parseJps, splitParseIssues, type PageConfig, type RenderAssets } from '@ijipu/engine'
 import { resolvePageConfig, type ResolvedConfig } from './config'
 import { renderScore, renderScoreFull, type ParseIssue } from './render'
 
@@ -68,8 +68,15 @@ export interface IjipuApi {
   lint(source: string): IjipuLintResult
   /** 规范化源码（与应用编辑器"格式化"同一份实现） */
   format(source: string): string
-  /** 渲染为**每页一段** SVG 字符串；`pageConfig` 省略时用插件当前设置（含源内 `# jps-config`） */
-  renderSvg(source: string, pageConfig?: Partial<PageConfig>): IjipuRenderResult
+  /**
+   * 渲染为**每页一段** SVG 字符串；`pageConfig` 省略时用插件当前设置（含源内 `# jps-config`）。
+   *
+   * `assets`（adj965k）：**宿主解析好的水印 / 背景图资源**（`{ href: data: URI, w, h }`）。
+   * 为什么要由调用方递：引擎是纯 TS、零 DOM —— 它读不到字节也量不到宽高，**只认这份 `{href,w,h}`**；
+   * 而"相对本谱的路径"与"`[[双链]]`"两类取值只有宿主（插件，能读 vault）解析得出来。
+   * 省略 ⇒ 与不加图片层时**逐字节相同**（引擎那条回归闸门管着）。
+   */
+  renderSvg(source: string, pageConfig?: Partial<PageConfig>, assets?: RenderAssets): IjipuRenderResult
   /** 生效配置 + 来源信息（"这个值来自哪一层"），供高级调用方显示/固化 */
   effectiveConfig(source: string): Pick<ResolvedConfig, 'config' | 'baseline' | 'sourceFields'>
   /** 实验性：连排版结果一起返回（**不要**改它；接口可能变） */
@@ -87,9 +94,16 @@ export function createIjipuApi(settings: () => Partial<PageConfig>): IjipuApi {
     return { ok: errors.length === 0, errors, warnings }
   }
 
-  const renderSvg = (source: string, pageConfig?: Partial<PageConfig>): IjipuRenderResult => {
+  /**
+   * adj965k（**用户实测证伪第一版修法之后**）：第三个参数 `assets` 直接转给 `renderScore`。
+   *
+   * 第一版把图内联成 `data:` URI 写进源码，**没用** ✗ —— 引擎渲染图片只认 `assets` 里那份
+   * `{href,w,h}`（它零 DOM：量不到宽高、也读不到字节，源码里写什么都不够）。
+   * 两个宿主（插件自己的出口、嵌入版应用）现在都是"**宿主解析好 ⇒ 当参数递给渲染端**"这一条口径。
+   */
+  const renderSvg = (source: string, pageConfig?: Partial<PageConfig>, assets?: RenderAssets): IjipuRenderResult => {
     const cfg = pageConfig ? { ...resolvePageConfig(source, settings()).config, ...pageConfig } : resolvePageConfig(source, settings()).config
-    const { svgs, error, warnings } = renderScore(source, cfg)
+    const { svgs, error, warnings } = renderScore(source, cfg, assets)
     return { ok: error === undefined, svgs, error, warnings: warnings ?? [] }
   }
 

@@ -40,7 +40,6 @@ import {
   overlayAssetRefs,
   splitAssetPath,
   toBase64,
-  writeJpsConfig,
   type PageConfig,
   type RenderAssets,
 } from '@ijipu/engine'
@@ -146,6 +145,10 @@ export function clearOverlayAssetCache(): void {
  * 而是等到结果再返回。为什么导出必须另走这条路：导出的栅格化在**嵌入版应用**里做（插件没有 canvas），
  * 应用拿到的是**一段源码字符串**、它自己读不到 vault ⇒ 背景图在那边解析不出来 ⇒ 导出图里没有背景 ✗
  * （预览走的是本插件的渲染，所以预览一直是对的 ✓ ——"预览有、导出没有"就是这个错位）。
+ *
+ * adj965k：返回的这份资源**当参数递给渲染端**才是唯一有效的用法 ——
+ * 位图出口放进桥请求的 `params.assets`、SVG 出口放进 `api.renderSvg` 的第三个参数；
+ * 早先那版"把图内联进源码"已删除（引擎只认 `assets`，源码里写路径没用，用户实测证伪）。
  */
 export async function resolveOverlayAssetsFor(
   app: App,
@@ -169,26 +172,16 @@ export async function resolveOverlayAssetsFor(
 }
 
 /**
- * adj965j：**把水印 / 背景图内联成 `data:` URI 写进那份（只用于导出的）源码**。
+ * adj965k：**这里原本有一个 `inlineAssetsInSource`，已删除** —— 记一笔免得日后有人"再想出来"。
  *
- * 为什么这么做（而不是给桥加个 `assets` 参数）：导出的栅格化在应用里、应用读不到 vault，
- * 而引擎本来就支持 `data:` 取值（`assetSource` 的三类之一）⇒ 把宿主解析好的 data URI 写进
- * **临时源码**的 `# jps-config` 里，应用那边按老路子就能画出背景 ✓ ——
- * 一处改动（仅插件侧）同时覆盖"相对路径"与"`[[]]` 双链"两种写法 ✓。
- *
- * ⚠ 这份源码**只递给应用做导出**，绝不写回笔记（纯函数、不落盘）✓。
+ * 它把宿主解析好的图**内联成 `data:` URI 写回那份（只用于导出的）源码**，指望应用"按老路子"
+ * 从源码里把图读出来。**用户实测证伪** ✗：引擎渲染图片时**只认 `assets` 里那份 `{href,w,h}`**
+ * （`render/overlay.ts`），它零 DOM、量不到宽高、读不到字节 —— 源码里写什么样的路径都不管用。
+ * ⇒ 正确机制只有一条：**宿主解析好 ⇒ 当作参数递给渲染端**。三个出口现在都这么走：
+ *   · 位图（复制图片 / 保存为 PNG）：`params.assets` 经宿主桥 → 嵌入版应用（`obsidianBridge.parseAssets`）；
+ *   · 矢量（复制 SVG 文本 / 保存为 SVG / 导出 SVG 命令）：插件自己渲染，走 `api.renderSvg` 第三个参数。
+ * 删除它是**清理**，不是收紧能力：这条路上它一个字节的作用都没有。
  */
-export function inlineAssetsInSource(source: string, cfg: PageConfig, assets: RenderAssets): string {
-  const wmHref = assets.wm?.href
-  const bgHref = assets.bg?.href
-  if (wmHref === undefined && bgHref === undefined) return source
-  const next: PageConfig = { ...cfg }
-  if (wmHref !== undefined) next.wmImage = wmHref
-  if (bgHref !== undefined) next.bgImage = bgHref
-  // `mode:'full'`：把整份生效配置写成一行（临时串，不落盘；差量模式会因"等于默认"丢掉一些键，
-  // 虽然不影响渲染，但"导出用的源码"最好逐项写全，便于出问题时肉眼比对）
-  return writeJpsConfig(source, next, { mode: 'full' })
-}
 
 /** 读 + 解码两张图（任一张失败只影响那一张：另一张照画，失败的那张弹一句说明） */
 async function loadAssets(

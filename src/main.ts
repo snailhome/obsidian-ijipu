@@ -8,9 +8,10 @@ import { createAppRequester, createEmbedRpc, type AppRequester, type EmbedRpc } 
 // adj807（B2）：RPC 的 `render.svg` 允许带 `pageConfig` 覆盖 ⇒ 这里只需要它的**类型**
 import type { PageConfig, RenderAssets } from '@ijipu/engine'
 // adj965g：图片文件被改写时清一次缓存（见下面 vault.on('modify') 那段说明）
-// adj965j：导出前把水印/背景图**内联成 data URI**（用户实报：代码块里背景用 `[[]]` 双链时导出 PNG 没背景）
-import { clearOverlayAssetCache, inlineAssetsInSource, resolveOverlayAssetsFor } from './overlayAssets'
-// adj965j：导出用的"临时源码"要把生效配置算全（默认 < 插件设置 < 源码）
+// adj965k：导出用的图片资源由宿主解析好**当参数递给渲染端**（`resolveOverlayAssetsFor`）——
+//          早先那版"把图内联成 data URI 写进临时源码"已被用户实测证伪，函数已删除
+import { clearOverlayAssetCache, resolveOverlayAssetsFor } from './overlayAssets'
+// adj965j：导出用的生效配置要把三层算全（默认 < 插件设置 < 源码）
 import { resolvePageConfig } from './config'
 import { IJipuSettingTab } from './settings'
 import { mountScorePane, sweepOrphanBodyToolbars, type ScorePaneHandle } from './scorePane'
@@ -487,7 +488,8 @@ export default class IJipuPlugin extends Plugin {
           void (async () => {
             const c = await contextSourceAsync()
             if (!c) return
-            const r = this.api.renderSvg(c.source)
+            // adj965k：这条命令也是**插件自己的引擎**出口（不经嵌入版）⇒ 图片资源同样要递进去
+            const r = this.api.renderSvg(c.source, undefined, await this.exportAssets(c.source))
             if (!r.ok) {
               new Notice(`iJipu：无法渲染 —— ${r.error ?? '未知原因'}`)
               return
@@ -1167,11 +1169,13 @@ export default class IJipuPlugin extends Plugin {
     pane?: { box: RangeBox | null; mode: 'page' | 'full' | 'score' },
   ): Promise<void> {
     /**
-     * adj965j：这条走**插件自己的引擎**（不经嵌入版），同样要先把图片内联进来 ——
-     * 否则"复制 SVG 文本"与"导出 PNG"一样会缺背景（同一个缺陷的两个出口）。
+     * adj965k（**用户实测证伪第一版之后**）：图片资源由宿主解析好、**当参数递给渲染端** ——
+     * 这条走**插件自己的引擎**（不经嵌入版），同样必须有图，否则"复制 SVG 文本"与"导出 PNG"一样缺背景。
+     * ⚠ 早先那版是"把图内联成 `data:` URI 写进临时源码"，**没用** ✗：引擎渲染图片只认 `assets`
+     * 那份 `{href,w,h}`（零 DOM，读不到字节也量不到宽高），源码里写什么都不够。
      */
-    const withImages = await this.exportSourceWithInlinedImages(source)
-    const r = this.api.renderSvg(withImages)
+    const assets = await this.exportAssets(source)
+    const r = this.api.renderSvg(source, undefined, assets)
     if (!r.ok) {
       new Notice(`iJipu：无法渲染 —— ${r.error ?? '未知原因'}`)
       return
@@ -1190,31 +1194,15 @@ export default class IJipuPlugin extends Plugin {
   }
 
   /**
-   * adj965j（**用户 2026-10-15 实报**）：「jps 代码块里背景用 `[[]]` 双链时，**预览正常、导出 PNG 没有背景**」
-   * （用户随后补了一句关键对照：**嵌入版 iJipu 自己的导出是好的** ✓）。
-   *
-   * 定位：插件工具条那条导出命令走应用 RPC，只递了一段**源码字符串** ⇒
-   * 栅格化在嵌入版应用里做，而应用在 iframe 里**读不到 vault** ⇒ 背景图解析不出来 ⇒ 导出图缺背景 ✗；
-   * 预览则是插件自己渲染的（`vendor/engine` + `src/overlayAssets.ts` 自己读 vault）⇒ 一直是对的 ✓。
-   * 嵌入版**自己**的导出没这个问题，因为那条路走宿主桥的 `readAsset`（EP-09 已接）✓ ——
-   * "同一个应用、两条导出入口，一条好一条坏"就是这么来的。
-   *
-   * 修法（只动插件侧）：导出前把宿主**已经解析好的** `data:` URI 写进那份**临时源码**的
-   * `# jps-config` 里 —— 引擎本来就支持 `data:` 取值 ⇒ 应用按老路子就能画出背景 ✓，
-   * 一种写法同时覆盖"相对路径"与"`[[]]` 双链" ✓。**这份源码只递给应用做导出，不写回笔记** ✓。
-   */
-  private async exportSourceWithInlinedImages(source: string): Promise<string> {
-    const assets = await this.exportAssets(source)
-    return inlineAssetsInSource(source, resolvePageConfig(source, this.settings as Partial<PageConfig>).config, assets)
-  }
-
-  /**
    * adj965j（第二次修，用户实测第一次没用）：**导出用的图片资源** `{wm?,bg?}`（`href` 是 `data:` URI）。
    *
    * ⚠ 第一次的修法是"宿主把图内联成 `data:` URI 写进临时源码"，**用户实测无效** ✗ ——
    * 因为引擎渲染图片**只认 `assets` 里那份 `{href,w,h}`**：它零 DOM，量不到宽高、也读不到字节，
    * 所以源码里写什么都不够，**必须把 `assets` 递给渲染端**。这条现在通过桥的 `params.assets`
    * 传给嵌入版应用（宿主才知道 vault 怎么解析：相对路径 / `[[]]` 双链）。
+   *
+   * adj965k：**插件自己的引擎出口（复制 SVG 文本 / 保存为 SVG / 导出 SVG 命令）也走这一个取图入口** ——
+   * 它们不经桥，直接把返回值当 `api.renderSvg` 的第三个参数递进去。`inlineAssetsInSource` 已删除。
    */
   private async exportAssets(source: string): Promise<RenderAssets> {
     const cfg = resolvePageConfig(source, this.settings as Partial<PageConfig>).config
@@ -1298,7 +1286,8 @@ export default class IJipuPlugin extends Plugin {
     pane?: { box: RangeBox | null; mode: 'page' | 'full' | 'score' },
     target?: { dir: string; base: string },
   ): Promise<void> {
-    const r = this.api.renderSvg(source)
+    // adj965k：与「复制 SVG 文本」同一条引擎出口 ⇒ 同样把宿主解析好的图片资源递进去（否则存出来的 SVG 缺背景）
+    const r = this.api.renderSvg(source, undefined, await this.exportAssets(source))
     if (!r.ok) {
       new Notice(`iJipu：无法渲染 —— ${r.error ?? '未知原因'}`)
       return
