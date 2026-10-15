@@ -34,6 +34,8 @@ import {
   type OverlayLayer,
 } from '@ijipu/engine'
 import { renderScoreFull, playScore, type PlayheadSeg } from './render'
+// adj965（方案 OVL，EP-09 插件侧）：代码块 / 文件视图的**取图**（相对本谱 + `[[双链]]` → data URI）
+import { overlayAssetsFor, clearOverlayAssetCache } from './overlayAssets'
 // adj758（清单 B1）：色块的分组/定位/配色来自 **引擎**（应用与插件共用一份；此处只做绘制）
 // adj764（清单 B6）：时间轴推进用引擎时钟（与应用共用"推进/暂停续播/取消/到点一次"的语义）
 import { createPlaybackClock, instrumentColorMap, playheadBaseOf, playheadPosIn, trackKeysOf, type PlayheadPos } from '@ijipu/engine'
@@ -917,7 +919,16 @@ export function mountScorePane(host: ScorePaneHost): ScorePaneHandle {
     // adj738：优先级 = 默认 < 插件设置 < 源内 `# jps-config`（笔记 frontmatter 那一层已删除）
     const resolved = resolvePageConfig(source, plugin.settings)
     const cfg = draft ?? resolved.config
-    const { svgs, layout: layoutMaybe, error, warnings, errorIssues } = renderScoreFull(source, cfg)
+    /**
+     * adj965（方案 OVL，EP-09 插件侧）：**水印 / 背景图的资源**。
+     *
+     * 读盘 + 解码是异步的，而 `paint()` 是同步的 ⇒ 先按"没有图"画一版（谱面立刻可见），
+     * 资源到位后 `overlayAssetsFor` 会回调 `schedulePaint()` 重画一次；命中缓存时当帧就用上。
+     * 解析失败**不静默**：`overlayAssets.ts` 里会弹一句能照做的 `Notice`。
+     */
+    const assetScope = host.filePath ?? host.containerPath ?? ''
+    const assets = overlayAssetsFor(plugin.app, cfg, assetScope, () => schedulePaint())
+    const { svgs, layout: layoutMaybe, error, warnings, errorIssues } = renderScoreFull(source, cfg, assets)
 
     if (error || !layoutMaybe) {
       // adj394：错误也给出「正确写法」（引擎 hint）——不只告诉用户哪里错了
@@ -3016,6 +3027,14 @@ toolbar.dataset.ijipuPane = String(paneId)
       stopRuntime()
       endDragListeners?.()
       endDragListeners = null
+      /**
+       * adj965（EP-09 插件侧）：**把图片资源缓存清掉**。
+       *
+       * 缓存键是"两张图的原始取值 + 承载它的文件"，**不含 mtime**（每帧去 stat 不值当）⇒
+       * 用户在会话中途把图换掉、或把图挪到别处时，缓存里那份会一直用到面板销毁。
+       * 销毁时清一次就够了：面板重建会重新读盘（同一份谱重开=重新取图）。
+       */
+      clearOverlayAssetCache()
       plugin.events.offref(settingsRef)
       plugin.events.offref(guidesRef)
       // adj725b：补量用的观察器要断开，否则会一直盯着已经被丢弃的 svg

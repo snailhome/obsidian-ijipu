@@ -9,6 +9,8 @@ import {
   noteFontFamily,
   type AccidentalInkMetrics,
   type PageConfig,
+  type RenderAssets,
+  type RenderOpts,
   type ScoreLayout,
 } from '@ijipu/engine'
 import { SpessaSynthBackend, HqCache, getHqLibrary, loadHqBank } from './soundbank'
@@ -111,15 +113,24 @@ function measureAccidentalInk(cfg: PageConfig): AccidentalInkMetrics | undefined
 export function renderScore(
   source: string,
   pageConfig: PageConfig,
+  assets?: RenderAssets,
 ): { svgs: string[]; error?: string; warnings?: ParseIssue[] } {
   const parsed = parseJps(source)
   const { errors, warnings } = splitParseIssues(parsed)
   if (errors.length > 0) return { svgs: [], error: errors.map((e) => e.text).join('\n'), warnings }
   const layout = layoutScore(parsed, pageConfig, undefined, { accidentalInk: measureAccidentalInk(pageConfig) })
   return {
-    svgs: renderScoreToSvg(layout, measureMeta(layout.config)),
+    svgs: renderScoreToSvg(layout, renderOptsOf(layout.config, assets)),
     warnings: warnings.length > 0 ? warnings : undefined,
   }
+}
+
+/**
+ * adj965（方案 OVL，EP-09 插件侧）：宿主实测的字体度量 + **宿主解析好的图片资源**。
+ * `assets` 缺省 ⇒ 与改动前逐字节相同（引擎那条回归闸门管着）。
+ */
+function renderOptsOf(cfg: PageConfig, assets?: RenderAssets): RenderOpts {
+  return assets === undefined ? measureMeta(cfg) : { ...measureMeta(cfg), assets }
 }
 
 /**
@@ -129,6 +140,7 @@ export function renderScore(
 export function renderScoreFull(
   source: string,
   pageConfig: PageConfig,
+  assets?: RenderAssets,
 ): { svgs: string[]; layout: ScoreLayout | null; error?: string; warnings?: ParseIssue[]; errorIssues?: ParseIssue[] } {
   const parsed = parseJps(source)
   const { errors, warnings } = splitParseIssues(parsed)
@@ -137,7 +149,7 @@ export function renderScoreFull(
   }
   const layout = layoutScore(parsed, pageConfig, undefined, { accidentalInk: measureAccidentalInk(pageConfig) })
   return {
-    svgs: renderScoreToSvg(layout, measureMeta(layout.config)),
+    svgs: renderScoreToSvg(layout, renderOptsOf(layout.config, assets)),
     layout,
     warnings: warnings.length > 0 ? warnings : undefined,
   }

@@ -40,6 +40,7 @@ export {
   ASSET_MAX_EDGE,
   ASSET_REENCODE_BYTES,
   ASSET_REENCODE_QUALITY,
+  overlayAssetRefs,
   ALLOWED_ASSET_EXT,
   assetPathOf,
   extOf,

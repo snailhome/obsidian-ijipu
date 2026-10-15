@@ -25,6 +25,21 @@
  * 但它能挡住"随手写个路径把系统文件读进来当图"这一大类，并给用户一句能懂的话。
  */
 
+import type { PageConfig } from './types'
+
+/**
+ * 这份配置**要画哪两张图**（空串 = 不画）——判据与 `render/overlay.ts` 的 `overlayLayers()` 同口径。
+ *
+ * 三处（合并前是各判一份）：应用的资源解析（`store/overlayAssets.ts`）、
+ * 插件代码块预览的取图、以及渲染端自己的 `overlayLayers()`。
+ * ⚠ 水印要看 `wmType`：只有 `'image'` 才取图形（文本水印根本不读 `wmImage`）。
+ */
+export function overlayAssetRefs(cfg: PageConfig): { wm: string; bg: string } {
+  const wm = cfg.wmEnabled !== false && cfg.wmType === 'image' ? String(cfg.wmImage ?? '').trim() : ''
+  const bg = cfg.bgEnabled !== false ? String(cfg.bgImage ?? '').trim() : ''
+  return { wm, bg }
+}
+
 /** 单文件上限：16MB（超过它当背景基本也糊，且会让每页 SVG 巨大） */
 export const MAX_ASSET_BYTES = 16 * 1024 * 1024
 

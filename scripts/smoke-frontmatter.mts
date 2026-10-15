@@ -8702,6 +8702,101 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
   )
 }
 
+/**
+ * adj965（方案 OVL，EP-09 插件侧）：**代码块 / 文件视图的取图**（`src/overlayAssets.ts`）。
+ *
+ * 为什么必须严：这是一条把"配置里的一句话"变成"读哪个文件"的路径 ⇒
+ * 越界（`..`）、非图片（顺手把 `.md`/`.exe` 读进来）、超大文件都必须在**读盘之前**挡掉。
+ * 这里钉纯逻辑（路径翻译、缓存键、无图时不读盘）+ 源码级策略闸门（阈值/白名单只能来自引擎）。
+ */
+{
+  const { pluginAssetTarget, pluginAssetKey, overlayAssetsFor } =
+    await import('../src/overlayAssets.ts')
+  const { defaultPageConfig } = await import('@ijipu/engine')
+
+  check(
+    'adj965 EP-09 插件取图①：相对路径解析成"承载它那份笔记的目录 + 图片子目录"的库内路径',
+    JSON.stringify(pluginAssetTarget('img/图.png', '乐谱/我的歌.md')) ===
+      JSON.stringify({ kind: 'rel', path: '乐谱/img/图.png' }) &&
+      JSON.stringify(pluginAssetTarget('图.png', '我的歌.md')) === JSON.stringify({ kind: 'rel', path: '图.png' }),
+    JSON.stringify(pluginAssetTarget('img/图.png', '乐谱/我的歌.md')),
+  )
+  check(
+    'adj965 EP-09 插件取图②：`[[双链]]` 交给 Obsidian 的链接解析（vault 全域），并带上"从哪篇笔记写的"',
+    JSON.stringify(pluginAssetTarget('[[图.png]]', '乐谱/我的歌.md')) ===
+      JSON.stringify({ kind: 'link', link: '图.png', source: '乐谱/我的歌.md' }) &&
+      JSON.stringify(pluginAssetTarget('[[图.png|别名]]', '我的歌.md')) ===
+        JSON.stringify({ kind: 'link', link: '图.png', source: '我的歌.md' }),
+    JSON.stringify(pluginAssetTarget('[[图.png]]', '乐谱/我的歌.md')),
+  )
+  check(
+    'adj965 EP-09 插件取图③：`..` 越界 / 空路径 / 只有目录没有文件名 ⇒ 一律拒绝（不生成读盘请求）',
+    pluginAssetTarget('../../库外.png', '乐谱/我的歌.md') === null &&
+      pluginAssetTarget('', '乐谱/我的歌.md') === null &&
+      pluginAssetTarget('img/', '乐谱/我的歌.md') === null &&
+      pluginAssetTarget('img/..', '乐谱/我的歌.md') === null,
+    '',
+  )
+  check(
+    'adj965 EP-09 插件取图④：缓存键 = 两张图的原始取值 + 承载它的文件（换谱/换图都必须换键）',
+    pluginAssetKey({ ...defaultPageConfig, wmEnabled: true, wmType: 'image', wmImage: 'a.png' } as never, 'A.md') !==
+      pluginAssetKey({ ...defaultPageConfig, wmEnabled: true, wmType: 'image', wmImage: 'a.png' } as never, 'B.md') &&
+      pluginAssetKey({ ...defaultPageConfig, bgEnabled: true, bgImage: 'a.png' } as never, 'A.md') !==
+        pluginAssetKey({ ...defaultPageConfig, bgEnabled: true, bgImage: 'b.png' } as never, 'A.md'),
+    '',
+  )
+  check(
+    'adj965 EP-09 插件取图⑤：**这份谱没有图 ⇒ 一次盘都不读**（总开关关 / 文本水印 / 空路径）',
+    overlayAssetsFor({} as never, { ...defaultPageConfig } as never, 'A.md', () => {}) === undefined &&
+      overlayAssetsFor({} as never, { ...defaultPageConfig, wmEnabled: true, wmText: '草稿' } as never, 'A.md', () => {}) ===
+        undefined &&
+      overlayAssetsFor({} as never, { ...defaultPageConfig, bgEnabled: true, bgImage: '' } as never, 'A.md', () => {}) ===
+        undefined,
+    '',
+  )
+
+  const assetSrc = String(readFileSync('src/overlayAssets.ts', 'utf8'))
+  const renderSrc965 = String(readFileSync('src/render.ts', 'utf8'))
+  const paneSrc965 = String(readFileSync('src/scorePane.ts', 'utf8'))
+  check(
+    'adj965 EP-09 插件取图**策略全部取自引擎**（白名单/上限/mime/路径归一/降采样阈值/要画哪两张图），本地不再各写一份',
+    /from '@ijipu\/engine'/.test(assetSrc) &&
+      /MAX_ASSET_BYTES/.test(assetSrc) &&
+      /isAllowedAssetPath/.test(assetSrc) &&
+      /ASSET_MAX_EDGE/.test(assetSrc) &&
+      /overlayAssetRefs/.test(assetSrc) &&
+      // 负对照：本地不得再出现这些"自己算"的写法
+      !/16 \* 1024 \* 1024/.test(assetSrc) &&
+      !/\b2000\b/.test(assetSrc) &&
+      !/\['png', 'jpg'/.test(assetSrc),
+    '',
+  )
+  check(
+    'adj965 EP-09 插件渲染把资源交给引擎（`renderScoreFull(source, cfg, assets)` → `RenderOpts.assets`）',
+    /renderScoreToSvg\(layout, renderOptsOf\(layout\.config, assets\)\)/.test(renderSrc965) &&
+      /assets === undefined \? measureMeta\(cfg\) : \{ \.\.\.measureMeta\(cfg\), assets \}/.test(renderSrc965) &&
+      /renderScoreFull\(source, cfg, assets\)/.test(paneSrc965),
+    '',
+  )
+  check(
+    'adj965 EP-09 插件取图**不静默**：解析失败给一句能照做的 `Notice`（未找到 / 只支持图片 / 超上限 / 解码失败）',
+    /new Notice\(msg, 6000\)/.test(assetSrc) &&
+      assetSrc.includes('未找到图片') &&
+      assetSrc.includes('只支持 png') &&
+      assetSrc.includes('上限') &&
+      assetSrc.includes('解码失败'),
+    '',
+  )
+  check(
+    'adj965 EP-09 插件取图不碰被禁 API：用 `createEl`（不用 `document.createElement` / `innerHTML`）',
+    /createEl\('img'\)/.test(assetSrc) &&
+      /createEl\('canvas'\)/.test(assetSrc) &&
+      !/document\.createElement\(/.test(assetSrc) &&
+      !/\.innerHTML\s*=/.test(assetSrc),
+    '',
+  )
+}
+
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。
 //   实测踩过：一次编辑顺手把它删掉，套件仍以退出码报错，但输出里再也看不到 `N passed, M failed`。
 console.log(`\n${pass} passed, ${fail} failed`)
