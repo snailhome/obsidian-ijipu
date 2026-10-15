@@ -34,7 +34,11 @@ export interface SettingDef {
 /** 谱面字体候选（adj-font：由引擎统一提供——每项都是含通用族的完整栈，跨机尽量有且保证有 fallback） */
 export const FONTS = SCORE_FONT_OPTIONS
 
-export const GROUPS = ['页面', '字体', '行距', '渲染'] as const
+/**
+ * 设置分组 = 插件「设置 → iJipu / 排版对话框」的页签（`configDialog.ts` 用 `[...GROUPS, '说明']`）。
+ * adj965：加水印 / 背景两组（与应用「谱面设置」里那两个子页签一一对应；跨仓闸门要求应用暴露的字段这里都有控件）。
+ */
+export const GROUPS = ['页面', '字体', '行距', '渲染', '水印', '背景'] as const
 
 /**
  * 四组设置项（继承 iJipu PageConfig 字段），frontmatter 键 = ijipu_<字段名>。
@@ -91,6 +95,28 @@ export const DEFS: SettingDef[] = [
     { label: '自动', value: '0' },
     { label: '圆弧', value: '1' },
     { label: '平顶', value: '2' } ] },
+  // —— 水印 / 背景（adj965，同步主项目「谱面设置 → 水印 / 背景」两个子页签）——
+  // 标签与应用 `PageConfigDialog` 的 `Row label=` 逐项对齐；默认值一律来自引擎（`getDefault`），插件不另立默认。
+  // 字段是**谱面级 L2**（随 `# jps-config` 走）：插件设置里的值只是"新谱默认"，写进谱面才算数。
+  { group: '水印', key: 'wmType', label: '水印类型', type: 'select', options: [
+    { label: '文字', value: 'text' },
+    { label: '图形', value: 'image' } ] },
+  { group: '水印', key: 'wmText', label: '水印文本', type: 'text' },
+  { group: '水印', key: 'wmImage', label: '水印图形文件（相对路径 / [[双链]]）', type: 'text' },
+  { group: '水印', key: 'wmSize', label: '水印字号(文本, pt)', type: 'number' },
+  { group: '水印', key: 'wmScale', label: '水印显示比率(图形, %)', type: 'number' },
+  { group: '水印', key: 'wmRotate', label: '水印旋转(°)', type: 'number' },
+  { group: '水印', key: 'wmRepeat', label: '重复铺满', type: 'toggle' },
+  { group: '水印', key: 'wmRepeatGap', label: '平铺间隔(%)', type: 'number' },
+  { group: '水印', key: 'wmOpacity', label: '水印透明度(0-100)', type: 'number' },
+  { group: '水印', key: 'wmOffsetX', label: '水印位置 X(px)', type: 'number' },
+  { group: '水印', key: 'wmOffsetY', label: '水印位置 Y(px)', type: 'number' },
+  { group: '背景', key: 'bgImage', label: '背景图形文件（相对路径 / [[双链]]）', type: 'text' },
+  { group: '背景', key: 'bgOffsetX', label: '背景位置 X(px)', type: 'number' },
+  { group: '背景', key: 'bgOffsetY', label: '背景位置 Y(px)', type: 'number' },
+  { group: '背景', key: 'bgScale', label: '背景显示比率(%)', type: 'number' },
+  { group: '背景', key: 'bgRotate', label: '背景旋转(°)', type: 'number' },
+  { group: '背景', key: 'bgOpacity', label: '背景透明度(0-100)', type: 'number' },
 ]
 
 /** 读某项当前值（含嵌套子项）：`segmentRowGap.bz` 这种取子项，其余整字段 */

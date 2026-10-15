@@ -756,8 +756,14 @@ console.log('[3g] adj631 设置面板：多页签 / 收藏音色分类列表 / �
       .split(',')
       .map((s) => s.trim().replace(/^'|'$/g, ''))
       .filter(Boolean)
-    check('⑦d 页签化后没有字段被"藏起来"：DEFS 的每个 group 都在 GROUPS 里，且四组都有项',
-      groups.every((g) => declared.includes(g)) && declared.length === 4 && declared.every((g) => groups.includes(g)),
+    /**
+     * adj965：判据里原来写死了 `declared.length === 4`（当时的组数）——加水印/背景两组后，
+     * 明明 DEFS 与 GROUPS **完全一致**却仍判红（消息里两组字面相同，看着像"闸门自己坏了"）。
+     * 这与本轮另外两条探针同族（**写死数量 / 写死名单 ⇒ 必然漂**）：改判"**双向一致**"，不写死数字。
+     * 意图不变：不出现"藏在未声明组里的字段"，也不出现"声明了却空着的页签"。
+     */
+    check('⑦d 页签化后没有字段被"藏起来"：DEFS 的每个 group 都在 GROUPS 里，且每个组都有项（双向一致，不写死组数）',
+      groups.every((g) => declared.includes(g)) && declared.length >= 4 && declared.every((g) => groups.includes(g)),
       `DEFS 组=${groups.join('/')} GROUPS=${declared.join('/')}`)
   }
 

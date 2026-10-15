@@ -90,12 +90,17 @@ function imageLayer(kind: 'bg' | 'wm', config: PageConfig, page: ScorePage, asse
   const cx = page.width / 2 + offX
   const cy = page.height / 2 + offY
 
-  return (
-    `<g data-overlay="${kind}" clip-path="url(#ovl-clip-${page.index})"${opacityAttr(opacity)}>` +
-    // `preserveAspectRatio="none"`：w/h 已按原图比例算好 ⇒ 不需要再加一层 letterbox 语义（更可预期）
-    `<image href="${asset.href}" x="${r1n(cx - w / 2)}" y="${r1n(cy - h / 2)}" width="${r1n(w)}" height="${r1n(h)}" preserveAspectRatio="none"${rotateAttr(rotate, cx, cy)}/>` +
-    `</g>`
-  )
+  /** 画一张（中心在 `(x, y)`）——`preserveAspectRatio="none"`：w/h 已按原图比例算好，不再加 letterbox 语义 */
+  const oneAt = (x: number, y: number): string =>
+    `<image href="${asset.href}" x="${r1n(x - w / 2)}" y="${r1n(y - h / 2)}" width="${r1n(w)}" height="${r1n(h)}" preserveAspectRatio="none"${rotateAttr(rotate, x, y)}/>`
+
+  // adj965b（用户 2026-10-15）：**重复水印**（图形水印同样适用；背景图不重复——它不是水印）
+  const body =
+    kind === 'wm' && config.wmRepeat === true
+      ? tileMarkup(page, w, h, config.wmRepeatGap, oneAt)
+      : oneAt(cx, cy)
+
+  return `<g data-overlay="${kind}" clip-path="url(#ovl-clip-${page.index})"${opacityAttr(opacity)}>${body}</g>`
 }
 
 /**
@@ -110,24 +115,84 @@ function textLayer(config: PageConfig, page: ScorePage): string {
   const text = String(config.wmText ?? '')
   if (text.trim() === '') return ''
   const size = numOr(config.wmSize, 6, 400, 36)
-  const rotate = numOr(config.wmRotate, -180, 180, 45)
+  const rotate = numOr(config.wmRotate, -180, 180, -45)
   const opacity = numOr(config.wmOpacity, 0, 100, 25)
   const cx = page.width / 2 + numOr(config.wmOffsetX, -1e6, 1e6, 0)
   const cy = page.height / 2 + numOr(config.wmOffsetY, -1e6, 1e6, 0)
 
   const lines = text.split('\n')
   const lineH = size * 1.2
-  // 整块垂直居中：`dominant-baseline="central"` 让 y 成为这一行的**视觉中心**
-  const y0 = cy - ((lines.length - 1) * lineH) / 2
-  const spans = lines
-    .map((ln, i) => `<tspan x="${r1n(cx)}" y="${r1n(y0 + i * lineH)}">${xmlEsc(ln)}</tspan>`)
-    .join('')
+  const textWidth = estimateTextWidth(lines, size)
+  const textHeight = lineH * lines.length
 
-  return (
-    `<g data-overlay="wm" clip-path="url(#ovl-clip-${page.index})"${opacityAttr(opacity)}>` +
-    `<text text-anchor="middle" dominant-baseline="central" font-size="${r1n(size)}" fill="#000000"${rotateAttr(rotate, cx, cy)}>${spans}</text>` +
-    `</g>`
-  )
+  /** 把整块画在 `(x, y)` 为中心的锚点上（`dominant-baseline="central"` ⇒ y 是行视觉中心） */
+  const blockAt = (x: number, y: number): string => {
+    const y0 = y - ((lines.length - 1) * lineH) / 2
+    const spans = lines
+      .map((ln, i) => `<tspan x="${r1n(x)}" y="${r1n(y0 + i * lineH)}">${xmlEsc(ln)}</tspan>`)
+      .join('')
+    return `<text text-anchor="middle" dominant-baseline="central" font-size="${r1n(size)}" fill="#000000"${rotateAttr(rotate, x, y)}>${spans}</text>`
+  }
+
+  const body =
+    config.wmRepeat === true
+      ? tileMarkup(page, textWidth, textHeight, config.wmRepeatGap, (x, y) => blockAt(x, y))
+      : blockAt(cx, cy)
+  return `<g data-overlay="wm" clip-path="url(#ovl-clip-${page.index})"${opacityAttr(opacity)}>${body}</g>`
+}
+
+/**
+ * 估算文本宽度（pt）——**只用于"重复水印"的平铺步进**，不参与任何排版。
+ *
+ * 引擎零 DOM ⇒ 量不到真实字形宽度；这里按"全角 ≈ 1em、半角 ≈ 0.55em"累加：
+ * CJK/全角标点算 1.0，其余（ASCII/数字/半角符）算 0.55。误差只影响铺得疏密，不影响正确性
+ * （同族做法见描述头文本宽度的估算）。
+ */
+function estimateTextWidth(lines: string[], size: number): number {
+  let maxUnits = 0
+  for (const ln of lines) {
+    let units = 0
+    for (const ch of ln) {
+      // 常见全角区：CJK 统一表意文字、全角标点、假名等
+      units += /[\u2e80-\u9fff\uff00-\uffef\u3000-\u303f]/.test(ch) ? 1 : 0.55
+    }
+    maxUnits = Math.max(maxUnits, units)
+  }
+  return Math.max(size, maxUnits * size)
+}
+
+/**
+ * 平铺（用户 2026-10-15 要求：**重复水印**，"以一定行列间隔重复铺满页面"）。
+ *
+ * 规则与理由：
+ *  · **步进** = `元素尺寸 × (1 + 间隔/100)` ⇒ `wmRepeatGap=100`（默认）时步进 = 2 倍自身尺寸；
+ *  · **奇数行右移半个步进**（错位排布）：水印是**斜的**（默认 -45°），正交网格会让斜向留下明显的空带，
+ *    错位后视觉上才是"铺满"；
+ *  · 网格**向外多铺一圈**（`from -step` 到 `page + step`）：斜置的角会伸出页面外，
+ *    不多铺就会在四边看到"秃边"；超出的部分由本层的 `clipPath` 裁掉 ⇒ 正好符合"只在页面内显示"。
+ */
+function tileMarkup(
+  page: ScorePage,
+  w: number,
+  h: number,
+  gapPct: number,
+  at: (x: number, y: number) => string,
+): string {
+  const gap = numOr(gapPct, 0, 1000, 100) / 100
+  const stepX = Math.max(8, w * (1 + gap))
+  const stepY = Math.max(8, h * (1 + gap))
+  const cols = Math.ceil(page.width / stepX) + 2
+  const rows = Math.ceil(page.height / stepY) + 2
+  const out: string[] = []
+  for (let r = 0; r < rows; r += 1) {
+    const y = r * stepY + stepY / 2 - stepY
+    const dx = r % 2 === 1 ? stepX / 2 : 0
+    for (let c = 0; c < cols; c += 1) {
+      const x = c * stepX + stepX / 2 - stepX + dx
+      out.push(at(x, y))
+    }
+  }
+  return out.join('')
 }
 
 /**

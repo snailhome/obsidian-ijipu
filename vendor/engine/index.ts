@@ -96,6 +96,8 @@ export { accidentalGeometry } from './layout/spaceLayout'
 export type { LayoutFontMeta } from './layout/index'
 // adj638：渲染端可选入参（宿主实测的 `1 = ` / ♯ / ♩ 宽）——应用与插件都按同一份口径传
 export type { RenderFontMeta } from './render/index'
+// adj965（方案「OVL」）：水印/背景层的运行时资源类型——宿主解析好图片后按这个形状传给引擎
+export type { RenderAssets, RenderOpts, OverlayAsset } from './render/index'
 // adj647：音符字体栈（宿主实测字形时必须与渲染用同一串 font-family）
 export { noteFontFamily } from './render/index'
 // adj428：临时叠加段（{bz … } / {dsb … }）上下两行纵向间距的默认常量；UI 显示缺省值用

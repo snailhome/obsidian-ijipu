@@ -87,6 +87,8 @@ import { MODIFIER_GLYPHS, glyphMarkup, type ModifierGlyphKey } from './modifierG
 import { r1n, r2n, xmlEsc } from './svgUtil'
 // adj965（方案「OVL」）：水印层与背景层（纯函数；资源由宿主解析好传进来）
 import { overlayLayers, type RenderAssets } from './overlay'
+// 让应用/插件能从引擎入口拿到这两个类型（`engine/index.ts` 再转出一次）
+export type { RenderAssets, OverlayAsset } from './overlay'
 
 // ============================================================
 // 工具

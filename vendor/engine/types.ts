@@ -1141,8 +1141,18 @@ export interface PageConfig {
   wmSize: number
   /** 图形水印宽度占**页宽**的百分比（100 ⇒ 宽度撑满页宽；渲染端钳 10~1000） */
   wmScale: number
-  /** 水印旋转角度（度；渲染端钳 -180~180） */
+  /** 水印旋转角度（度；渲染端钳 -180~180）。**默认 -45**（用户 2026-10-15 裁定：从 +45 改为 -45） */
   wmRotate: number
+  /**
+   * **重复水印**（用户 2026-10-15 要求）：勾选后按"一定行列间隔"把水印**平铺满页面**，
+   * 而不是只画正中一个。默认 `false`（单个居中 = 经典水印；也保证不用这功能的谱零变化）。
+   */
+  wmRepeat: boolean
+  /**
+   * 平铺**间隔**（百分比）：相邻两个水印之间的空隙 = 水印自身尺寸 × 该值/100
+   * ⇒ `100`（默认）时步进 = 自身尺寸的 2 倍。只在 `wmRepeat` 打开时有意义。
+   */
+  wmRepeatGap: number
   /** 水印不透明度（0~100；100 = 完全不透明） */
   wmOpacity: number
   /** 水印中心相对**页面中心**的横向偏移（pt） */
@@ -1224,7 +1234,10 @@ export const defaultPageConfig: PageConfig = {
   wmImage: '',
   wmSize: 36,
   wmScale: 100,
-  wmRotate: 45,
+  // adj965b（用户 2026-10-15 裁定）：默认旋转由 +45 改为 **-45**
+  wmRotate: -45,
+  wmRepeat: false,
+  wmRepeatGap: 100,
   wmOpacity: 25,
   wmOffsetX: 0,
   wmOffsetY: 0,
