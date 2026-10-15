@@ -60,6 +60,8 @@ import { PAGE_NUM_RANGES, clampNum } from '../src/numRanges'
 import { DEFS, changedDefs, getDefault, isDefaultValue, readDef, writeDef } from '../src/defs'
 import { clearVoices, filterVoices, groupVoices, invertVoices, normalizeVoices, selectAllVoices, selectedInGroup, setGroupVoices, toggleVoice, voiceSummary } from '../src/voiceChooser'
 import { resolvePageConfig } from '../src/config'
+// adj965j：导出前把水印/背景图内联进临时源码（用户实报"导出 PNG 没背景"）
+import { inlineAssetsInSource as inlineAssetsInSource965j } from '../src/overlayAssets'
 import { codeBlockBody, jpsLinkpath, replaceCodeBlockBody } from '../src/sourceEdit'
 // adj865：代码块 info string 里的**块级缩放** `z`（解析口径与扫描器同源；此前的注释写着"见冒烟 adj839"，
 // 但套件里从来没有那一节 ⇒ 现在钉在 adj865 里）
@@ -392,6 +394,38 @@ console.log('[3c] adj629q 设置口径与应用一致（字段集 / 标签 / 范
     scoreUsesWholeDraft(
       paneSrc965i.replace('const payload = next', 'const payload = mergeConfigEdits(host.getSource(), resolved.config, next)'),
       dialogSrc965i,
+    ) === false,
+    '')
+  /**
+   * adj965j（**用户 2026-10-15 实报**）：「jps 代码块里背景用 `[[]]` 双链时，**预览正常、导出 PNG 没有背景**」
+   * （用户随后补了关键对照：**嵌入版 iJipu 自己的导出是好的** ✓）。
+   *
+   * 根因：插件工具条那条导出走应用 RPC，只递**源码字符串** ⇒ 栅格化在 iframe 里做、那里**读不到 vault**
+   * ⇒ 背景图解析不出来；预览是插件自己渲染（能读 vault）⇒ 一直正常。嵌入版自己的导出走宿主桥
+   * `readAsset`（EP-09 已接）⇒ 也没问题 —— "同一应用两条导出入口，一条好一条坏"。
+   *
+   * 修法：导出前把宿主解析好的 `data:` URI 写进那份**临时源码**（引擎本就支持 `data:` 取值）。
+   */
+  const inlineSrc965j = '# jps-config:{"bgEnabled":true,"bgImage":"[[凤冠.png]]","bgScale":150}\nV: 1.0\nB: 标题\nQ: 1 2 3 4 |\n'
+  const inlineCfg965j = resolvePageConfig(inlineSrc965j, {}).config
+  const DATA965j = 'data:image/png;base64,AA'
+  const inlined965j = inlineAssetsInSource965j(inlineSrc965j, inlineCfg965j, { bg: { href: DATA965j, w: 10, h: 10 } })
+  const inlinedCfg965j = cfgOfLine(inlined965j)
+  check('adj965j 导出前把背景图**内联成 data URI**（否则应用在 iframe 里读不到 vault ⇒ 导出图缺背景，用户实报）',
+    inlinedCfg965j.bgImage === DATA965j && inlinedCfg965j.bgEnabled === true && inlined965j !== inlineSrc965j,
+    `bgImage=${String(inlinedCfg965j.bgImage).slice(0, 40)}`)
+  check('adj965j **负对照**：一张图都没解析出来时**原样返回**（不许凭空改动那份只用于导出的源码）',
+    inlineAssetsInSource965j(inlineSrc965j, inlineCfg965j, {}) === inlineSrc965j,
+    '')
+  const mainSrc965j = String(readFileSync('src/main.ts', 'utf8'))
+  /** 判据本体（抽出来给负对照复用）：定义 1 处 + 三个导出出口各调用 1 次 ⇒ 至少 4 次出现 */
+  const exportInlinesImages = (s: string): boolean => (s.match(/exportSourceWithInlinedImages\(/g) ?? []).length >= 4
+  check('adj965j 三个导出出口都内联图片（复制图片 / 保存为 PNG / 复制 SVG 文本 —— 同一个缺陷的三个出口）',
+    exportInlinesImages(mainSrc965j),
+    `${(mainSrc965j.match(/exportSourceWithInlinedImages\(/g) ?? []).length} 处`)
+  check('adj965j 源码**负对照**：抹掉「复制 SVG」那一处调用 ⇒ 同一条判据判假（证明它真的在数三处）',
+    exportInlinesImages(
+      mainSrc965j.replace('const withImages = await this.exportSourceWithInlinedImages(source)', 'const withImages = source'),
     ) === false,
     '')
 }
@@ -4698,7 +4732,9 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
       /export const APP_BRIDGE_METHODS = \['render\.svg', 'render\.png', 'export\.midi'\] as const/.test(b810) &&
       /if \(!\(APP_BRIDGE_METHODS as readonly string\[\]\)\.includes\(method\)\)/.test(b810) &&
       // ④ 参数校验
-      /typeof source !== 'string' \|\| source\.length > 500_000/.test(b810) &&
+      // ④ 参数校验（**adj965j 更新**：上限 500000 → 8000000 —— 宿主导出前会把水印/背景图内联成
+      //    `data:` URI 写进这份临时源码，几百 KB 的图 base64 后就有几十万字符，旧上限会误拒合法请求）
+      /typeof source !== 'string' \|\| source\.length > 8_000_000/.test(b810) &&
       /scaleRaw >= 1 && scaleRaw <= 4/.test(b810) &&
       // ⑤ 诚实降级（四种错误码都在）
       /notFound: -32601/.test(b810) &&
@@ -5129,8 +5165,8 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
   // —— ③ 图片路径：应用渲染 → 插件补 pHYs → 剪贴板；失败如实说 ——
   check('adj864 `copyScoreImage`：探活取页宽 → `resolveRangeBox(pane)` → `render.png`（带 crop）→ 补 pHYs → 写剪贴板',
     /async copyScoreImage\(\s*source: string,\s*scale: number,\s*pane\?: \{ box: RangeBox \| null; mode: 'page' \| 'full' \| 'score' \},?\s*\): Promise<void>/.test(main864) &&
-      /await this\.appRpc\.request<\{ svgs: string\[\] \}>\('render\.svg', \{ source \}, 4000\)/.test(main864) &&
-      /const ranged = this\.resolveRangeBox\(source, probe\.svgs, pane\)/.test(main864) &&
+      /await this\.appRpc\.request<\{ svgs: string\[\] \}>\('render\.svg', \{ source: exportSource \}, 4000\)/.test(main864) &&
+      /const ranged = this\.resolveRangeBox\(exportSource, probe\.svgs, pane\)/.test(main864) &&
       /await this\.appRpc\.request<\{ pngs: string\[\] \}>\('render\.png', params\)/.test(main864) &&
       /const withDpi = insertPngPhys\(bytes, dpi\)/.test(main864) &&
       /await copyPngBytesToClipboard\(withDpi\)/.test(main864))
@@ -5972,8 +6008,8 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
   // —— ⑦ 两个新出口的实现（复用既有通道，只是出口改成文件） ——
   const savePng912 = (src: string): boolean =>
     /async saveScorePng\(\s*source: string,\s*pane\?: \{ box: RangeBox \| null; mode: 'page' \| 'full' \| 'score' \},\s*target\?: \{ dir: string; base: string \},?\s*\): Promise<void>/.test(src) &&
-    /await this\.appRpc\.request<\{ svgs: string\[\] \}>\('render\.svg', \{ source \}, 4000\)/.test(src) &&
-    /const ranged = this\.resolveRangeBox\(source, probe\.svgs, pane\)/.test(src) &&
+    /await this\.appRpc\.request<\{ svgs: string\[\] \}>\('render\.svg', \{ source: exportSource \}, 4000\)/.test(src) &&
+    /const ranged = this\.resolveRangeBox\(exportSource, probe\.svgs, pane\)/.test(src) &&
     /if \(ranged\.box !== null\) params\.crop = ranged\.box/.test(src) &&
     /await this\.appRpc\.request<\{ pngs: string\[\] \}>\('render\.png', params\)/.test(src) &&
     /const withDpi = insertPngPhys\(bytes, dpi\)/.test(src) &&
@@ -6016,9 +6052,14 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
     !/iJipu：保存为 PNG 失败 —— \$\{ranged\.error\}/.test(main912.replace('iJipu：保存为 PNG 失败 —— ${ranged.error}', '（静默）')))
 
   // —— ⑧ 视图（导出范围）对**四个**出口都生效（用户裁定 ④；分辨率只对位图两项生效） ——
+  /**
+   * adj912 的范围口径（**adj965j 更新**）：位图出口的范围盒在**内联过图片的临时源码**上量
+   * （导出改用 `exportSource` —— 应用读不到 vault，宿主先把图内联进去，见 `adj965j`）；
+   * SVG 出口渲染的也是内联版，但范围仍按**原源码**量（几何只依赖页面配置，两者一致 ✓）。
+   */
   const rangeOk912 = (src: string): boolean =>
-    /this\.resolveRangeBox\(source, probe\.svgs, pane\)/.test(bodyOf912(src, 'copyScoreImage')) &&
-    /this\.resolveRangeBox\(source, probe\.svgs, pane\)/.test(bodyOf912(src, 'saveScorePng')) &&
+    /this\.resolveRangeBox\(exportSource, probe\.svgs, pane\)/.test(bodyOf912(src, 'copyScoreImage')) &&
+    /this\.resolveRangeBox\(exportSource, probe\.svgs, pane\)/.test(bodyOf912(src, 'saveScorePng')) &&
     /this\.applyExportRange\(source, r\.svgs, pane\)/.test(bodyOf912(src, 'copyScoreSvg')) &&
     /this\.applyExportRange\(source, r\.svgs, pane\)/.test(bodyOf912(src, 'saveScoreSvg'))
   check('adj912 视图（导出范围）组对四个出口都生效：复制图片 / 保存为 PNG 走 `resolveRangeBox(…, pane)`，复制 SVG / 保存为 SVG 走 `applyExportRange(…, pane)`',

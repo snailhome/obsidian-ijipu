@@ -8,7 +8,10 @@ import { createAppRequester, createEmbedRpc, type AppRequester, type EmbedRpc } 
 // adj807（B2）：RPC 的 `render.svg` 允许带 `pageConfig` 覆盖 ⇒ 这里只需要它的**类型**
 import type { PageConfig } from '@ijipu/engine'
 // adj965g：图片文件被改写时清一次缓存（见下面 vault.on('modify') 那段说明）
-import { clearOverlayAssetCache } from './overlayAssets'
+// adj965j：导出前把水印/背景图**内联成 data URI**（用户实报：代码块里背景用 `[[]]` 双链时导出 PNG 没背景）
+import { clearOverlayAssetCache, inlineAssetsInSource, resolveOverlayAssetsFor } from './overlayAssets'
+// adj965j：导出用的"临时源码"要把生效配置算全（默认 < 插件设置 < 源码）
+import { resolvePageConfig } from './config'
 import { IJipuSettingTab } from './settings'
 import { mountScorePane, sweepOrphanBodyToolbars, type ScorePaneHandle } from './scorePane'
 import { registerJpsEmbeds } from './embed'
@@ -1121,14 +1124,16 @@ export default class IJipuPlugin extends Plugin {
       return
     }
     try {
+      // adj965j：先把水印/背景图内联进这份**只用于导出**的源码（否则应用那边读不到 vault ⇒ 导出图没背景）
+      const exportSource = await this.exportSourceWithInlinedImages(source)
       // 探活 + 取页宽（范围要用页面尺寸；这一步与「导出 PNG」同一套路）
-      const probe = await this.appRpc.request<{ svgs: string[] }>('render.svg', { source }, 4000)
-      const ranged = this.resolveRangeBox(source, probe.svgs, pane)
+      const probe = await this.appRpc.request<{ svgs: string[] }>('render.svg', { source: exportSource }, 4000)
+      const ranged = this.resolveRangeBox(exportSource, probe.svgs, pane)
       if (ranged.error !== undefined) {
         new Notice(`iJipu：复制为图片失败 —— ${ranged.error}`, 8000)
         return
       }
-      const params: Record<string, unknown> = { source, scale }
+      const params: Record<string, unknown> = { source: exportSource, scale }
       if (ranged.box !== null) params.crop = ranged.box
       const res = await this.appRpc.request<{ pngs: string[] }>('render.png', params)
       const first = res.pngs[0]
@@ -1161,7 +1166,12 @@ export default class IJipuPlugin extends Plugin {
     source: string,
     pane?: { box: RangeBox | null; mode: 'page' | 'full' | 'score' },
   ): Promise<void> {
-    const r = this.api.renderSvg(source)
+    /**
+     * adj965j：这条走**插件自己的引擎**（不经嵌入版），同样要先把图片内联进来 ——
+     * 否则"复制 SVG 文本"与"导出 PNG"一样会缺背景（同一个缺陷的两个出口）。
+     */
+    const withImages = await this.exportSourceWithInlinedImages(source)
+    const r = this.api.renderSvg(withImages)
     if (!r.ok) {
       new Notice(`iJipu：无法渲染 —— ${r.error ?? '未知原因'}`)
       return
@@ -1177,6 +1187,28 @@ export default class IJipuPlugin extends Plugin {
     } catch (e) {
       new Notice(`iJipu：复制失败 —— ${e instanceof Error ? e.message : String(e)}`, 6000)
     }
+  }
+
+  /**
+   * adj965j（**用户 2026-10-15 实报**）：「jps 代码块里背景用 `[[]]` 双链时，**预览正常、导出 PNG 没有背景**」
+   * （用户随后补了一句关键对照：**嵌入版 iJipu 自己的导出是好的** ✓）。
+   *
+   * 定位：插件工具条那条导出命令走应用 RPC，只递了一段**源码字符串** ⇒
+   * 栅格化在嵌入版应用里做，而应用在 iframe 里**读不到 vault** ⇒ 背景图解析不出来 ⇒ 导出图缺背景 ✗；
+   * 预览则是插件自己渲染的（`vendor/engine` + `src/overlayAssets.ts` 自己读 vault）⇒ 一直是对的 ✓。
+   * 嵌入版**自己**的导出没这个问题，因为那条路走宿主桥的 `readAsset`（EP-09 已接）✓ ——
+   * "同一个应用、两条导出入口，一条好一条坏"就是这么来的。
+   *
+   * 修法（只动插件侧）：导出前把宿主**已经解析好的** `data:` URI 写进那份**临时源码**的
+   * `# jps-config` 里 —— 引擎本来就支持 `data:` 取值 ⇒ 应用按老路子就能画出背景 ✓，
+   * 一种写法同时覆盖"相对路径"与"`[[]]` 双链" ✓。**这份源码只递给应用做导出，不写回笔记** ✓。
+   */
+  private async exportSourceWithInlinedImages(source: string): Promise<string> {
+    const cfg = resolvePageConfig(source, this.settings as Partial<PageConfig>).config
+    // 双链要按"从哪篇笔记里写的"解析 ⇒ 用当前活动文件；拿不到就退化为空（相对路径仍可用）
+    const from = this.app.workspace.getActiveFile()?.path ?? ''
+    const assets = await resolveOverlayAssetsFor(this.app, cfg, from)
+    return inlineAssetsInSource(source, cfg, assets)
   }
 
   /**
@@ -1205,13 +1237,15 @@ export default class IJipuPlugin extends Plugin {
       return
     }
     try {
-      const probe = await this.appRpc.request<{ svgs: string[] }>('render.svg', { source }, 4000)
-      const ranged = this.resolveRangeBox(source, probe.svgs, pane)
+      // adj965j：同「复制图片」——导出前把水印/背景图内联进这份临时源码
+      const exportSource = await this.exportSourceWithInlinedImages(source)
+      const probe = await this.appRpc.request<{ svgs: string[] }>('render.svg', { source: exportSource }, 4000)
+      const ranged = this.resolveRangeBox(exportSource, probe.svgs, pane)
       if (ranged.error !== undefined) {
         new Notice(`iJipu：保存为 PNG 失败 —— ${ranged.error}`, 8000)
         return
       }
-      const params: Record<string, unknown> = { source, scale }
+      const params: Record<string, unknown> = { source: exportSource, scale }
       if (ranged.box !== null) params.crop = ranged.box
       const res = await this.appRpc.request<{ pngs: string[] }>('render.png', params)
       const saveDir = target?.dir ?? ''
