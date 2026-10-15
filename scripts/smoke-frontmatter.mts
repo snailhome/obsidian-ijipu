@@ -338,6 +338,62 @@ console.log('[3c] adj629q 设置口径与应用一致（字段集 / 标签 / 范
   check('adj965h 审计覆盖面自检：真的审到了大部分字段（否则"全绿"没意义）',
     DEFS.filter((d) => !d.sub).length - auditSkipped.length >= 30,
     `审到 ${DEFS.filter((d) => !d.sub).length - auditSkipped.length} 项，共 ${DEFS.length} 行`)
+  /**
+   * adj965i（**用户 2026-10-15 定稿口径**，原话）：
+   *
+   * > 要保存时，谱面值和设置对话框的值两张表，先遍历谱面值，对比设置对话框里的值，
+   * > 如果设置对话框里是默认值，则谱面里这项删除。然后再保存设置对话框里的非默认值。
+   *
+   * 落地即：谱面里最终**只留"对话框里的非默认值"**。这一条替代了 `adj480` 的"只写本次改动"，
+   * 因为旧口径有两个洞（都表现为"改完没保存 / 又恢复成设置前"）⇒ 下面两条各钉一个 + 负对照。
+   */
+  const sid = 'V: 1.0\nB: 测试\nP: 4/4\nQ: 1 2 3 4 |\n'
+  const cfgOfLine = (src: string): Record<string, unknown> => {
+    const line = src.split('\n').find((l) => l.startsWith('# jps-config')) ?? '# jps-config:{}'
+    try {
+      return JSON.parse(line.slice(line.indexOf(':') + 1)) as Record<string, unknown>
+    } catch {
+      return {}
+    }
+  }
+  // ① 非默认项**来自插件设置层**（用户根本没在对话框里动过它）⇒ 也要写进谱面
+  const setLayer = { showInstrument: true } as Partial<PageConfig>
+  const draftA = resolvePageConfig(sid, setLayer).config
+  const outA = writeJpsConfig(sid, draftA)
+  /** 负对照：旧口径（基线 = 生效值）⇒ 一个字都不写 ⇒ 判据必须能区分这两种写法 */
+  const oldWayA = mergeConfigEdits(sid, draftA, draftA)
+  check('adj965i 保存到谱面①：**插件设置层带来的非默认项**也要落进谱面（用户没在对话框动过它；旧口径会漏 ⇒ 负对照为空）',
+    cfgOfLine(outA).showInstrument === true && Object.keys(oldWayA).length === 0,
+    `新口径=${JSON.stringify(cfgOfLine(outA))} 旧口径=${JSON.stringify(oldWayA)}`)
+  // ② 谱面里旧的"等于默认"的键 ⇒ 删掉；非默认的键 ⇒ 留着（两步走：先清旧、再写非默认）
+  const defMarginTop = Number(getDefault('margin_top'))
+  const srcB = `# jps-config:{"margin_top":${defMarginTop},"page":"A5"}\n${sid}`
+  const draftB = { ...defaultPageConfig, page: 'A5' } as PageConfig
+  const cfgB = cfgOfLine(writeJpsConfig(srcB, draftB))
+  check('adj965i 保存到谱面②：对话框里是**默认值**的旧键从谱面删掉、**非默认值**的键留着（纸面只留非默认项）',
+    !('margin_top' in cfgB) && cfgB.page === 'A5',
+    JSON.stringify(cfgB))
+  check('adj965i 保存到谱面③：对话框里**全默认**（用户点了恢复默认）⇒ 谱面那一行清空为 `{}`（旧键一并删干净）',
+    /# jps-config:\{\}/.test(writeJpsConfig(srcB, { ...defaultConfigForReset() } as PageConfig)),
+    writeJpsConfig(srcB, { ...defaultConfigForReset() } as PageConfig).split('\n').find((l) => l.startsWith('# jps-config')) ?? '')
+  const dialogSrc965i = String(readFileSync('src/configDialog.ts', 'utf8'))
+  const paneSrc965i = String(readFileSync('src/scorePane.ts', 'utf8'))
+  /**
+   * 判据本体（抽出来给负对照复用）：'score' 出口直接整份交差量写入，且不再有重复的第二个出口。
+   * ⚠ 只盯**按钮工厂调用**（`mk('随谱固化…`），不盯"随谱固化"这四个字——
+   * 注释里说明"它为什么被撤掉"是应该的，拿词做判据会把自己的注释判红（第一次就是这么错的）。
+   */
+  const scoreUsesWholeDraft = (pane: string, dialog: string): boolean =>
+    /const payload = next\n/.test(pane) && !/mk\('随谱固化/.test(dialog)
+  check('adj965i 源码：`保存到谱面` = 整份草稿交差量写入（`const payload = next`），且**撤掉**了语义重复的「随谱固化」按钮',
+    scoreUsesWholeDraft(paneSrc965i, dialogSrc965i),
+    '')
+  check('adj965i 源码**负对照**：把旧口径（`mergeConfigEdits(source, 生效值, next)`）换回去 ⇒ 同一条判据判假',
+    scoreUsesWholeDraft(
+      paneSrc965i.replace('const payload = next', 'const payload = mergeConfigEdits(host.getSource(), resolved.config, next)'),
+      dialogSrc965i,
+    ) === false,
+    '')
 }
 
 console.log('[3f] adj629z 插件默认值/字段集/文档 与 iJipu 应用逐项同步')

@@ -121,20 +121,19 @@ export class ConfigDialog extends Modal {
       this.refresh()
     })
     mk('取消', 'ijipu-btn', () => this.close())
-    mk('随谱固化（分享用）', 'ijipu-btn', () => {
-      // adj480：把"与引擎默认不同的全部生效项"写进谱面（差量模式 + 生效配置）——
-      // 只多写真正影响外观的项，既保真又不把与默认相同的项钉进文件。
-      const cfg = this.draft
-      this.close()
-      this.opts.onApply('score-full', cfg)
-    })
     mk('保存为插件默认', 'ijipu-btn', () => {
       const cfg = this.draft
       this.close()
       this.opts.onApply('plugin', cfg)
     })
     mk('保存到谱面', 'ijipu-btn mod-cta', () => {
-      // adj480：只写本次改动（基线 = 打开时的生效配置）
+      /**
+       * adj965i（用户 2026-10-15 定稿口径）：**谱面里只留"对话框里的非默认值"**——
+       * 等于默认的项从谱面删掉，非默认的项全部写进去（不看"用户动没动过"）。
+       *
+       * ⚠ 因此原来的「随谱固化（分享用）」按钮**语义与它完全重合**了（那个按钮的口径就是这句话），
+       * 已撤掉：两个一模一样的出口摆在一起只会让人猜"该点哪个"。口径说明见 `scorePane.ts` 的 `onApply`。
+       */
       const cfg = this.draft
       this.close()
       this.opts.onApply('score', cfg)
@@ -147,11 +146,10 @@ export class ConfigDialog extends Modal {
       host.createDiv({ cls: 'ijipu-settings-note', text })
     }
     note(
-      this.opts.sourceFields.length > 0
-        ? '**保存到谱面**：本谱已自带 `# jps-config` 行 ⇒ 只更新**本次改动**（原位更新，优先级最高）。'
-        : '**保存到谱面**：只写入**本次改动**——不会把插件设置的默认值顺手烧进谱面。',
+      '**保存到谱面**（口径，用户 2026-10-15 定稿）：遍历谱面原有各项 —— 对话框里该项是**默认值** ⇒ 从谱面删掉；' +
+        '随后把对话框里**非默认**的项全部写进谱面。⇒ 谱面里最终只留"非默认值"，**不看你在对话框里动没动过它**' +
+        '（这条替代了 `adj480` 的"只写本次改动"：那种写法会让"插件设置层带来的非默认项"一直进不了谱面）。',
     )
-    note('**随谱固化（分享用）**：把当前生效的**全部非默认项**写进谱面（差量）⇒ 把这份谱或只把代码块复制给别人（或在 iJipu 应用里打开）都显示一致。')
     note('**保存为插件默认**：只把**你在本对话框里改动过的项**写进本库全局默认（不会把这份谱源内的值顺手变成全库默认）。')
   }
 
