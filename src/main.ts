@@ -6,7 +6,7 @@ import { jpsBlockRanges, modeOfInfo, modeParamWarning, zoomOfInfo, zoomWrittenIn
 import { createIjipuApi, type IjipuApi } from './api'
 import { createAppRequester, createEmbedRpc, type AppRequester, type EmbedRpc } from './embed/rpc'
 // adj807（B2）：RPC 的 `render.svg` 允许带 `pageConfig` 覆盖 ⇒ 这里只需要它的**类型**
-import type { PageConfig } from '@ijipu/engine'
+import type { PageConfig, RenderAssets } from '@ijipu/engine'
 // adj965g：图片文件被改写时清一次缓存（见下面 vault.on('modify') 那段说明）
 // adj965j：导出前把水印/背景图**内联成 data URI**（用户实报：代码块里背景用 `[[]]` 双链时导出 PNG 没背景）
 import { clearOverlayAssetCache, inlineAssetsInSource, resolveOverlayAssetsFor } from './overlayAssets'
@@ -1124,16 +1124,16 @@ export default class IJipuPlugin extends Plugin {
       return
     }
     try {
-      // adj965j：先把水印/背景图内联进这份**只用于导出**的源码（否则应用那边读不到 vault ⇒ 导出图没背景）
-      const exportSource = await this.exportSourceWithInlinedImages(source)
+      // adj965j：**把宿主解析好的图片资源递过去**（应用在 iframe 里读不到 vault ⇒ 不给就没有背景）
+      const exportAssets = await this.exportAssets(source)
       // 探活 + 取页宽（范围要用页面尺寸；这一步与「导出 PNG」同一套路）
-      const probe = await this.appRpc.request<{ svgs: string[] }>('render.svg', { source: exportSource }, 4000)
-      const ranged = this.resolveRangeBox(exportSource, probe.svgs, pane)
+      const probe = await this.appRpc.request<{ svgs: string[] }>('render.svg', { source, assets: exportAssets }, 4000)
+      const ranged = this.resolveRangeBox(source, probe.svgs, pane)
       if (ranged.error !== undefined) {
         new Notice(`iJipu：复制为图片失败 —— ${ranged.error}`, 8000)
         return
       }
-      const params: Record<string, unknown> = { source: exportSource, scale }
+      const params: Record<string, unknown> = { source, scale, assets: exportAssets }
       if (ranged.box !== null) params.crop = ranged.box
       const res = await this.appRpc.request<{ pngs: string[] }>('render.png', params)
       const first = res.pngs[0]
@@ -1204,11 +1204,23 @@ export default class IJipuPlugin extends Plugin {
    * 一种写法同时覆盖"相对路径"与"`[[]]` 双链" ✓。**这份源码只递给应用做导出，不写回笔记** ✓。
    */
   private async exportSourceWithInlinedImages(source: string): Promise<string> {
+    const assets = await this.exportAssets(source)
+    return inlineAssetsInSource(source, resolvePageConfig(source, this.settings as Partial<PageConfig>).config, assets)
+  }
+
+  /**
+   * adj965j（第二次修，用户实测第一次没用）：**导出用的图片资源** `{wm?,bg?}`（`href` 是 `data:` URI）。
+   *
+   * ⚠ 第一次的修法是"宿主把图内联成 `data:` URI 写进临时源码"，**用户实测无效** ✗ ——
+   * 因为引擎渲染图片**只认 `assets` 里那份 `{href,w,h}`**：它零 DOM，量不到宽高、也读不到字节，
+   * 所以源码里写什么都不够，**必须把 `assets` 递给渲染端**。这条现在通过桥的 `params.assets`
+   * 传给嵌入版应用（宿主才知道 vault 怎么解析：相对路径 / `[[]]` 双链）。
+   */
+  private async exportAssets(source: string): Promise<RenderAssets> {
     const cfg = resolvePageConfig(source, this.settings as Partial<PageConfig>).config
     // 双链要按"从哪篇笔记里写的"解析 ⇒ 用当前活动文件；拿不到就退化为空（相对路径仍可用）
     const from = this.app.workspace.getActiveFile()?.path ?? ''
-    const assets = await resolveOverlayAssetsFor(this.app, cfg, from)
-    return inlineAssetsInSource(source, cfg, assets)
+    return await resolveOverlayAssetsFor(this.app, cfg, from)
   }
 
   /**
@@ -1237,15 +1249,15 @@ export default class IJipuPlugin extends Plugin {
       return
     }
     try {
-      // adj965j：同「复制图片」——导出前把水印/背景图内联进这份临时源码
-      const exportSource = await this.exportSourceWithInlinedImages(source)
-      const probe = await this.appRpc.request<{ svgs: string[] }>('render.svg', { source: exportSource }, 4000)
-      const ranged = this.resolveRangeBox(exportSource, probe.svgs, pane)
+      // adj965j：同「复制图片」——宿主解析好的图片资源随请求递过去（否则导出图缺背景）
+      const exportAssets = await this.exportAssets(source)
+      const probe = await this.appRpc.request<{ svgs: string[] }>('render.svg', { source, assets: exportAssets }, 4000)
+      const ranged = this.resolveRangeBox(source, probe.svgs, pane)
       if (ranged.error !== undefined) {
         new Notice(`iJipu：保存为 PNG 失败 —— ${ranged.error}`, 8000)
         return
       }
-      const params: Record<string, unknown> = { source: exportSource, scale }
+      const params: Record<string, unknown> = { source, scale, assets: exportAssets }
       if (ranged.box !== null) params.crop = ranged.box
       const res = await this.appRpc.request<{ pngs: string[] }>('render.png', params)
       const saveDir = target?.dir ?? ''
