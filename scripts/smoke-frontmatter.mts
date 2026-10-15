@@ -5,7 +5,7 @@
  * 断言来源：用户反馈「在 frontmatter 里设置像 `ijipu_note_size` 好像没生效」——
  * 覆盖键名写法兼容、值类型转换、未识别键提示、优先级四类。
  */
-import { defaultPageConfig, dragDelta, formatJps, formatLine, instrumentColorMap, layoutScore, parseJps, playheadBaseOf, playheadPosIn, renderScoreToSvg, splitParseIssues, tokenizeJpsLine, JPS_HIGHLIGHT_COLORS, JPS_PLAIN_COLORS, JPS_PROBLEM_COLORS, trackKeysOf, writeJpsConfig, mergeConfigEdits, configCarryover, SCORE_FONT_OPTIONS, buildPlaySequence, GUIDE_LIMITS, GUIDE_LIMITS_EX, SEGMENT_ROW_GAP_DEFAULT, OPTIONAL_CONFIG_FIELDS, defaultConfigForReset, extractJpsConfig, extractLegacyEditorPrefs, nonDefaultConfigKeys, GM_GROUPS, highlightLineModel, jpsBlockMarks, rangeBox, applyRangeToSvg, insertPngPhys, readPngPhys, crc32, dpiForScale } from '@ijipu/engine'
+import { defaultPageConfig, dragDelta, formatJps, formatLine, instrumentColorMap, layoutScore, parseJps, playheadBaseOf, playheadPosIn, renderScoreToSvg, splitParseIssues, tokenizeJpsLine, JPS_HIGHLIGHT_COLORS, JPS_PLAIN_COLORS, JPS_PROBLEM_COLORS, trackKeysOf, writeJpsConfig, mergeJpsConfig, mergeConfigEdits, configCarryover, SCORE_FONT_OPTIONS, buildPlaySequence, GUIDE_LIMITS, GUIDE_LIMITS_EX, SEGMENT_ROW_GAP_DEFAULT, OPTIONAL_CONFIG_FIELDS, defaultConfigForReset, extractJpsConfig, extractLegacyEditorPrefs, nonDefaultConfigKeys, GM_GROUPS, highlightLineModel, jpsBlockMarks, rangeBox, applyRangeToSvg, insertPngPhys, readPngPhys, crc32, dpiForScale } from '@ijipu/engine'
 import type { PageConfig } from '@ijipu/engine'
 import { existsSync, globSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
@@ -59,8 +59,8 @@ import { PAGE_NUM_RANGES, clampNum } from '../src/numRanges'
 // —— `obsidian` 依赖已由 `npm run smoke` 的 `--alias:obsidian=./scripts/obsidianStub.ts` 替换掉
 import { DEFS, changedDefs, getDefault, isDefaultValue, readDef, writeDef } from '../src/defs'
 import { clearVoices, filterVoices, groupVoices, invertVoices, normalizeVoices, selectAllVoices, selectedInGroup, setGroupVoices, toggleVoice, voiceSummary } from '../src/voiceChooser'
-import { resolvePageConfig } from '../src/config'
-import { codeBlockBody, jpsLinkpath, replaceCodeBlockBody } from '../src/sourceEdit'
+import { resolvePageConfig, scoreWritePayload } from '../src/config'
+import { codeBlockBody, jpsLinkpath, replaceCodeBlockBody, writeRoute } from '../src/sourceEdit'
 // adj865：代码块 info string 里的**块级缩放** `z`（解析口径与扫描器同源；此前的注释写着"见冒烟 adj839"，
 // 但套件里从来没有那一节 ⇒ 现在钉在 adj865 里）
 import { jpsBlockRanges, zoomOfInfo, zoomWrittenInInfo } from '../src/jpsBlocks'
@@ -379,18 +379,28 @@ console.log('[3c] adj629q 设置口径与应用一致（字段集 / 标签 / 范
   const dialogSrc965i = String(readFileSync('src/configDialog.ts', 'utf8'))
   const paneSrc965i = String(readFileSync('src/scorePane.ts', 'utf8'))
   /**
-   * 判据本体（抽出来给负对照复用）：'score' 出口直接整份交差量写入，且不再有重复的第二个出口。
+   * 判据本体（抽出来给负对照复用）：'score' 出口的写入交给**纯函数**决定要写哪些键、并按 `mode:'full'` 落盘；
+   * 且不再有语义重复的第二个出口。
    * ⚠ 只盯**按钮工厂调用**（`mk('随谱固化…`），不盯"随谱固化"这四个字——
    * 注释里说明"它为什么被撤掉"是应该的，拿词做判据会把自己的注释判红（第一次就是这么错的）。
+   *
+   * ⚠ **adj965l 口径变更（不是放宽，是原口径被实测证伪）**：这里原来盯 `const payload = next`
+   * （= 整份草稿交给**默认差量模式**）。用户在代码块对话框里**取消「启用水印」**后点保存、
+   * 看到成功提示，重开却仍开着 —— 量下来真因是：`false` 等于引擎默认 ⇒ 被差量模式删掉，
+   * 而插件设置层（本库默认）若供着 `true`，删掉就等于"跟随设置层" ⇒ 取消不生效（`E-2026-445`）。
+   * 现在改为"纯函数 `scoreWritePayload(draft, baseline)` 决定键集 + `mode:'full'` 写入"；
+   * 负对照同步换成**旧口径**（`mergeConfigEdits(...)` + 默认差量），它必须判假。
    */
-  const scoreUsesWholeDraft = (pane: string, dialog: string): boolean =>
-    /const payload = next\n/.test(pane) && !/mk\('随谱固化/.test(dialog)
-  check('adj965i 源码：`保存到谱面` = 整份草稿交差量写入（`const payload = next`），且**撤掉**了语义重复的「随谱固化」按钮',
-    scoreUsesWholeDraft(paneSrc965i, dialogSrc965i),
+  const scoreWritesViaPurePayload = (pane: string, dialog: string): boolean =>
+    /const payload = scoreWritePayload\(next, resolved\.baseline\)/.test(pane) &&
+    /writeJpsConfig\(host\.getSource\(\), payload, \{ mode: 'full' \}\)/.test(pane) &&
+    !/mk\('随谱固化/.test(dialog)
+  check('adj965i 源码：`保存到谱面` 的键集由纯函数 `scoreWritePayload` 定、以 `mode:\'full\'` 落盘，且**撤掉**了语义重复的「随谱固化」按钮',
+    scoreWritesViaPurePayload(paneSrc965i, dialogSrc965i),
     '')
-  check('adj965i 源码**负对照**：把旧口径（`mergeConfigEdits(source, 生效值, next)`）换回去 ⇒ 同一条判据判假',
-    scoreUsesWholeDraft(
-      paneSrc965i.replace('const payload = next', 'const payload = mergeConfigEdits(host.getSource(), resolved.config, next)'),
+  check('adj965i 源码**负对照**：把旧口径（`mergeConfigEdits(source, 生效值, next)` + 默认差量）换回去 ⇒ 同一条判据判假',
+    scoreWritesViaPurePayload(
+      paneSrc965i.replace('const payload = scoreWritePayload(next, resolved.baseline)', 'const payload = mergeConfigEdits(host.getSource(), resolved.config, next)'),
       dialogSrc965i,
     ) === false,
     '')
@@ -472,6 +482,106 @@ console.log('[3c] adj629q 设置口径与应用一致（字段集 / 标签 / 范
     '')
   check('adj965k ③ **负对照**：把它的调用形态塞回去（`= inlineAssetsInSource(source, cfg, assets)`）⇒ 同一条判据判假',
     inlineHackGone(overlaySrc965k, `${mainSrc965j}\nconst x = inlineAssetsInSource(source, cfg, assets)\n`) === false,
+    '')
+}
+
+/**
+ * ---- adj965l（**用户 2026-10-15 实报**）----
+ *
+ * 原话：「代码块预览设置里，我取消了水印启用，保存笔记，重新打开笔记，发现水印还启用着，
+ * 说明取消水印启用没有保存到谱面」。用户随后确认了四个关键细节：**代码块工具条的「设置」对话框 →
+ * 「水印」页签**、点的是**「保存到谱面」**、看到的是**成功提示**、当时笔记处于**阅读模式**。
+ *
+ * 于是这是两条**互相独立**的缺陷（都用真引擎量过，见 `E-2026-445`）：
+ *  ① **假成功**：`writeSource` 原来是"只要有一个指向这份笔记的 MarkdownView 就走编辑器"——
+ *     阅读模式里那个 editor **不是这份文件的活动缓冲区**，`replaceRange` 既不报错也写不进文件
+ *     ⇒ 插件缓存的源码被换掉（预览当场看着好了）⇒ 提示"已写入谱面"，**文件一个字没动**；
+ *  ② **设置层又赢**：差量写入只认"引擎默认"一层 ⇒ 取消总开关（值 = 引擎默认）被当成默认**删掉**，
+ *     只要插件设置层供着 `true`，删掉就等于"跟随设置层" ⇒ 取消不生效（`E-2026-443` 洞②的残留）。
+ *
+ * 两条修法都落成**纯函数**（判据才机器化得起来）：
+ *  · `writeRoute(mode, viewPath, sourcePath)`（`src/sourceEdit.ts`）—— 只有"同一文件 **且** 可编辑模式"才用编辑器；
+ *  · `scoreWritePayload(draft, baseline)`（`src/config.ts`）—— 决定往 `# jps-config` 写哪些键。
+ * **每条判据都配负对照**：旧写法必须判假（禁止靠放宽判据换绿灯）。
+ */
+console.log('[3g] adj965l 保存到谱面：走哪条写回的路 + 写哪些键（用户实报的"假成功"与"设置层又赢"）')
+{
+  const notePath = 'notes/世界赠予我的.md'
+  /** 四种组合下的期望路由（旧写法在 `preview` 那一格走错 —— 那正是用户撞到的情形） */
+  const routeOk = (fn: (mode: string | null, viewPath: string | null, sourcePath: string) => string): boolean =>
+    fn('source', notePath, notePath) === 'editor' && // 实时预览/源码 + 同一文件 ⇒ 编辑器（保留撤销栈）
+      fn('preview', notePath, notePath) === 'file' && // ← 阅读模式：必须走整文件事务写（写盘为准）
+      fn('source', 'notes/别的笔记.md', notePath) === 'file' && // 活动视图是别的笔记：不能借它的编辑器写
+      fn(null, null, notePath) === 'file' // 没有 MarkdownView（嵌入、手机端等）
+  check('adj965l ① 写回路由：只有"同一文件 + 可编辑模式"才用编辑器；阅读模式一律整文件事务写',
+    routeOk(writeRoute),
+    '')
+  check('adj965l ① **负对照**：退回旧写法（"只要有指向本笔记的 MarkdownView 就用编辑器"）⇒ 阅读模式那一格判假',
+    routeOk((_mode, viewPath, sourcePath) => (viewPath === sourcePath ? 'editor' : 'file')) === false,
+    '')
+
+  const baselineWmOff = { ...defaultPageConfig } as PageConfig
+  /** 本库默认层把水印打开（= 插件设置 → 水印 → 启用水印 是勾上的） */
+  const baselineWmOn = { ...defaultPageConfig, wmEnabled: true } as PageConfig
+  const draftWmOn = { ...defaultPageConfig, wmEnabled: true } as PageConfig
+  const draftWmOff = { ...defaultPageConfig, wmEnabled: false } as PageConfig
+  const payloadHas = (cfg: PageConfig, base: PageConfig, key: string): boolean =>
+    key in (scoreWritePayload(cfg, base) as unknown as Record<string, unknown>)
+  check('adj965l ② 设置层开着水印时，「取消启用」必须**显式写进谱面**（否则设置层又赢＝用户实报的"取消没保存"）',
+    payloadHas(draftWmOff, baselineWmOn, 'wmEnabled') === true,
+    '')
+  check('adj965l ② 两层都不用水印时「取消启用」**不写**（谱面保持最小，尊重"默认值就别写进谱面"的定稿口径）',
+    payloadHas(draftWmOff, baselineWmOff, 'wmEnabled') === false,
+    '')
+  check('adj965l ② 设置层带来的**非默认项**照旧随谱走（`E-2026-443` 洞①不许回归：换台机器要一样）',
+    payloadHas(draftWmOn, baselineWmOn, 'wmEnabled') === true,
+    '')
+  check('adj965l ② **负对照**：退回"整份草稿 + 默认差量模式"（旧写法）⇒ 取消启用后**生效值仍是 true** ⇒ 判假',
+    (() => {
+      const src = '# jps-config:{"wmEnabled":true}\n1 2 3 |\n'
+      const settings = { wmEnabled: true }
+      const eff = (s: string): unknown =>
+        (mergeJpsConfig(s, settings as never) as unknown as Record<string, unknown>).wmEnabled
+      const oldWay = writeJpsConfig(src, draftWmOff) // 旧：整份草稿 + diff（把 false 当默认删掉）
+      const newWay = writeJpsConfig(src, scoreWritePayload(draftWmOff, baselineWmOn), { mode: 'full' })
+      return eff(oldWay) === true && eff(newWay) === false
+    })(),
+    '')
+
+  /** 源码级：判据（算哪些键 / 走哪条路）必须留在纯函数里，别又在 `scorePane` 现写一套 */
+  const paneSrc965l = String(readFileSync('src/scorePane.ts', 'utf8'))
+  const mainSrc965l = String(readFileSync('src/main.ts', 'utf8'))
+  /**
+   * 只取**「保存到谱面」那段处理代码**（`if (target === 'plugin')` … `}).open()`）。
+   * ⚠ 为什么不扫整个文件：`E-2026-443` 记过这个坑 —— 我在注释里正解释着"原来写的是
+   * `host.writeSource?.(…)`"，拿这个词当全局判据就会**把自己的注释判红** ✗。
+   */
+  const dialogHandlerOf = (pane: string): string => {
+    const i = pane.indexOf("if (target === 'plugin')")
+    const j = pane.indexOf('}).open()', i)
+    return i < 0 || j <= i ? '' : pane.slice(i, j)
+  }
+  const wiringOk965l = (pane: string, main: string): boolean => {
+    const h = dialogHandlerOf(pane)
+    return (
+      h !== '' &&
+      /const payload = scoreWritePayload\(next, resolved\.baseline\)/.test(h) &&
+      // 必须 `full`：差量模式会把我们刚决定"要钉住"的默认值再删一次 ✗
+      /writeJpsConfig\(host\.getSource\(\), payload, \{ mode: 'full' \}\)/.test(h) &&
+      // 没有写回入口 ⇒ **如实报错**，不再有"没写也报成功"的可选调用
+      /if \(!host\.writeSource\)/.test(h) &&
+      !/host\.writeSource\?\./.test(h) &&
+      // 同族的两处出口（虚线拖动 / 格式化）也各自"取出来再判一次"，别只修用户撞到的那一处
+      /const writeSource = host\.writeSource/.test(pane) &&
+      /const write = host\.writeSource/.test(pane) &&
+      /writeRoute\(view\?\.getMode\?\.\(\) \?\? null, view\?\.file\?\.path \?\? null, this\.sourcePath\)/.test(main)
+    )
+  }
+  check('adj965l ③ 源码：scorePane 用纯函数算 payload 并按 `mode:\'full\'` 写入、三处写回都不谎报成功；main 用 `writeRoute` 选路',
+    wiringOk965l(paneSrc965l, mainSrc965l),
+    '')
+  check('adj965l ③ **负对照**：把写入退回默认差量模式（去掉 `{ mode: \'full\' }`）⇒ 同一条判据判假',
+    wiringOk965l(paneSrc965l.replace("{ mode: 'full' }", ''), mainSrc965l) === false,
     '')
 }
 

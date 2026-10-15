@@ -20,7 +20,7 @@ import { registerJpsEmbeds } from './embed'
 import { jpsHighlightExtension } from './jpsHighlight'
 import { IJipuFileView, JPS_EXTENSION, VIEW_TYPE_IJIPU } from './fileView'
 import { createJpsFile, consumeJpsLinkCreate, materializeJpsFile, planJpsLinkCreate, registerJpsFileCreator, unregisterJpsFileCreator, NEW_JPS_TEMPLATE } from './newFile'
-import { replaceCodeBlockBody } from './sourceEdit'
+import { replaceCodeBlockBody, writeRoute } from './sourceEdit'
 import { canOpenWithDefaultApp, openWithDefaultApp } from './openExternal'
 import { DEFAULT_EMBED_CHANNEL, DEFAULT_EMBED_OPEN_MODE, DEFAULT_EXPORT_RANGE, DEFAULT_IMAGE_SCALE, type EmbedOpenMode, type ExportRangeSetting, type IJipuSettings, type ImageScaleSetting } from './types'
 // adj912：「保存为 PNG / SVG」的**落点与文件名**全在这份纯函数里（`.jps` 同目录 + 主名，同名不覆盖就加序号）
@@ -2449,15 +2449,31 @@ class IJipuBlock extends MarkdownRenderChild {
     if (!info) throw new Error('无法定位代码块位置（请在编辑视图中重试）')
     const app = this.plugin.app
     const body = next.replace(/\n+$/, '')
-    // ① 编辑器可见（实时预览 / 源码模式）：替换块内文本，保留撤销栈
     const view = app.workspace.getActiveViewOfType(MarkdownView)
-    if (view && view.file?.path === this.sourcePath) {
-      view.editor.replaceRange(`${body}\n`, { line: info.lineStart + 1, ch: 0 }, { line: info.lineEnd, ch: 0 })
-      this.source = body
-      this.pane?.refresh()
-      return
+    /**
+     * adj965l（**用户 2026-10-15 实报**：「代码块预览设置里取消水印启用 → 点保存到谱面 →
+     * 提示"已写入谱面" → 保存笔记重开，水印还开着」）：**能不能用编辑器**这条判据挪进纯函数
+     * `writeRoute`（`sourceEdit.ts`，有冒烟断言 + 负对照）——
+     * 只有"同一个文件 **且** 视图确实处于 `source`（实时预览/源码）模式"才走编辑器。
+     *
+     * 真因：原来只判"有没有指向这份笔记的 MarkdownView"，于是**阅读模式**也走编辑器那条路；
+     * 而阅读模式里那个 editor **不是这份文件的活动缓冲区**，`replaceRange` 既不报错、也写不进文件
+     * ⇒ 插件自己缓存的那份源码被换掉了（预览当场看着好了）⇒ 提示"已写入谱面"，
+     * 而**文件一个字没动** ⇒ 用户重开就回来了 ✗（这就是"假成功"）。
+     */
+    const route = writeRoute(view?.getMode?.() ?? null, view?.file?.path ?? null, this.sourcePath)
+    if (route === 'editor' && view !== null) {
+      try {
+        // ① 实时预览 / 源码模式：替换块内文本，保留撤销栈
+        view.editor.replaceRange(`${body}\n`, { line: info.lineStart + 1, ch: 0 }, { line: info.lineEnd, ch: 0 })
+        this.source = body
+        this.pane?.refresh()
+        return
+      } catch {
+        /* 视图状态与 mode 不同步等罕见情形：**不静默**，落到下面的整文件事务写（写盘为准） */
+      }
     }
-    // ② 阅读模式等无编辑器场景：整文件事务写
+    // ② 阅读模式 / 视图不同步 / 这份笔记不是当前活动视图：整文件事务写（直接落盘，不依赖编辑器）
     const file = app.vault.getAbstractFileByPath(this.sourcePath)
     if (!(file instanceof TFile)) throw new Error(`找不到文件：${this.sourcePath}`)
     await app.vault.process(file, (data) => replaceCodeBlockBody(data, info.lineStart, info.lineEnd, body))

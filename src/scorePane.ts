@@ -45,7 +45,7 @@ import { rangeBox, minInkFor, RANGE_PAD_DEFAULT } from '@ijipu/engine'
 
 /** adj764：起播延迟（与应用一致：前 200ms 不计入时间轴，避免"第一拍还没响、色块先动"） */
 const PLAY_START_DELAY_MS = 200
-import { resolvePageConfig } from './config'
+import { resolvePageConfig, scoreWritePayload } from './config'
 import { ConfigDialog } from './configDialog'
 // adj631：「保存为插件默认」要按"本次真正改动过的项"写入（changedDefs）+ 等于引擎默认则不存（isDefaultValue）
 import { changedDefs, isDefaultValue } from './defs'
@@ -1941,8 +1941,15 @@ toolbar.dataset.ijipuPane = String(paneId)
             new Notice('源码已是应用规范格式（无需改动）', 3000)
             return
           }
-          void host.writeSource?.(next)
-          new Notice('已按应用规范格式化源码', 4000)
+          /** adj965l：同「保存到谱面」那一族 —— 取出来再判一次，没有入口就如实说，别"没写也报成功"（顺带补失败提示） */
+          const write = host.writeSource
+          if (!write) {
+            new Notice('iJipu：这个位置没有写回入口，无法格式化源码', 5000)
+            return
+          }
+          void Promise.resolve(write(next))
+            .then(() => new Notice('已按应用规范格式化源码', 4000))
+            .catch((e) => new Notice(`格式化写入失败：${e instanceof Error ? e.message : String(e)}`, 6000))
         })
       }
       cfgBtn = menuOnly.createEl('button', { cls: 'ijipu-play ijipu-config-btn' })
@@ -2006,10 +2013,26 @@ toolbar.dataset.ijipuPane = String(paneId)
              * 实现上**一行就够**：把对话框草稿整份交给 `writeJpsConfig`（默认差量模式）——
              * 差量模式本来就是"只留与默认不同的键、并整行替换"⇒ 上面两条（删旧默认键 + 写非默认值）同时成立 ✓。
              */
-            const payload = next
-            void Promise.resolve(host.writeSource?.(writeJpsConfig(host.getSource(), payload)))
+            /**
+             * adj965l（**用户 2026-10-15 实报**「取消启用水印 → 点保存到谱面 → 提示已写入 → 重开还开着」）：
+             *
+             * 这里原来是 `const payload = next`（整份草稿）+ 默认差量模式。两个问题：
+             *  ① **设置层又赢**：差量模式只认"引擎默认"一层 ⇒ 取消总开关（值 = 引擎默认）被当成默认删掉，
+             *     而插件设置层若供着 `true`，删掉就等于"跟随设置层" ⇒ 取消不生效 ✗；
+             *  ② **假成功**：原来把"可选调用"和成功提示串在一句里 —— 没有写回入口时也会报成功，
+             *     阅读模式那条"写进脱离文件的编辑器"同样看不出来（都是"没写也说写了"）。
+             * 现在：要写哪些键由纯函数 `scoreWritePayload` 决定（详见它的注释），写入用 `mode:'full'`
+             * （**必须** full —— 差量模式会把我们刚决定"要钉住"的默认值再删一次 ✗），
+             * 且**没有写回入口时如实报错**、不谎报成功。
+             */
+            if (!host.writeSource) {
+              new Notice('iJipu：这个位置没有写回入口（读屏/嵌入等只读上下文），无法保存到谱面', 6000)
+              return
+            }
+            const payload = scoreWritePayload(next, resolved.baseline)
+            void Promise.resolve(host.writeSource(writeJpsConfig(host.getSource(), payload, { mode: 'full' })))
               .then(() => {
-                new Notice('已写入谱面：对话框里的**非默认项**全部写进 `# jps-config`，等于默认的项已从谱面移除', 4000)
+                new Notice('已写入谱面：对话框里的**非默认项**全部写进 `# jps-config`，等于本库默认的项不写', 4000)
                 paint()
               })
               .catch((e) => new Notice(`写入谱面失败：${e instanceof Error ? e.message : String(e)}`, 6000))
@@ -2947,7 +2970,17 @@ toolbar.dataset.ijipuPane = String(paneId)
         const shown = segKey
           ? (finalCfg.segmentRowGap ?? {})[segKey as 'bz' | 'dsb' | 'tp']
           : (finalCfg as unknown as Record<string, unknown>)[line.key]
-        void Promise.resolve(host.writeSource?.(writeJpsConfig(host.getSource(), payload)))
+        /**
+         * adj965l：这里原来写 `host.writeSource?.(…)` —— 可选调用 + 后面紧跟"已保存"的提示，
+         * 是"**没有写回入口也会报成功**"那一族写法（按下时虽然判过一次，但判据分散在两处迟早会漂）。
+         * 现在取出来再判一次：没有入口就**如实返回**，一个字也不假报。
+         */
+        const writeSource = host.writeSource
+        if (!writeSource) {
+          new Notice('iJipu：这个位置没有写回入口，虚线拖动结果没有保存', 5000)
+          return
+        }
+        void Promise.resolve(writeSource(writeJpsConfig(host.getSource(), payload)))
           .then(() => {
             new Notice(`排版已保存：${line.key} = ${String(shown)}`, 2500)
             paint()

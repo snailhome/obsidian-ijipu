@@ -35,3 +35,26 @@ export function codeBlockBody(fileText: string, lineStart: number, lineEnd: numb
   if (lineStart < 0 || lineEnd >= lines.length || lineEnd <= lineStart) return null
   return lines.slice(lineStart + 1, lineEnd).join('\n')
 }
+
+/**
+ * adj965l（**用户 2026-10-15 实报**：「代码块预览设置里取消了水印启用、点保存到谱面、
+ * 提示"已写入谱面"，保存笔记后重开，水印还开着」）：**写回该走哪条路**——纯判据。
+ *
+ * 由来（真因）：宿主 `writeSource` 原来只判"有没有一个指向这份笔记的 MarkdownView"，
+ * 于是**阅读模式**下也走编辑器那条路；而阅读模式里那个 editor **不是这份文件的活动缓冲区**
+ * （`replaceRange` 不报错、也写不进文件）⇒ 只更新了插件自己缓存的那份源码（预览当场变好看了）
+ * ⇒ 提示"已写入谱面"，**文件一个字没动**，重开就回来了 ✗。插件自己在「打开源码」那处
+ * 就因为同一个原因先 `setState({mode:'source'})` 再动编辑器（见 `main.ts` 的 `openInObsidianEditor`）。
+ *
+ * 现在把"能不能用编辑器"这条判据**独立成纯函数**：只有"同一个文件 **且** 视图确实处于可编辑模式"
+ * 才走编辑器（保留撤销栈），其余一律走**整文件事务写**（阅读模式、别的笔记、无视图都在此列）。
+ *
+ * @param mode 视图模式（Obsidian `MarkdownView.getMode()`：`'source'` = 实时预览/源码，`'preview'` = 阅读）
+ * @param viewPath 当前活动 MarkdownView 对应的文件路径（没有视图则传 null/undefined）
+ * @param sourcePath 这份代码块所在的笔记路径
+ */
+export function writeRoute(mode: string | null | undefined, viewPath: string | null | undefined, sourcePath: string): 'editor' | 'file' {
+  if (viewPath === null || viewPath === undefined || viewPath !== sourcePath) return 'file'
+  // 只有可编辑模式才认编辑器；`preview`（阅读）以及未知取值一律走整文件事务写 —— 宁可慢一点，也不能假成功
+  return mode === 'source' ? 'editor' : 'file'
+}
