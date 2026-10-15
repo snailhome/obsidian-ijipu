@@ -95,9 +95,10 @@ function imageLayer(kind: 'bg' | 'wm', config: PageConfig, page: ScorePage, asse
     `<image href="${asset.href}" x="${r1n(x - w / 2)}" y="${r1n(y - h / 2)}" width="${r1n(w)}" height="${r1n(h)}" preserveAspectRatio="none"${rotateAttr(rotate, x, y)}/>`
 
   // adj965b（用户 2026-10-15）：**重复水印**（图形水印同样适用；背景图不重复——它不是水印）
+  // adj965f：平铺网格以这一层自己的中心 `(cx, cy)` 为基点 ⇒ 拖动水印时整片跟着走（见 `tileMarkup`）
   const body =
     kind === 'wm' && config.wmRepeat === true
-      ? tileMarkup(page, w, h, config.wmRepeatGap, oneAt)
+      ? tileMarkup(page, w, h, config.wmRepeatGap, cx, cy, oneAt)
       : oneAt(cx, cy)
 
   return `<g data-overlay="${kind}" clip-path="url(#ovl-clip-${page.index})"${opacityAttr(opacity)}>${body}</g>`
@@ -136,7 +137,7 @@ function textLayer(config: PageConfig, page: ScorePage): string {
 
   const body =
     config.wmRepeat === true
-      ? tileMarkup(page, textWidth, textHeight, config.wmRepeatGap, (x, y) => blockAt(x, y))
+      ? tileMarkup(page, textWidth, textHeight, config.wmRepeatGap, cx, cy, (x, y) => blockAt(x, y))
       : blockAt(cx, cy)
   return `<g data-overlay="wm" clip-path="url(#ovl-clip-${page.index})"${opacityAttr(opacity)}>${body}</g>`
 }
@@ -165,31 +166,54 @@ function estimateTextWidth(lines: string[], size: number): number {
  * 平铺（用户 2026-10-15 要求：**重复水印**，"以一定行列间隔重复铺满页面"）。
  *
  * 规则与理由：
- *  · **步进** = `元素尺寸 × (1 + 间隔/100)` ⇒ `wmRepeatGap=100`（默认）时步进 = 2 倍自身尺寸；
+ *  · **步进** = `元素尺寸 × (1 + 间隔/100)` ⇒ `wmRepeatGap=300`（默认）时步进 = 4 倍自身尺寸；
  *  · **奇数行右移半个步进**（错位排布）：水印是**斜的**（默认 -45°），正交网格会让斜向留下明显的空带，
  *    错位后视觉上才是"铺满"；
- *  · 网格**向外多铺一圈**（`from -step` 到 `page + step`）：斜置的角会伸出页面外，
- *    不多铺就会在四边看到"秃边"；超出的部分由本层的 `clipPath` 裁掉 ⇒ 正好符合"只在页面内显示"。
+ *  · 网格**向外多铺一圈**：斜置的角会伸出页面外，不多铺就会在四边看到"秃边"；
+ *    超出的部分由本层的 `clipPath` 裁掉 ⇒ 正好符合"只在页面内显示"。
+ *
+ * ## ⚠ 网格是**刚性格子 + 整片平移**，且平移量就是这一层自己的偏移（adj965f，用户 2026-10-15 追问）
+ *
+ * 用户原话：「选中了按行列间隔平铺整页，就看不出水印有移动的效果，但实现位置是有变化了…
+ * 我的意见是两个都让看到移动，选中了平铺整页时，也是**以这个水印为基点**进行排列的，因此应该要能够移动」。
+ *
+ * 上一版从**页面原点**起铺（`r*stepY + stepY/2 - stepY` 这种式子），`wmOffsetX/Y` 只影响
+ * `cx/cy`、而那对值**根本没进这个函数** ⇒ 位置真的改了，**图案纹丝不动** ⇒ 用户"看不出移动" ✓。
+ *
+ * 现在：`(cx, cy)` 是这一层的中心（= 页中心 + 偏移）⇒ **偏移就是整片格子的平移量**，
+ * 拖动时整片跟着走 ✓；格子序号 `r/c` 仍旧相对**页中心**编号（不是相对基点），
+ * 这样**奇偶错位是固定的**——否则基点纵向挪一行，错位就翻面，拖动时图案会一跳一跳 ✗。
+ * 页面覆盖范围按"页面相对页中心再减掉平移量"现算 ⇒ 基点拖到哪儿，页面**都铺满** ✓。
  */
 function tileMarkup(
   page: ScorePage,
   w: number,
   h: number,
   gapPct: number,
+  cx: number,
+  cy: number,
   at: (x: number, y: number) => string,
 ): string {
-  const gap = numOr(gapPct, 0, 1000, 100) / 100
+  const gap = numOr(gapPct, 0, 1000, 300) / 100
   const stepX = Math.max(8, w * (1 + gap))
   const stepY = Math.max(8, h * (1 + gap))
-  const cols = Math.ceil(page.width / stepX) + 2
-  const rows = Math.ceil(page.height / stepY) + 2
+  /** 格子原点 = 页中心；`offX/offY` = 这一层相对页中心的偏移（整片平移量） */
+  const wc = page.width / 2
+  const hc = page.height / 2
+  const offX = cx - wc
+  const offY = cy - hc
+  // 以基点（相对页中心那套编号）向两侧铺到盖住页面、再多铺一圈（斜置的角会伸出页面外）
+  const cMin = Math.floor((0 - offX - wc) / stepX) - 1
+  const cMax = Math.ceil((page.width - offX - wc) / stepX) + 1
+  const rMin = Math.floor((0 - offY - hc) / stepY) - 1
+  const rMax = Math.ceil((page.height - offY - hc) / stepY) + 1
   const out: string[] = []
-  for (let r = 0; r < rows; r += 1) {
-    const y = r * stepY + stepY / 2 - stepY
-    const dx = r % 2 === 1 ? stepX / 2 : 0
-    for (let c = 0; c < cols; c += 1) {
-      const x = c * stepX + stepX / 2 - stepX + dx
-      out.push(at(x, y))
+  for (let r = rMin; r <= rMax; r += 1) {
+    const y = hc + r * stepY + offY
+    // 奇数行错位半个步进（`r % 2 !== 0`：负号行也算奇数，`r` 可能为负）
+    const dx = r % 2 !== 0 ? stepX / 2 : 0
+    for (let c = cMin; c <= cMax; c += 1) {
+      out.push(at(wc + c * stepX + dx + offX, y))
     }
   }
   return out.join('')

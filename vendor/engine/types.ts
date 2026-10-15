@@ -1253,7 +1253,8 @@ export const defaultPageConfig: PageConfig = {
   // adj965b（用户 2026-10-15 裁定）：默认旋转由 +45 改为 **-45**
   wmRotate: -45,
   wmRepeat: false,
-  wmRepeatGap: 100,
+  // adj965f（用户 2026-10-15 裁定）：默认平铺间隔由 100 改为 **300**（100 太密）
+  wmRepeatGap: 300,
   wmOpacity: 25,
   wmOffsetX: 0,
   wmOffsetY: 0,
