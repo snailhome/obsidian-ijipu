@@ -199,3 +199,17 @@ buildScoreMenu(ctx)   // src/scoreMenu.ts —— 纯数据，零 obsidian/DOM �
 `图.png` 相对**承载它的那份笔记**、`[[图.png]]` 走 Obsidian 的链接解析；
 白名单（**拒 svg**）、16MB 上限、mime 与降采样阈值**全部取自引擎**，失败弹一句能照做的 `Notice`（不静默）。
 读盘是异步的，而 `paint()` 是同步的 ⇒ 先按"没有图"画一版，资源到位后重画一次。
+
+### 这套手势是怎么被验住的（真浏览器，不只是源码正则）
+
+`adj959` 的教训是"事件挂错地方"源码级断言守不住 ⇒ 这里也留了一条**真派发**的闸门：
+`scripts/overlayGestureProbe.ts` 在**无头 Chrome**里搭一块仿 ` ```jps ` 的 DOM、挂**真的**
+`mountScorePane`（`obsidian` 模块换成 `scripts/toolbarDomShim.ts`，`src/scorePane.ts` 一个字不改），
+派发真的 `wheel` / `pointer` 事件，把宿主 `writeSource` 收到的源码读回来断言
+（冒烟的 `adj965d` 节）。覆盖：滚轮缩放/旋转、在虚线上 `Alt+拖动`（不许被虚线抢）、
+关掉「排版」后一个字都不写、以及提示条/切换器/红字提醒三态。
+
+⚠ 写这类夹具时两条纪律（第一版各翻车一次，别再踩）：
+① **每次派发前重新取活元素**——写回会让面板重画，旧 `svg` 脱离文档后事件不再冒泡；
+② **要看"重画之后"的 DOM 就显式 `refresh()`**——无头 + `--virtual-time-budget` 下
+`requestAnimationFrame` 不一定被投递（`toolbarDomProbe` 的 `frames()` 里那个 `setTimeout` 兜底就是为这个加的）。

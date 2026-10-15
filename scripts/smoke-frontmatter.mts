@@ -8797,6 +8797,168 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
   )
 }
 
+/**
+ * adj965d（方案 OVL，EP-13）：**手势的真浏览器验证**。
+ *
+ * 与应用侧 `verify:app-ui` 的 CDP 真派发同一个动机（`adj959` 立的规矩）：
+ * "事件挂错地方"这类缺陷**源码级断言守不住**——代码里确实挂了监听、`tsc`/冒烟全绿，
+ * 但事件收不到（挂错层 / 被 `stopPropagation` 掐断 / 挂在被动监听里）。
+ * 插件这一面没有 Obsidian 可用，但**有真 DOM**（与本文件 `adj952` 那套同一个无头浏览器 harness）⇒
+ * 在真浏览器里挂**真的** `mountScorePane`、派发**真的** `wheel`/`pointer` 事件，
+ * 把宿主 `writeSource` 收到的源码读回来断言。
+ */
+if (true) {
+  const BROWSER965 = [
+    process.env.IJIPU_CHROME,
+    'C:/Program Files/Google/Chrome/Application/chrome.exe',
+    'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
+    'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
+    'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
+    '/usr/bin/google-chrome',
+    '/usr/bin/chromium',
+  ].find((p): p is string => typeof p === 'string' && existsSync(p))
+
+  /** 夹具面板源码：把相对导入挪到 `../src/`、`./main`（只为两个事件名常量）换桩 —— 与 adj952 同款 */
+  const pane965 = String(readFileSync('src/scorePane.ts', 'utf8'))
+  const shifted965 = pane965
+    .replace(/from '\.\/(?!main)/g, "from '../src/")
+    .replace(/from '\.\/main'/g, "from './_tmp_965_mainstub'")
+  mkdirSync('dist-smoke', { recursive: true })
+  writeFileSync('dist-smoke/_tmp_965_pane.ts', shifted965, 'utf8')
+  writeFileSync(
+    'dist-smoke/_tmp_965_mainstub.ts',
+    "export const GUIDES_CHANGED = 'ijipu-guides-changed'\n" +
+      "export const SETTINGS_CHANGED = 'ijipu-settings-changed'\n" +
+      'export default class IJipuPlugin {}\n',
+    'utf8',
+  )
+  /** 夹具夹具：一份"没有水印/背景"的谱（那两层由**插件设置**给，正好是"还没写进谱面"的状态） */
+  const baseSrc965 = 'V: 1.0\nB: 半山听雨\nD: C\nP: 4/4\nQ: 1 2 3 4 |\n\n# jps-config:{}\n'
+  writeFileSync(
+    'dist-smoke/_tmp_965_entry.ts',
+    "import { mountScorePane } from './_tmp_965_pane'\n" +
+      "import { runOverlayGestureProbe } from '../scripts/overlayGestureProbe'\n" +
+      `void runOverlayGestureProbe(mountScorePane, ${JSON.stringify(baseSrc965)})\n`,
+    'utf8',
+  )
+
+  type Probe965 = {
+    done?: boolean
+    error?: string
+    chipFound?: boolean
+    setup?: { svg?: number; guideLines?: number; hint?: boolean; chips?: number; active?: string; unsaved?: boolean; writes?: number }
+    switchToWm?: { chips?: number; active?: string; chipTexts?: string[] }
+    zoom?: { writes?: number; cfg?: Record<string, unknown>; unsaved?: boolean }
+    rotate?: { writes?: number; cfg?: Record<string, unknown> }
+    pan?: { writes?: number; cfg?: Record<string, unknown>; onGuideLine?: boolean }
+    off?: { wrote?: number }
+  }
+  let r965: Probe965 = { error: '未跑' }
+  if (BROWSER965) {
+    try {
+      execFileSync(
+        process.execPath,
+        [
+          resolve('node_modules/esbuild/bin/esbuild'),
+          'dist-smoke/_tmp_965_entry.ts',
+          '--bundle',
+          '--platform=browser',
+          '--format=iife',
+          '--target=chrome110',
+          '--alias:obsidian=./scripts/toolbarDomShim.ts',
+          '--alias:electron=./scripts/fakeElectron.ts',
+          '--alias:@ijipu/engine=./vendor/engine/index.ts',
+          '--loader:.png=dataurl',
+          '--outfile=dist-smoke/_tmp_965.js',
+          '--log-level=warning',
+        ],
+        { stdio: ['ignore', 'pipe', 'pipe'], timeout: 240_000 },
+      )
+      /** 页面里注入**真的 `styles.css`**（提示条/切换器的可见性才有意义） */
+      const css965 = String(readFileSync('styles.css', 'utf8'))
+      writeFileSync(
+        'dist-smoke/_tmp_965.html',
+        '<!doctype html>\n<html lang="zh-CN"><head><meta charset="utf-8" />\n<style>\n' +
+          'body { margin: 0; font-family: system-ui, sans-serif; }\n#host { width: 900px; padding: 0 12px; }\n' +
+          '</style>\n<style>\n' +
+          css965 +
+          '\n</style>\n</head><body>\n<div id="host"></div>\n<pre id="out"></pre>\n' +
+          '<script src="_tmp_965.js"></script>\n</body></html>\n',
+        'utf8',
+      )
+      const dom965 = execFileSync(
+        BROWSER965,
+        [
+          '--headless=new',
+          '--disable-gpu',
+          '--no-first-run',
+          '--no-default-browser-check',
+          '--user-data-dir=' + resolve('dist-smoke/chrome-adj965d'),
+          '--window-size=1000,900',
+          '--virtual-time-budget=20000',
+          '--dump-dom',
+          pathToFileURL(resolve('dist-smoke/_tmp_965.html')).href,
+        ],
+        { encoding: 'utf8', timeout: 180_000, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024 },
+      )
+      const i965 = dom965.indexOf('<pre id="out">')
+      const body965 = i965 < 0 ? '' : dom965.slice(i965 + '<pre id="out">'.length, dom965.indexOf('</pre>', i965))
+      r965 = JSON.parse(
+        body965.replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>'),
+      ) as Probe965
+      if (r965.error) r965 = { error: '夹具内抛错：' + r965.error.slice(0, 200) }
+    } catch (e) {
+      r965 = { error: '夹具跑不起来：' + (e instanceof Error ? e.message.split('\n')[0].slice(0, 120) : String(e)) }
+    }
+  } else {
+    r965 = { error: '本机没有 Chrome/Edge' }
+  }
+  const ok965 = r965.done === true
+  check('adj965d 真浏览器夹具自检：谱面真画出来（有 svg）+ 辅助虚线在（否则手势没有作用对象）',
+    ok965 && (r965.setup?.svg ?? 0) > 0 && (r965.setup?.guideLines ?? 0) > 0,
+    `svg=${r965.setup?.svg ?? '—'} 虚线=${r965.setup?.guideLines ?? '—'}｜${r965.error ?? ''}`)
+  check('adj965d 真浏览器：两级前提齐时出现角落提示 + 「调整对象」切换器（水印/背景都可调 ⇒ 2 个 chip）',
+    ok965 && r965.setup?.hint === true && r965.setup?.chips === 2,
+    JSON.stringify(r965.setup ?? r965.error))
+  check('adj965d 真浏览器：该层只在插件设置里（源码没有）⇒ 红字提醒「尚未写入谱面」',
+    ok965 && r965.setup?.unsaved === true,
+    JSON.stringify(r965.setup ?? {}))
+  check('adj965d 真浏览器：点切换器能被接住（切到「水印」并成为当前调整对象）',
+    ok965 && r965.chipFound === true && r965.switchToWm?.active === '水印',
+    `chipFound=${String(r965.chipFound)} ${JSON.stringify(r965.switchToWm ?? {})}`)
+  /**
+   * **核心断言**：真派发 `Alt+滚轮` ⇒ **宿主真的收到了写回**，而且写的是
+   * **被调那一层整层**（启用 + 内容 + 字号）——不是只写一个 `wmSize`（那正是"半截配置"缺陷的形态）。
+   */
+  check('adj965d 真浏览器：`Alt+滚轮` ⇒ 宿主收到写回，且**该层整层固化**（wmEnabled+wmText+wmSize），**不夹带背景层**',
+    ok965 &&
+      r965.zoom?.writes === 1 &&
+      r965.zoom?.cfg?.wmEnabled === true &&
+      r965.zoom?.cfg?.wmText === '草稿' &&
+      typeof r965.zoom?.cfg?.wmSize === 'number' &&
+      r965.zoom?.cfg?.bgEnabled === undefined &&
+      r965.zoom?.cfg?.bgImage === undefined,
+    `writes=${r965.zoom?.writes ?? '—'} cfg=${JSON.stringify(r965.zoom?.cfg ?? {})}`)
+  check('adj965d 真浏览器：落盘之后「尚未写入谱面」提醒自己消失（保险不是恒亮的）',
+    ok965 && r965.zoom?.unsaved === false,
+    `unsaved=${String(r965.zoom?.unsaved)}`)
+  check('adj965d 真浏览器：`Alt+Shift+滚轮` ⇒ 旋转写进谱面（`wmRotate`）',
+    ok965 && r965.rotate?.writes === 2 && typeof r965.rotate?.cfg?.wmRotate === 'number',
+    `writes=${r965.rotate?.writes ?? '—'} cfg=${JSON.stringify(r965.rotate?.cfg ?? {})}`)
+  check('adj965d 真浏览器：`Alt+拖动` **落在辅助虚线上** ⇒ 走的是"平移层"（写 wmOffsetX/Y），**没有被虚线拖拽抢走**（不写行距那类键）',
+    ok965 &&
+      r965.pan?.onGuideLine === true &&
+      r965.pan?.writes === 3 &&
+      typeof r965.pan?.cfg?.wmOffsetX === 'number' &&
+      typeof r965.pan?.cfg?.wmOffsetY === 'number' &&
+      r965.pan?.cfg?.height_ciqu === undefined &&
+      r965.pan?.cfg?.margin_left === undefined,
+    `writes=${r965.pan?.writes ?? '—'} cfg=${JSON.stringify(r965.pan?.cfg ?? {})}`)
+  check('adj965d 真浏览器**负向判据**：关掉「排版」之后按 Alt ⇒ **一个字都不写**',
+    ok965 && r965.off?.wrote === 0,
+    `又写了 ${String(r965.off?.wrote)} 次`)
+}
+
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。
 //   实测踩过：一次编辑顺手把它删掉，套件仍以退出码报错，但输出里再也看不到 `N passed, M failed`。
 console.log(`\n${pass} passed, ${fail} failed`)
