@@ -57,7 +57,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
 import { PAGE_NUM_RANGES, clampNum } from '../src/numRanges'
 // adj631：设置面板的纯逻辑（页签/收藏音色分类列表/「保存为插件默认」的改动判据）
 // —— `obsidian` 依赖已由 `npm run smoke` 的 `--alias:obsidian=./scripts/obsidianStub.ts` 替换掉
-import { DEFS, changedDefs, getDefault, isDefaultValue } from '../src/defs'
+import { DEFS, changedDefs, getDefault, isDefaultValue, readDef, writeDef } from '../src/defs'
 import { clearVoices, filterVoices, groupVoices, invertVoices, normalizeVoices, selectAllVoices, selectedInGroup, setGroupVoices, toggleVoice, voiceSummary } from '../src/voiceChooser'
 import { resolvePageConfig } from '../src/config'
 import { codeBlockBody, jpsLinkpath, replaceCodeBlockBody } from '../src/sourceEdit'
@@ -280,6 +280,64 @@ console.log('[3c] adj629q 设置口径与应用一致（字段集 / 标签 / 范
       nestedBack?.dsb === 22 &&
       nestedBack?.tp === 14,
     `${nestedLine.join('|')} → ${JSON.stringify(nestedBack)}`)
+  /**
+   * adj965h（用户 2026-10-15 要求：「请检查谱面设置里的设置项在代码块里调整后的表现，
+   * 是否确实变化后（非默认值）有保存到谱面」）—— **逐项审计**。
+   *
+   * 用户实报：「页面设置里的纸张设置、虚线调整的边距好像都没有保存到谱面，保存后切回笔记又恢复」。
+   * 代码块里「保存到谱面」走的就是这三步（`resolvePageConfig` → `mergeConfigEdits` → `writeJpsConfig`），
+   * 都是纯函数 ⇒ **每个键都可以在这里过一遍**：取一个**非默认值**，看它是否真的落进 `# jps-config`。
+   *
+   * 为什么要逐项而不是挑几个：写回丢键往往**整类字段一起丢**（例如基线取错、或差量模式把某一类值滤掉），
+   * 手工点一两个键很容易刚好点到没事的那个。
+   */
+  const auditSkipped: string[] = []
+  const auditMissing: string[] = []
+  /** 取一个既不同于当前值、也不同于引擎默认值的探针（差量模式只写非默认值 ⇒ 探针必须是"真非默认"） */
+  const probeOf = (def: (typeof DEFS)[number], cur: unknown): unknown => {
+    if (def.type === 'toggle') return !(cur === true)
+    if (def.type === 'select') {
+      const opts = (def.options ?? []).map((o) => o.value)
+      return opts.find((v) => String(v) !== String(cur))
+    }
+    if (def.type === 'number') {
+      const n = Number(cur)
+      const d = Number(getDefault(def.key as string, def.sub))
+      return [d + 7, d - 7, d + 13, n + 7].find((v) => v !== n && v !== d)
+    }
+    return `${String(cur)}-探针`
+  }
+  for (const def of DEFS) {
+    if (def.sub) {
+      auditSkipped.push(`${def.key}.${def.sub}`)
+      continue
+    }
+    const opened = resolvePageConfig('V: 1.0\nB: 测试\nP: 4/4\nQ: 1 2 3 4 |\n', {})
+    const src0 = 'V: 1.0\nB: 测试\nP: 4/4\nQ: 1 2 3 4 |\n'
+    const cur = readDef(opened.config, def)
+    const probe = probeOf(def, cur)
+    if (probe === undefined) {
+      auditSkipped.push(def.key)
+      continue
+    }
+    const draft = { ...opened.config }
+    writeDef(draft, def, probe)
+    const out = writeJpsConfig(src0, mergeConfigEdits(src0, opened.config, draft as never))
+    const line = out.split('\n').find((l) => l.startsWith('# jps-config')) ?? ''
+    let has = false
+    try {
+      has = Object.prototype.hasOwnProperty.call(JSON.parse(line.slice(line.indexOf(':') + 1)), def.key)
+    } catch {
+      has = false
+    }
+    if (!has) auditMissing.push(`${def.key}=${String(probe)}`)
+  }
+  check('adj965h 逐项审计：谱面设置里**每个可改字段**取非默认值后，都能写进代码块的 `# jps-config`（用户实报"纸张/边距没保存"）',
+    auditMissing.length === 0,
+    `没写进去：${auditMissing.join('、')}｜跳过（子项另测）：${auditSkipped.length} 项`)
+  check('adj965h 审计覆盖面自检：真的审到了大部分字段（否则"全绿"没意义）',
+    DEFS.filter((d) => !d.sub).length - auditSkipped.length >= 30,
+    `审到 ${DEFS.filter((d) => !d.sub).length - auditSkipped.length} 项，共 ${DEFS.length} 行`)
 }
 
 console.log('[3f] adj629z 插件默认值/字段集/文档 与 iJipu 应用逐项同步')
