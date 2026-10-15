@@ -12,6 +12,43 @@
  */
 export * from './types'
 export { parseJps } from './parser'
+// adj965d（方案 OVL，EP-13）：水印/背景层的**手势口径**——应用与 Obsidian 插件共用这一份
+// （插件经 `vendor/engine` 逐字节同步；两端各自只负责"接线"）
+export {
+  OVERLAY_SCALE_RANGE,
+  OVERLAY_ROTATE_RANGE,
+  OVERLAY_TEXT_SIZE_RANGE,
+  OVERLAY_WHEEL_STEP_PX,
+  overlayLayerVisible,
+  activeOverlayLayer,
+  bothOverlayLayersVisible,
+  overlayLayerPersisted,
+  wheelDeltaPx,
+  overlayWheelSteps,
+  overlayWheelMode,
+  overlayOffsetOf,
+  overlayGestureBase,
+  applyOverlayWheel,
+  applyOverlayDrag,
+} from './overlayGesture'
+export type { OverlayLayer, OverlayWheelMode } from './overlayGesture'
+// adj965（方案 OVL，EP-09）：取图策略（白名单/上限/路径归一/mime/base64）——应用、插件、
+// 桌面端三处必须逐字一致，所以只写引擎这一份（插件经 vendor/engine 同步）
+export {
+  MAX_ASSET_BYTES,
+  ASSET_MAX_EDGE,
+  ASSET_REENCODE_BYTES,
+  ASSET_REENCODE_QUALITY,
+  ALLOWED_ASSET_EXT,
+  assetPathOf,
+  extOf,
+  isAllowedAssetPath,
+  mimeOf,
+  splitAssetPath,
+  toBase64,
+  fromBase64,
+  dataUriOf,
+} from './overlayAsset'
 export { formatJps, formatLine } from './format/format'
 // adj752：`.jps` 源码**分词规则**（应用渲染 HTML、Obsidian 插件渲染 CM6 decoration，共用这一份口径）
 export { tokenizeJpsLine, tokenizeJpsMusic, tokenizeJpsLyric, jpsHeaderOf } from './highlight/jpsHighlight'
