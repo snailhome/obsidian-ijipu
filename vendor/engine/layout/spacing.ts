@@ -339,6 +339,70 @@ export const barNumberBoxW = (n: number, noteSize: number): number =>
   Math.max(barNumberBoxH(noteSize), String(n).length * barNumberFontSize(noteSize) * 0.62 + BAR_NUMBER_PAD * 2)
 /** 多声部块首序号需要的「大括号与音符之间」净空隙（框宽 + 左右各 1px 净距 + 括号自身 3px 厚） */
 export const barNumberGapNeed = (n: number, noteSize: number): number => barNumberBoxW(n, noteSize) + 5
+
+/**
+ * adj970（**用户实报**，截图）：`&ds`（D.S.）与小节序号方框**叠在一起** ——
+ * 截图里那个细黑框就是序号方框，斜体的 `D.S.` 压在框里、数字被盖住。
+ *
+ * 根因：**两者都挂在小节线正下方**，而且各自算各自的 y：
+ *  · 序号方框：布局端 `yBarBottom + BAR_NUMBER_BOTTOM_GAP`（`BAR_NUMBER_BOTTOM_GAP = 1`）；
+ *  · 线下方文本记号（`&fine`/`&dc`/`&ds`）：**渲染端**现算 `yBottom + 8s + 1.8s`
+ *    （`render/index.ts` 的 `downMarks` 那一段）——布局端**根本不知道**有这个记号。
+ * 实测（用户那条 Q 行，`note_size` 13）：记号墨迹 ≈ `[158.9 … 165.6]`、方框 ≈ `[158.6 … 166.3]`
+ * ⇒ 完全重叠（与截图一致）。
+ *
+ * 处置（用户口径「上下错开」）：**记号贴着线**（它属于这根线），**序号方框再往下让一个层间距**。
+ * 为此把这三个量收敛到**这里**（渲染画字与布局避让消费同一份，`六之二·4`「数值口径必须同源」）。
+ */
+export const barDownMarkFontSize = (noteSize: number): number => Math.max(8, Math.round(9 * noteScaleOf(noteSize)))
+/** 该记号的**基线** y（相对小节线底缘；渲染端画字用它） */
+export const barDownMarkBaselineY = (yBottom: number, noteSize: number): number =>
+  yBottom + (8 + 1.8) * noteScaleOf(noteSize)
+/**
+ * 该记号的**墨迹**上下沿（布局端避让用它）。
+ *
+ * 为什么按字号估：记号是**字体字形**（`Fine` / `D.C.` / `D.S.`，粗体斜体），引擎零 DOM、量不到真实墨迹高
+ * ⇒ 与 `inkBox.ts` 的其它估计同口径：上沿 = 基线 − 0.72×字号（大写高）、下沿 = 基线 + 0.12×字号（降部）。
+ * 避让还额外让出 `LAYER_GAP`，估计误差被那 2px 吸收。
+ */
+export const barDownMarkInk = (yBottom: number, noteSize: number): { top: number; bottom: number } => {
+  const fs = barDownMarkFontSize(noteSize)
+  const base = barDownMarkBaselineY(yBottom, noteSize)
+  return { top: base - 0.72 * fs, bottom: base + 0.12 * fs }
+}
+/**
+ * 这根小节线有没有"**线下方**文本记号"（`&fine`/`&dc`/`&ds`）。
+ *
+ * ⚠ `&ty`（大跳跃）/`&hs`（花 S）画在线**上方**，不算在内（见 `render/index.ts` 的 `upMarks`）——
+ * 判据与渲染端共用这一份，免得"渲染画了、布局不知道"这类事再发生。
+ */
+export const hasBarDownMark = (marks?: readonly string[]): boolean =>
+  (marks ?? []).some((m) => m === 'fine' || m === 'dc' || m === 'ds')
+
+/** 线下方文本记号的**文字**（渲染画它、布局按它估宽度 —— 同一份映射） */
+export const barDownMarkLabel = (mark: string): string => (mark === 'fine' ? 'Fine' : mark === 'dc' ? 'D.C.' : 'D.S.')
+
+/**
+ * 同一根线上有**多个**线下方记号时，相邻两个的**中心**横向间隔系数
+ * （`× noteScaleOf(noteSize)`；渲染端 `dx = mx + (idx − (n−1)/2) × STEP × s` 用的就是它）。
+ */
+export const BAR_DOWN_MARK_STEP = 10
+
+/**
+ * 这根线上"线下方文本记号"的**总墨迹宽**（px；布局端判断"要不要横向让开"用）。
+ *
+ * 宽度按 `0.5em/字符` 估（粗体斜体拉丁的比例字体，比数字的 0.62em 窄一点，取 0.5 偏保守）
+ * —— 引擎零 DOM 量不到真实字宽，与 `inkBox.ts` 的其它估计同口径，且避让还额外让 `LAYER_GAP`。
+ */
+export const barDownMarkSpan = (marks: readonly string[] | undefined, noteSize: number): number => {
+  const labels = (marks ?? []).filter((m) => m === 'fine' || m === 'dc' || m === 'ds').map(barDownMarkLabel)
+  if (labels.length === 0) return 0
+  const fs = barDownMarkFontSize(noteSize)
+  const step = BAR_DOWN_MARK_STEP * noteScaleOf(noteSize)
+  const widest = Math.max(...labels.map((t) => t.length * fs * 0.5))
+  return (labels.length - 1) * step + widest
+}
+
 /**
  * adj625c（用户要求）：**序号算在曲部行自己的空间里，显隐不得影响排版** ⇒
  * 不再为它预留任何纵向空间（既不抬高行高、也不把词部下移）。

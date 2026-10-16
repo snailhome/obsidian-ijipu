@@ -41,6 +41,8 @@ export {
   ASSET_REENCODE_BYTES,
   ASSET_REENCODE_QUALITY,
   overlayAssetRefs,
+  // adj969：这份配置里"必须靠基准目录才读得到"的引用（决定要不要向用户要一个文件夹）
+  localAssetRefs,
   ALLOWED_ASSET_EXT,
   assetPathOf,
   extOf,

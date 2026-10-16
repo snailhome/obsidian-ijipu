@@ -183,7 +183,14 @@ export function inkBoxOfLayout(layout: ScoreLayout, pageIndex = 0): RangeBox | n
   for (const br of page.brackets) add(a, br.x - br.width / 2, br.yTop, br.width, ns)
   for (const vb of page.voiceBlocks) add(a, vb.x, vb.yTop, ns, vb.yBottom - vb.yTop)
   for (const bn of page.barNumbers) {
-    add(a, bn.x - barNumberBoxW(bn.n, ns) / 2, bn.yBarBottom, barNumberBoxW(bn.n, ns), barNumberBoxH(ns))
+    // adj970：`yDrop`/`xShift` 是"给线下方文本记号错开的量"（布局端算好），这里跟着搬，否则墨迹框会低估
+    add(
+      a,
+      bn.x - (bn.xShift ?? 0) - barNumberBoxW(bn.n, ns) / 2,
+      bn.yBarBottom + (bn.yDrop ?? 0),
+      barNumberBoxW(bn.n, ns),
+      barNumberBoxH(ns),
+    )
   }
   for (const sb of page.segmentBrackets ?? []) {
     const w = sb.inkW ?? Math.max(3, ns * 0.32)

@@ -40,6 +40,25 @@ export function overlayAssetRefs(cfg: PageConfig): { wm: string; bg: string } {
   return { wm, bg }
 }
 
+/**
+ * adj969：这份配置里**必须靠"某个基准目录"才读得到**的引用（= 相对本谱的路径）。
+ *
+ * 为什么单独一个判据（而不是让调用方自己看那两个字段）：
+ * 「打开一份谱之后要不要向用户要一个目录」这件事**只该问一次**，而它的答案由三件事共同决定
+ * —— 开关（`overlayAssetRefs` 已经算过）、`data:` 内嵌（根本不用读文件）、`[[双链]]`
+ * （只有 Obsidian 插件认，网页版拿不到也不该弹"选文件夹"）。三处各判一份必然漂。
+ *
+ * 返回**原文**（未剥壳），调用方按需再 `assetPathOf`。
+ */
+export function localAssetRefs(cfg: PageConfig): string[] {
+  const { wm, bg } = overlayAssetRefs(cfg)
+  return [wm, bg].filter((raw) => {
+    if (raw === '') return false
+    const { link, isData } = assetPathOf(raw)
+    return !link && !isData
+  })
+}
+
 /** 单文件上限：16MB（超过它当背景基本也糊，且会让每页 SVG 巨大） */
 export const MAX_ASSET_BYTES = 16 * 1024 * 1024
 

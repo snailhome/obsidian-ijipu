@@ -29,7 +29,7 @@ import type {
   ScorePageMeta,
   VoiceBlock,
 } from '../types'
-import { DIGIT_HEIGHT_RATIO, LAYER_GAP, SLUR_W, octaveTopY, octaveDotY, BRACKET_PAD, H_GAP, noteScaleOf, VOLTA_BAR_GAP, VOLTA_RAISE, DYN_HALF_H, barlinePad, barlineTotalW, DOT_AFTER_DIGIT_GAP, DOT_R, SEGMENT_ROW_GAP_DEFAULT, SEGMENT_LAYER_YSCALE, SEGMENT_LAYER_CLEARANCE, SEGMENT_BRACE_ASPECT, SEGMENT_BRACE_MIN_W, NOTE_BASELINE_RATIO, digitBottomY, beamBottomY, lowDotY, TP_BRACKET_GAP, slurApexY, VOLTA_INK_GAP, digitInkW, barNumberGapNeed, lyricCommentFontSize, lyricCommentWidth, LYRIC_COMMENT_GAP, markReserveRatio, type AccidentalInkMetrics } from './spacing'
+import { DIGIT_HEIGHT_RATIO, LAYER_GAP, SLUR_W, octaveTopY, octaveDotY, BRACKET_PAD, H_GAP, noteScaleOf, VOLTA_BAR_GAP, VOLTA_RAISE, DYN_HALF_H, barlinePad, barlineTotalW, DOT_AFTER_DIGIT_GAP, DOT_R, SEGMENT_ROW_GAP_DEFAULT, SEGMENT_LAYER_YSCALE, SEGMENT_LAYER_CLEARANCE, SEGMENT_BRACE_ASPECT, SEGMENT_BRACE_MIN_W, NOTE_BASELINE_RATIO, digitBottomY, beamBottomY, lowDotY, TP_BRACKET_GAP, slurApexY, VOLTA_INK_GAP, digitInkW, barNumberGapNeed, lyricCommentFontSize, lyricCommentWidth, LYRIC_COMMENT_GAP, markReserveRatio, type AccidentalInkMetrics, BAR_NUMBER_BOTTOM_GAP, barNumberBoxH, barNumberBoxW, barDownMarkInk, barDownMarkSpan, hasBarDownMark } from './spacing'
 // adj284：空间优先布局的度量（本体宽 / 时值拆分 / 非时值元素间距）
 import { splitNoteDur, noteBodyW, augBodyW, dotBodyW, accidentalBodyW, accidentalGeometry, markBodyW, digitSlotW, hxBodyW, graceAtTail, graceSlotLayout, nonDurGap, slideExtraW, braceInkRightOffset, BRACE_LINE_DX } from './spaceLayout'
 import { hairpinEvents, resolveHairpins, type DynEvent, type NoteAnchors } from './hairpins'
@@ -989,8 +989,22 @@ export function layoutScore(
    * **结束时**再写下自己的行末线。因此：
    *  · 碎片行（超长小节的续行）结束时**不写**（它的行尾在小节中间、不是小节线）⇒ 再下一行自动退回"行首"；
    *  · 跨组、跨页都不清空（用户明确要求「跨页也挪」）。
+   *
+   * adj970：多带两样东西，供"行首序号挂过来时错开"用 —— `marks`（这条线上有没有 `&fine`/`&dc`/`&ds`
+   * 那种**线下方**文本记号）与 `maxTop`（**那一行**允许的方框顶上限 = 该行歌词墨迹上沿再让出层间距与框高）。
+   * 为什么要在写下时就存 `maxTop`：行首序号是**在下一行**挂上去的，那时已经拿不到上一行的歌词行了。
    */
-  let prevRowEndLine: { x: number; y: number; page: number } | null = null
+  let prevRowEndLine: { x: number; y: number; page: number; marks?: readonly string[]; maxTop: number } | null = null
+
+  /**
+   * adj970：这条 x 上的小节线的 `marks`（找不到就给 `undefined`）。
+   *
+   * 为什么要查而不是各处传：写 `prevRowEndLine` 的三处（duration / space / 多声部块）
+   * 手上只有 x（行末线是从线位数组末端取的）⇒ 统一按 x 反查刚推进去的那根线，一处口径。
+   */
+  const barMarksAt = (x: number, pageIdx: number): readonly string[] | undefined =>
+    pages[pageIdx].barlines.find((l) => Math.abs(l.x - x) < 0.6)?.marks
+
 
   /**
    * 放置一个音符并处理歌词对齐。
@@ -1251,20 +1265,99 @@ export function layoutScore(
    * 显示个嘛？**」
    *
    * 命中的是**幽灵末小节**：源码末尾多写了一个小节线（`… 4 | |`）或末尾留了一个空小节时，
-   * 解析出来的**最后一个 seg 是空的**（没有音符），却仍被 `barOrdinalsOf` 编上了小节号
+   * 解析出来的**末尾那些 seg 是空的**（没有音符），却仍被 `barOrdinalsOf` 编上了小节号
    * （那里只把"组首空 seg"判为 `null`）⇒ 行末埋点会给它画一个方框，挂在最后那条线旁。
    * 那种"小节"没有任何内容、后面也没有小节 ⇒ **不画**。
    *
-   * 只排除"**组的最后一个 seg 且为空**"这一种：中间真的写了一个空小节（`| |` 夹在中间）时，
-   * 它仍是这一小节序列里的一格，照旧编号（用户口径只针对"最后一条线后面没有小节"）。
+   * 判据写成"**从这一格起、到本组末尾全是空的**"（而不是"必须是最后一个 seg"）：
+   * 末尾常见写法不止一种（`… |`、`… | |`、`… | || |`……），凡是"尾部的空段串"一律不算小节。
+   * ⚠ 中间真的写了一个空小节（`| |` 夹在中间、后面还有音符）时，它仍是序列里的一格 ⇒ 照旧编号。
    */
   const isGhostTrailingSeg = (segs: BarSeg[], nc: number): boolean =>
-    nc === segs.length - 1 && (segs[nc]?.notes.length ?? 0) === 0
+    segs.length > 0 && segs.slice(nc).every((s) => s.notes.length === 0)
+  /**
+   * adj970：**序号方框为"线下方文本记号"让位的算法**（用户口径：「上下错开，避免重叠」）。
+   *
+   * 实测（用户那条 Q 行、默认版式 `note_size` 13）：记号墨迹 ≈ `[158.9 … 165.6]`、方框 `[158.6 … 166.3]`
+   * ⇒ 完全叠在一起（与用户截图一致）。让位顺序：
+   *  ① **上下错开**（用户要的那一档）：方框整体下移到 `记号墨迹下沿 + LAYER_GAP` —— 前提是**下方放得下**
+   *     （`maxTop` = 歌词墨迹上沿再让一个层间距与框高；行内没歌词就是无穷大）；
+   *  ② 放不下 ⇒ **左右错开**（往左让开 `记号半宽 + 半个框宽 + LAYER_GAP`）。
+   *
+   * 为什么不能硬撑到 ①：默认版式下"线底 → 歌词墨迹上沿"只有 **14.6px**，而"记号 6.7 + 层间距 2 + 框 7.7
+   * = 16.4px"⇒ **塞不下**（实测压歌词 3.1px）。而"给这一行撑高"违反 `adj625c` 的用户口径
+   * （「**序号算在曲部行自己的空间里，显隐不得影响排版**」）—— 让序号去改分页是明令禁止的。
+   * 往**左**让（不是往右）：行末那条线右边就是页边距，往右会让方框越出版心。
+   */
+  const barNumberAvoid = (
+    n: number,
+    yBarBottom: number,
+    marks: readonly string[] | undefined,
+    maxTop: number,
+  ): { yDrop?: number; xShift?: number } => {
+    if (!hasBarDownMark(marks)) return {}
+    const ink = barDownMarkInk(yBarBottom, m.noteSize)
+    const top = yBarBottom + BAR_NUMBER_BOTTOM_GAP
+    const need = ink.bottom + LAYER_GAP - top
+    if (need <= 0) return {}
+    if (top + need <= maxTop) return { yDrop: r1(need) }
+    const shift = barDownMarkSpan(marks, m.noteSize) / 2 + barNumberBoxW(n, m.noteSize) / 2 + LAYER_GAP
+    return { xShift: r1(shift) }
+  }
+
+  /**
+   * adj970：这一行的歌词**墨迹上沿**允许的"序号方框顶"上限（行内没歌词 ⇒ 无穷大 = 随便往下让）。
+   *
+   * 口径照抄 `inkBox.ts` 的 `addLyricInk`（歌词墨迹上沿 = 基线 − 0.9×字号），第 1 行歌词取 `lyricRow = 0`。
+   * ⚠ 替谱层（`{tp}`）会把歌词往下推 ⇒ 这里**故意不传** `tpExtras`：算出的是**偏小**的余量（更保守，
+   * 宁可落到"左右错开"也不会去压歌词）。
+   */
+  const barNumberMaxTop = (yTop: number, lyricMaps: Map<number, LyricChar>[], sp: Spacing, geciSize: number): number => {
+    if (lyricMaps.length === 0) return Number.POSITIVE_INFINITY
+    const lyricY = lyricRowY(yTop, m.noteSize, sp, geciSize, 0, [])
+    return lyricY - geciSize * 0.9 - LAYER_GAP - barNumberBoxH(m.noteSize)
+  }
+
+  /**
+   * adj970：埋点处用的**便捷封装** —— 把"这根线上的记号"与"这一行的歌词余量"合成 `pushBarNumber` 要的让位量。
+   * 三处埋点（duration / space / 多声部块）都调它，避免每处各写一遍余量算式。
+   */
+  const avoidAtBar = (
+    n: number,
+    yBarBottom: number,
+    marks: readonly string[] | undefined,
+    yTop: number,
+    lyricMaps: Map<number, LyricChar>[],
+    sp: Spacing,
+    geciSize: number,
+  ): { yDrop?: number; xShift?: number } =>
+    barNumberAvoid(n, yBarBottom, marks, barNumberMaxTop(yTop, lyricMaps, sp, geciSize))
+
   /**
    * 记一条序号锚点（渲染层据此画「数字 + 外框」）；`pageIdx` 缺省 = 当前页（adj967 起允许跨页）
+   *
+   * adj970：`avoid` = 为"线下方文本记号"让位的量（`yDrop` 往下 / `xShift` 往左；都没有就不产出）。
+   * ⚠ `yBarBottom` 仍是**线底缘**、`x` 仍是**线位**（口径都不变，`adj906`/`adj967` 那两条断言照旧成立）；
+   * 让位量单独记，渲染端与 `inkBox` 各自加一次（同源）。
    */
-  const pushBarNumber = (n: number, x: number, yBarBottom: number, voice: number, group: number, pageIdx = pageIndex): void => {
-    pages[pageIdx].barNumbers.push({ n, x: r1(x), yBarBottom: r1(yBarBottom), voice, group })
+  const pushBarNumber = (
+    n: number,
+    x: number,
+    yBarBottom: number,
+    voice: number,
+    group: number,
+    pageIdx = pageIndex,
+    avoid: { yDrop?: number; xShift?: number } = {},
+  ): void => {
+    pages[pageIdx].barNumbers.push({
+      n,
+      x: r1(x),
+      yBarBottom: r1(yBarBottom),
+      voice,
+      group,
+      ...(avoid.yDrop !== undefined ? { yDrop: avoid.yDrop } : {}),
+      ...(avoid.xShift !== undefined ? { xShift: avoid.xShift } : {}),
+    })
   }
   /**
    * adj967（**用户 2026-10-17 口径**）：**序号落在行首时，把方框挪到上一行的"行末小节线"处**。
@@ -1291,9 +1384,11 @@ export function layoutScore(
     yBarBottom: number,
     voice: number,
     group: number,
-    prevEnd: { x: number; y: number; page: number } | null,
+    prevEnd: { x: number; y: number; page: number; marks?: readonly string[]; maxTop: number } | null,
   ): void => {
-    if (prevEnd) pushBarNumber(n, prevEnd.x, prevEnd.y, voice, group, prevEnd.page)
+    // adj970：挂到上一行行末线时，那根线上若有 `&ds` 一类记号，方框同样要错开
+    // （`marks` 与"那一行允许的方框顶上限"都在锚点里带过来了，见 `prevRowEndLine`）
+    if (prevEnd) pushBarNumber(n, prevEnd.x, prevEnd.y, voice, group, prevEnd.page, barNumberAvoid(n, prevEnd.y, prevEnd.marks, prevEnd.maxTop))
     else pushBarNumber(n, config.margin_left, yBarBottom, voice, group)
   }
   /**
@@ -1535,6 +1630,14 @@ export function layoutScore(
     //  ② 拍内音符最小间距 1px（need = max(14, 12.16/拍内最小时值)）
     //  ③ 超拍挤占其它正常拍空间，正常拍再平均调整
     const leadingEmpty = row.start < row.end && segs[row.start].notes.length === 0 ? 1 : 0
+    /**
+     * adj967d（**用户口径**："**统一**将放在行首的序号放在上一行的行末" —— 用户实测里还留在行首的那一档）：
+     * 本行第一个"算作小节"的 seg。行内埋点用它判断"要标的那一格是不是**行首那一格**"：
+     * 典型写法是 Q 行**以小节线开头**（`Q: |/&hs 2' …`、`Q: | 1 2 …`）⇒ 解析出一个"行首空 seg"，
+     * 于是行首埋点（要求 `fc === row.start`）**不触发**，序号改由**行内埋点**挂在行首那条线上。
+     * 若不特判，它会一直留在行首（= 左边距）——正是用户截图里那个"行首还有序号"。
+     */
+    const fcRow = firstCountedSeg(ord, row)
     // adj625：**行首那个序号**——行首小节线通常不画（隐藏小节线），序号就放在它的位置下（= 左边距）。
     // 只有「本行第一个算作小节的 seg」正好落在行首时才在此埋点；若它在本行靠后，
     // 说明其左侧小节线是**上一小节的收尾线**（在行内），由那边的埋点负责。
@@ -2052,7 +2155,12 @@ export function layoutScore(
             const nc = nextCountedSeg(ord, b, row.end)
             // adj967b：幽灵末小节（末尾空 seg）不画 —— "后面又没有小节了"（用户口径）
             if (nc < row.end && isNumberedBar(ord[nc]) && !isGhostTrailingSeg(segs, nc)) {
-              pushBarNumber(ord[nc] as number, lineX, yBottomBar, voice, groupIndex)
+              // adj967d：要标的那一格正是**本行第一个计数小节** ⇒ 它的左边界就是**行首的隐藏线**，
+              // 与"行首那一档"同一情形 ⇒ 走同一份锚点逻辑（能挪就挪到上一行行末那条真线下）
+              if (nc === fcRow) pushRowStartBarNumber(ord[nc] as number, yBottomBar, voice, groupIndex, prevEndLine)
+              // adj970：这根线上若有 `&fine`/`&dc`/`&ds`（线下方文本记号），序号方框错开（上有余量就上下、否则左右）
+              else
+                pushBarNumber(ord[nc] as number, lineX, yBottomBar, voice, groupIndex, pageIndex, avoidAtBar(ord[nc] as number, yBottomBar, bar.marks, yTop, lyricMaps, sp, geciSize))
             }
           }
           page.barlines.push({
@@ -2089,7 +2197,17 @@ export function layoutScore(
     // adj967：本行的**行末小节线**（下一行若在行首轮到序号，就把方框挂到它下面 —— 见 `pushRowStartBarNumber`）
     {
       const lastX = durRowLineX[durRowLineX.length - 1]
-      prevRowEndLine = lastX === undefined ? null : { x: lastX, y: yBottomBar, page: pageIndex }
+      // adj970：同时记下这根线的 `marks` 与**本行**允许的方框顶上限（下一行行首序号挂过来时要错开）
+      prevRowEndLine =
+        lastX === undefined
+          ? null
+          : {
+              x: lastX,
+              y: yBottomBar,
+              page: pageIndex,
+              marks: barMarksAt(lastX, pageIndex),
+              maxTop: barNumberMaxTop(yTop, lyricMaps, sp, geciSize),
+            }
     }
     // adj199：返回该行平均每拍宽（撑满行 → 实际均分宽；未撑满行 → 参考宽/自然宽），
     // 供后续行按小节线对齐（adj940 起只在拿不到线位时兜底）
@@ -2151,6 +2269,14 @@ export function layoutScore(
     const prevEndLine = prevRowEndLine
     prevRowEndLine = null
     const leadingEmpty = row.start < row.end && segs[row.start].notes.length === 0 ? 1 : 0
+    /**
+     * adj967d（**用户口径**："**统一**将放在行首的序号放在上一行的行末" —— 用户实测里还留在行首的那一档）：
+     * 本行第一个"算作小节"的 seg。行内埋点用它判断"要标的那一格是不是**行首那一格**"：
+     * 典型写法是 Q 行**以小节线开头**（`Q: |/&hs 2' …`、`Q: | 1 2 …`）⇒ 解析出一个"行首空 seg"，
+     * 于是行首埋点（要求 `fc === row.start`）**不触发**，序号改由**行内埋点**挂在行首那条线上。
+     * 若不特判，它会一直留在行首（= 左边距）——正是用户截图里那个"行首还有序号"。
+     */
+    const fcRow = firstCountedSeg(ord, row)
     // adj625：行首序号（行首小节线通常隐藏 ⇒ 放在它的位置下 = 左边距）；与 `placeMusicRow` 同一口径。
     // adj967：能挪到上一行行末那条真线下面就挪（用户口径，两处判据同一份实现）。
     // 小节线高度公式与 `placeMusicRow` 一致（基线-18.4×s .. 基线+4.5×s）。
@@ -2770,13 +2896,17 @@ export function layoutScore(
         const bid: LayoutId = { page: pageIndex, voice, group: groupIndex, index: barCounter }
         // adj625：本 seg 的收尾小节线 = 「下一个算作小节的 seg」的左侧小节线（同 `placeMusicRow`）：
         // 那个小节在本行内才在此埋点，跨到下一行的由下一行的行首埋点负责。
-        {
-          const nc = nextCountedSeg(ord, b, row.end)
-          // adj967b：同上 —— 幽灵末小节不画
-          if (nc < row.end && isNumberedBar(ord[nc]) && !isGhostTrailingSeg(segs, nc)) {
-            pushBarNumber(ord[nc] as number, lineX, yBottomBar, voice, groupIndex)
+          {
+            const nc = nextCountedSeg(ord, b, row.end)
+            // adj967b：同上 —— 幽灵末小节不画
+            if (nc < row.end && isNumberedBar(ord[nc]) && !isGhostTrailingSeg(segs, nc)) {
+              // adj967d：要标的是**本行第一个计数小节** ⇒ 左边界即"行首隐藏线" ⇒ 与行首那一档同口径
+              if (nc === fcRow) pushRowStartBarNumber(ord[nc] as number, yBottomBar, voice, groupIndex, prevEndLine)
+              // adj970：同上（空间优先路径）——这根线上有下方文本记号时，序号方框错开
+              else
+                pushBarNumber(ord[nc] as number, lineX, yBottomBar, voice, groupIndex, pageIndex, avoidAtBar(ord[nc] as number, yBottomBar, bk.bar.marks, yTop, lyricMaps, sp, geciSize))
+            }
           }
-        }
         page.barlines.push({
           id: bid,
           type: bk.bar.type,
@@ -2810,7 +2940,17 @@ export function layoutScore(
     // adj967：本行的行末小节线（给下一行的行首序号当锚点，见 `pushRowStartBarNumber`）
     {
       const lastX = rowLineX[rowLineX.length - 1]
-      prevRowEndLine = lastX === undefined ? null : { x: lastX, y: yBottomBar, page: pageIndex }
+      // adj970：同时记下这根线的 `marks` 与**本行**允许的方框顶上限（下一行行首序号挂过来时要错开）
+      prevRowEndLine =
+        lastX === undefined
+          ? null
+          : {
+              x: lastX,
+              y: yBottomBar,
+              page: pageIndex,
+              marks: barMarksAt(lastX, pageIndex),
+              maxTop: barNumberMaxTop(yTop, lyricMaps, sp, geciSize),
+            }
     }
     return rowLineX
   }
@@ -3793,7 +3933,17 @@ export function layoutScore(
        * adj967：本块（= 一行）的**行末小节线**，写进 `prevRowEndLine` 供紧随其后的行使用 ——
        * y 取**主声部**那条线的底缘（与 `adj906`"序号挂在主声部小节线下"同一口径；`yBottomTop` 就是它）。
        */
-      prevRowEndLine = barX.length > 0 ? { x: barX[barX.length - 1] as number, y: yBottomTop, page: pageIndex } : null
+      // adj970：同样带上这根线的 `marks` 与该块允许的方框顶上限（多声部块的行末线也可能带 `&ds`）
+      prevRowEndLine =
+        barX.length > 0
+          ? {
+              x: barX[barX.length - 1] as number,
+              y: yBottomTop,
+              page: pageIndex,
+              marks: barMarksAt(barX[barX.length - 1] as number, pageIndex),
+              maxTop: barNumberMaxTop(voiceYTop[mainVi] ?? 0, parts[mainVi]?.lyricMaps ?? [], sp, config.geci_size),
+            }
+          : null
     }
     for (let vi = 0; vi < parts.length; vi++) {
       const p = parts[vi]
@@ -3812,7 +3962,17 @@ export function layoutScore(
           const nc = nextCountedSeg(ord, b, numBars)
           // adj967b：同上 —— 幽灵末小节不画（`p` 就是主声部，用它自己的 segs 判"末尾空小节"）
           if (nc < numBars && isNumberedBar(ord[nc]) && !isGhostTrailingSeg(p.segs, nc)) {
-            pushBarNumber(ord[nc] as number, barX[b], yBottomBar, p.voice, p.groupIndex)
+            // adj970：同上（多声部块路径）——主声部这根线上有下方文本记号时，序号方框错开
+            // （多声部块的 yTop / 歌词 / 间距都取主声部那一份）
+            pushBarNumber(
+              ord[nc] as number,
+              barX[b],
+              yBottomBar,
+              p.voice,
+              p.groupIndex,
+              pageIndex,
+              avoidAtBar(ord[nc] as number, yBottomBar, seg.bar.marks, voiceYTop[mainVi] ?? vTop, p.lyricMaps, sp, config.geci_size),
+            )
           }
         }
         const bid: LayoutId = { page: pageIndex, voice: p.voice, group: p.groupIndex, index: barCounter }

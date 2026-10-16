@@ -750,6 +750,22 @@ export interface PlacedBarNumber {
   x: number
   /** 谱行小节线底缘 y（方框顶 = 该值 + `BAR_NUMBER_TOP_GAP`） */
   yBarBottom: number
+  /**
+   * adj970（**用户实报**：`&ds` 与序号方框叠在一起）：
+   * **为"线下方文本记号"（`&fine`/`&dc`/`&ds`）错开的量**。两者都挂在小节线正下方、各自算各自的 y
+   * ⇒ 实测完全重叠（记号墨迹 ≈[158.9…165.6]、方框 ≈[158.6…166.3]）。
+   *
+   * 让位顺序（用户口径「上下错开，避免重叠」，但默认版式下竖着塞不下，见 `layout/index.ts` 的
+   * `barNumberAvoid` 说明）：
+   *  · 下方有余量 ⇒ `yDrop`（往下让，让到记号墨迹之下）；
+   *  · 下方放不下（会压歌词）⇒ `xShift`（往左让开）。
+   *
+   * ⚠ 两者都**不改变 `x` / `yBarBottom` 的口径**（`x` 仍是线位、`yBarBottom` 仍是线底缘）——
+   * `adj906`/`adj967` 那两条断言照旧成立；渲染端与 `inkBox` 各自加一次这两个量（同源）。
+   */
+  yDrop?: number
+  /** adj970：往**左**错开的量（px；行末线右边就是页边距，所以只往左让） */
+  xShift?: number
   voice: number
   group: number
 }

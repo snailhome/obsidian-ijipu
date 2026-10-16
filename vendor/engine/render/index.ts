@@ -51,6 +51,9 @@ import {
   barNumberFontSize,
   barNumberBoxH,
   barNumberBoxW,
+  // adj970：小节线**下方**文本记号（&fine/&dc/&ds）的字号与基线 —— 布局端算"序号方框要不要让"同源
+  barDownMarkFontSize,
+  barDownMarkBaselineY,
   noteScaleOf,
   DIGIT_BOTTOM,
   // adj630b：谱尾说明（S:）的行基线（与预览端拖拽基准共用）
@@ -1264,19 +1267,19 @@ function renderBarline(bar: PlacedBarline, noteSize = 18, noteFontFamily = FONT_
         )
       }
     })
-    // 下方文本组（fine/dc/ds）
-    const downMarks = bar.marks.filter((m) => m === 'fine' || m === 'dc' || m === 'ds')
+    // 下方文本组（fine/dc/ds）—— adj970 起判据与几何都取自 `spacing.ts`（布局端避让消费同一份）
+    const downMarks = (bar.marks ?? []).filter((m) => m === 'fine' || m === 'dc' || m === 'ds')
     downMarks.forEach((m, idx) => {
       const label = m === 'fine' ? 'Fine' : m === 'dc' ? 'D.C.' : 'D.S.'
-      // 小节线正下方文本（adj：&fine/&dc/&ds 一律粗体 + 斜体；
-      // adj210：字号为主音符的 0.5（9×s = noteSize×0.5））
-      const fs = Math.max(8, Math.round(9 * s))
+      // 小节线正下方文本（adj：&fine/&dc/&ds 一律粗体 + 斜体；adj210：字号为主音符的 0.5）
+      const fs = barDownMarkFontSize(noteSize)
       const bold = ' font-weight="bold"'
       const italic = ' font-style="italic"'
       const dx = mx + (idx - (downMarks.length - 1) / 2) * 10 * s
       parts.push(
         // adj：位置下移 0.1 音符高度（0.1×18×s = 1.8×s），与字号缩放一致；花体渲染
-        `<text x="${dx.toFixed(1)}" y="${(yBottom + 8 * s + 1.8 * s).toFixed(1)}" text-anchor="middle" font-size="${fs}" font-family="${FONT_SCRIPT}"${bold}${italic} fill="#1b1b1b">${label}</text>`,
+        // adj970：基线算式搬进 `barDownMarkBaselineY`（布局端算"序号方框要不要让"用的是同一个函数）
+        `<text x="${dx.toFixed(1)}" y="${barDownMarkBaselineY(yBottom, noteSize).toFixed(1)}" text-anchor="middle" font-size="${fs}" font-family="${FONT_SCRIPT}"${bold}${italic} fill="#1b1b1b">${label}</text>`,
       )
     })
   }
@@ -1320,7 +1323,8 @@ function renderBarline(bar: PlacedBarline, noteSize = 18, noteFontFamily = FONT_
 /**
  * 画一个**带外框的小节序号**（`showBarCount`）。几何全部来自 `spacing.ts`（布局端同源）：
  *  - 字号 = **倚音音符**字号 **× 3/4**（`barNumberFontSize`；框内空隙与线宽同步 ×0.75，见 `spacing.ts`）；
- *  - 外框顶 = 该谱行小节线底缘 + `BAR_NUMBER_BOTTOM_GAP`，数字在框内**上下居中**；
+ *  - 外框顶 = 该谱行小节线底缘 + `BAR_NUMBER_BOTTOM_GAP`（+ `yDrop`：adj970 为线下方文本记号让位）；
+ *  - 数字在框内**上下居中**；
  *  - 框宽按数字位数自适应（等宽估算 0.62em，与数字槽同比例）。
  */
 function renderBarNumber(bn: PlacedBarNumber, config: PageConfig): string {
@@ -1329,16 +1333,18 @@ function renderBarNumber(bn: PlacedBarNumber, config: PageConfig): string {
   const boxH = barNumberBoxH(noteSize)
   const text = String(bn.n)
   const boxW = barNumberBoxW(bn.n, noteSize)
-  const top = bn.yBarBottom + BAR_NUMBER_BOTTOM_GAP
+  // adj970：线下方有 `&fine`/`&dc`/`&ds` 时布局端会给错开量（上下优先、放不下才左右）
+  const top = bn.yBarBottom + BAR_NUMBER_BOTTOM_GAP + (bn.yDrop ?? 0)
+  const cx = bn.x - (bn.xShift ?? 0)
   const cy = top + boxH / 2
   // adj625（用户反馈"序号在方框里偏靠上"）：必须用 `central` 而**不是** `middle`——
   // `middle` 对齐的是 **x-height 的中线**，而数字占的是 cap 高 ⇒ 数字整体偏上；
   // `central` 才是"字符中心对齐"（本库增时线 `-`、段层括号等居中文本一直用 `central`）。
   return (
     `<g data-barnumber="${bn.n}">` +
-    `<rect x="${r1n(bn.x - boxW / 2)}" y="${r1n(top)}" width="${r1n(boxW)}" height="${r1n(boxH)}" ` +
+    `<rect x="${r1n(cx - boxW / 2)}" y="${r1n(top)}" width="${r1n(boxW)}" height="${r1n(boxH)}" ` +
     `fill="none" stroke="#1b1b1b" stroke-width="${r1n(BAR_NUMBER_STROKE * noteScaleOf(noteSize))}"/>` +
-    `<text x="${r1n(bn.x)}" y="${r1n(cy)}" text-anchor="middle" dominant-baseline="central" ` +
+    `<text x="${r1n(cx)}" y="${r1n(cy)}" text-anchor="middle" dominant-baseline="central" ` +
     `font-size="${r1n(fs)}" font-family="${noteFont(config.shuzi_font)}" fill="#1b1b1b">${text}</text>` +
     `</g>`
   )
