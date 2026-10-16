@@ -979,6 +979,18 @@ export function layoutScore(
   // 上一页最后一行的线位当基准」。为什么不是 adj355 的"内容宽"：见下面 `placeMusicRowSpace` 里
   // `adj940` 那一段（内容宽保证不了"线落在哪"，差的就是"内容右端 → 线中心"的偏移）。
   let prevRowLineX: (number | undefined)[] | undefined
+  /**
+   * adj967（**用户 2026-10-17 口径**）：**上一行的"行末小节线"**（x / 线底 y / 所在页）。
+   *
+   * 用途只有一个：某一行**行首**正好轮到方框序号时（`pushRowStartBarNumber`），把方框挂到
+   * **上一行行末那条线上** —— 同一条小节边界、但那一侧**有线可依**（详见 `pushRowStartBarNumber` 的说明）。
+   *
+   * 维护方式：每个"行"的放置函数在**开始时**把上一行的值取下来、把自己的清空（`prevRowEndLine = null`），
+   * **结束时**再写下自己的行末线。因此：
+   *  · 碎片行（超长小节的续行）结束时**不写**（它的行尾在小节中间、不是小节线）⇒ 再下一行自动退回"行首"；
+   *  · 跨组、跨页都不清空（用户明确要求「跨页也挪」）。
+   */
+  let prevRowEndLine: { x: number; y: number; page: number } | null = null
 
   /**
    * 放置一个音符并处理歌词对齐。
@@ -1234,9 +1246,55 @@ export function layoutScore(
   const showBarNo = config.showBarCount === true
   /** 该小节序号是否要画（间隔为 1 时第 1 小节也画——它就落在全曲起点的隐藏小节线上） */
   const isNumberedBar = (n: number | null): boolean => showBarNo && n !== null && n % barNoStep === 0
-  /** 记一条序号锚点（渲染层据此画「数字 + 外框」） */
-  const pushBarNumber = (n: number, x: number, yBarBottom: number, voice: number, group: number): void => {
-    pages[pageIndex].barNumbers.push({ n, x: r1(x), yBarBottom: r1(yBarBottom), voice, group })
+  /**
+   * adj967b（**用户 2026-10-17 口径**）：「**最后一条小节线的序号方块不显示的哦，后面又没有小节了，
+   * 显示个嘛？**」
+   *
+   * 命中的是**幽灵末小节**：源码末尾多写了一个小节线（`… 4 | |`）或末尾留了一个空小节时，
+   * 解析出来的**最后一个 seg 是空的**（没有音符），却仍被 `barOrdinalsOf` 编上了小节号
+   * （那里只把"组首空 seg"判为 `null`）⇒ 行末埋点会给它画一个方框，挂在最后那条线旁。
+   * 那种"小节"没有任何内容、后面也没有小节 ⇒ **不画**。
+   *
+   * 只排除"**组的最后一个 seg 且为空**"这一种：中间真的写了一个空小节（`| |` 夹在中间）时，
+   * 它仍是这一小节序列里的一格，照旧编号（用户口径只针对"最后一条线后面没有小节"）。
+   */
+  const isGhostTrailingSeg = (segs: BarSeg[], nc: number): boolean =>
+    nc === segs.length - 1 && (segs[nc]?.notes.length ?? 0) === 0
+  /**
+   * 记一条序号锚点（渲染层据此画「数字 + 外框」）；`pageIdx` 缺省 = 当前页（adj967 起允许跨页）
+   */
+  const pushBarNumber = (n: number, x: number, yBarBottom: number, voice: number, group: number, pageIdx = pageIndex): void => {
+    pages[pageIdx].barNumbers.push({ n, x: r1(x), yBarBottom: r1(yBarBottom), voice, group })
+  }
+  /**
+   * adj967（**用户 2026-10-17 口径**）：**序号落在行首时，把方框挪到上一行的"行末小节线"处**。
+   *
+   * 用户原话：「小节序号方块如果是在行首，是不是可以改放到上一行行末的小节线处，
+   * 两处实际都指向同一个小节，且**行末固定有小节线**，会更直观」。
+   *
+   * 为什么对：断行只发生在**小节线**上 ⇒ 行首那条"隐藏小节线"（不画的）与上一行行末那条"真线"
+   * 是**同一条**边界、同一个小节；挂在有线的那一侧可读得多（行首那一侧上面什么都没有，容易被读成
+   * 上一行的行尾或页面装饰）。实测（夹具：4 小节/行、间隔 3）：`n=9` 原先挂在 `x=50`（= 左边距，
+   * 无线），而它标注的小节左边界正是上一行那条画出来的线 `x=544.3`。
+   *
+   * 用户同时拍了两条边界（2026-10-17）：
+   *  ① **跨页也挪**（"上一行"在上一页时，序号仍放到上一页那行的行末线下）⇒ 所以这里带 `page`；
+   *  ② 上一行行末那条线即使是**纯跳房子起点**（`|[` 那种不画竖线的线）也**照旧挂在那里**（不特判）。
+   * 兜底：**没有上一行**（整份谱的第一行）时仍挂行首（= 左边距），与旧行为一致。
+   *
+   * ⚠ **不要按 group 拦"跨曲部"**（我自己试过一版，量出来是错的）：本项目里**每条 `Q:` 行就是一个
+   * group**，多行谱的每个 `Q:` 行都算"另一个 group" ⇒ 按 group 拦会把绝大多数谱（含示例 `茉莉花`）
+   * 的主功能整个挡掉（实测 `n=9` 又回到行首）。行与行在纸面上是连着的，**"上一行"就是上一行**。
+   */
+  const pushRowStartBarNumber = (
+    n: number,
+    yBarBottom: number,
+    voice: number,
+    group: number,
+    prevEnd: { x: number; y: number; page: number } | null,
+  ): void => {
+    if (prevEnd) pushBarNumber(n, prevEnd.x, prevEnd.y, voice, group, prevEnd.page)
+    else pushBarNumber(n, config.margin_left, yBarBottom, voice, group)
   }
   /**
    * 组内每个 seg 的**全曲小节序号**（1 起）——`null` = 组首空 seg（那是**行首小节线**、不是小节）。
@@ -1297,6 +1355,10 @@ export function layoutScore(
     const bs = noteScaleOf(m.noteSize)
     const yTopBar = r1(barNoteY - 18.4 * bs)
     const yBottomBar = r1(barNoteY + 4.5 * bs)
+    // adj967：本行开始 —— 先把"上一行的行末小节线"取下来（本行**行首**的序号要挂到它下面），
+    // 并把槽位腾空（本行结束时写下自己的行末线；碎片行不写 ⇒ 再下一行自动退回行首）
+    const prevEndLine = prevRowEndLine
+    prevRowEndLine = null
     let x = config.margin_left
     let slotIndex = slotStart
     // adj393：渐强/渐弱改为「行级事件流 + 共用解析」（layout/hairpins.ts）——
@@ -1321,9 +1383,10 @@ export function layoutScore(
       // 超长小节碎片行：拍级每拍宽（adj35）
       const seg = segs[row.segIdx]
       // adj625：超长小节被拆成多行时，**只有第一片**才算"这个行首就是该小节的开头"——
-      // 序号（若轮到它）落在它的左侧小节线位置（隐藏线 ⇒ 左边距），后续碎片行不再重复画。
+      // 序号（若轮到它）落在它的左侧小节线位置，后续碎片行不再重复画。
+      // adj967：那条"左侧小节线"若是上一行的行末线（有线）就挂到它下面，否则才退到隐藏线（左边距）。
       if (row.noteStart === 0 && isNumberedBar(ord[row.segIdx])) {
-        pushBarNumber(ord[row.segIdx] as number, config.margin_left, yBottomBar, voice, groupIndex)
+        pushRowStartBarNumber(ord[row.segIdx] as number, yBottomBar, voice, groupIndex, prevEndLine)
       }
       const slice = { notes: seg.notes.slice(row.noteStart, row.noteEnd), bar: null }
       const beatsInfo: { dur: number; minDur: number; extra: number }[] = []
@@ -1475,10 +1538,12 @@ export function layoutScore(
     // adj625：**行首那个序号**——行首小节线通常不画（隐藏小节线），序号就放在它的位置下（= 左边距）。
     // 只有「本行第一个算作小节的 seg」正好落在行首时才在此埋点；若它在本行靠后，
     // 说明其左侧小节线是**上一小节的收尾线**（在行内），由那边的埋点负责。
+    // adj967（用户口径）：**能挪就挪** —— 上一行行末那条线就是这一小节的左边界（有线可依），
+    // 所以行首这一档改成挂在它下面；只有确实没有上一行时才留在行首的隐藏线位置。
     {
       const fc = firstCountedSeg(ord, row)
       if (fc === row.start && isNumberedBar(ord[fc])) {
-        pushBarNumber(ord[fc] as number, config.margin_left, yBottomBar, voice, groupIndex)
+        pushRowStartBarNumber(ord[fc] as number, yBottomBar, voice, groupIndex, prevEndLine)
       }
     }
     // adj47：跨行跳房子起点——上一行末的 voltaStart 小节线改画在本行行首
@@ -1985,7 +2050,8 @@ export function layoutScore(
           // 若它已经跨到下一行，则由下一行的"行首埋点"放在隐藏小节线的位置（= 边距线）上。
           {
             const nc = nextCountedSeg(ord, b, row.end)
-            if (nc < row.end && isNumberedBar(ord[nc])) {
+            // adj967b：幽灵末小节（末尾空 seg）不画 —— "后面又没有小节了"（用户口径）
+            if (nc < row.end && isNumberedBar(ord[nc]) && !isGhostTrailingSeg(segs, nc)) {
               pushBarNumber(ord[nc] as number, lineX, yBottomBar, voice, groupIndex)
             }
           }
@@ -2020,6 +2086,11 @@ export function layoutScore(
     finishDyn(x) // 行尾关闭未闭合渐强
     // adj940：本行线位交给下一行（跨组、跨页都不清空）
     prevRowLineX = durRowLineX
+    // adj967：本行的**行末小节线**（下一行若在行首轮到序号，就把方框挂到它下面 —— 见 `pushRowStartBarNumber`）
+    {
+      const lastX = durRowLineX[durRowLineX.length - 1]
+      prevRowEndLine = lastX === undefined ? null : { x: lastX, y: yBottomBar, page: pageIndex }
+    }
     // adj199：返回该行平均每拍宽（撑满行 → 实际均分宽；未撑满行 → 参考宽/自然宽），
     // 供后续行按小节线对齐（adj940 起只在拿不到线位时兜底）
     const totalBeats = beatsInfo.reduce((a, b) => a + b.dur, 0)
@@ -2076,14 +2147,18 @@ export function layoutScore(
     const page = pages[pageIndex]
     // adj627：本组"每小节生效调号"（空间优先路径同样要按当下调号定音高）
     const keysAt = effectiveKeysByGroup(groupIndex, segs)
+    // adj967：本行开始 —— 取下"上一行的行末小节线"给行首序号用，并把槽位腾空（见 `prevRowEndLine`）
+    const prevEndLine = prevRowEndLine
+    prevRowEndLine = null
     const leadingEmpty = row.start < row.end && segs[row.start].notes.length === 0 ? 1 : 0
     // adj625：行首序号（行首小节线通常隐藏 ⇒ 放在它的位置下 = 左边距）；与 `placeMusicRow` 同一口径。
+    // adj967：能挪到上一行行末那条真线下面就挪（用户口径，两处判据同一份实现）。
     // 小节线高度公式与 `placeMusicRow` 一致（基线-18.4×s .. 基线+4.5×s）。
     {
       const yBottomBarLead = r1(yTop + m.noteSize * 1.1 + 4.5 * noteScaleOf(m.noteSize))
       const fc = firstCountedSeg(ord, row)
       if (fc === row.start && isNumberedBar(ord[fc])) {
-        pushBarNumber(ord[fc] as number, config.margin_left, yBottomBarLead, voice, groupIndex)
+        pushRowStartBarNumber(ord[fc] as number, yBottomBarLead, voice, groupIndex, prevEndLine)
       }
     }
 
@@ -2697,7 +2772,8 @@ export function layoutScore(
         // 那个小节在本行内才在此埋点，跨到下一行的由下一行的行首埋点负责。
         {
           const nc = nextCountedSeg(ord, b, row.end)
-          if (nc < row.end && isNumberedBar(ord[nc])) {
+          // adj967b：同上 —— 幽灵末小节不画
+          if (nc < row.end && isNumberedBar(ord[nc]) && !isGhostTrailingSeg(segs, nc)) {
             pushBarNumber(ord[nc] as number, lineX, yBottomBar, voice, groupIndex)
           }
         }
@@ -2730,6 +2806,11 @@ export function layoutScore(
     const dynY = yTop + m.noteSize * 0.3 - (LAYER_GAP + DYN_HALF_H + SLUR_W / 2) * noteScaleOf(m.noteSize)
     for (const s of resolveHairpins(dynEvents, (i) => dynAnchors[i], config.margin_left + BAR_PAD, curX)) {
       page.dynamics.push({ x1: r1(s.x1), x2: r1(s.x2), y: r1(dynY), type: s.type, plus: s.plus })
+    }
+    // adj967：本行的行末小节线（给下一行的行首序号当锚点，见 `pushRowStartBarNumber`）
+    {
+      const lastX = rowLineX[rowLineX.length - 1]
+      prevRowEndLine = lastX === undefined ? null : { x: lastX, y: yBottomBar, page: pageIndex }
     }
     return rowLineX
   }
@@ -2874,6 +2955,13 @@ export function layoutScore(
   const placeVoiceBlock = (unit: Unit, startBar = 1, isLastBlock = false) => {
     const geciSize = config.geci_size
     const sp = spacingFor(config, pageIndex)
+    /**
+     * adj967：多声部块 = 一"行"。它的**块首序号**沿用既有口径（画在"大括号与音符之间"那条空隙里，
+     * 且只在整份谱最开头那个块才画，见下面 `fc === 0` 那处）⇒ **本块不用上一行的行末线**；
+     * 但本块**结束时**要把自己的行末线写进 `prevRowEndLine`，好让紧随其后的那一行
+     * （单声部行或下一个块）在行首轮到序号时能挂过来（与单声部两条路径同口径）。
+     */
+    prevRowEndLine = null
     // adj275：多声部括号占位（括号/注释在页面有效范围、音符内容区右移）；每组占位在 parts 后按注释长度独立计算
     const parts = unit.groups.map(({ groupIndex, group }) => ({
       groupIndex,
@@ -3701,6 +3789,11 @@ export function layoutScore(
       if (fc === 0 && isNumberedBar(ord[0])) {
         pushBarNumber(ord[0] as number, xGap, yBottomTop, parts[mainVi]?.voice ?? 1, parts[mainVi]?.groupIndex ?? 0)
       }
+      /**
+       * adj967：本块（= 一行）的**行末小节线**，写进 `prevRowEndLine` 供紧随其后的行使用 ——
+       * y 取**主声部**那条线的底缘（与 `adj906`"序号挂在主声部小节线下"同一口径；`yBottomTop` 就是它）。
+       */
+      prevRowEndLine = barX.length > 0 ? { x: barX[barX.length - 1] as number, y: yBottomTop, page: pageIndex } : null
     }
     for (let vi = 0; vi < parts.length; vi++) {
       const p = parts[vi]
@@ -3717,7 +3810,8 @@ export function layoutScore(
         // 这根收尾线正是「下一个算作小节的格」的左侧小节线；块首那格由上面的埋点负责。
         if (vi === mainVi) {
           const nc = nextCountedSeg(ord, b, numBars)
-          if (nc < numBars && isNumberedBar(ord[nc])) {
+          // adj967b：同上 —— 幽灵末小节不画（`p` 就是主声部，用它自己的 segs 判"末尾空小节"）
+          if (nc < numBars && isNumberedBar(ord[nc]) && !isGhostTrailingSeg(p.segs, nc)) {
             pushBarNumber(ord[nc] as number, barX[b], yBottomBar, p.voice, p.groupIndex)
           }
         }
