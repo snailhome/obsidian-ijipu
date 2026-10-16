@@ -41,11 +41,13 @@ import { parseInstrumentRef, INSTRUMENT_LIB_NAMES, voiceDefaultInstrumentRef } f
 import {
   computeSegments,
   mainSpans,
+  mainSpansInRange, // adj675：替谱段"替换掉哪几个主旋律音"用它算（拍跨度 → 槽位区间）
   isDurational,
   segmentNoteIndexBase,
   segmentBarIndexBase,
   tpNoteIndexBase, // adj629d：替谱段用源码可推导的 id 命名空间
   SEG_TP_NOTE_ID_BASE,
+  SEG_ID_OPEN_STRIDE, // adj675：按 id 区间收集"某一个 {tp} 段内"的音（见 tpNoteIndexBase）
   SEG_BAR_ID_BASE,
   type DurationalToken, // adj629b：段内音符（连音线配对/墨迹宽用）
   type SegmentInfo, // adj629e：替谱层几何
@@ -4756,6 +4758,61 @@ function buildLyricMaps(lyrics: LyricLine[]): Map<number, LyricChar>[] {
   })
 }
 
+/**
+ * adj675（**用户 2026-10-15 实报**：「2 已经回到主旋律了，已不在替谱范围了，此处的词对齐音符就对错了位置」）：
+ * **把替谱段（`{tp … }`）的音接进"这一遍的发声音序列"**。
+ *
+ * ## 为什么要有这一步
+ *
+ * 替谱段替换掉的**只是它覆盖的那几个主旋律音**（由它的拍跨度决定），而它自己的音数可以不同
+ * ——用户谱面：替谱 `(3/ 2//) (2// 2/) 1/` 有 **5** 个音，只覆盖 **4** 个主旋律音（拍位 8→10）。
+ * 旧口径是"按槽位把字挪到替谱音上、替谱有几个音就占几个槽" ⇒ **多吃一个槽位**：
+ * 本该落在主旋律那个音上的字被抢到替谱最后一个音上，而那个主旋律音**空着没有字**
+ * （实测：红 `2`（槽位 17 / 拍位 10）无字，`曾` 被抢到替谱第 5 音，`经` 顺延到下一个音）。
+ *
+ * ## 新口径（与全局歌词口径同源）
+ *
+ * 歌词的全局口径是「**第 k 个字 = 第 k 个发声音**」（`@` 跳空照占一槽 = 跳过一个**发声音**）。
+ * 那么替谱段的音就该**接进这个序列**、替换掉它覆盖的那几个主旋律音；字仍按槽位对到第 k 个发声音。
+ * 上面那例：发声音序列 = …、替谱 5 个音、主旋律从槽位 17 起的音… ⇒ `曾`（槽位 17）落在替谱第 5 音、
+ * `经`（槽位 18）落回**主旋律槽位 17 那个红 `2`** ✓、其余字依次左移一位 ✓。
+ *
+ * @param slots 主旋律"槽位 → 音"（调用方的 `placed`，与 `spans` 一一对应）
+ * @param tps 该歌词行的替谱段（按锚点槽位升序）：`at` = 锚点槽位、`covered` = 它覆盖的主旋律音数、`notes` = 段内音
+ */
+function spliceTpNotes(
+  slots: (PlacedToken | undefined)[],
+  tps: { at: number; covered: number; notes: PlacedToken[] }[],
+): PlacedToken[] {
+  const out: PlacedToken[] = []
+  let k = 0
+  for (const tp of tps) {
+    const at = Math.min(Math.max(tp.at, 0), slots.length)
+    const covered = Math.max(tp.covered, 0)
+    for (; k < at; k += 1) {
+      const n = slots[k]
+      if (n) out.push(n)
+    }
+    // 它不是空的：替谱自己的音就是这一段要唱的音（有几个唱几个）
+    for (const n of tp.notes) out.push(n)
+    /**
+     * ⚠ **替谱音比它替换掉的主旋律音少**时（`adj658` 的真实谱面就有这种：`{tp 4 音}` 覆盖 5 个主旋律音），
+     * 多出来的那几个主旋律音**仍然是这一段的"字位"**（旧口径的原话是"多出来的字保持原位"）。
+     * 少了这一步，整行的可用字位会凭空少几个 ⇒ 末尾的字没地方放（`adj658` 的 `可做` 就是这么丢的）。
+     */
+    for (let m = at + tp.notes.length; m < at + covered; m += 1) {
+      const n = slots[m]
+      if (n) out.push(n)
+    }
+    k = at + covered
+  }
+  for (; k < slots.length; k += 1) {
+    const n = slots[k]
+    if (n) out.push(n)
+  }
+  return out
+}
+
 function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: PageConfig, keySemitone: number): void {
   /**
    * adj689：**视觉行号索引**（`页|y` → 行号）——与 `layoutScore` 给连音线编号的 `rows` 分组
@@ -5763,66 +5820,11 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
       }
 
       /**
-       * adj629k / adj654（用户报「替谱段对应的歌词显示的乱的」）：
-       * 「有替谱的歌词，相应的歌词部分应对齐替谱的音符，而不是对齐主曲部的音符」。
-       *
-       * 为什么：歌词字是主旋律放置时按**音符 x** 居中挂上去的；替谱层替换了这一段的旋律，
-       * 该遍真正唱的是替谱层的音 ⇒ 落在替谱覆盖区间里的那些字，要跟着**替谱层的音**走。
-       * 只调**本替谱所属的那条歌词行**（`seg.tpLine`）——其余歌词行仍对主旋律。
-       * 字比替谱音多（或少）时只配对前面的 `min(字数, 音数)`，多出来的保持原位。
-       *
-       * ⚠️ adj654 根因：原先按"**拍位覆盖**"配对（`covers(tp音, 主旋律音)` 还要求 `barIndex` 相同），
-       * 而**替谱层的小节号/拍位是它自己的一套坐标系**（`{tp}` 是另起一段、自己的小节从 0 数），
-       * 与主旋律的同名 `barIndex` 只是**数值巧合**、语义无关 ⇒ 配对随机错位：实测
-       * `看` 被配到 515px、`一` 被配到 239px（用户截图里那两个乱字），其余字又有的配、有的没配。
-       * 而 `fallback` 只比 `beatPos` 不比小节 ⇒ 更容易跨小节抓到一个"拍位凑巧更大"的替谱音。
-       *
-       * 现在的口径 = 注释里本来写的那句**「按先后顺序一一对应」**：
-       * 覆盖区间内的字（按拍序，没挂字的音不占位）与替谱音（按源码序）**逐个对齐**。
+       * adj675：替谱段的歌词对齐改成**整组一次算**（见本函数末尾的"替谱段歌词对齐"那段 +
+       * `spliceTpNotes` 的注释）——原来这里"逐段把字挪到替谱音上"的口径已废弃：
+       * 它按"替谱有几个音就占几个槽位"排，替谱音数与它替换掉的主旋律音数不等时会**多吃槽位**，
+       * 把本该落在主旋律音上的字抢走、让那个音空着（用户 2026-10-15 实报的那处错位）。
        */
-      if (isTp && seg.tpLine !== undefined && segNoteOrder.length > 0) {
-        const sameNote = (ly: PlacedLyric, n: PlacedToken): boolean =>
-          ly.id.page === n.id.page && ly.id.group === n.id.group && ly.id.index === n.id.index
-        /**
-         * adj657/adj658（用户报「`{tp …}因为你@有梦可做，` 的 `可做，` 没显示」）：替谱层的歌词
-         * **按歌词槽位直接落到替谱音上**。
-         *
-         * 三条事实（`docs/SYNTAX.md` + `buildLyricMaps`）：
-         *  ① 歌词槽位 = 主旋律的**计时 token 序号**（`@` 跳空**照占一槽**、标点不占槽）；
-         *  ② 替谱段是"**这一段换成另一段**"⇒ 它自己的音符就是这一段的"字位"，
-         *     槽位要从替谱的起点重新按替谱音数排下去（用户谱面：C2 那一行有 30 槽，
-         *     而主旋律该行只有 29 个音符 ⇒ **末尾的 `可做，` 在放置阶段就被丢掉**，
-         *     根本进不了 `page.lyrics`，后面对齐无从下手 ⇒ 截图里"没有显示"）；
-         *  ③ 替谱块里写的 `@` 同样跳过一个**替谱音**。
-         *
-         * 所以这里直接查"该行的槽位表"（`lyricMaps`，与放置歌词用的是同一张表）：
-         * 第 `tpSlot + j` 槽的字 → 替谱的第 `j` 个音；槽位没有字（`@` 跳空）就不放。
-         * 已经放在主旋律音上的那条**搬**过来（同时把 y 校正到本行的歌词行），
-         * 主旋律音符不够、没放下的**新建**一条（挂在替谱音上）⇒ 不再丢字。
-         */
-        const lineMap = buildLyricMaps(group.lyrics)[seg.tpLine]
-        const tpSlot = result.groups[gi]?.lyrics?.[seg.tpLine]?.variants?.[seg.tpVariant ?? 0]?.slot
-        if (lineMap && tpSlot !== undefined && tpSlot >= 0) {
-          // 本歌词行在本视觉行的 y（取该行已放置歌词中最近的一条）
-          const yRef = page.lyrics
-            .filter((c) => c.line === seg.tpLine && c.y > row.y - 1)
-            .sort((a, b) => a.y - b.y)[0]?.y
-          for (let j = 0; j < segNoteOrder.length; j++) {
-            const ch = lineMap.get(tpSlot + j)
-            if (!ch) continue
-            const note = segNoteOrder[j].note
-            const x = r1(note.x + halfDigitW(config.note_size) - config.geci_size / 2)
-            const slotNote = placed[tpSlot + j]?.note
-            const hit = slotNote ? page.lyrics.find((c) => c.line === seg.tpLine && sameNote(c, slotNote)) : undefined
-            if (hit) {
-              hit.x = x
-              if (yRef !== undefined) hit.y = r1(yRef)
-            } else if (yRef !== undefined) {
-              page.lyrics.push({ id: note.id, char: ch, x, y: r1(yRef), line: seg.tpLine, slotW: r1(note.width) })
-            }
-          }
-        }
-      }
 
       // ---- adj629b：段内连音线（`( … )`）----
       // 段内音符自成一组（不参与主旋律的 `gNote` 计数），因此主旋律那套配对看不到它们：
@@ -6093,6 +6095,103 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
            * 既偏紧又可能穿弧线。
            */
           b.voltaYTop = Math.min(cur, r1(inkTWithSlurs - VOLTA_INK_GAP))
+        }
+      }
+    }
+
+    /**
+     * ---- adj675：**替谱段（`{tp … }`）的歌词对齐 = 字跟"这一遍的发声音序列"** ----
+     *
+     * 放在这里（**整组、全部段都放完之后**）而不是段循环里：替谱的音替换掉哪几个主旋律音，
+     * 要按**整个歌词行**的替谱一起算（同一行可以有多处 `{tp}`，后面的字整体左/右移的量会累加）。
+     * 口径、根因与用户原话见 `spliceTpNotes` 的注释。
+     */
+    {
+      const tpSegs = segs.filter((s) => s.type === 'tp' && s.tpLine !== undefined)
+      const lineIdxs = [...new Set(tpSegs.map((s) => s.tpLine as number))].sort((a, b) => a - b)
+      for (const lineIdx of lineIdxs) {
+        const lineMap = buildLyricMaps(group.lyrics)[lineIdx]
+        if (!lineMap || lineMap.size === 0) continue
+        const tps = tpSegs
+          .filter((s) => s.tpLine === lineIdx)
+          .map((s) => {
+            const variant = s.tpVariant ?? 0
+            const anchor = result.groups[gi]?.lyrics?.[lineIdx]?.variants?.[variant]?.slot
+            /** 它替换掉的主旋律音 = 落在它**拍跨度**里的那些音（引擎同一份口径：`mainSpansInRange`） */
+            const covered = mainSpansInRange(spans, s.startBeat, s.startBeat + s.beats)
+            const coveredSlots = covered.map((sp) => spans.indexOf(sp)).filter((k) => k >= 0)
+            const base = tpNoteIndexBase(gi, lineIdx, variant)
+            const notes = pages
+              .flatMap((p) => p.notes)
+              .filter(
+                (n) =>
+                  n.segment?.type === 'tp' &&
+                  n.id.group === gi &&
+                  n.id.index >= base &&
+                  n.id.index < base + SEG_ID_OPEN_STRIDE,
+              )
+              .sort((a, b) => a.id.index - b.id.index)
+            // 锚点 = 解析期算好的"紧跟 `}` 之后那个字"的槽位（与 `docs/SYNTAX.md` §2.12b 同一口径）；
+            // 拿不到就退化为"覆盖区间的第一个槽位"
+            const at = anchor !== undefined && anchor >= 0 ? anchor : (coveredSlots[0] ?? 0)
+            return { at, covered: coveredSlots.length, notes }
+          })
+          .sort((a, b) => a.at - b.at)
+        if (tps.length === 0) continue
+        /** 该遍的**发声音序列**：主旋律音，其中每个替谱段用**它自己的音**替换掉它覆盖的那几个 */
+        const stream = spliceTpNotes(
+          placed.map((p) => p.note),
+          tps,
+        )
+        const sameNote = (ly: PlacedLyric, n: PlacedToken): boolean =>
+          ly.id.page === n.id.page && ly.id.group === n.id.group && ly.id.index === n.id.index
+        /**
+         * ⚠ 上界是 **`stream.length`**（不是主旋律槽位数）：替谱音数可以**多于**它替换掉的主旋律音数
+         * ⇒ 发声音序列比主旋律长，尾部多出来的槽位（歌词行比主旋律音多的那些字）要挂到替谱音上
+         * ——`adj658` 的"末尾 `可做` 被丢掉"就是这一条。
+         */
+        for (let k = 0; k < stream.length; k += 1) {
+          const ch = lineMap.get(k)
+          if (!ch) continue
+          const target = stream[k]
+          if (!target) continue
+          const src = placed[k]
+          const hit = src ? pages[src.page]?.lyrics.find((c) => c.line === lineIdx && sameNote(c, src.note)) : undefined
+          const x = r1(target.x + halfDigitW(config.note_size) - config.geci_size / 2)
+          if (hit) {
+            /**
+             * ⚠️ adj675c（用户实报「词的文本对齐了，但**颜色**没对齐」）：字挪到新音上时
+             * **必须把它的 `id` 一起换掉**。
+             *
+             * `PlacedLyric.id` 就是"这个字属于哪个音"——渲染端 `data-cipos` 由它来（`noteposId(lyric.id)`），
+             * 点谱面跳源码、光标联动、"哪个字对哪个音"的一切都认它。
+             * 只改 `x` 不改 `id` ⇒ 字**画在**替谱音下面、**联动却仍指向**主旋律那个音
+             * （实测：第二行的 `曾` 画在替谱末音上、`id` 还指着主旋律那个音 ⇒ 高亮/联动对不上）。
+             * y 不动：字始终在它那条歌词行上；`slotW` 跟着新音（歌词缩窄判据用它）。
+             */
+            hit.x = x
+            hit.id = target.id
+            hit.slotW = r1(target.width)
+            continue
+          }
+          /**
+           * 放置阶段就被丢掉的字（该行槽位比主旋律音多）：补一条挂到目标音上。
+           *
+           * ⚠️ adj675b（用户实报「第二行的后面漏了一个歌词『双』」）：`y` 必须取**目标音所在那一行**的
+           * 歌词 y，而且要**只认本组**——两个坑：
+           *  ① **歌词行的 `line` 序号是每个曲部各自从 0 数的** ⇒ 只按 `line` 找会匹配到**别的曲部**的
+           *     同号歌词行（实测：真谱里 `双` 被写成 `y=249`，那是上一曲部的行 ⇒ 它"从这一行消失"）；
+           *  ② 一行长歌词会**折成多个视觉行**（用户的谱面就是）⇒ 取"本行的第一条"会把补出来的字扔到
+           *     上一行去。
+           * 所以按「**本组 + 本歌词行 + 在目标音下方最近**」取 y（歌词行总在它上面那行曲部的下方）。
+           */
+          const pg = pages.find((p) => p.notes.includes(target))
+          const yRef = pg?.lyrics
+            .filter((c) => c.line === lineIdx && c.id.group === gi && c.y > target.y - 1)
+            .sort((a, b) => a.y - b.y)[0]?.y
+          if (pg && yRef !== undefined) {
+            pg.lyrics.push({ id: target.id, char: ch, x, y: r1(yRef), line: lineIdx, slotW: r1(target.width) })
+          }
         }
       }
     }
