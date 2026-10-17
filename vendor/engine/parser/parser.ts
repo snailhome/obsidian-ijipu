@@ -27,6 +27,8 @@ import { errAt } from './errors'
 import { inspectJpsConfigLine, JPS_CONFIG_PREFIX } from '../settings'
 // adj594（用户要求）：小节时值校验（按拍号 + `|"p:2/4"` 临时拍号，不符给 warning）
 import { checkMeasureBeats } from '../measures'
+// adj973：连音线配对（唯一一份纯函数；布局改为消费它的结果，见 `parser/slurPairs.ts` 文件头）
+import { pairSlurs } from './slurPairs'
 
 const HEADER_KEYS = new Set(['V', 'B', 'Z', 'D', 'P', 'J', 'Y', 'S'])
 
@@ -391,7 +393,17 @@ export function parseJps(source: string): ParseResult {
   const preliminary: ParseResult = { header, lines, groups, errors }
   errors.push(...checkMeasureBeats(preliminary))
 
-  return { header, lines, groups, errors }
+  /**
+   * adj973（**用户 2026-10-18 实报**）：**连音线配对**从布局搬到这里（唯一一份纯函数），
+   * 并在这一步把"**没画出来的连音线**"变成告警（嵌套超过两层 / 谱末未闭合的 `(` / 多余的 `)`）。
+   *
+   * 为什么要放解析期：告警必须进 `errors` —— 应用问题面板、Obsidian 插件、命令行 `lint`
+   * **三处都只读它**，于是这半边零改动就能看见；布局那边改为**消费** `slurPairs`（不再自己配）。
+   */
+  const pairing = pairSlurs(preliminary)
+  errors.push(...pairing.problems)
+
+  return { header, lines, groups, errors, slurPairs: pairing.pairs, continuationTies: pairing.continuationTies }
 }
 
 /** 解析拍号名义拍数（"4/4" → 4；"6/8 (2/4)" → 6；无法解析返回 null） */

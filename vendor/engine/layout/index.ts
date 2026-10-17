@@ -4146,133 +4146,24 @@ export function layoutScore(
     segNoteKeys.add(`${n.y.toFixed(1)}`)
   }
 
-  const slurPairs: {
-    start: number
-    end: number
-    depth: number
-    tuplet: boolean
-    plus: number
-    minus: number
-    /** adj651：孤立 `)` 延续出来的**跨跳房子连音线**（只画「房子起始小节线 → 首音」这半条右弧，
-     *  不再从上一行行末拉一条左半部——上半条由房子 1 的显式连线已经表达） */
-    houseTie?: boolean
-  }[] = []
-  // 配对规则：先进后出（LIFO 栈式，adj55）—— 最近打开的先闭合，标准括号嵌套；
-  // 栈跨行保留：上一行未闭合的括号延续到下一行配对（跨行两半）
-  const sQueue: { start: number; depth: number; tuplet: boolean; plus: number; minus: number; barSeq: number }[] = []
-  let gNote = 0
-  let lastNote = -1
   /**
-   * adj651（用户要求）：**跨跳房子连音线**。
-   *
-   * `(5/ |["1." 5/)` 这种「起点在小节线**之前**、终点是跳房子**首音**」的连音线，
-   * 在后面的房子里用**孤立 `)`**（前面没有未闭合的 `(`）延续——连回**同一条连音线的起点**
-   * （用户原话：「跳房子 2、结束句和跳房子 1 的第一个 5 都是与跳房子 1 的小节线前面的 5 连音」）。
-   *
-   * 为什么不能只认「上一条已闭合的连音线」：房子之间常夹着别的连线
-   * （本例 `(5 |["1." 5/)` 后面紧跟 `(6/ 6)`），取"最近闭合"会连到 6 上。
-   * 所以只记住**跨过房子起始小节线**那一条的起点。
+   * adj973：**连音线配对已搬到 `parser/slurPairs.ts`**（唯一一份纯函数）——这里是**消费方**，
+   * 不再自己配对。搬走的理由：① "哪几条连音线没画出来"要变成**告警**，而告警得进 `parseResult.errors`
+   * 才能被应用/插件/CLI 同时看见；② 配对与几何无关（纯 token 逻辑），放在解析期更合适；
+   * ③ 两处各写一份必然漂（本项目的老毛病）。
    */
-  let houseTieStart = -1
+  const slurPairs = result.slurPairs ?? []
+
   /**
-   * adj651c：**延续类连音线**的（起点, 终点）音符索引对——随排版结果交给播放端。
-   *
-   * 演奏上它与普通同音连线一样应"并成一个长音"，但它在**演奏顺序**里两端相邻、在**源码顺序**里
-   * 隔着一整段旋律（用户原话：「对于跳房子 2 和结束句，因为跨了小节或行，却是按两个半拍演奏」），
-   * 播放端那套"源码索引相邻 + 同属一弧"的判据认不出来 ⇒ 只能显式带过去。
+   * `adj54`：每个音符索引对应的「音符单位数」——基础 1，增时线每根折算 +1、
+   * 附点按 (1+0.5×附点数) 乘算（如 `1-` = 2、`1.` = 1.5、`1-.` = 3），供自动样式判断连音线长度。
+   * （此前与配对挤在同一个循环里；配对搬走后这里单独走一遍，口径不变。）
    */
-  const continuationTies: { start: number; end: number }[] = []
-  /** 已扫描到的小节线根数（含纯跳房子起点）——判断连音线是否跨过房子起始线 */
-  let barSeq = 0
-  /** 「跳房子首音」音符索引集合 + 各自起始小节线的小节线序号（配对时判定跨线） */
-  const voltaFirstNotes = new Set<number>()
-  const voltaFirstBarSeq = new Map<number, number>()
-  let expectVoltaFirst = false
-  let pendingVoltaBarSeq = -1
-  /**
-   * adj651：登记一条连音线；若它「跨过房子起始小节线且终点是该房子首音」，
-   * 就记下它的起点，供后续房子里的孤立 `)` 延续。
-   */
-  const pushSlurPair = (
-    start: number,
-    end: number,
-    depth: number,
-    tuplet: boolean,
-    plus: number,
-    minus: number,
-    openBarSeq: number,
-    houseTie = false,
-  ) => {
-    slurPairs.push({ start, end, depth, tuplet, plus, minus, houseTie })
-    if (voltaFirstNotes.has(end) && openBarSeq < (voltaFirstBarSeq.get(end) ?? -1)) houseTieStart = start
-  }
-  // adj54：每个音符索引对应的「音符单位数」——基础 1，增时线每根折算 +1、
-  // 附点按 (1+0.5×附点数) 乘算（如 1- =2、1. =1.5、1-. =3），供自动样式判断连音线长度
   const noteUnits: number[] = []
-  for (const line of result.lines) {
-    if (line.kind !== 'music') continue
-    const group = result.groups.find((g) => g.music === line)
-    if (!group) continue
+  for (const group of result.groups) {
     for (const t of group.music.tokens) {
       if (t.kind === 'note' || t.kind === 'rest' || t.kind === 'rhythm') {
-        // 音符锚定栈中所有尚未设置起点的开括号（adj56：同起点嵌套 ——
-        // 如 ((3 2/) 4)：内层与外层连音线都从 3 开始，不能只锚定队尾，
-        // 否则外层括号 start 保持 -1 被丢弃）
-        for (const s of sQueue) {
-          if (s.start === -1) s.start = gNote
-        }
-        // adj651：紧跟跳房子起始小节线的第一个音符 = 该房子首音（供跨线判定）
-        if (expectVoltaFirst) {
-          voltaFirstNotes.add(gNote)
-          voltaFirstBarSeq.set(gNote, pendingVoltaBarSeq)
-          expectVoltaFirst = false
-        }
-        lastNote = gNote
-        // adj54：记录单位数（休止符/节奏符同样按增时线/附点折算）
         noteUnits.push((1 + t.augmentCount) * (1 + 0.5 * t.dots))
-        gNote++
-      } else if (t.kind === 'barline') {
-        // adj651：只需数根数与识别房子起始——连音线跨线判定用
-        barSeq++
-        if (t.voltaStart) {
-          pendingVoltaBarSeq = barSeq
-          expectVoltaFirst = true
-        }
-      } else if (t.kind === 'slur') {
-        if (t.dir === 'open') {
-          sQueue.push({ start: -1, depth: sQueue.length, tuplet: t.tuplet === true, plus: t.plus ?? 0, minus: t.minus ?? 0, barSeq })
-        } else {
-          // adj55：先进后出 —— pop 最近打开的开括号；栈跨行保留（未闭合延续到后续行）
-          const s = sQueue.pop()
-          // adj321 连接点规则：连音线至少连接 2 个音符。
-          // 「(X)」开+一个音符+关（pop 出的开括号为退化 start===lastNote），且栈内还有更早未闭合的
-          // 开括号（前方有未结束连音）时，X 是**连接点**——前一连音终止于 X、并以 X 为起点开启新连音。
-          // 用例：(1 (2) 3) → 1连到2(终止) + 2连到3(开始)，两条；而 (1(2 3)) / (1 (2 3) 4) 的
-          // (2 3) 是多音符内层 → 真嵌套（1→3外层 + 2→3内层 / 1→4 + 2→3）。
-          // adj321b：连接点检测**不受 depth<2（adj91 渲染层数限制）约束**——X 是明确的连音语义，
-          // 即使嵌套在深层括号内也应终止前一连音 + 起新连音（depth 取被终止连音层级，保持可渲染）。
-          // 否则普通退化对（如独立 (2)，前面无连音）走 adj137 分割；普通配对受 depth<2（adj91）限制。
-          if (s && s.start !== -1 && lastNote >= s.start) {
-            if (s.start === lastNote && sQueue.length > 0) {
-              // 连接点 X：终止栈内前一个未闭合连音（prev）于 X，并以 X 为起点重开新连音
-              const prev = sQueue.pop()
-              if (prev && prev.start !== -1 && lastNote >= prev.start) {
-                pushSlurPair(prev.start, lastNote, prev.depth, prev.tuplet, prev.plus, prev.minus, prev.barSeq)
-              }
-              // 新连音从 X 起，层级取被终止的 prev（断开嵌套，保持可渲染）
-              sQueue.push({ ...s, start: lastNote, depth: prev ? prev.depth : s.depth })
-            } else if (s.depth < 2) {
-              // 普通配对（受 adj91 depth<2 渲染限制）
-              pushSlurPair(s.start, lastNote, s.depth, s.tuplet, s.plus, s.minus, s.barSeq)
-            }
-          } else if (!s && houseTieStart >= 0 && lastNote > houseTieStart) {
-            // adj651：孤立 `)`（前面没有未闭合的连音线）= **延续那条跨跳房子的连音线**——
-            // 一律连回它的起点（不改起点 → 跳房子 2 / 结束句 / 跳房子 1 三条共用同一起音）
-            pushSlurPair(houseTieStart, lastNote, 0, false, 0, 0, barSeq, true)
-            // adj651c：登记给播放端（同音连线要并成一个长音，见 types.ts 的 `continuationTies`）
-            continuationTies.push({ start: houseTieStart, end: lastNote })
-          }
-        }
       }
     }
   }
@@ -4833,7 +4724,8 @@ export function layoutScore(
 
   const configKey = JSON.stringify(config)
   // adj651c：延续类连音线（跳房子孤立 `)`）随排版结果交给播放端——演奏上要并成一个长音
-  return { pages, config, configKey, continuationTies }
+  // adj973：这份清单由解析期的 `pairSlurs()` 一并产出（`result.continuationTies`），布局只是转交
+  return { pages, config, configKey, continuationTies: result.continuationTies ?? [] }
 }
 
 /**

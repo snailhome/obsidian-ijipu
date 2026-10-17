@@ -510,6 +510,23 @@ export interface MusicGroup {
   startIndex: number
 }
 
+/**
+ * adj973：**一条成对的连音线**（`parser/slurPairs.ts` 配出来的；索引是组内发声音符序号）。
+ *
+ * 定义放在这里（而不是那个模块里）：它是**数据形状**，且 `ParseResult` 要引用它
+ * ——反过来从 `types.ts` 去 import 会绕成一个环。
+ */
+export interface SlurPair {
+  start: number
+  end: number
+  depth: number
+  tuplet: boolean
+  plus: number
+  minus: number
+  /** `adj651`：孤立 `)` 延续出来的跨跳房子连音线（只画「房子起始小节线 → 首音」半条右弧） */
+  houseTie?: boolean
+}
+
 export interface ParseResult {
   header: Header
   /** 全部源码行（含空行/注释，保持顺序与行号一致） */
@@ -517,6 +534,15 @@ export interface ParseResult {
   /** 曲词分组（按出现的顺序） */
   groups: MusicGroup[]
   errors: ParseError[]
+  /**
+   * adj973：**连音线配对结果**（唯一一份，定义在 `parser/slurPairs.ts`）。
+   *
+   * 为什么放在解析结果上：配对是**纯 token 逻辑**（与几何无关），而"哪几条连音线没画出来"
+   * 这类告警必须进 `errors` 才能被应用问题面板 / Obsidian 插件 / 命令行 `lint` **同时**看见；
+   * 布局只**消费**它（不再自己配对，避免同一口径两处实现漂开）。
+   */
+  slurPairs?: SlurPair[]  /** adj973：延续类连音线（跨跳房子的孤立 `)`）的（起点, 终点）——布局转交给播放端 */
+  continuationTies?: { start: number; end: number }[]
 }
 
 // ============================================================
