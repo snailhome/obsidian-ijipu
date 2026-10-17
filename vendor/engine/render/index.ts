@@ -41,6 +41,8 @@ import {
   TUPLET_NUM_W_RATIO,
   TUPLET_LABEL_PAD,
   GRACE_BEAM_GAP,
+  // adj980（用户口径）：第一条减时线 = 主音符墨迹高的 2/3 处
+  GRACE_BEAM_TOP_RATIO,
   GRACE_LINE_W,
   // adj632b：倚音记号的尺寸尺子与数字墨迹度量（渲染与布局同源）
   markFontSize,
@@ -738,7 +740,7 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
   //  ① 倚音字号 = 主音符 × 0.5（adj105 由 0.4 调大），**加粗**（adj105，与主音符粗体一致）；
   //  ② 倚音减时线 = 实际时值 +1 条（2[3] → 1 条、2[3/] → 2 条），线**更细**（0.6）、
   //     间距固定 1.2px（adj100 由 1.8px 减小）；
-  //  ③ 第一条减时线与主音符文本上端对齐（= mainTop，adj100）；数字底距首条线 2px，
+  //  ③ 第一条减时线落在「主音符**墨迹高的 2/3** 处」（adj980，用户口径；此前是"与主音符文本上端对齐"）；
   //     adj101 数字整体下移 1.5px（数字底距线 0.5px）；
   //  ④ 低八度点紧贴该音符最后一条减时线下方，间距规则同主音符
   //     （线底 + LAYER_GAP×s + DOT_R×s = 圆心，层内点距 INNER_GAP×s，adj101）；
@@ -764,10 +766,23 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
     // （与布局端同一份几何，见 spaceLayout.ts）
     const { offs: gOffs, leftExt0: gLeftExt, width: gGroupW, gSize, gW } = graceSlotLayout(gn.notes, size)
     const gs = gSize / 18 // 倚音缩放因子（高低音点/间距随倚音字号缩放）
-    const mainTop = y - size * DIGIT_HEIGHT_RATIO // 主音符文本上端（adj100 = 第一条减时线位置）
-    // ③ 数字底 = 首条减时线上方 0.5×s（adj101 下移 1.5px 后；间距随字号等比）
-    //    基线 = mainTop - 0.5×s - 字号/9（字号/9 = 2×gs，即数字底到基线的 descender）
-    const gBaseY = mainTop - 0.5 * s - gSize / 9
+    /**
+     * adj980（**用户 2026-10-18 口径**）：「倚音的减时线，第一条与主音符数字上沿同高 143.9：
+     * **调整为 2/3 主音符高**」。
+     *
+     * 口径：第一条减时线的 y = `基线 − DIGIT_HEIGHT_RATIO × 字号 × 2/3`
+     * （`DIGIT_HEIGHT_RATIO × 字号` 就是主音符数字的墨迹高 ⇒ "2/3 主音符高"）。
+     * 换句话说：相对以前"与数字上沿同高"**下移 1/3 个数字高**（13 号时 143.9 → 147.37）。
+     */
+    const beamTop = y - size * DIGIT_HEIGHT_RATIO * GRACE_BEAM_TOP_RATIO
+    /**
+     * ③ 数字底 = 首条减时线上方 0.5×s（adj101 下移 1.5px 后；间距随字号等比）
+     *    基线 = beamTop - 0.5×s - 字号/9（字号/9 = 2×gs，即数字底到基线的 descender）
+     *
+     * ⚠ adj980：这里以前锚 `mainTop`（主音符数字上沿）—— 减时线下移后必须跟着改成锚 `beamTop`，
+     * 否则那条线会**横穿倚音数字的墨迹**（二者是"数字在上、线在其下方 0.5×s 处"的固定关系）。
+     */
+    const gBaseY = beamTop - 0.5 * s - gSize / 9
     // adj396：后倚音的锚点（组左缘基准 / 弧线终点）——尾部倚音取「末个时值元素右缘」
     const tailGrace = graceAtTail(t)
     let graceAnchorX = x + digitW
@@ -796,10 +811,9 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
     // 组范围（数字区）：组首 x、组尾 x
     const gx1 = Math.min(...gxs)
     const gx2 = Math.max(...gxs) + gW
-    // ② 减时线参数：首条 = mainTop（与主音符文本上端对齐），间距 GRACE_BEAM_GAP×s（adj103 等比）
+    // ② 减时线参数：首条 = `beamTop`（adj980 起 = 主音符墨迹高的 2/3 处），间距 GRACE_BEAM_GAP×s（adj103 等比）
     const maxDim = Math.max(0, ...gn.notes.map((g) => g.diminishCount + 1))
     const beamGap = GRACE_BEAM_GAP * s
-    const beamTop = mainTop
     const lineHalf = (GRACE_LINE_W * s) / 2 // 减时线/弧线半线宽（线底 = 线中心 + 半线宽）
     for (let gi = 0; gi < gn.notes.length; gi++) {
       const g = gn.notes[gi]

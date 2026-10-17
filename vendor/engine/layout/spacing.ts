@@ -326,7 +326,9 @@ export const BAR_NUMBER_PAD = 1.5 * BAR_NUMBER_SCALE
 export const BAR_NUMBER_STROKE = 0.8 * BAR_NUMBER_SCALE
 /** 序号与**倚音音符**同字号，再整体 ×3/4：`max(6×s, note_size × 0.5) × 0.75` */
 export const barNumberFontSize = (noteSize: number): number =>
-  Math.max(6 * noteScaleOf(noteSize), noteSize * GRACE_SIZE_RATIO) * BAR_NUMBER_SCALE
+  // adj980：序号字号**自己一份比例**（`BAR_NUMBER_SIZE_RATIO` = 0.5），不再借 `GRACE_SIZE_RATIO`
+  // —— 倚音字号已按用户口径调到 2/3，序号不跟着放大。
+  Math.max(6 * noteScaleOf(noteSize), noteSize * BAR_NUMBER_SIZE_RATIO) * BAR_NUMBER_SCALE
 /** 外框高度（含线宽，px） */
 export const barNumberBoxH = (noteSize: number): number =>
   barNumberFontSize(noteSize) + BAR_NUMBER_PAD * 2 + BAR_NUMBER_STROKE
@@ -437,13 +439,44 @@ export const DOT_AFTER_DIGIT_GAP = (noteSize: number) => 0.2 * noteScaleOf(noteS
 
 // ---- 倚音（adj103：以下设计值均为 18 号字基准，实际使用一律 ×主音符缩放因子 s） ----
 /** 倚音字号与主音符字号比值（adj105：0.4 → 0.5） */
-export const GRACE_SIZE_RATIO = 0.5
+/**
+ * 倚音数字字号 = 主音符字号 × 该比例。
+ *
+ * adj105：0.4 → **0.5**；
+ * **adj980（用户 2026-10-18 口径）**：「倚音字号 6.50（= 0.5 × 主音符）→ 调整为 **2/3 × 主音符**」。
+ * ⚠ 这条比例**只服务倚音**：方框小节序号以前"借"它取字号，现在拆成独立的
+ * `BAR_NUMBER_SIZE_RATIO`（保持 0.5 不变），免得改倚音把序号一起放大。
+ */
+export const GRACE_SIZE_RATIO = 2 / 3
+/**
+ * adj980（**用户 2026-10-18 口径**）：「倚音的减时线，第一条与主音符数字上沿同高…**调整为 2/3 主音符高**」。
+ *
+ * 口径：第一条减时线落在「主音符**数字墨迹高**（`DIGIT_HEIGHT_RATIO × 字号`）的 **2/3** 处，自基线往上量」。
+ * `2/3` ⇒ 比原先"与数字上沿同高"**下移 1/3 个数字高**（13 号时 143.9 → 147.37，下移 3.47px）。
+ *
+ * ⚠ 减时线下来了，**倚音数字也得跟着下移**（否则线会横穿数字墨迹）——
+ * 渲染端把数字基线挂在 `beamTop − 0.5×s − 字号/9`（见 `render/index.ts` 的倚音块）。
+ */
+export const GRACE_BEAM_TOP_RATIO = 2 / 3
+/**
+ * adj980：**方框小节序号**的字号比例（相对音符字号）。
+ *
+ * 以前它"借" `GRACE_SIZE_RATIO`（两者都是"小一号的数字"，同源取值 0.5）；
+ * adj980 把倚音调到 2/3 之后，序号**不跟着变**（用户只要求改倚音）⇒ 拆成独立常量保持 0.5。
+ */
+export const BAR_NUMBER_SIZE_RATIO = 0.5
 /** 倚音数字槽宽与字号比值（同数字槽宽比例） */
 export const GRACE_SLOT_RATIO = 0.62
 /** 倚音多音符（≥2 个）时数字间占宽与字号比值（adj103：缩小多音符间距，0.62 → 0.5） */
 export const GRACE_SLOT_RATIO_MULTI = 0.5
-/** 倚音减时线间距设计值（px，adj100 由 1.8 减小；实际 ×s） */
-export const GRACE_BEAM_GAP = 1.2
+/**
+ * 倚音减时线**相邻两条**之间的间距（设计值 px，实际 `× s`，`s = 字号/18`）。
+ *
+ * adj100 由 1.8 减到 1.2；
+ * **adj981（用户 2026-10-18 口径）**：「倚音的减时线，**第二条间距 = 1.5×s**」⇒ 1.2 → **1.5**。
+ * （13 号时：1.5 × 0.722 = **1.083px**；18 号时 = 1.5px。）
+ */
+export const GRACE_BEAM_GAP = 1.5
 /** 倚音减时线/连接弧线线宽设计值（px，adj97；实际 ×s） */
 export const GRACE_LINE_W = 0.6
 /**
