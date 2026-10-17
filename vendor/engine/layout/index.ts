@@ -2825,7 +2825,22 @@ export function layoutScore(
             if (n.hasDot) {
               const g = Math.max(0, (noteElW - n.noteBodyW - n.dotBodyW) / 3)
               blockX = curX + g
-              dotCX = curX + g + n.noteBodyW + g + n.dotBodyW / 2
+              /**
+               * adj982（**用户截图实报**）：替谱段里的附点**偏靠右、贴上 `&ykh` 的右括号**。
+               *
+               * 根因：这里把格内余白**三等分**（左一份、数字与附点之间一份、右一份）——
+               * 格子一宽（段层为对齐主旋律常被撑开），"数字与附点之间"那份就跟着变大，
+               * 附点被推到格子右端，紧挨着后面那个括号 ✗。
+               *
+               * 口径：附点**属于数字**，必须贴紧数字右缘 —— 与**主旋律**同一个间隙函数
+               * `DOT_AFTER_DIGIT_GAP`（主旋律那条路见上面 `space.hasDot` 的分支）。
+               * ⚠ 只挪**附点**、不挪数字（`blockX` 保持原公式）：
+               *    数字的 x 必须与主旋律的同拍音符**逐个相等**（`adj435`/AL1/O4 那条对齐律），
+               *    多出来的余白就留在附点与格子右端之间（后一个元素自然离得更远）。
+               * `Math.min` 兜住"格子很紧"的情形：贴紧数字若比原位更靠右，就仍取原位（不许越出本格）。
+               */
+              const dotGap982 = DOT_AFTER_DIGIT_GAP(m.noteSize)
+              dotCX = Math.min(curX + g + n.noteBodyW + g + n.dotBodyW / 2, blockX + n.noteBodyW + dotGap982 + n.dotBodyW / 2)
             } else {
               blockX = curX + Math.max(0, (noteElW - n.noteBodyW) / 2)
             }
@@ -4509,7 +4524,7 @@ export function layoutScore(
         row: rowA,
         rowTop: r1(rows[rowA].y),
       })
-    } else if (rowB === rowA + 1 || sp.houseTie) {
+    } else if (rowB === rowA + 1 || sp.houseTie || sp.wrap) {
       // 相邻行：上一行左半部（开始 → 行末小节线）、下一行右半部（边距 → 结束）；
       // 行首/行末均为连音符最高点；相隔多行视为误输入，不渲染
       //
@@ -5912,16 +5927,33 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
            */
           const gridX = (beatAbs: number): number =>
             xContent0 + (mapX(beatAbs) - segNaturalXStart) * segScale
-          const parts: { beats: number; el: 'note' | 'aug' | 'dot' }[] = [{ beats: bodyDur, el: 'note' }]
+          /**
+           * adj982（**用户截图实报**）：替谱段 `{tp …}` 里**附点偏靠右、贴上 `&ykh` 右括号**。
+           *
+           * 根因：下面给各分量取 x 时**一律走拍位栅格** `gridX(该分量的拍位)` —— 附点那 0.5 拍
+           * 落在数字之后、被段层的拉伸推开，于是离数字越来越远，最后顶到右括号上 ✗。
+           *
+           * 口径：**附点属于数字**，必须贴紧数字右缘 —— 与主旋律同一个间隙
+           * `DOT_AFTER_DIGIT_GAP`（主旋律见上面 `space.hasDot` 那一段）。
+           * 其余分量（增时线）照旧走栅格：它们本来就该落在各自的拍位上。
+           * ⚠ 只改**附点**这一种分量，`bx0`/`bx1` 与段层对齐口径**一点不动**
+           * （段层与主旋律的同拍左缘对齐是 `adj435`/AL1/O4 那条铁律）。
+           */
+          const dotW982 = dotBodyW(ns) * Math.max(1, t.dots)
+          const dotHugX982 = bx0 + digitSlotW(ns) + DOT_AFTER_DIGIT_GAP(ns) + dotW982 / 2
+          const parts: { beats: number; el: 'note' | 'aug' | 'dot'; hugX?: number; hugW?: number }[] = [
+            { beats: bodyDur, el: 'note' },
+          ]
           for (let a = 0; a < sp.augCount; a++) parts.push({ beats: sp.augDur, el: 'aug' })
-          if (sp.dotDur > 0) parts.push({ beats: sp.dotDur, el: 'dot' })
+          if (sp.dotDur > 0) parts.push({ beats: sp.dotDur, el: 'dot', hugX: dotHugX982, hugW: dotW982 })
           let off = 0
           for (let pi = 0; pi < parts.length; pi++) {
             const pt = parts[pi]
             const isLast = pi === parts.length - 1
             // 首分量用块左缘 `bx0`；其余用拍位栅格。末分量右缘仍取 `bx1`（它可能被钳到段内容右界）
-            const xsRaw = pi === 0 ? bx0 : gridX(envStart + beatAt + off)
-            const xeRaw = isLast ? bx1 : gridX(envStart + beatAt + off + pt.beats)
+            const xsRaw = pi === 0 ? bx0 : pt.hugX !== undefined ? pt.hugX : gridX(envStart + beatAt + off)
+            const xeRaw =
+              pt.hugW !== undefined ? xsRaw + pt.hugW : isLast ? bx1 : gridX(envStart + beatAt + off + pt.beats)
             // 映射在段内容之外时会越界/反序 ⇒ 钳回 [bx0, bx1] 且保证非递减
             const xs = Math.min(Math.max(xsRaw, bx0), bx1)
             const xe = Math.min(Math.max(xeRaw, xs), bx1)

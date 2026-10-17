@@ -43,6 +43,14 @@ export interface SlurPairing {
 
 /** 「正确写法」提示（告警里跟着给出，别只告诉用户"哪里错了"） */
 const HINT_PAIRED = '`(` 与 `)` 必须成对；连音线至少要连接 **2 个音符**，如 `(1 2)`'
+/** adj983：`|:` 之后那个 `)` —— 既是"反复前那条 `(`"的闭合，也是"反复体末尾那条 `(`"跳回的闭合 */
+interface WrapCand {
+  note: number
+  line: number
+  col: number
+  barSeq: number
+  used?: boolean
+}
 const HINT_DEPTH = '连音线**最多嵌套两层**；本条在第三层及更深处、因此没有绘制。' +
   '常见原因是**前面多写了一个 `(`**（会把内层的线整体挤到第三层）——请检查括号是否配对'
 const HINT_STRAY_CLOSE = '多了一个 `)`（前面没有未闭合的 `(`）。' +
@@ -103,6 +111,29 @@ export function pairSlurs(result: ParseResult): SlurPairing {
   let houseTieStart = -1
   /** 已扫描到的小节线根数（含纯跳房子起点）——判断连音线是否跨过房子起始线 */
   let barSeq = 0
+  /**
+   * adj983（**用户 2026-10-18 实报**）：**反复跳回**的连音线。
+   *
+   * 用户原话：「上例中如图，最后一个 Q 行的 `(6/[5/]` 因为 `:|` 再跳回 `|:` 接着第一个 Q 行的
+   * `6/)`，因此 `(6/[5/]` 的连音线还是有效的跨行连音线，还是要画，且接到第一个 Q 行」。
+   *
+   * 线性扫描下这一对是**反的**：先遇到首行 `|: 6/)` 那个 `)`（栈为空 ⇒ 以前判"多余"），
+   * 再遇到末行 `(6/[5/]` 的 `(`（到谱末仍未闭合 ⇒ 以前判"没配对"）。两条告警都发错了。
+   *
+   * 规则：孤立 `)` 若出现在**反复起点 `|:` 之后**，并且它后面**还有**一个未闭合的 `(`、
+   * 那个 `(` 之后又有**反复终点 `:|`** ⇒ 它们是同一条连音线（唱到末尾跳回开头）。
+   * 于是：
+   *   · 记下这类"候选孤立 `)`"（每个 `|:` 之后只认**第一个**），暂不报警；
+   *   · 谱末再把这个候选取用掉：配成 `wrap: true` 的对（`start` = 末行的音 > `end` = 首行的音），
+   *     被用掉的那条 `)` 与那个 `(` **都不再报警**，其余照旧报。
+   */
+  const strayCloses: { note: number; line: number; col: number; usedForWrap?: boolean; cand?: WrapCand }[] = []
+  /** `|:` 之后遇到的**第一个 `)`** —— "跳回"那条连音线的闭合（可能同时闭合了反复前那条 `(`） */
+  const wrapCands: WrapCand[] = []
+  /** 见过 `|:`（反复起点）⇒ 下一个孤立 `)` 可能是"跳回"的闭合 */
+  let repeatStartArmed = false
+  /** 最近一次见到 `:|` / `:|:` 时的小节线序号（配对时判定"那个 `(` 之后确实有反复终点"） */
+  let lastRepeatEndBarSeq = -1
   /** 「跳房子首音」音符索引集合 + 各自起始小节线的小节线序号（配对时判定跨线） */
   const voltaFirstNotes = new Set<number>()
   const voltaFirstBarSeq = new Map<number, number>()
@@ -113,6 +144,18 @@ export function pairSlurs(result: ParseResult): SlurPairing {
    * `adj651`：登记一条连音线；若它「跨过房子起始小节线且终点是该房子首音」，
    * 就记下它的起点，供后续房子里的孤立 `)` 延续。
    */
+  /**
+   * adj984（**用户 2026-10-18 追问**）：「这 4 个告警的连音线都是正确的，你是怎么计算为 3 层的？」
+   *
+   * 查下来：`depth` 原先取"**打开那一刻**栈里还有几个 `(`"。而"等跳回闭合"的那条 `(`（`(6/[5/]` 之后
+   * 就是 `:|`）会一直挂在栈上直到谱末 ⇒ **后面所有括号的深度都被它顶高一层**，于是两层的写法被算成三层 ✗。
+   *
+   * 正确口径：深度 = **实际有多少条别的连音线把这一段包在里面**（包含关系），与"谁先挂在栈上"无关。
+   * 所以这里先照常收对（深度是临时值），**谱末统一按包含关系重算**，再据此判"超过两层"。
+   *   · `houseTie`（跳房子延续线）与 `wrap`（反复跳回）是"接续"类，**不参与包含计数、深度固定 0**；
+   *   · 退化对（`start === end`，如 `(3)`）不是一层，不计。
+   */
+  const anchorsOf = new Map<SlurPair, { line: number; col: number }>()
   const pushSlurPair = (
     start: number,
     end: number,
@@ -122,8 +165,11 @@ export function pairSlurs(result: ParseResult): SlurPairing {
     minus: number,
     openBarSeq: number,
     houseTie = false,
+    anchor?: { line: number; col: number },
   ): void => {
-    pairs.push({ start, end, depth, tuplet, plus, minus, houseTie })
+    const p: SlurPair = { start, end, depth, tuplet, plus, minus, houseTie }
+    pairs.push(p)
+    if (anchor) anchorsOf.set(p, anchor)
     if (voltaFirstNotes.has(end) && openBarSeq < (voltaFirstBarSeq.get(end) ?? -1)) houseTieStart = start
   }
 
@@ -147,6 +193,9 @@ export function pairSlurs(result: ParseResult): SlurPairing {
       } else if (t.kind === 'barline') {
         // `adj651`：只需数根数与识别房子起始——连音线跨线判定用
         barSeq++
+        // adj983：反复起点 / 终点（`|:` 之后那个孤立 `)` 可能是"跳回"的闭合）
+        if (t.type === '|:' || t.type === ':|:') repeatStartArmed = true
+        if (t.type === ':|' || t.type === ':|:') lastRepeatEndBarSeq = barSeq
         if (t.voltaStart) {
           pendingVoltaBarSeq = barSeq
           expectVoltaFirst = true
@@ -165,6 +214,19 @@ export function pairSlurs(result: ParseResult): SlurPairing {
             col,
           })
         } else {
+          /**
+           * adj983：**`|:` 之后遇到的第一个 `)`** 记成"跳回闭合"的候选 —— **哪怕它同时也闭合了
+           * 反复之前那条 `(`**（用户补全原谱后的真实情形：前奏行末尾的 `(6/[5/]` 与反复体末尾的
+           * `(6/[5/]` **共用** `|: 6/)` 这个 `)`；线性配对只会给前者，后者就被判"没闭合"、
+           * 还会把后面 2. 房子里的括号顶到第三层、连带不画）。
+           */
+          const at983 = colOf(music.raw, t)
+          let cand983: WrapCand | undefined
+          if (repeatStartArmed) {
+            cand983 = { note: lastNote, line: music.pos.line, col: at983, barSeq }
+            wrapCands.push(cand983)
+            repeatStartArmed = false
+          }
           // `adj55`：先进后出 —— pop 最近打开的开括号；栈跨行保留（未闭合延续到后续行）
           const s = sQueue.pop()
           if (s && s.start !== -1 && lastNote >= s.start) {
@@ -172,25 +234,22 @@ export function pairSlurs(result: ParseResult): SlurPairing {
               // `adj321` 连接点：终止栈内前一个未闭合连音（prev）于 X，并以 X 为起点重开新连音
               const prev = sQueue.pop()
               if (prev && prev.start !== -1 && lastNote >= prev.start) {
-                pushSlurPair(prev.start, lastNote, prev.depth, prev.tuplet, prev.plus, prev.minus, prev.barSeq)
+                pushSlurPair(prev.start, lastNote, prev.depth, prev.tuplet, prev.plus, prev.minus, prev.barSeq, false, {
+                  line: prev.line,
+                  col: prev.col,
+                })
               }
               // 新连音从 X 起，层级取被终止的 prev（断开嵌套，保持可渲染）
               sQueue.push({ ...s, start: lastNote, depth: prev ? prev.depth : s.depth })
-            } else if (s.depth < 2) {
-              // 普通配对（受 `adj91` 的 `depth < 2` 渲染限制：最多两层嵌套）
-              pushSlurPair(s.start, lastNote, s.depth, s.tuplet, s.plus, s.minus, s.barSeq)
             } else {
               /**
-               * adj973（**用户 2026-10-18 实报**）：**嵌套超过两层 ⇒ 不绘制**，此前**静默**。
-               * 本轮用户那份谱就是这个下场（上一行多了一个 `(` ⇒ 内层两条落到第三层）。
-               * ⇒ 现在发一条 `warning`，把"哪一行哪个 `(` 没画出来"直接说给用户听。
+               * 普通配对。**一律先收下**，深度留给谱末按"包含关系"重算（adj984）——
+               * 以前在这里按"打开时的栈长度"判 `depth < 2`，会被那条"等跳回闭合、整段挂在栈上"的
+               * `(` 顶高一层，把两层的正确写法误判成三层。
                */
-              problems.push({
+              pushSlurPair(s.start, lastNote, s.depth, s.tuplet, s.plus, s.minus, s.barSeq, false, {
                 line: s.line,
                 col: s.col,
-                message: '这条连音线嵌套超过两层（最多两层），没有绘制',
-                severity: 'warning',
-                hint: HINT_DEPTH,
               })
             }
           } else if (!s && houseTieStart >= 0 && lastNote > houseTieStart) {
@@ -204,15 +263,11 @@ export function pairSlurs(result: ParseResult): SlurPairing {
              * adj973（ⓑ，用户要求）：**多出来的 `)`** —— 前面没有未闭合的 `(`（也不是跳房子延续线）。
              * 此前同样静默：整条连线凭空消失，而用户只能盯着源码找那个多余的括号。
              * 锚点取**这个 `)` 自己**（它才是多余的那个）。
+             *
+             * adj983：**先不报** —— 它可能正是"反复跳回"那条连音线的闭合（见 `wrapCands`），
+             * 留到谱末统一判定：被用掉的不报，没被用掉的才报。
              */
-            const at = colOf(music.raw, t)
-            problems.push({
-              line: music.pos.line,
-              col: at,
-              message: '多了一个 `)`（前面没有未闭合的 `(`）',
-              severity: 'warning',
-              hint: HINT_STRAY_CLOSE,
-            })
+            strayCloses.push({ note: lastNote, line: music.pos.line, col: at983, cand: cand983 })
           }
         }
       }
@@ -220,8 +275,112 @@ export function pairSlurs(result: ParseResult): SlurPairing {
   }
 
   /**
+   * adj983（**用户 2026-10-18 实报**）：把"**反复跳回**"那条配掉。
+   *
+   * 用户补全原谱后的真实情形：`|:` 后面那个 `)` **同时**是两条 `(` 的闭合 ——
+   *   · 反复之前那行末尾的 `(6/[5/]`（线性配对已经用它闭合了 ✓ 画成相邻两行的跨行线）；
+   *   · 反复体末尾的 `(6/[5/]`（跳到 `|:` 之后接着唱 ⇒ 也用这个 `)`）。
+   * 所以这里**允许候选已被线性配对用过**（`cand.used` 只表示"这条候选已被某条 wrap 用掉"，
+   * 不表示"这个 `)` 已经闭过别人"）。
+   *
+   * 判据（宁可少配、不可错配）：
+   *  ① 有未用的 `|:` 之后 `)` 候选；
+   *  ② 栈里还有未闭合、已锚到音符、且**在候选之后**（`barSeq >= cand.barSeq`）的 `(` —— 取最内层；
+   *  ③ 那个 `(` 之后**确实有反复终点**（`lastRepeatEndBarSeq >= open.barSeq`）——
+   *     没有真的跳回去，这种写法仍然算错、要报。
+   */
+  for (const cand of wrapCands) {
+    if (cand.used) continue
+    let openIdx = -1
+    for (let k = sQueue.length - 1; k >= 0; k--) {
+      const s = sQueue[k]
+      if (s.start !== -1 && s.barSeq >= cand.barSeq && s.barSeq <= lastRepeatEndBarSeq) {
+        openIdx = k
+        break
+      }
+    }
+    if (openIdx < 0) continue
+    const open = sQueue[openIdx]
+    sQueue.splice(openIdx, 1)
+    cand.used = true
+    // 这个 `)` 若本来被判"多余"，也不许再报 —— 它就是这条跳回连音线的闭合
+    for (const c of strayCloses) if (c.cand === cand) c.usedForWrap = true
+    pairs.push({
+      start: open.start,
+      end: cand.note,
+      depth: 0,
+      tuplet: open.tuplet,
+      plus: open.plus,
+      minus: open.minus,
+      wrap: true,
+    })
+  }
+
+  /**
+   * adj984：**按"实际包含关系"重算深度**，并据此判"超过两层"。
+   *
+   * 深度 = 有多少条**别的**连音线把这一段包在里面（`q.start <= p.start && p.end <= q.end` 且区间不同）：
+   *  · 两层写法（外 `(` 包住内 `(`）⇒ 内层深度 1 ⇒ 都画 ✓（用户那 4 条就属于这种）；
+   *  · 三层写法（真的三层套娃）⇒ 最内深度 2 ⇒ 不画并告警；
+   *  · `houseTie`（跳房子延续线）/ `wrap`（反复跳回）是接续类 ⇒ **不参与计数、深度固定 0**；
+   *  · 退化对（`start === end`）不包任何人、也不被算作"层"。
+   *
+   * 为什么不能按"打开时的栈长度"：那条"等跳回闭合"的 `(` 会一直挂在栈上，
+   * 把**后面所有**括号的深度都顶高一层（用户追问「你是怎么计算为 3 层的？」的答案）。
+   */
+  {
+    const kept: SlurPair[] = []
+    for (const p of pairs) {
+      if (p.houseTie || p.wrap) {
+        p.depth = 0
+        kept.push(p)
+        continue
+      }
+      if (p.start === p.end) {
+        p.depth = 0
+        kept.push(p)
+        continue
+      }
+      let d = 0
+      for (const q of pairs) {
+        if (q === p || q.houseTie || q.wrap) continue
+        if (q.start === q.end) continue
+        if (q.start <= p.start && p.end <= q.end && !(q.start === p.start && q.end === p.end)) d++
+      }
+      p.depth = d
+      if (d < 2) {
+        kept.push(p)
+      } else {
+        const a = anchorsOf.get(p)
+        problems.push({
+          line: a?.line ?? 0,
+          col: a?.col ?? 0,
+          message: '这条连音线嵌套超过两层（最多两层），没有绘制',
+          severity: 'warning',
+          hint: HINT_DEPTH,
+        })
+      }
+    }
+    pairs.length = 0
+    pairs.push(...kept)
+  }
+
+  /** 没被"跳回"用掉的孤立 `)` 才报（adj973 ⓑ 的口径不变） */
+  for (const c of strayCloses) {
+    if (c.usedForWrap) continue
+    problems.push({
+      line: c.line,
+      col: c.col,
+      message: '多了一个 `)`（前面没有未闭合的 `(`）',
+      severity: 'warning',
+      hint: HINT_STRAY_CLOSE,
+    })
+  }
+
+  /**
    * adj973（ⓑ，用户要求）：**谱面结束时仍有未闭合的 `(`** ⇒ 这些线一条也画不出来，此前静默。
    * 只报"括号后面**有音符**"的那些（`start !== -1`）：`()` 里没音符属于退化写法，没有线可画，不吵人。
+   * adj983：被"反复跳回"配掉的那个 `(` 已出栈，不会在这里再报。
    */
   for (const s of sQueue) {
     if (s.start === -1) continue
