@@ -287,7 +287,24 @@ export function resolvePracticeRange(seq: PlaySequence, startId: string, endId: 
         if (id.index <= idx) best = i
       } else if (id.index >= idx) return [i]
     }
-    return best >= 0 ? [best] : []
+    if (best >= 0) return [best]
+    /**
+     * adj990（**用户 2026-10-19 实报**：标记段播放时又弹"找不到…按全曲播放"）：
+     * 最后一档兜底 —— **连分组号都对不上**时，忽略分组、只按"同声部 + 序号"夹紧；
+     * 再不行就取整条序列的最前/最后（宁可范围不精确，也不要静默退回全曲：
+     * 退回全曲对用户来说是"功能失效"，而范围偏一点至少还能用、且线能看见）。
+     */
+    let bestAny = -1
+    for (let i = 0; i < seq.events.length; i++) {
+      const id = seq.events[i].placed.id
+      if (voice !== null && id.voice !== voice) continue
+      if (dir === 'before') {
+        if (id.index <= idx) bestAny = i
+      } else if (id.index >= idx) return [i]
+    }
+    if (bestAny >= 0) return [bestAny]
+    if (seq.events.length === 0) return []
+    return [dir === 'before' ? seq.events.length - 1 : 0]
   }
   const starts0 = pickIdx(startId)
   const vStart = starts0.length > 0 ? seq.events[starts0[0]].placed.id.voice : null

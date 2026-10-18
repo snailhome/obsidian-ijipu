@@ -805,7 +805,21 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
     // adj636c：倚音上的滑音改画在**左侧**后，首音的左伸墨迹（`leftExt0`）要从**组宽之外**再让出：
     //         前倚音由 `gGroupW` 自动带出（组左缘再往左），后倚音则把组左缘右移 `leftExt0`，
     //         否则滑音墨迹会压到主音符的收尾元素（数字/增时线/附点）上。
-    const gx0 = gn.after ? graceAnchorX + 1 * s + gLeftExt : x - 1 * s - gGroupW
+    /**
+     * adj988（**用户 2026-10-18 实报**）：`7/$[6/]` 里**变音记号（`$`→`b`）与前倚音重叠**。
+     *
+     * 用户口径：「当两者共存时，**倚音给升降调符让位**，即升降符更靠近主音符 7，
+     * 以主音符往左算：主音符 7、升降符 b、倚音 6/」。
+     *
+     * 所以前倚音组的**右缘**要停在变音记号占位（`accLead` = 布局已算好的 `leadW`）之左，
+     * 而不是像原来那样紧贴主音符左缘（`x − 1s`）⇒ 那样必然压到 `b` 上 ✗。
+     * 占位总宽不变（布局本来就同时算了 `accW + graceGroupW`），只是组内让位。
+     */
+    const accLead =
+      t.kind === 'note' && t.accidental ? (note.accidentalGeo?.leadW ?? accidentalBodyW(size, t.accidental)) : 0
+    const gx0 = gn.after
+      ? graceAnchorX + 1 * s + gLeftExt
+      : x - (accLead > 0 ? accLead : 1 * s) - gGroupW
     const gxs: number[] = gOffs.map((o) => gx0 + o)
     const gy = gBaseY // 同基线（水平排列）
     // 组范围（数字区）：组首 x、组尾 x
