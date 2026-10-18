@@ -126,8 +126,308 @@ export interface PlaySequence {
   bpm: number
 }
 
-/** 从描述头 J 推断拍速（30~240），无效或缺失默认 70（adj343；函数头注释此前误写 90） */
-export function inferBpm(result: ParseResult): number {
+/** 音符 id → `page_voice_group_index` 串（与 `data-notepos` / `activeNoteId` 同一形状） */
+export function noteIdStringOf(id: { page: number; voice: number; group: number; index: number }): string {
+  return `${id.page}_${id.voice}_${id.group}_${id.index}`
+}
+
+/**
+ * adj987（**用户 2026-10-18 需求**）：试听「练习段」——把整份序列**裁成一段**。
+ *
+ * 用户原话：「在试唱演奏练习时，我们经常针对一小段反复练……需要标注出反复练习段的起止点，
+ * 然后重复试唱演奏」。
+ *
+ * 口径：
+ *  · 起止都是**音符 id**（`page_voice_group_index`），按序列里**出现的先后**取区间
+ *    —— 反复展开后同一音符可能出现多次，这里取**第一处**起点到**其后第一处**终点（通常就是第 1 遍里那段）；
+ *  · 时间轴**从 0 重排**（`atMs` 减去起点时刻），这样"从头播"就是"从这一段播"；
+ *  · `totalMs` = 该段最后一个事件的结束时刻；
+ *  · 起点找不到 / 终点在起点之前 ⇒ 返回 `null`（调用方退回"播放全曲"，别静默播半段）。
+ *
+ * @returns 裁剪后的序列（含 `rangeMs`），或 `null` 表示这段标记在本次排版里对不上
+ */
+export function slicePlaySequenceByNoteRange(
+  seq: PlaySequence,
+  startId: string,
+  endId: string,
+): (PlaySequence & { rangeMs: number }) | null {
+  const idOf = (e: PlayEvent): string => noteIdStringOf(e.placed.id)
+  const i0 = seq.events.findIndex((e) => idOf(e) === startId)
+  if (i0 < 0) return null
+  let i1 = -1
+  for (let i = i0; i < seq.events.length; i++) {
+    if (idOf(seq.events[i]) === endId) {
+      i1 = i
+      break
+    }
+  }
+  if (i1 < i0) return null
+  const base = seq.events[i0].atMs
+  const events = seq.events.slice(i0, i1 + 1).map((e) => ({ ...e, atMs: Math.max(0, e.atMs - base) }))
+  const last = events[events.length - 1]
+  const rangeMs = Math.max(0, last.atMs + last.durationMs)
+  return { events, totalMs: rangeMs, bpm: seq.bpm, rangeMs }
+}
+
+/**
+ * adj987b（**用户 2026-10-18 追问的歧义**）：练习段在**展开序列**里可能有多处候选。
+ *
+ * ## 为什么会歧义
+ *
+ * 标记存的是**源码位置**（音符 id），而序列是**反复/跳房子/D.S./D.C. 展开后**的 ——
+ * 同一个音符会出现多次，于是同一对起止 id 可能对应**多个区间**。
+ *
+ * ## 用户给的口径
+ *
+ * · 「起止跨 `D.S.`/`D.C.` 前后，**通常起在后、止在前**」⇒ **不按源码先后配**，
+ *   只按**播放先后**配：起点那次出现之后，取**其后最近**的终点出现（自然就跨过一次跳越）；
+ * · 「起点在公共段、终点也在公共段、但中间被跳跃分开的」⇒ 这类**真要用户选遍次**：
+ *   候选 > 1 时由 UI 出下拉，选中的候选号**存进标记**（`PracticeMark.pass`）。
+ *
+ * ## 判据（宁可少配、不可错配）
+ *
+ *  · 每个"起点出现"都取**其后最近的终点出现** ⇒ 得一组候选（去重）；
+ *  · `containsJump`：区间内源码位置**倒退**（group 变小，或同 group 内 index 变小）⇒ 含跳越；
+ *    **默认优先选不含跳越的**（用户本意多半只是"这一句"），同为不含则取**最早**那一个；
+ *  · 起点/终点在本次排版里**一次都没出现** ⇒ `missing`，调用方据此把该标记显示为"失效"、退回全曲。
+ */
+export interface PracticeRangeCandidate {
+  /** 起点事件下标（展开序列） */
+  i0: number
+  /** 终点事件下标（含） */
+  i1: number
+  /** 起点是该音符的**第几次**出现（1 起；UI 显示"第 N 遍"就用它） */
+  startOccurrence: number
+  /** 区间里是否**跨过跳越**（源码位置倒退） */
+  containsJump: boolean
+}
+
+export interface ResolvedPracticeRange {
+  /** 默认选中的候选下标（调用方可用用户保存的 `pass` 覆盖） */
+  pick: number
+  candidates: PracticeRangeCandidate[]
+  /** 起止有一端在展开序列里找不到 ⇒ 'start' / 'end'（标记失效） */
+  missing?: 'start' | 'end'
+}
+
+export function resolvePracticeRange(seq: PlaySequence, startId: string, endId: string): ResolvedPracticeRange {
+  const idOf = (e: PlayEvent): string => noteIdStringOf(e.placed.id)
+  /**
+   * 宽松匹配（adj987g 起）——**先整串、再退到"组号+序号"**（预览与试听排版不同，页号/声部号可能变）。
+   *
+   * adj987p（**用户 2026-10-18 实报**「连停止位的音符都没有播放」）：退到"组号+序号"时，
+   * 多声部谱里**别的声部**可能也有同组同序号的音 ⇒ 终点会匹配到**更早**的那个 ⇒ 这一段在
+   * 真正的停止音之前就结束了 ✗。
+   * ⇒ 结尾的宽松匹配**额外要求声部号与起点一致**（起点用同样办法先定出来），
+   * 这样跨声部撞车的概率大幅下降；仍找不到才退回"只按组号+序号"。
+   */
+  const tailOf = (id: string): string => {
+    const m = /^(\d+)_(\d+)_(\d+)_(\d+)$/.exec(id)
+    return m ? `_${m[3]}_${m[4]}` : id
+  }
+
+  /**
+   * 段层音符（`{tp}` / `{bz}` / `{dsb}`）的序号是**结构化编码**的，得用官方解码器比对。
+   *
+   * adj987w（**用户 2026-10-18 实报**「添加这段时提示找不到这段音符」）：
+   * 上一版对"带段基的 id"**直接放弃**（返回空 ⇒ 报 missing），于是标在段层音上的段落永远解析不出 ✗。
+   * 现在改成**按解码后的三元组精确比**（tp: `group/lineIdx/variantIdx/durSeq`，
+   * 其它段: `group/openIndex/durSeq`）——既不撞主旋律，也不会像上一版那样一律判死。
+   */
+  const segKeyOf = (idx: number): string | null => {
+    const tp = decodeTpNoteId(idx)
+    if (tp) return `tp:${tp.group}.${tp.lineIdx}.${tp.variantIdx}.${tp.durSeq}`
+    const sg = decodeSegmentNoteId(idx)
+    if (sg) return `seg:${sg.group}.${sg.openIndex}.${sg.durSeq}`
+    return null
+  }
+  const pickIdx = (want: string, sameVoiceAs?: number | null): number[] => {
+    const exact = seq.events.map((e, i) => (idOf(e) === want ? i : -1)).filter((i) => i >= 0)
+    if (exact.length > 0) return exact
+    const mWant = /^(\d+)_(\d+)_(\d+)_(\d+)$/.exec(want)
+    if (!mWant) return []
+    const wantIdx = Number(mWant[4])
+    // ① 段层音符：按解码后的结构比对（主旋律与段层序号不在同一域，不能混着找）
+    const wantKey = segKeyOf(wantIdx)
+    if (wantKey !== null) {
+      return seq.events
+        .map((e, i) => (segKeyOf(e.placed.id.index) === wantKey && e.placed.id.group === Number(mWant[3]) ? i : -1))
+        .filter((i) => i >= 0)
+    }
+    // ② 主旋律：退到"组号+序号"（预览与试听排版不同，页号/声部号可能变）
+    const tail = tailOf(want)
+    const byTail = seq.events
+      .map((e, i) => (idOf(e).endsWith(tail) ? { i, v: e.placed.id.voice } : null))
+      .filter((x): x is { i: number; v: number } => x !== null)
+    if (sameVoiceAs === undefined || sameVoiceAs === null) return byTail.map((x) => x.i)
+    const sameVoice = byTail.filter((x) => x.v === sameVoiceAs).map((x) => x.i)
+    return sameVoice.length > 0 ? sameVoice : byTail.map((x) => x.i)
+  }
+  /**
+   * adj987x（**用户 2026-10-18 实报**「添加这段时提示**找不到终点**」）：
+   * 终点 id 在播放序列里**没有对应事件**（标到的那个音没进序列：被并进前一个音的时值、
+   * 或者是段层里没有独立事件的音…），此前直接返回 `missing: 'end'` ⇒ 退回全曲 ✗。
+   *
+   * 兜底口径：**按"同组 + 同声部 + 序号就近夹紧"**——
+   *  · 终点：取"序号 ≤ 目标"的**最后一个**事件（宁可停在最近的那个音，也不要退回全曲）；
+   *  · 起点：取"序号 ≥ 目标"的**第一个**事件（不从目标之前起，避免把不该练的音带进来）。
+   * 兜底只在"确实一个都对不上"时发生，正常情况仍走上面的精确/宽松匹配。
+   */
+  const clampNear = (want: string, voice: number | null, dir: 'before' | 'after'): number[] => {
+    const m = /^(\d+)_(\d+)_(\d+)_(\d+)$/.exec(want)
+    if (!m) return []
+    const g = Number(m[3])
+    const idx = Number(m[4])
+    let best = -1
+    for (let i = 0; i < seq.events.length; i++) {
+      const id = seq.events[i].placed.id
+      if (id.group !== g) continue
+      if (voice !== null && id.voice !== voice) continue
+      if (dir === 'before') {
+        if (id.index <= idx) best = i
+      } else if (id.index >= idx) return [i]
+    }
+    return best >= 0 ? [best] : []
+  }
+  const starts0 = pickIdx(startId)
+  const vStart = starts0.length > 0 ? seq.events[starts0[0]].placed.id.voice : null
+  const starts = starts0.length > 0 ? starts0 : clampNear(startId, null, 'after')
+  const ends0 = pickIdx(endId, vStart)
+  const ends = ends0.length > 0 ? ends0 : clampNear(endId, vStart, 'before')
+  if (starts.length === 0) return { pick: 0, candidates: [], missing: 'start' }
+  if (ends.length === 0) return { pick: 0, candidates: [], missing: 'end' }
+
+  /** 源码位置是否"倒退"（跨反复 / D.S. / D.C. 的特征） */
+  const srcKey = (e: PlayEvent): [number, number] => [e.placed.id.group, e.placed.id.index]
+  const hasJump = (i0: number, i1: number): boolean => {
+    for (let i = i0 + 1; i <= i1; i++) {
+      const [g0, n0] = srcKey(seq.events[i - 1])
+      const [g1, n1] = srcKey(seq.events[i])
+      if (g1 < g0) return true
+      if (g1 === g0 && n1 < n0) return true
+    }
+    return false
+  }
+
+  const candidates: PracticeRangeCandidate[] = []
+  const seen = new Set<string>()
+  for (let k = 0; k < starts.length; k++) {
+    const i0 = starts[k]
+    const i1 = ends.find((j) => j > i0)
+    if (i1 === undefined) continue
+    const key = `${i0}:${i1}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    candidates.push({ i0, i1, startOccurrence: k + 1, containsJump: hasJump(i0, i1) })
+  }
+  if (candidates.length === 0) return { pick: 0, candidates: [], missing: 'end' }
+  // 默认：优先"不含跳越"的、其次最早
+  let pick = 0
+  const clean = candidates.findIndex((c) => !c.containsJump)
+  if (clean >= 0) pick = clean
+  return { pick, candidates }
+}
+
+/**
+ * adj987b：按**已解析出的候选区间**（事件下标）裁出序列；时间轴从 0 重排。
+ *
+ * 与 `slicePlaySequenceByNoteRange` 分开的原因：候选可能在"第 2 遍"，不能只按 id 取第一处。
+ *
+ * ## adj987f（**用户 2026-10-18 口径**）：结尾音符要**完整奏完**
+ *
+ * 用户原话：「被标记为停止的音符**也要播放**，包括其后的**附点**和**增时线**，
+ *   **后倚音**等与该音符直接关联的修饰符」。
+ *
+ * 附点/增时线在引擎里已经并进那个事件自己的 `durationMs`（不产生额外事件）；
+ * 但**后倚音**是紧跟在主音之后单独排的事件（`atMs` 落在主音的时值窗口里）。
+ * 若只切到"终点音符那个事件"，这些事件就被切掉 ⇒ 听感上"停止音符的后倚音没响"。
+ *
+ * ⇒ 切完后**向前多吃**：把"起点早于终点音符结束时刻"的事件都纳入（含后倚音、同时发声的其它声部）。
+ */
+export function slicePlaySequenceByRange(
+  seq: PlaySequence,
+  i0: number,
+  i1: number,
+): (PlaySequence & { rangeMs: number }) | null {
+  if (i0 < 0 || i1 < i0 || i1 >= seq.events.length) return null
+  const endEvent = seq.events[i1]
+  const endT = endEvent.atMs + endEvent.durationMs
+  // adj987f：把"与结尾音符同时/在其时值窗口内发声"的事件一并纳入（后倚音、同时值的别声部…）
+  let last = i1
+  while (last + 1 < seq.events.length && seq.events[last + 1].atMs < endT - 0.5) last++
+  const base = seq.events[i0].atMs
+  const events = seq.events.slice(i0, last + 1).map((e) => ({ ...e, atMs: Math.max(0, e.atMs - base) }))
+  const lastEv = events[events.length - 1]
+  const rangeMs = Math.max(0, lastEv.atMs + lastEv.durationMs)
+  return { events, totalMs: rangeMs, bpm: seq.bpm, rangeMs }
+}
+
+/**
+ * adj987u（**用户 2026-10-18 给的实例**，根因确认）：把这一段终点**延伸到覆盖它的连音线末尾**。
+ *
+ * ⚠ 前两版都错在同一处：`slurPairs` 的 `start/end` 是**解析期 token 序号**
+ * （`pairSlurs` 里按 `note|rest|rhythm` 计数），而 `placed.id.index` 是**放置后音符序号**——
+ * 有倚音/段层时两者**会错开**。用户实例里外层线是 `{13 → 17}`，而事件序列里**根本没有 `#17`**
+ * ⇒ 永远找不到终点、不延长 ✗（他听到的就是"连音线里的音没奏"）。
+ *
+ * ⚠ **当前界面不再调用本函数**（用户 2026-10-18 最后口径：连音线由用户指定末音，不自动判断）；保留算法与断言，
+ * 是为了将来若恢复"自动延长"时不必重写即可直接用。
+ *
+ * 正确做法：按 **token 对象身份**建映射 —— `PlacedToken.token` 与 `ParseResult.groups[g].music.tokens`
+ * 里是**同一批对象**，于是"放置序号 ↔ 解析序号"可以精确互转。目标 token 若没有独立事件
+ * （被并入前一个音的时值），退到"同组里解析序号不超过它的最后一个事件"。
+ */
+export function extendRangeEndToSlurEnd(
+  seq: PlaySequence,
+  i1: number,
+  slurPairs: readonly { start: number; end: number }[] | undefined,
+  result?: ParseResult,
+): number {
+  if (!slurPairs || slurPairs.length === 0 || !result) return i1
+  const ev = seq.events[i1]
+  if (!ev) return i1
+  const group = ev.placed.id.group
+  const g = result.groups.find((gr) => gr.music.voice === group) ?? result.groups[group]
+  if (!g) return i1
+  const parserIdxOf = new Map<unknown, number>()
+  const tokenOfParserIdx = new Map<number, unknown>()
+  let n = 0
+  for (const t of g.music.tokens) {
+    if (t.kind === 'note' || t.kind === 'rest' || t.kind === 'rhythm') {
+      parserIdxOf.set(t, n)
+      tokenOfParserIdx.set(n, t)
+      n++
+    }
+  }
+  const myParserIdx = parserIdxOf.get(ev.placed.token)
+  if (myParserIdx === undefined) return i1
+  let hi = -1
+  for (const p of slurPairs) {
+    const lo = Math.min(p.start, p.end)
+    const h = Math.max(p.start, p.end)
+    if (myParserIdx >= lo && myParserIdx <= h && h > myParserIdx && h > hi) hi = h
+  }
+  if (hi < 0) return i1
+  const wantTok = tokenOfParserIdx.get(hi)
+  if (wantTok !== undefined) {
+    for (let k = i1 + 1; k < seq.events.length; k++) {
+      const e2 = seq.events[k]
+      if (e2.placed.id.group === group && e2.placed.token === wantTok) return k
+    }
+  }
+  // 目标 token 没有独立事件 ⇒ 退到"同组里解析序号不超过 hi 的最后一个事件"
+  let lastWithin = i1
+  for (let k = i1 + 1; k < seq.events.length; k++) {
+    const e2 = seq.events[k]
+    if (e2.placed.id.group !== group) continue
+    const pi = parserIdxOf.get(e2.placed.token)
+    if (pi === undefined || pi > hi) break
+    lastWithin = k
+  }
+  return lastWithin
+}
+
+/** 从描述头 J 推断拍速（30~240），无效或缺失默认 70（adj343；函数头注释此前误写 90） */export function inferBpm(result: ParseResult): number {
   const t = result.header.tempoNum ?? result.header.tempo
   if (t) {
     const n = Number(t)
@@ -1003,7 +1303,16 @@ export function buildPlaySequence(
           const rep = seq.findIndex((it, k) => k > si && isRepeatBar(it))
           const strict = seq.findIndex((it, k) => k > si && isStrictCloserBar(it))
           const withFine = seq.findIndex((it, k) => k > si && isFineOrStrictCloserBar(it))
-          voltaAfterRepeat.set(start, rep >= 0 ? rep : si)
+          /**
+           * adj986（**用户 2026-10-18 实报**）：「第 3 遍时，第三曲部 `|]/ (3- 3/) … ||/&ds` 这段
+           * **多演奏了一遍**」。根因：这里在"后面没有 `:|`"时**回退到 `si`（＝`]/` 那根线本身）**，
+           * 于是"跳过这个房子"的落点就是 `]/` —— 后半段（`]/` 之后的音）被原样再奏一遍 ✗。
+           *
+           * 口径（用户原话）：「`|]/` 只是**线画到这里**，并不表示跳房子范围到这里；
+           * 要往后推到下一个 `:|`/`:|:` 或跳跃 `&ds`/`&dc` 才是这个跳房子的末尾」。
+           * ⇒ 没有 `:|` 时**回退到跳跃线**（`strict`），别回退到 `]/` 自己。
+           */
+          voltaAfterRepeat.set(start, rep >= 0 ? rep : strict >= 0 ? strict : si)
           voltaAfterStrict.set(start, strict >= 0 ? strict : si)
           voltaAfterWithFine.set(start, withFine >= 0 ? withFine : si)
         } else {
