@@ -2994,8 +2994,16 @@ console.log('\n[adj725] ```jps preview: 2px 留白 / 工具条在块外侧 / 源
       /显示类=\$\{toolbarEl\.hasClass\('is-revealed'\)/.test(pane725) &&
       /opacity=\$\{cs\.opacity\} visibility=\$\{cs\.visibility\} position=\$\{cs\.position\}/.test(pane725) &&
       /｜祖先链：/.test(pane725) &&
-      settings730.includes('预览工具条（诊断信息，无需操作）') &&
-      settings730.includes('lastToolbarInfo'))
+      /**
+       * adj994（**用户 2026-10-19 口径**：诊断块太多太杂 ⇒ 综合成一块）：
+       * 原来这里断言的是独立的「预览工具条（诊断信息，无需操作）」块，现在改为断言**综合块**里
+       * 仍带 `lastToolbarInfo`（信息一条没丢，只是换了摆放），并断言旧的三块标题**不再单独出现**。
+       */
+      settings730.includes('渲染与交互（综合 · 最近一次）') &&
+      settings730.includes('lastToolbarInfo') &&
+      !settings730.includes('预览工具条（诊断信息，无需操作）') &&
+      !settings730.includes('谱面裁剪（诊断信息，无需操作）') &&
+      !settings730.includes('点击预览区显/隐工具条（诊断信息，无需操作）'))
   // ③c **不再往预览里塞 textarea**（用户明确要求）
   check('adj725 不再往预览里塞 textarea（用户口径：不要再单独的 textarea）',
     !pane725.includes('ijipu-block-source-editor') &&

@@ -422,24 +422,21 @@ export class IJipuSettingTab extends PluginSettingTab {
       '构建信息',
       `构建 ${BUILD_STAMP} @${GIT_COMMIT}\n插件版本 ${this.plugin.manifest.version}（嵌入版 ${WEBAPP_META.appVersion}）`,
     )
+    /**
+     * adj994（**用户 2026-10-19 口径**）：「诊断里的那些辅助调整的块如果不再需要，可以去掉，
+     * 或者留一个**综合可看全貌**的就好，现在诊断块太多太杂」
+     *
+     * ⇒ 原来「谱面裁剪 / 预览工具条 / 点击预览区显隐工具条」三块**合成一块**，一行一项、可整块复制；
+     *   三项都还是"最近一次"的记录，内容一个不丢（`生成完整诊断报告` 里也仍逐项全量输出）。
+     *   仍单列的只剩两块：**构建信息**（第一眼要看）与 **嵌入版本地服务**（真会失败的那条链，属故障信息）。
+     */
     this.diagBlock(
       host,
-      '谱面裁剪（诊断信息，无需操作）',
-      '打开谱面时自动记录：默认的「**谱面**」视图有没有**按墨迹裁掉四周空白**（「整页 / 满宽」不受影响）。\n' +
-        `最近一次：${this.plugin.lastCropInfo ?? '（还没打开过谱面）打开任意一份谱，再回到本页即可看到最新一条'}`,
-    )
-    this.diagBlock(
-      host,
-      '预览工具条（诊断信息，无需操作）',
-      '回答"工具条显示在哪、为什么那样显示"：宿主类型、显示类、最终样式、屏幕坐标、谱面块坐标，\n' +
-        '以及从谱面往上每一层**裁剪祖先**是被放开了还是因为是滚动容器而保留。\n' +
-        `最近一次：${this.plugin.lastToolbarInfo ?? '（还没触发过）点一下预览区让工具条显示一次，再回到本页'}`,
-    )
-    this.diagBlock(
-      host,
-      '点击预览区显/隐工具条（诊断信息，无需操作）',
-      '回答"插件有没有收到这次点击、命中了哪个元素" —— 用来区分"事件没到"与"状态判断错"。\n' +
-        `最近一次：${this.plugin.lastToolbarClick ?? '（还没触发过）点一下预览区试试'}`,
+      '渲染与交互（综合 · 最近一次）',
+      '这一块把原来三块（谱面裁剪 / 预览工具条 / 点击预览区显隐工具条）合成一行一项：\n' +
+        `工具条：${this.plugin.lastToolbarInfo ?? '（还没触发过）点一下预览区让工具条显示一次，再回到本页'}\n` +
+        `点击/滚动：${this.plugin.lastToolbarClick ?? '（还没触发过）点一下预览区试试'}\n` +
+        `裁剪：${this.plugin.lastCropInfo ?? '（还没打开过谱面）打开任意一份谱，再回到本页即可看到最新一条'}`,
     )
     this.diagBlock(
       host,
@@ -482,11 +479,18 @@ export class IJipuSettingTab extends PluginSettingTab {
 
   /** adj788：「一键复制全部诊断」用的整段文本（构建信息 + 各诊断块，自带标题） */
   private diagnosticsText(): string {
+    /**
+     * adj994（用户口径：诊断块太多太杂 ⇒ 综合成一块）：这里的文本也跟着合并，
+     * 否则"复制全部"与设置页上看到的块**对不上**（用户拿起两段对比会以为其中一段过期了）。
+     */
     const blocks: Array<[string, string]> = [
       ['构建信息', `构建 ${BUILD_STAMP} @${GIT_COMMIT}\n插件版本 ${this.plugin.manifest.version}（嵌入版 ${WEBAPP_META.appVersion}）`],
-      ['谱面裁剪（诊断信息，无需操作）', this.plugin.lastCropInfo ?? '（还没打开过谱面）'],
-      ['预览工具条（诊断信息，无需操作）', this.plugin.lastToolbarInfo ?? '（还没触发过）'],
-      ['点击预览区显/隐工具条（诊断信息，无需操作）', this.plugin.lastToolbarClick ?? '（还没触发过）'],
+      [
+        '渲染与交互（综合 · 最近一次）',
+        `工具条：${this.plugin.lastToolbarInfo ?? '（还没触发过）'}\n` +
+          `点击/滚动：${this.plugin.lastToolbarClick ?? '（还没触发过）'}\n` +
+          `裁剪：${this.plugin.lastCropInfo ?? '（还没打开过谱面）'}`,
+      ],
       ['嵌入版本地服务（诊断信息，无需操作）', this.plugin.lastEmbedError ?? '（无错误）'],
     ]
     return blocks.map(([t, b]) => `【${t}】\n${b}`).join('\n\n')
