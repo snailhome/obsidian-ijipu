@@ -124,6 +124,14 @@ export interface PlaySequence {
   events: PlayEvent[]
   totalMs: number
   bpm: number
+  /**
+   * adj996（用户 2026-10-19 要求）：**遍次时间轴** —— 每到一遍的开始处记一条 `{atMs, pass}`，`pass` 从 1 起。
+   *
+   * 试听对话框据此实时显示"现在在第几遍"（按当前播放时刻取最后一条 `atMs <= t`）。
+   */
+  passMarks?: { atMs: number; pass: number }[]
+  /** adj996：整首一共用了几遍（= `passMarks` 里最大的 `pass`），供"第 N / 共 M 遍"显示 */
+  maxPass?: number
 }
 
 /** 音符 id → `page_voice_group_index` 串（与 `data-notepos` / `activeNoteId` 同一形状） */
@@ -376,7 +384,14 @@ export function slicePlaySequenceByRange(
   const events = seq.events.slice(i0, last + 1).map((e) => ({ ...e, atMs: Math.max(0, e.atMs - base) }))
   const lastEv = events[events.length - 1]
   const rangeMs = Math.max(0, lastEv.atMs + lastEv.durationMs)
-  return { events, totalMs: rangeMs, bpm: seq.bpm, rangeMs }
+  /**
+   * adj996：把**遍次时间轴**一起搬过来（区间内那几条 `passMarks`，并按新的 0 点重排）。
+   * 不搬的话，标记段播放时"第几遍"就不显示了（用户正是要练某一遍）。
+   */
+  const passMarks = seq.passMarks
+    ?.filter((m) => m.atMs >= base - 0.5 && m.atMs <= base + rangeMs + 0.5)
+    .map((m) => ({ atMs: Math.max(0, m.atMs - base), pass: m.pass }))
+  return { events, totalMs: rangeMs, bpm: seq.bpm, rangeMs, passMarks, maxPass: seq.maxPass }
 }
 
 /**
@@ -1364,6 +1379,16 @@ export function buildPlaySequence(
   const repeatCountAt = new Map<number, number>()
   {
     let endCount = 0
+    /**
+     * adj997：当前这块"反复结构"是否还没真正收尾。
+     *
+     * 判据（用户 2026-10-19 口径）：**`:|` 后面紧跟另一个跳房子的起点（`:][`）时，这一大块还没完**
+     * —— 每个跳房子的末尾各带一根 `:|`，它们属于**同一个反复结构**，中间的 `|:` 只是把回跳点往后挪。
+     * 只有 `:|` 后面**不再接跳房子**时，这段才算收尾，下一个 `|:` 才重新计数（`adj723x` 那类谱）。
+     */
+    let open = false
+    /** adj997：本结构里是否出现过跳房子（决定 |:/:| 是否重新计数/收尾） */
+    let sawVolta = false
     seq.forEach((it, k) => {
       if (it.kind !== 'bar') return
       /**
@@ -1377,7 +1402,23 @@ export function buildPlaySequence(
        * 两侧（`repeatCountAt` 的统计 与 走查里的 `repeatStart`）**必须同一口径**，
        * 否则计数与回跳点对不上。
        */
-      if (it.bar?.type === '|:' || it.bar?.type === '||:') endCount = 0
+      /**
+       * adj997（**用户 2026-10-19 口径**）：**遍次整曲连续**；而且 `|:` **只移动回跳点、不重新计数**
+       * —— **除非**上一块已经真正收尾（上一根 `:|` 后面不再接跳房子）。
+       *
+       * 用户给的谱：Q1 的 `|:` 与 Q3 的 `:|["3."` 是同一个反复结构的两个终点（`:][` 后面接了房子 2），
+       * Q2 的 `|:` 夹在中间只挪回跳点 ⇒ 该段 count = 3 ⇒ 前两遍各回跳一次，
+       * 第 3 遍落到房子 3，随后 `&ds` 进第 4 遍（= 用户期望的 4 遍）。
+       * 旧实现"见 `|:` 就归零"会把它算成两段（count=2）⇒ 只走到第 3 遍 ✗。
+       */
+      /** adj997：这一段里出现过跳房子（[/]）⇒ 结构一直延续，中间的 |: 不再重新计数 */
+      if (it.bar?.voltaStart || it.bar?.voltaEnd) sawVolta = true
+      const startsRepeat = it.bar?.type === '|:' || it.bar?.type === '||:'
+      if (startsRepeat && (!open || !sawVolta)) {
+        endCount = 0
+        open = true
+        sawVolta = false
+      }
       if (it.bar?.type === ':|' || it.bar?.type === ':|:') {
         endCount++
         repeatCountAt.set(k, endCount + 1)
@@ -1388,6 +1429,12 @@ export function buildPlaySequence(
          * 被算成 count=3 ⇒ `12` 奏 3 遍；归零后 count=2 ⇒ 正好 2 遍）。
          */
         if (it.bar?.type === ':|:') endCount = 0
+        /**
+         * adj997：这根 `:|` 之后**还接另一个跳房子**（`:][`）⇒ 这一大块没完，保持 `open`；
+         * 否则收尾，下一个 `|:` 重新计数（`adj723x` 的 `|: A :| |: B :|` 就属于这种）。
+         */
+        /** 含跳房子的结构一路开着（volta 的各根 :| 属于同一结构）；无跳房子的才在这里收尾 */
+        if (!sawVolta) open = false
       }
     })
   }
@@ -1615,18 +1662,31 @@ export function buildPlaySequence(
   }
 
   const events: PlayEvent[] = []
-  let pass = 1 // 当前反复遍次（1 起；决定演奏哪个 volta）
+  /**
+   * adj996（用户 2026-10-19 要求「实时显示当前在第几个反复遍次」）：
+   * 按**事件下标**收集遍次边界（`pass` 变化时才记），最后换算成播放时刻发给 UI。
+   */
+  const passIdxMarks: { idx: number; pass: number }[] = [{ idx: 0, pass: 1 }]
+  /** adj996：`pass` 与上一条不同就记一格（在主循环每轮开头调用） */
+  const markPass = (): void => {
+    const last = passIdxMarks[passIdxMarks.length - 1]
+    if (last.pass !== pass) passIdxMarks.push({ idx: events.length, pass })
+  }
+  let pass = 1 // 当前反复遍次（1 起；**整曲连续**：|:/:|: 不再归 1，只有跳跃/repeat 前进时 +1）
+  /**
+   * adj997（用户 2026-10-19 口径「整曲连续遍次」）：**本反复段的起始遍次**。
+   * 
+   * 遍次全曲连续之后，不能再用 pass < count 判回跳（第二段的 pass 已经 ≥ 2）。
+   * 改用「**本段已走几遍** = pass - passBase + 1」与 count 比。
+   */
+  let passBase = 1
   let repeatStart = 0 // 反复起点（无 |: 时默认从头反复）
   let bigRepeatDone = false // adj359：&dc/&ds 是否已发生过（大反复；之后 &fine 生效、&ty 跳越、dc/ds 不再重复跳）
   /**
-   * adj723w：已扫过的 `&ty` 小节线下标（**每根最多只扫一次**）。
+   * adj723w（用户 2026-10-19 复核后**保留**）：已扫过的 `&ty` 小节线下标（**每根最多只跳一次**）。
    *
-   * 用户权威口径（2026-10，取代此前那句"IsReadEach"式的"每个反复、跳跃只执行一次"）：
-   * **跳跃只执行一次**——`&dc`/`&ds` 全曲各只跳一次、`&ty` 的跳越也只发生一次；
-   * 而**小节反复在跳转后重走**（`𝄆A𝄇 B D.C.` ⇒ `A A B → A A B`，由 `pass`/`repeatStart` 保证）。
-   *
-   * 本守卫只关"跳跃不重复"，故**不影响反复重走**（实测 `1 2 |&ty 3 4 |&dc 5 6 |&ty 7 1 |`
-   * ⇒ `1 2 3 4 | 1 2 | 7 1`：`&dc` 回跳后反复照走 `1 2`，而 `&ty` 不再重复跳越）。
+   * 语义对齐标准谱的 **To Coda**：第一遍经过不跳；`&dc`/`&ds` 回跳后**第二遍**再经过才跳进 Coda，
+   * 之后一般直接到曲末。即便某谱二次绕回，「每根最多一次」也保证不会形成跳转循环。
    */
   const tyFiredAt = new Set<number>()
   let landedByVoltaSkip = -1 // adj359：因跳过某 volta 而落在的小节线索引（该线上不再触发 :| 回跳，只处理其 volta 番号）
@@ -2099,6 +2159,7 @@ export function buildPlaySequence(
   }
 
   while (i < seq.length && guard++ < maxIter) {
+    markPass() // adj996：`pass` 变了就记进遍次时间轴（此刻 events.length = 该遍第一个事件）
     const item = seq[i]
     if (item.kind === 'segment') {
       // adj427：临时段（{bz}/{dsb}）——**不占主旋律时值**，此处只打标记；
@@ -2656,7 +2717,8 @@ export function buildPlaySequence(
         if (!bigRepeatDone) {
           i = 0 // 从头反复
           bigRepeatDone = true
-          pass = 1
+          // adj997（用户 2026-10-19 口径）：**首曲连续遍次** —— &dc 也**只 +1**，不归 1
+          pass++
           repeatStart = 0
           pendingJumpMs = lastEndMs // adj361：从当前播放时刻无缝接上（从头反复）
           continue
@@ -2685,30 +2747,32 @@ export function buildPlaySequence(
       }
       if (bar.marks.includes('ty')) {
         /**
-         * adj359：`&ty`（渲染为花记号 `⊕`）**第一次遇到忽略**（无大反复则不跳越，全部演奏）；
-         * 有大反复时，**大反复已发生后**才生效——跳到**下一根 `&ty` 之后**（两 `&ty` 之间不演奏）。
+         * adj359 / adj723w（**用户 2026-10-19 复核定稿：**保留旧口径**，不采用"二次到达就跳"**）：
          *
-         * ⚠ `To Coda`（"跳至花"）**没有对应修饰符**（用户 2026-10 明确）⇒ 标准写法
-         * `𝄆A𝄇 𝄋B ToCoda C D.S. ⊕D` 目前只能用 `&ty` 近似，会多奏
-         * "To Coda 到跳转线之间"那一小节（详见 `docs/SYNTAX.md` §2.8 的「已知缺口」）。
+         * `&ty`（渲染为花记号 `⊕`）的语义就是标准谱里的 **To Coda**：
+         *  · **第一遍**经过这里**不跳**，照常往下演奏；
+         *  · 演奏到 **`&dc`（D.C. al Coda）/ `&ds`（D.S. al Coda）** 处按指令回跳；
+         *  · **第二遍**再演奏到这根 `&ty` 时，**立即跳到 Coda 段**（= 下一根 `&ty` 之后），一直奏到结束。
          *
-         * `tyFiredAt` 是 adj723w 加的**防御性**守卫（每根最多扫一次）：实测当前**不改变行为**
-         * （跳转点只会在 `bigRepeatDone` 刚置位后经过一次），只为将来引入 `To Coda` 之类
-         * "可能二次经过"的记号时天然免疫重复跳越。
+         * ⇒ 判据是「**大反复已发生**」（`bigRepeatDone`），而不是"经过次数"：
+         *   没有 `&dc`/`&ds` 的谱里，`&ty` 永远不跳（块两遍都演奏）；
+         *   跳进 Coda 后一般直接到曲末，**不会再触发**；即便某些谱二次绕回，`tyFiredAt` 保证
+         *   **每根 `&ty` 最多跳一次**（`adj723w`），不会形成跳转循环。
+         *
+         * ⚠ 与"To Coda 圈定范围"的已知缺口：标准写法里 To Coda 与 Coda ⊕ 之间那段
+         * （`… ToCoda C D.S. ⊕D`）用两根 `&ty` 近似时会**多奏** `C`（详见 §2.8「已知缺口」）。
          */
         if (bigRepeatDone && !tyFiredAt.has(i)) {
           /**
-           * ⚠ `tyFiredAt.add(i)` 必须**在判定时**登记，而不是"找到落点之后"才登记。
-           *
-           * 否则"**没有下一根 `&ty`**"的那根会**不被登记**，于是 `&dc` 回跳后再走到它时
-           * 又被重新判定，若此时恰有别的 `&ty` 在它后面 ⇒ **重复跳越**，把本不该跳的
-           * 那一小节跳掉。实测 `Q: 1 2 |&ty 3 4 |&dc 5 6 |&ty 7 1 |` 修前奏
-           * `1 2 3 4 1 2 7 1`（`5 6` 被跳掉），修后 `1 2 3 4 1 2 5 6 7 1`。
+           * ⚠ `tyFiredAt.add(i)` 必须在**判定时**登记：否则"没有下一根 `&ty`"的那根不会被登记，
+           * `&dc` 回跳后再走到它时会重新判定，若此时后面恰有别的 `&ty` ⇒ 重复跳越。
+           * 实测 `Q: 1 2 |&ty 3 4 |&dc 5 6 |&ty 7 1 |`：修前 `1 2 3 4 1 2 7 1`（`5 6` 被跳掉），
+           * 修后 `1 2 3 4 1 2 5 6 7 1`。
            */
           tyFiredAt.add(i)
           const nextTy = seq.findIndex((it, k) => k > i && it.kind === 'bar' && it.bar?.marks?.includes('ty'))
           if (nextTy >= 0) {
-            i = nextTy + 1 // 跳到下一个 &ty 之后（两 ty 之间不演奏）
+            i = nextTy + 1 // 跳进 Coda 段：从第二根 &ty 之后继续，直到结束
             pendingJumpMs = lastEndMs // adj361：跳越段不占时，从当前播放时刻无缝接上
             continue
           }
@@ -2723,7 +2787,9 @@ export function buildPlaySequence(
     // 终止线 `||` / 段落起点 `|:` 仍要照常处理——落点线可能正是"结束"或"下一段起点"。
     if (!landedByVolta && (bar.type === ':|' || bar.type === ':|:')) {
       const count = repeatCountAt.get(i) ?? 2 // 本段内到该线的第几个 :|（+1 = 总遍数）
-      if (pass < count) {
+      /** adj997：本段已走遍数（整曲连续遍次下用相对量判回跳） */
+      const doneInSeg = pass - passBase + 1
+      if (doneInSeg < count) {
         /**
          * adj723x（用户报 `Q: 11:|: 12:| 13|: 14 :|` 里 `12` 被奏 **3** 遍）：
          *
@@ -2736,7 +2802,7 @@ export function buildPlaySequence(
          * 判定"这是最后一次回跳"：`pass + 1 >= count`（本跳之后本段正好走满）。
          * 修后同例实测 `11 11 12 12 13 14 14` ✔
          */
-        const lastJump = pass + 1 >= count
+        const lastJump = doneInSeg + 1 >= count
         const from = i
         /** adj723aa：**进入下一遍次时**把本遍进入过的注释组各扣 1（不管该组有没有都走完） */
         settlePassVolta()
@@ -2748,7 +2814,8 @@ export function buildPlaySequence(
       }
       if (bar.type === ':|:') {
         repeatStart = i + 1 // 新段落起点
-        pass = 1
+        passBase = pass // adj997：新段落以当前遍次为起点（整曲连续遍次）
+        // adj997：遍次**不重置**（整曲连续）；:|: 只换段起点
       }
       i++
       continue
@@ -2758,7 +2825,8 @@ export function buildPlaySequence(
       case '|:':
       case '||:':
         repeatStart = i + 1
-        pass = 1 // 新段落起点 → 遍次从 1 起
+        passBase = pass // adj997：新段落以当前遍次为起点（整曲连续遍次）
+        // adj997：遍次**不重置**（整曲连续）；|: 只换段起点
         i++
         break
       case '||':
@@ -2865,5 +2933,15 @@ export function buildPlaySequence(
     return { events, totalMs, bpm }
   }
 
-  return { events, totalMs, bpm }
+  /**
+   * adj996（用户 2026-10-19 要求）：把"按事件下标记的遍次边界"换算成**播放时刻**再交给 UI。
+   *
+   * 边界下标指向"该遍的第一个事件"；若那一遍没有任何事件（空遍/全被跳过），就落到 `totalMs`。
+   */
+  const passMarks = passIdxMarks
+    .map((m) => ({ atMs: m.idx < events.length ? events[m.idx].atMs : totalMs, pass: m.pass }))
+    .filter((m, k, arr) => k === 0 || m.atMs > arr[k - 1].atMs)
+  const maxPass = passIdxMarks.reduce((mx, m) => Math.max(mx, m.pass), 1)
+
+  return { events, totalMs, bpm, passMarks, maxPass }
 }

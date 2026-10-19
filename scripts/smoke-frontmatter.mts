@@ -3891,10 +3891,16 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
         /el\.removeClass\('is-user-hidden'\)/.test(pane773) &&
         /liveToolbar\(\)\.addClass\('is-user-hidden'\)/.test(pane773) &&
         /\.is-mobile \.ijipu-score-toolbar\.is-user-hidden \{/.test(css773) &&
-        // adj777：诊断（"到底有没有收到点击、命中了什么元素"）—— 显示在设置页「说明」
+        // adj777：诊断（"到底有没有收到点击、命中了什么元素"）—— 显示在设置页「诊断」页签
         /lastToolbarClick =/.test(pane773) &&
         /lastToolbarClick/.test(String(readFileSync('src/main.ts', 'utf8'))) &&
-        /点击预览区显\/隐工具条（诊断信息，无需操作）/.test(String(readFileSync('src/settings.ts', 'utf8'))) &&
+        /**
+         * adj994（用户 2026-10-19：诊断块太多太杂 ⇒ 综合成一块）：这条原来要求 settings.ts 里有
+         * 独立的「点击预览区显/隐工具条（诊断信息，无需操作）」块；现在它被并进
+         * 「渲染与交互（综合 · 最近一次）」⇒ 改为断言**综合块里仍带 `lastToolbarClick`**。
+         */
+        /渲染与交互（综合 · 最近一次）/.test(String(readFileSync('src/settings.ts', 'utf8'))) &&
+        /lastToolbarClick/.test(String(readFileSync('src/settings.ts', 'utf8'))) &&
         // ⚠ 负向判据剥注释：规则上方的说明里写了"不使用 !important"这几个字，直接搜会被自己的注释绊倒
         !/is-user-hidden[\s\S]{0,80}!important/.test(css773.replace(/\/\*[\s\S]*?\*\//g, '')),
       '')
@@ -4541,12 +4547,15 @@ console.log('\n[adj741] 手机端 P0：桌面专属能力按需加载 + 平台�
     /export const SETTINGS_TABS: SettingsTabId\[\] = \['嵌入版', '说明', '诊断'\]/.test(st788) &&
       /if \(this\.activeTab === '诊断'\) this\.renderDiagnostics\(panel\)/.test(st788) &&
       body788.length > 400 &&
-      // 五块诊断（构建信息 + 四条运行期诊断）都在诊断页里
-      (body788.match(/this\.diagBlock\(/g) ?? []).length === 5 &&
-      /'谱面裁剪（诊断信息，无需操作）'/.test(body788) &&
-      /'预览工具条（诊断信息，无需操作）'/.test(body788) &&
-      /'点击预览区显/ &&
+      // adj994（用户 2026-10-19：诊断块太多太杂 ⇒ 综合成一块）：现在共 **3 块**——
+      // 构建信息 / 渲染与交互（综合·最近一次）/ 嵌入版本地服务；原来三块标题不再单独出现。
+      (body788.match(/this\.diagBlock\(/g) ?? []).length === 3 &&
+      /'构建信息'/.test(body788) &&
+      /'渲染与交互（综合 · 最近一次）'/.test(body788) &&
       /'嵌入版本地服务（诊断信息，无需操作）'/.test(body788) &&
+      !/'谱面裁剪（诊断信息，无需操作）'/.test(body788) &&
+      !/'预览工具条（诊断信息，无需操作）'/.test(body788) &&
+      !/'点击预览区显\/隐工具条（诊断信息，无需操作）'/.test(body788) &&
       // 「说明」页里不得再出现诊断块（这是本次搬家要保证的）
       !/'（诊断信息，无需操作）'/.test(
         st788.slice(st788.indexOf('private renderAbout('), st788.indexOf('private renderDiagnostics(')),
