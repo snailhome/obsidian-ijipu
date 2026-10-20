@@ -140,6 +140,30 @@ export function noteIdStringOf(id: { page: number; voice: number; group: number;
 }
 
 /**
+ * adj1006：把遍次时间轴**搬到新时间轴**（0 点 = `base`）。
+ *
+ * · 起播点所在的那一遍要在 0 处补一条 —— 否则第一帧会显示成下一遍/第 1 遍
+ *   （`passAt` 取"最后一条 `atMs <= t`"，起播点之前没有本条时会退回上一条）；
+ * · `endMs` 给定 = 只保留切片区间内的标记（练习段/标记段）。
+ *
+ * 三处共用（整曲从音符起播 / `slicePlaySequenceByRange` / `slicePlaySequenceByNoteRange`）：
+ * 同一份"时间轴重排"只允许一处实现。
+ */
+function rebasePassMarksOf(
+  marks: readonly { atMs: number; pass: number }[] | undefined,
+  base: number,
+  endMs?: number,
+): { atMs: number; pass: number }[] {
+  if (!marks || marks.length === 0) return []
+  const cur = [...marks].reverse().find((m) => m.atMs <= base + 0.5)
+  const out = marks
+    .filter((m) => m.atMs >= base - 0.5 && (endMs === undefined || m.atMs <= endMs + 0.5))
+    .map((m) => ({ atMs: Math.max(0, m.atMs - base), pass: m.pass }))
+  if (cur && (out.length === 0 || out[0].atMs > 0.5)) out.unshift({ atMs: 0, pass: cur.pass })
+  return out
+}
+
+/**
  * adj987（**用户 2026-10-18 需求**）：试听「练习段」——把整份序列**裁成一段**。
  *
  * 用户原话：「在试唱演奏练习时，我们经常针对一小段反复练……需要标注出反复练习段的起止点，
@@ -174,7 +198,15 @@ export function slicePlaySequenceByNoteRange(
   const events = seq.events.slice(i0, i1 + 1).map((e) => ({ ...e, atMs: Math.max(0, e.atMs - base) }))
   const last = events[events.length - 1]
   const rangeMs = Math.max(0, last.atMs + last.durationMs)
-  return { events, totalMs: rangeMs, bpm: seq.bpm, rangeMs }
+  return {
+    events,
+    totalMs: rangeMs,
+    bpm: seq.bpm,
+    rangeMs,
+    // adj1006：遍次读数跟随切片重排（与 `slicePlaySequenceByRange` 同一口径）
+    passMarks: rebasePassMarksOf(seq.passMarks, base, rangeMs),
+    maxPass: seq.maxPass,
+  }
 }
 
 /**
@@ -387,10 +419,9 @@ export function slicePlaySequenceByRange(
   /**
    * adj996：把**遍次时间轴**一起搬过来（区间内那几条 `passMarks`，并按新的 0 点重排）。
    * 不搬的话，标记段播放时"第几遍"就不显示了（用户正是要练某一遍）。
+   * adj1006：从某遍**中间**起播时，0 点还要补当前那一遍（`rebasePassMarksOf` 统一处理）。
    */
-  const passMarks = seq.passMarks
-    ?.filter((m) => m.atMs >= base - 0.5 && m.atMs <= base + rangeMs + 0.5)
-    .map((m) => ({ atMs: Math.max(0, m.atMs - base), pass: m.pass }))
+  const passMarks = rebasePassMarksOf(seq.passMarks, base, rangeMs)
   return { events, totalMs: rangeMs, bpm: seq.bpm, rangeMs, passMarks, maxPass: seq.maxPass }
 }
 
@@ -1301,6 +1332,31 @@ export function buildPlaySequence(
   /** 含 `&fine` 的末尾线（跳跃后备用） */
   const isFineOrStrictCloserBar = (it: SeqItem): boolean =>
     it.kind === 'bar' && !!it.bar && isVoltaCloserBarline(it.bar, true)
+  /**
+   * adj1005（用户 2026-10-20 定稿）：`|/` 是**不占小节**的隐藏线（画法上也不占位）。
+   *
+   * 跳过跳房子的落点、反复段（`|:` / `:|:`）的起点若落在它上面，应当**直接越过**——
+   * 否则"落到隐藏线上再走一步"会让回跳点/落点看起来多走了一节。
+   *
+   * 只越过**纯隐藏线**：带跳房子 `[`/`]` 或记号（`&ds` 等）的 `|/` 仍要参与配对/跳跃，
+   * 不能吞掉（否则落到它上面时会漏掉该房子的判定）。
+   */
+  const isPureHiddenBar = (k: number): boolean => {
+    const it = seq[k]
+    return (
+      it?.kind === 'bar' &&
+      it.bar?.type === '|/' &&
+      !it.bar.voltaStart &&
+      !it.bar.voltaEnd &&
+      !(it.bar.marks && it.bar.marks.length > 0)
+    )
+  }
+  /** adj1005：从 `k` 起跳过纯 `|/`，返回第一个"真正要处理"的序列项下标 */
+  const firstContentAt = (k: number): number => {
+    let j = k
+    while (j < seq.length && isPureHiddenBar(j)) j++
+    return j
+  }
   const voltaAfterRepeat = new Map<number, number>()
   const voltaAfterStrict = new Map<number, number>()
   const voltaAfterWithFine = new Map<number, number>()
@@ -1330,7 +1386,20 @@ export function buildPlaySequence(
         pendingStarts.push(si)
       } else if (pendingStarts.length > 0) {
         const start = pendingStarts.pop()!
-        if (item.bar.voltaEndSlash) {
+        /**
+         * adj1005（用户 2026-10-20 定稿）：**终点线优先取本跳房子自己的 `|]` / `:|]`**；
+         * 只有写成**不封闭**的 `|]/`（`voltaEndSlash`）时，才退回"其后最近的 `:|`/`:|:`"。
+         *
+         * `:|]/` = 反复线 + 未封闭跳房子：它自己的线**就是**反复线 ⇒ 仍以自己为终点
+         * （此时 `voltaEndSlash` 为真，但不能再往后找下一条 `:|`，否则终点被拉到下一个房子）。
+         */
+        const ownIsRepeat = isRepeatBar(item)
+        if (!item.bar.voltaEndSlash || ownIsRepeat) {
+          // 已封闭房子（`|]` / `:|]`）：就以该末尾小节线为界（各表一致）
+          voltaAfterRepeat.set(start, si)
+          voltaAfterStrict.set(start, si)
+          voltaAfterWithFine.set(start, si)
+        } else {
           // 未封闭房子（`|]/`）：末尾线优先取 `:|`/`:|:`，其次跳跃线
           const rep = seq.findIndex((it, k) => k > si && isRepeatBar(it))
           const strict = seq.findIndex((it, k) => k > si && isStrictCloserBar(it))
@@ -1347,11 +1416,6 @@ export function buildPlaySequence(
           voltaAfterRepeat.set(start, rep >= 0 ? rep : strict >= 0 ? strict : si)
           voltaAfterStrict.set(start, strict >= 0 ? strict : si)
           voltaAfterWithFine.set(start, withFine >= 0 ? withFine : si)
-        } else {
-          // 已封闭房子（`|]`）：就以该末尾小节线为界（各表一致）
-          voltaAfterRepeat.set(start, si)
-          voltaAfterStrict.set(start, si)
-          voltaAfterWithFine.set(start, si)
         }
       }
     }
@@ -2636,7 +2700,15 @@ export function buildPlaySequence(
       const repeatTarget = voltaAfterRepeat.get(i)
       const jumpTarget = allowFine ? voltaAfterWithFine.get(i) : voltaAfterStrict.get(i)
       const after = repeatTarget ?? jumpTarget
-      const target = after === undefined || after <= i ? i + 1 : after
+      /**
+       * adj1005（用户 2026-10-20 定稿）：跳过落点 = **末尾线之后的第一小节**，`|/` 不计。
+       *
+       * 落点仍先停在**末尾线本身**（`after`）——下一轮要先执行该线上的 `&ds`/`&dc`/`&fine`
+       * （adj598/adj653），再由 `landedByVolta` 越过它的 `:|` 回跳。
+       * **不能**取 `after - 1`（落到 `:|]` 之前 ⇒ 该线被当成正常反复线，多回跳一遍）；
+       * `firstContentAt` 只负责越过落在落点上的**纯 `|/` 隐藏线**。
+       */
+      const target = firstContentAt(after === undefined || after <= i ? i + 1 : after)
       landedByVoltaSkip = target
       i = target
       pendingJumpMs = lastEndMs // adj361：被跳过的房子不占时，从当前播放时刻无缝接上
@@ -2813,7 +2885,8 @@ export function buildPlaySequence(
         continue
       }
       if (bar.type === ':|:') {
-        repeatStart = i + 1 // 新段落起点
+        // adj1005：新段起点跳过紧跟的纯 `|/`（隐藏线不占小节；带跳房子/记号的线仍保留）
+        repeatStart = firstContentAt(i + 1)
         passBase = pass // adj997：新段落以当前遍次为起点（整曲连续遍次）
         // adj997：遍次**不重置**（整曲连续）；:|: 只换段起点
       }
@@ -2824,7 +2897,9 @@ export function buildPlaySequence(
     switch (bar.type) {
       case '|:':
       case '||:':
-        repeatStart = i + 1
+        // adj1005：反复段起点 = **`|:` 之后第一小节**；紧跟的纯 `|/` 隐藏线不占小节，直接越过。
+        // （带跳房子 `[` / 记号的 `|/` 不是"纯隐藏线"，仍从它起算——那些线本身要参与判定。）
+        repeatStart = firstContentAt(i + 1)
         passBase = pass // adj997：新段落以当前遍次为起点（整曲连续遍次）
         // adj997：遍次**不重置**（整曲连续）；|: 只换段起点
         i++
@@ -2879,6 +2954,25 @@ export function buildPlaySequence(
    */
   alignSameBeatSegs(events)
 
+  /**
+   * adj996（用户 2026-10-19 要求）：把"按事件下标记的遍次边界"换算成**播放时刻**再交给 UI。
+   *
+   * 边界下标指向"该遍的第一个事件"；若那一遍没有任何事件（空遍/全被跳过），就落到 `totalMs`。
+   *
+   * adj1006（**用户 2026-10-20 实报**「试听里第 N / 共 M 遍的显示不见了」）：这段必须在
+   * **"从音符起播"的三条早退之前**算好 —— 那三条原来只返回 `{events,totalMs,bpm}`，
+   * 一旦 `playbackStartId` 非空（双击音符试听 / 点音起播），`passMarks`/`maxPass` 就被丢掉，
+   * 对话框只能拿到 `undefined` ⇒ 读数整条消失。
+   */
+  const passMarks = passIdxMarks
+    .map((m) => ({ atMs: m.idx < events.length ? events[m.idx].atMs : totalMs, pass: m.pass }))
+    .filter((m, k, arr) => k === 0 || m.atMs > arr[k - 1].atMs)
+  const maxPass = passIdxMarks.reduce((mx, m) => Math.max(mx, m.pass), 1)
+  /**
+   * adj1006：从音符起播时，遍次时间轴用 `rebasePassMarksOf` 搬到新时间轴（0 点 = 起播音符）；
+   * `maxPass` 保持全曲遍数（"共 M 遍"不是"还剩 M 遍"）。
+   */
+
   // adj88：从指定音符开始——丢弃起点之前的音符事件，其后 atMs 统一减去起点 atMs
   if (startIdxByPage !== null) {
     /**
@@ -2926,22 +3020,13 @@ export function buildPlaySequence(
     if (from > 0) {
       const base = events[from].atMs
       const sliced = events.slice(from).map((e) => ({ ...e, atMs: Math.max(0, e.atMs - base) }))
-      return { events: sliced, totalMs: totalMs - base, bpm }
+      // adj1006：遍次时间轴跟随切片重排（见 `rebasePassMarksOf`）
+      return { events: sliced, totalMs: totalMs - base, bpm, passMarks: rebasePassMarksOf(passMarks, base), maxPass }
     }
-    if (from === 0) return { events, totalMs, bpm }
+    if (from === 0) return { events, totalMs, bpm, passMarks, maxPass }
     // 起点音符不在事件中（隐藏休止符等）→ 从第一个可播放事件开始
-    return { events, totalMs, bpm }
+    return { events, totalMs, bpm, passMarks, maxPass }
   }
-
-  /**
-   * adj996（用户 2026-10-19 要求）：把"按事件下标记的遍次边界"换算成**播放时刻**再交给 UI。
-   *
-   * 边界下标指向"该遍的第一个事件"；若那一遍没有任何事件（空遍/全被跳过），就落到 `totalMs`。
-   */
-  const passMarks = passIdxMarks
-    .map((m) => ({ atMs: m.idx < events.length ? events[m.idx].atMs : totalMs, pass: m.pass }))
-    .filter((m, k, arr) => k === 0 || m.atMs > arr[k - 1].atMs)
-  const maxPass = passIdxMarks.reduce((mx, m) => Math.max(mx, m.pass), 1)
 
   return { events, totalMs, bpm, passMarks, maxPass }
 }

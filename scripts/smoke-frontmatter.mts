@@ -9,6 +9,10 @@ import { defaultPageConfig, dragDelta, formatJps, formatLine, instrumentColorMap
 import type { PageConfig } from '@ijipu/engine'
 import { existsSync, globSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
+// adj1007b：本地服务请求改用 `node:http`（`agent:false`，每次新连接）——
+// Node 22 的 `fetch`（undici）在"本地服务刚响应完又复用连接"时会偶发 `ECONNRESET`，
+// 把冒烟卡在"取音源"那条路径上；这里只换传输层，断言仍是 200/字节逐字比对。
+import { request as httpRequest } from 'node:http'
 // adj920：**无头浏览器实测**（嵌入块与段落盒/段落文字的左缘、右缘）—— 起浏览器进程、拿 `--dump-dom` 的文本
 import { execFileSync } from 'node:child_process'
 import { resolve } from 'node:path'
@@ -37,12 +41,44 @@ export function codeOf(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1')
 }
 
-const realFetch = globalThis.fetch
+/**
+ * adj1007b：本地服务请求用 `node:http`（`agent:false`）而不是 `fetch`。
+ *
+ * 由来：Node 22 的 `fetch`（undici）在"本地服务刚响应完又复用连接"时会偶发
+ * `TypeError: fetch failed`（`ECONNRESET`），把套件卡在"取音源"那条路径上；
+ * 换传输层不改断言：下面仍按 HTTP 状态 + 原始字节逐字比对。
+ */
+async function localHttpFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const url = typeof input === 'string' ? input : input instanceof URL ? input.href : String((input as Request).url)
+  return await new Promise<Response>((resolve, reject) => {
+    const req = httpRequest(
+      url,
+      { method: init?.method ?? 'GET', agent: false, headers: init?.headers as Record<string, string> | undefined },
+      (res) => {
+        const chunks: Buffer[] = []
+        res.on('data', (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)))
+        res.on('end', () => {
+          resolve(
+            new Response(Buffer.concat(chunks), {
+              status: res.statusCode ?? 0,
+              headers: res.headers as unknown as HeadersInit,
+            }),
+          )
+        })
+      },
+    )
+    req.on('error', reject)
+    const body = init?.body
+    if (body !== undefined && body !== null) req.write(body as string | Uint8Array)
+    req.end()
+  })
+}
+
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   const url = typeof input === 'string' ? input : input instanceof URL ? input.href : String((input as Request).url)
   if (url.startsWith('http://127.0.0.1') || url.startsWith('http://localhost')) {
     try {
-      return await realFetch(input, init)
+      return await localHttpFetch(input, init)
     } catch (e) {
       // 排查用：本地服务请求失败时把 URL 打出来（否则只看到 `fetch failed`，不知道是哪一个）
       console.log(`[smoke] 本地请求失败：${url} ⇒ ${e instanceof Error ? e.message : String(e)}`)

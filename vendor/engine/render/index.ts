@@ -1591,19 +1591,34 @@ function renderVoltas(
     rows.set(bar.yTop, arr)
   }
   const firstOfRow = new Map<number, PlacedBarline>()
+  /**
+   * adj1007（**用户 2026-10-20 实报**）：跨行跳房子的"右半"必须从**行首内容左缘**起画，
+   * 不能从"该行第一根小节线"起 —— 行首若直接从音符开始（没有小节线），
+   * 第一根小节线在**第一小节之后**，右半就会漏掉最左那一小节。
+   *
+   * 行首音符的纵向偏移 = `18.4 × noteScaleOf(noteSize)`（与布局 `bar.yTop = 行顶 − 18.4×s`
+   * 同一口径）。**不能写死 18.4**：默认字号 13 时偏移是 13.29，写死就一个都匹配不到。
+   */
+  const noteYOffset = 18.4 * noteScaleOf(noteSize)
   for (const [y, arr] of rows) {
     arr.sort((a, b) => a.x - b.x)
-    // 该行首音符 x（音符基线 y - 18.4 = 小节线 yTop，容差 1px）
+    // 该行首音符 x（音符基线 y - 18.4×s = 小节线 yTop，容差 1px）
     let firstNoteX: number | undefined
     if (notes) {
       for (const n of notes) {
-        if (Math.abs(n.y - 18.4 - y) < 1 && (firstNoteX === undefined || n.x < firstNoteX)) {
+        // 段层音符（{bz}/{dsb}/{tp}）有自己的纵向偏移，不能拿来定"行首"
+        if (n.segment) continue
+        if (Math.abs(n.y - noteYOffset - y) < 1 && (firstNoteX === undefined || n.x < firstNoteX)) {
           firstNoteX = n.x
         }
       }
     }
-    const lead =
-      firstNoteX !== undefined ? arr.find((b) => b.x < firstNoteX) : arr[0]
+    /**
+     * 只认"**第一音左侧**"的小节线；没有就**不设** `firstOfRow`，
+     * 让 `renderVoltaLine` 退到"边距+2"（盖住行首那一小节）。
+     * 旧写法在这里回退到 `arr[0]`（第一根小节线），正是"少画一小节"的来源。
+     */
+    const lead = firstNoteX !== undefined ? arr.find((b) => b.x < firstNoteX) : undefined
     if (lead) firstOfRow.set(y, lead)
   }
   let open: PlacedBarline | null = null
