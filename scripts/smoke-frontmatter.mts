@@ -9425,6 +9425,19 @@ if (true) {
       /body\.ijipu-preview-theme-dark \.ijipu-svgs \.ijipu-page-svg > svg \[data-page-bg\][\s\S]{0,200}fill: transparent/.test(css1009))
   check('adj1009 **仅预览**：预览主题只出现在 main/preview 相关处，导出链（render.ts / api.ts）完全不引用',
     /ijipu-preview-theme-dark/.test(main1009) && !/previewTheme|ijipu-preview-theme/.test(render1009) && !/previewTheme|ijipu-preview-theme/.test(api1009))
+  /**
+   * adj1009（用户要求）：「Obsidian 打印强制浅色」——屏幕可跟随深色，打印必须白纸。
+   * 判据：`@media print` 里同时有 `filter: none`（去反相）、`background: #fff`（纸底）、
+   * `fill: #fff`（SVG 页面白底恢复）。
+   */
+  const printBlock1009 = css1009.match(/@media print \{[\s\S]*?\n\}/)?.[0] ?? ''
+  const printOk1009 = (block: string): boolean =>
+    block.includes('filter: none') && block.includes('background: #fff') && block.includes('fill: #fff')
+  check('adj1009 Obsidian 打印强制浅色：`@media print` 去除反相，纸底与 SVG 页面白底都刷白',
+    printBlock1009 !== '' && printOk1009(printBlock1009),
+    printBlock1009.slice(0, 120))
+  check('adj1009 **负对照**：把 print 里的 `filter: none` 改成 `filter: invert(1)` ⇒ 同一条判据判假',
+    printBlock1009 !== '' && !printOk1009(printBlock1009.replace('filter: none', 'filter: invert(1)')))
   check('adj1009 **负对照**：把设置开关忽略（enabled 恒真）⇒ 上面"关掉返回 null"那条判据会判红',
     resolvePreviewTheme({ ...base, enabled: true, kvMode: 'dark' }) === 'dark')
 }

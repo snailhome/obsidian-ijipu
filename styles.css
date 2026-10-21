@@ -50,6 +50,28 @@ body.ijipu-preview-theme-dark .ijipu-svgs .ijipu-page-svg > svg [data-page-bg],
 body.ijipu-preview-theme-dark .ijipu-svgs .ijipu-page-svg > svg > rect:first-child {
   fill: transparent;
 }
+/**
+ * adj1009（用户要求）：**Obsidian 打印 / 「导出为 PDF」强制浅色**。
+ *
+ * 屏幕预览可以跟随深色，但打印必须回到白纸：去掉反相滤镜、纸底刷白、
+ * 页面白底 `[data-page-bg]` 恢复为白色。打印时**不跟随**预览主题。
+ */
+@media print {
+  body.ijipu-preview-theme-dark .ijipu-score {
+    background: #fff;
+  }
+  body.ijipu-preview-theme-dark .ijipu-svgs .ijipu-page-svg {
+    background: #fff;
+    filter: none;
+  }
+  body.ijipu-preview-theme-dark .ijipu-svgs .ijipu-page-svg > svg {
+    background: #fff;
+  }
+  body.ijipu-preview-theme-dark .ijipu-svgs .ijipu-page-svg > svg [data-page-bg],
+  body.ijipu-preview-theme-dark .ijipu-svgs .ijipu-page-svg > svg > rect:first-child {
+    fill: #fff;
+  }
+}
 /* adj652（用户要求）：谱面文本里的**链接**（引擎把 URL 包成 `a.jp-link`，如 `S:` 谱尾说明里的官网）——
    手型光标 + 下划线，一眼看出能点；点击由 scorePane 接管（系统浏览器打开）。 */
 .ijipu-svgs a.jp-link {
