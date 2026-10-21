@@ -285,6 +285,26 @@ export class IJipuSettingTab extends PluginSettingTab {
         })
       })
 
+    /**
+     * adj1009（用户要求）：**预览跟随嵌入版主题**。
+     *
+     * 只作用于 `.jps` 文件 / ` ```jps ` 代码块的预览（背景 + 墨色）；
+     * 导出/复制仍走引擎产物与导出设置，**不受这里影响**。
+     */
+    new Setting(host)
+      .setName('预览跟随嵌入版主题')
+      .setDesc(
+        '`.jps` 文件与 jps 代码块的预览背景/墨色，跟随嵌入版 iJipu 的「自动 / 浅色 / 深色」设置。' +
+          '**仅预览**：导出 / 复制仍按引擎产物与导出设置，不受影响。',
+      )
+      .addToggle((tg) => {
+        tg.setValue(this.plugin.settings.previewFollowEmbedTheme !== false)
+        tg.onChange((v) => {
+          this.plugin.settings.previewFollowEmbedTheme = v
+          void this.plugin.saveSettings({ from: 'settingsTab' })
+        })
+      })
+
     const tip = host.createDiv({ cls: 'ijipu-settings-note' })
     tip.setText(
       '说明：嵌入版是把整个 iJipu 网页随插件一起分发（不访问网络），文件读写都通过 Obsidian 的文库接口完成；' +

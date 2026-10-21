@@ -26,6 +26,30 @@
   margin: 0 auto;
   background: #ffffff;
 }
+/**
+ * adj1009（用户要求）：**预览跟随嵌入版 iJipu 的「自动 / 浅色 / 深色」**。
+ *
+ * 只作用于预览（`.jps` 文件 / jps 代码块），做法与应用预览同源：
+ *  · 深色：把**纸张容器**刷成 `#e6e5e5` 再整体 `invert(1)`（反相后 = 中性深灰 `#191a1a`），
+ *    引擎 SVG 自带的页面白底 `[data-page-bg]` 透明化，墨色随反相变浅；
+ *  · 浅色：不加任何规则（保持上面的白纸）。
+ *
+ * ⚠ **导出 / 复制不读这些类**：它们走引擎产物（SVG/PNG），预览 CSS 不会进入导出结果。
+ */
+body.ijipu-preview-theme-dark .ijipu-score {
+  background: #191a1a;
+}
+body.ijipu-preview-theme-dark .ijipu-svgs .ijipu-page-svg {
+  background: #e6e5e5;
+  filter: invert(1) contrast(0.88) brightness(1.03) saturate(1);
+}
+body.ijipu-preview-theme-dark .ijipu-svgs .ijipu-page-svg > svg {
+  background: transparent;
+}
+body.ijipu-preview-theme-dark .ijipu-svgs .ijipu-page-svg > svg [data-page-bg],
+body.ijipu-preview-theme-dark .ijipu-svgs .ijipu-page-svg > svg > rect:first-child {
+  fill: transparent;
+}
 /* adj652（用户要求）：谱面文本里的**链接**（引擎把 URL 包成 `a.jp-link`，如 `S:` 谱尾说明里的官网）——
    手型光标 + 下划线，一眼看出能点；点击由 scorePane 接管（系统浏览器打开）。 */
 .ijipu-svgs a.jp-link {

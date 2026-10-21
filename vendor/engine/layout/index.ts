@@ -990,11 +990,11 @@ export function layoutScore(
    *  · 碎片行（超长小节的续行）结束时**不写**（它的行尾在小节中间、不是小节线）⇒ 再下一行自动退回"行首"；
    *  · 跨组、跨页都不清空（用户明确要求「跨页也挪」）。
    *
-   * adj970：多带两样东西，供"行首序号挂过来时错开"用 —— `marks`（这条线上有没有 `&fine`/`&dc`/`&ds`
-   * 那种**线下方**文本记号）与 `maxTop`（**那一行**允许的方框顶上限 = 该行歌词墨迹上沿再让出层间距与框高）。
-   * 为什么要在写下时就存 `maxTop`：行首序号是**在下一行**挂上去的，那时已经拿不到上一行的歌词行了。
+   * adj970：多带 `marks`（这条线上有没有 `&fine`/`&dc`/`&ds` 那种**线下方**文本记号），
+   * 供"行首序号挂过来时"给两个让位候选。adj1008 起不再存 `maxTop`——最终选上/下
+   * 由 `layoutScore` 末尾按**实际歌词墨迹**判，跨页也能拿到真实的歌词框。
    */
-  let prevRowEndLine: { x: number; y: number; page: number; marks?: readonly string[]; maxTop: number } | null = null
+  let prevRowEndLine: { x: number; y: number; page: number; marks?: readonly string[] } | null = null
 
   /**
    * adj970：这条 x 上的小节线的 `marks`（找不到就给 `undefined`）。
@@ -1276,67 +1276,38 @@ export function layoutScore(
   const isGhostTrailingSeg = (segs: BarSeg[], nc: number): boolean =>
     segs.length > 0 && segs.slice(nc).every((s) => s.notes.length === 0)
   /**
-   * adj970：**序号方框为"线下方文本记号"让位的算法**（用户口径：「上下错开，避免重叠」）。
+   * adj970/adj1008：**序号方框为"线下方文本记号"让位的候选量**。
    *
-   * 实测（用户那条 Q 行、默认版式 `note_size` 13）：记号墨迹 ≈ `[158.9 … 165.6]`、方框 `[158.6 … 166.3]`
-   * ⇒ 完全叠在一起（与用户截图一致）。让位顺序：
-   *  ① **上下错开**（用户要的那一档）：方框整体下移到 `记号墨迹下沿 + LAYER_GAP` —— 前提是**下方放得下**
-   *     （`maxTop` = 歌词墨迹上沿再让一个层间距与框高；行内没歌词就是无穷大）；
-   *  ② 放不下 ⇒ **左右错开**（往左让开 `记号半宽 + 半个框宽 + LAYER_GAP`）。
+   * adj1008（**用户 2026-10-21 最终口径**）：「如果会压到歌词就放左边，否则放下边」。
    *
-   * 为什么不能硬撑到 ①：默认版式下"线底 → 歌词墨迹上沿"只有 **14.6px**，而"记号 6.7 + 层间距 2 + 框 7.7
-   * = 16.4px"⇒ **塞不下**（实测压歌词 3.1px）。而"给这一行撑高"违反 `adj625c` 的用户口径
-   * （「**序号算在曲部行自己的空间里，显隐不得影响排版**」）—— 让序号去改分页是明令禁止的。
-   * 往**左**让（不是往右）：行末那条线右边就是页边距，往右会让方框越出版心。
+   * 这里**不再当场二选一**：同时给出两个候选 —— `yDrop`（下移让到记号墨迹之下）与
+   * `xShift`（左移让开记号）。真正的选择放到 `layoutScore` 末尾的**歌词后处理**：
+   * 拿**这一格下面实际的歌词墨迹**判，下移会压歌词才用左移，否则一律下移。
+   *
+   * 为什么不能在这里判：旧口径用的是"整行第一行歌词"的 y（`barNumberMaxTop`），
+   * 行里**别处有歌词、这一格空着**时也会被判成"会压歌词"⇒ 用户截图那种"下面明明没有歌词
+   * 却放到左边"就是这么来的。
    */
   const barNumberAvoid = (
     n: number,
     yBarBottom: number,
     marks: readonly string[] | undefined,
-    maxTop: number,
   ): { yDrop?: number; xShift?: number } => {
     if (!hasBarDownMark(marks)) return {}
     const ink = barDownMarkInk(yBarBottom, m.noteSize)
     const top = yBarBottom + BAR_NUMBER_BOTTOM_GAP
     const need = ink.bottom + LAYER_GAP - top
     if (need <= 0) return {}
-    if (top + need <= maxTop) return { yDrop: r1(need) }
     const shift = barDownMarkSpan(marks, m.noteSize) / 2 + barNumberBoxW(n, m.noteSize) / 2 + LAYER_GAP
-    return { xShift: r1(shift) }
+    // 两个候选都产出；由 `layoutScore` 末尾按实际歌词二选一（见 `resolveBarNumberAvoid`）
+    return { yDrop: r1(need), xShift: r1(shift) }
   }
-
-  /**
-   * adj970：这一行的歌词**墨迹上沿**允许的"序号方框顶"上限（行内没歌词 ⇒ 无穷大 = 随便往下让）。
-   *
-   * 口径照抄 `inkBox.ts` 的 `addLyricInk`（歌词墨迹上沿 = 基线 − 0.9×字号），第 1 行歌词取 `lyricRow = 0`。
-   * ⚠ 替谱层（`{tp}`）会把歌词往下推 ⇒ 这里**故意不传** `tpExtras`：算出的是**偏小**的余量（更保守，
-   * 宁可落到"左右错开"也不会去压歌词）。
-   */
-  const barNumberMaxTop = (yTop: number, lyricMaps: Map<number, LyricChar>[], sp: Spacing, geciSize: number): number => {
-    if (lyricMaps.length === 0) return Number.POSITIVE_INFINITY
-    const lyricY = lyricRowY(yTop, m.noteSize, sp, geciSize, 0, [])
-    return lyricY - geciSize * 0.9 - LAYER_GAP - barNumberBoxH(m.noteSize)
-  }
-
-  /**
-   * adj970：埋点处用的**便捷封装** —— 把"这根线上的记号"与"这一行的歌词余量"合成 `pushBarNumber` 要的让位量。
-   * 三处埋点（duration / space / 多声部块）都调它，避免每处各写一遍余量算式。
-   */
-  const avoidAtBar = (
-    n: number,
-    yBarBottom: number,
-    marks: readonly string[] | undefined,
-    yTop: number,
-    lyricMaps: Map<number, LyricChar>[],
-    sp: Spacing,
-    geciSize: number,
-  ): { yDrop?: number; xShift?: number } =>
-    barNumberAvoid(n, yBarBottom, marks, barNumberMaxTop(yTop, lyricMaps, sp, geciSize))
 
   /**
    * 记一条序号锚点（渲染层据此画「数字 + 外框」）；`pageIdx` 缺省 = 当前页（adj967 起允许跨页）
    *
    * adj970：`avoid` = 为"线下方文本记号"让位的量（`yDrop` 往下 / `xShift` 往左；都没有就不产出）。
+   * adj1008：两个量**同时**产出候选，`layoutScore` 末尾按实际歌词二选一（见 `resolveBarNumberAvoid`）。
    * ⚠ `yBarBottom` 仍是**线底缘**、`x` 仍是**线位**（口径都不变，`adj906`/`adj967` 那两条断言照旧成立）；
    * 让位量单独记，渲染端与 `inkBox` 各自加一次（同源）。
    */
@@ -1384,11 +1355,11 @@ export function layoutScore(
     yBarBottom: number,
     voice: number,
     group: number,
-    prevEnd: { x: number; y: number; page: number; marks?: readonly string[]; maxTop: number } | null,
+    prevEnd: { x: number; y: number; page: number; marks?: readonly string[] } | null,
   ): void => {
     // adj970：挂到上一行行末线时，那根线上若有 `&ds` 一类记号，方框同样要错开
     // （`marks` 与"那一行允许的方框顶上限"都在锚点里带过来了，见 `prevRowEndLine`）
-    if (prevEnd) pushBarNumber(n, prevEnd.x, prevEnd.y, voice, group, prevEnd.page, barNumberAvoid(n, prevEnd.y, prevEnd.marks, prevEnd.maxTop))
+    if (prevEnd) pushBarNumber(n, prevEnd.x, prevEnd.y, voice, group, prevEnd.page, barNumberAvoid(n, prevEnd.y, prevEnd.marks))
     else pushBarNumber(n, config.margin_left, yBarBottom, voice, group)
   }
   /**
@@ -2160,7 +2131,7 @@ export function layoutScore(
               if (nc === fcRow) pushRowStartBarNumber(ord[nc] as number, yBottomBar, voice, groupIndex, prevEndLine)
               // adj970：这根线上若有 `&fine`/`&dc`/`&ds`（线下方文本记号），序号方框错开（上有余量就上下、否则左右）
               else
-                pushBarNumber(ord[nc] as number, lineX, yBottomBar, voice, groupIndex, pageIndex, avoidAtBar(ord[nc] as number, yBottomBar, bar.marks, yTop, lyricMaps, sp, geciSize))
+                pushBarNumber(ord[nc] as number, lineX, yBottomBar, voice, groupIndex, pageIndex, barNumberAvoid(ord[nc] as number, yBottomBar, bar.marks))
             }
           }
           page.barlines.push({
@@ -2206,7 +2177,6 @@ export function layoutScore(
               y: yBottomBar,
               page: pageIndex,
               marks: barMarksAt(lastX, pageIndex),
-              maxTop: barNumberMaxTop(yTop, lyricMaps, sp, geciSize),
             }
     }
     // adj199：返回该行平均每拍宽（撑满行 → 实际均分宽；未撑满行 → 参考宽/自然宽），
@@ -2919,7 +2889,7 @@ export function layoutScore(
               if (nc === fcRow) pushRowStartBarNumber(ord[nc] as number, yBottomBar, voice, groupIndex, prevEndLine)
               // adj970：同上（空间优先路径）——这根线上有下方文本记号时，序号方框错开
               else
-                pushBarNumber(ord[nc] as number, lineX, yBottomBar, voice, groupIndex, pageIndex, avoidAtBar(ord[nc] as number, yBottomBar, bk.bar.marks, yTop, lyricMaps, sp, geciSize))
+                pushBarNumber(ord[nc] as number, lineX, yBottomBar, voice, groupIndex, pageIndex, barNumberAvoid(ord[nc] as number, yBottomBar, bk.bar.marks))
             }
           }
         page.barlines.push({
@@ -2964,7 +2934,6 @@ export function layoutScore(
               y: yBottomBar,
               page: pageIndex,
               marks: barMarksAt(lastX, pageIndex),
-              maxTop: barNumberMaxTop(yTop, lyricMaps, sp, geciSize),
             }
     }
     return rowLineX
@@ -3956,7 +3925,6 @@ export function layoutScore(
               y: yBottomTop,
               page: pageIndex,
               marks: barMarksAt(barX[barX.length - 1] as number, pageIndex),
-              maxTop: barNumberMaxTop(voiceYTop[mainVi] ?? 0, parts[mainVi]?.lyricMaps ?? [], sp, config.geci_size),
             }
           : null
     }
@@ -3986,7 +3954,7 @@ export function layoutScore(
               p.voice,
               p.groupIndex,
               pageIndex,
-              avoidAtBar(ord[nc] as number, yBottomBar, seg.bar.marks, voiceYTop[mainVi] ?? vTop, p.lyricMaps, sp, config.geci_size),
+              barNumberAvoid(ord[nc] as number, yBottomBar, seg.bar.marks),
             )
           }
         }
@@ -4736,6 +4704,55 @@ export function layoutScore(
    * 各自段落的位移上（实测同属第 3 行的两条差 0.9px）。
    */
   alignRowSlurBaselines(pages)
+
+  /**
+   * adj1008（**用户 2026-10-21 最终口径**）：「如果会压到歌词就放左边，否则放下边」。
+   *
+   * `barNumberAvoid` 只产出两个候选（`yDrop` 下移 / `xShift` 左移）。到这里，歌词已经全部落位，
+   * 就按**这一格下面实际的歌词墨迹**二选一：
+   *  · 下移后的方框**不与任何歌词墨迹相交** ⇒ 保留下移（小节线 → 修饰符 → 序号，垂直放）；
+   *  · 会相交（压歌词）⇒ 改用左移。
+   *
+   * 为什么不在埋点时判：那时只有"整行有没有歌词"的信息（旧 `barNumberMaxTop` 按第一行歌词的 y 算），
+   * 行里别处有歌词、**这一格空着**时也会被误判成"会压歌词"⇒ 用户看到的"下面没有歌词却放左边"。
+   */
+  {
+    const ns = m.noteSize
+    const bh = barNumberBoxH(ns)
+    const gs = config.geci_size
+    /** 歌词墨迹宽（保守：CJK 取满字身、其余 0.55em；只用于"会不会压到"的判据） */
+    const textW = (t: string): number => {
+      let w = 0
+      for (const ch of t) w += (ch.codePointAt(0) ?? 0) > 127 ? gs : gs * 0.55
+      return w
+    }
+    const overlap = (
+      a: { x0: number; x1: number; y0: number; y1: number },
+      b: { x0: number; x1: number; y0: number; y1: number },
+    ): boolean => a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1
+    for (const page of pages) {
+      const lyrics = page.lyrics.map((l) => ({
+        x0: l.x,
+        x1: l.x + textW(`${l.char.text}${l.char.trailing ?? ''}`),
+        y0: l.y - gs * 0.9,
+        y1: l.y + gs * 0.2,
+      }))
+      for (const bn of page.barNumbers) {
+        // 两个候选都产出才需要二选一（没有线下方记号时两个都没有）
+        if (bn.yDrop === undefined || bn.xShift === undefined) continue
+        const bw = barNumberBoxW(bn.n, ns)
+        const top = bn.yBarBottom + BAR_NUMBER_BOTTOM_GAP
+        const down = {
+          x0: bn.x - bw / 2,
+          x1: bn.x + bw / 2,
+          y0: top + bn.yDrop,
+          y1: top + bn.yDrop + bh,
+        }
+        if (lyrics.some((l) => overlap(down, l))) delete bn.yDrop
+        else delete bn.xShift
+      }
+    }
+  }
 
   const configKey = JSON.stringify(config)
   // adj651c：延续类连音线（跳房子孤立 `)`）随排版结果交给播放端——演奏上要并成一个长音

@@ -17,6 +17,8 @@ import { request as httpRequest } from 'node:http'
 import { execFileSync } from 'node:child_process'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+// adj1009：预览跟随嵌入版主题的纯解析（见文件头）
+import { resolvePreviewTheme } from '../src/previewTheme'
 
 /**
  * adj773：**离线闸门** —— 套件不得依赖外网。
@@ -9387,6 +9389,44 @@ if (true) {
   check('adj965d 真浏览器**负向判据**：关掉「排版」之后按 Alt ⇒ **一个字都不写**',
     ok965 && r965.off?.wrote === 0,
     `又写了 ${String(r965.off?.wrote)} 次`)
+}
+
+// ─────────────────────────── adj1009：预览跟随嵌入版主题 ───────────────────────────
+
+/**
+ * adj1009（用户要求）：`.jps` 文件 / jps 代码块的预览跟随嵌入版 iJipu 的「自动/浅色/深色」，
+ * **仅预览**，不改变导出。主题值从嵌入版桥接的 `ijipu.themeMode` 读。
+ */
+{
+  console.log('[adj1009] preview follows embedded app theme')
+  const base = { enabled: true, followObsidian: true, obsidianDark: false, systemDark: false, kvMode: undefined as string | undefined }
+  check('adj1009 显式浅色 ⇒ light；显式深色 ⇒ dark（不参与 auto 判定）',
+    resolvePreviewTheme({ ...base, kvMode: 'light', obsidianDark: true, systemDark: true }) === 'light' &&
+      resolvePreviewTheme({ ...base, kvMode: 'dark', obsidianDark: false, systemDark: false }) === 'dark')
+  check('adj1009 auto + 跟随 Obsidian ⇒ 用 Obsidian 的深浅（不看系统）',
+    resolvePreviewTheme({ ...base, kvMode: 'auto', obsidianDark: true, systemDark: false }) === 'dark' &&
+      resolvePreviewTheme({ ...base, kvMode: 'auto', obsidianDark: false, systemDark: true }) === 'light')
+  check('adj1009 auto + 不跟随 Obsidian ⇒ 用系统 `prefers-color-scheme`（与嵌入版 systemLight 同口径）',
+    resolvePreviewTheme({ ...base, kvMode: 'auto', followObsidian: false, obsidianDark: false, systemDark: true }) === 'dark' &&
+      resolvePreviewTheme({ ...base, kvMode: 'auto', followObsidian: false, obsidianDark: true, systemDark: false }) === 'light')
+  check('adj1009 缺省/非法主题值 ⇒ 按 auto 处理（不炸、不静默用错）',
+    resolvePreviewTheme({ ...base, kvMode: undefined, obsidianDark: true }) === 'dark' &&
+      resolvePreviewTheme({ ...base, kvMode: 'bogus', obsidianDark: false }) === 'light')
+  check('adj1009 **设置关掉 ⇒ 返回 null**（保持原来的白纸预览，不强行改观感）',
+    resolvePreviewTheme({ ...base, enabled: false, kvMode: 'dark' }) === null)
+  /** 源码/CSS 闸门：只挂预览类；导出链（render.ts / api.ts）不得引用预览主题 */
+  const css1009 = String(readFileSync('styles.css', 'utf8'))
+  const main1009 = String(readFileSync('src/main.ts', 'utf8'))
+  const render1009 = String(readFileSync('src/render.ts', 'utf8'))
+  const api1009 = String(readFileSync('src/api.ts', 'utf8'))
+  check('adj1009 预览深色样式：只作用在 `.ijipu-svgs .ijipu-page-svg`（反相 + 页面白底透明），且类名由 body 控制',
+    /body\.ijipu-preview-theme-dark \.ijipu-score \{/.test(css1009) &&
+      /body\.ijipu-preview-theme-dark \.ijipu-svgs \.ijipu-page-svg \{[\s\S]{0,200}filter: invert\(1\)/.test(css1009) &&
+      /body\.ijipu-preview-theme-dark \.ijipu-svgs \.ijipu-page-svg > svg \[data-page-bg\][\s\S]{0,200}fill: transparent/.test(css1009))
+  check('adj1009 **仅预览**：预览主题只出现在 main/preview 相关处，导出链（render.ts / api.ts）完全不引用',
+    /ijipu-preview-theme-dark/.test(main1009) && !/previewTheme|ijipu-preview-theme/.test(render1009) && !/previewTheme|ijipu-preview-theme/.test(api1009))
+  check('adj1009 **负对照**：把设置开关忽略（enabled 恒真）⇒ 上面"关掉返回 null"那条判据会判红',
+    resolvePreviewTheme({ ...base, enabled: true, kvMode: 'dark' }) === 'dark')
 }
 
 // ⚠ 这一行**不能删**：它是套件唯一的"总结 + 计数"输出（缺了它，失败数就看不到了）。

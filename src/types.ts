@@ -28,6 +28,14 @@ export type IJipuSettings = Partial<PageConfig> & {
   /** 嵌入版是否跟随 Obsidian 主题（默认开） */
   embedFollowTheme?: boolean
   /**
+   * adj1009（用户要求）：**预览是否跟随嵌入版 iJipu 的主题**（`auto` / `light` / `dark`）。
+   *
+   * 只影响 `.jps` 文件 / ` ```jps ` 代码块的**预览背景与墨色**（`styles.css` 的
+   * `.ijipu-preview-theme-*`），**不改变导出/复制**——那些走引擎产物，与预览 CSS 无关。
+   * 主题值直接读嵌入版的 `ijipu.themeMode`（已桥接进 `embedKv`）。
+   */
+  previewFollowEmbedTheme?: boolean
+  /**
    * adj724b（用户要求）：**打开 `.jps` 的方式**。
    *
    * 用户原话：「在嵌入版页签中添加一个下拉列表选择，默认打开方式，添加以下几个打开方式选择：

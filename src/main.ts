@@ -25,6 +25,8 @@ import { canOpenWithDefaultApp, openWithDefaultApp } from './openExternal'
 import { DEFAULT_EMBED_CHANNEL, DEFAULT_EMBED_OPEN_MODE, DEFAULT_EXPORT_RANGE, DEFAULT_IMAGE_SCALE, type EmbedOpenMode, type ExportRangeSetting, type IJipuSettings, type ImageScaleSetting } from './types'
 // adj912：「保存为 PNG / SVG」的**落点与文件名**全在这份纯函数里（`.jps` 同目录 + 主名，同名不覆盖就加序号）
 import { fileNameOf, uniqueNameIn } from './savePath'
+// adj1009：预览跟随嵌入版主题（纯解析函数，见该文件头；只决定预览 CSS 类，不碰导出）
+import { resolvePreviewTheme } from './previewTheme'
 import { IJipuBridge } from './embed/bridge'
 import { embedEditLeavesObsidian, keepsSourceOnPreview, pickRightSidebarLeaf, planEmbedTarget, planSourceLeafDisposal } from './embed/openPlan'
 /**
@@ -528,6 +530,18 @@ export default class IJipuPlugin extends Plugin {
 
   async onload(): Promise<void> {
     await this.loadSettings()
+    /**
+     * adj1009：预览主题的初始状态必须在**注册视图之前**定好（否则第一帧先按白纸画一版）。
+     * 之后由三处触发更新：嵌入版改主题（`embedKvSet`）、插件设置保存、Obsidian/系统深浅变化。
+     */
+    this.refreshPreviewTheme()
+    this.registerEvent(this.app.workspace.on('css-change', () => this.refreshPreviewTheme()))
+    {
+      const mq = window.matchMedia?.('(prefers-color-scheme: dark)')
+      const onMq = (): void => this.refreshPreviewTheme()
+      mq?.addEventListener?.('change', onMq)
+      this.register(() => mq?.removeEventListener?.('change', onMq))
+    }
     this.workletUrl = this.makeWorkletUrl()
     // adj729：音色库文件的落点 = 插件自己的目录（`manifest.dir` 由 Obsidian 给出）
     // adj772（社区审核）：兜底路径**不硬编码 `.obsidian`** —— 配置目录可由用户改名，按 `vault.configDir` 拼
@@ -1401,13 +1415,36 @@ export default class IJipuPlugin extends Plugin {
   embedKvSet(key: string, value: string): void {
     if (key === '') return
     this.embedKv[key] = value
+    // adj1009：嵌入版改了「自动/浅色/深色」⇒ 预览立刻跟着换（仅预览 CSS 类）
+    if (key === 'ijipu.themeMode') this.refreshPreviewTheme()
     this.scheduleEmbedKvSave()
   }
 
   embedKvRemove(key: string): void {
     if (!Object.prototype.hasOwnProperty.call(this.embedKv, key)) return
     delete this.embedKv[key]
+    if (key === 'ijipu.themeMode') this.refreshPreviewTheme()
     this.scheduleEmbedKvSave()
+  }
+
+  /**
+   * adj1009（用户要求）：**预览跟随嵌入版 iJipu 的「自动/浅色/深色」**。
+   *
+   * 只做一件事：按 `resolvePreviewTheme` 的结果给 `document.body` 挂
+   * `ijipu-preview-theme-dark` / `-light`（都不挂 = 不跟随，保持原白纸预览）。
+   * 真正的底色/反相在 `styles.css`；**导出/复制不读这个类**，仍走引擎产物。
+   */
+  refreshPreviewTheme(): void {
+    if (!document.body) return
+    const theme = resolvePreviewTheme({
+      kvMode: this.embedKvGet('ijipu.themeMode'),
+      enabled: this.settings.previewFollowEmbedTheme !== false,
+      followObsidian: this.settings.embedFollowTheme !== false,
+      obsidianDark: document.body.classList.contains('theme-dark'),
+      systemDark: window.matchMedia?.('(prefers-color-scheme: dark)').matches === true,
+    })
+    document.body.classList.toggle('ijipu-preview-theme-dark', theme === 'dark')
+    document.body.classList.toggle('ijipu-preview-theme-light', theme === 'light')
   }
 
   /** 防抖 300ms 落盘（与 Obsidian 自身设置写入同一 `data.json`，不额外建文件） */
@@ -2164,6 +2201,8 @@ export default class IJipuPlugin extends Plugin {
     await this.saveData(this.settings)
     // 设置面板改动后广播：打开中的谱面即时按新设置重渲染（此前要重开笔记才生效）
     this.events.trigger(SETTINGS_CHANGED)
+    // adj1009：预览主题开关/「跟随 Obsidian」变了 ⇒ 重算预览 CSS 类（不必重渲染谱面）
+    this.refreshPreviewTheme()
     // 嵌入版存储的落盘**不触发**设置页重画（那是插件设置，跟它无关，重画会打断输入焦点）
     if (opts?.from !== 'settingsTab' && opts?.from !== 'embedKv') this.settingsRefresh?.()
   }
