@@ -330,6 +330,30 @@ export type RenderFontMeta = {
  * `assets` 缺省 ⇒ 不画水印/背景层，产物与改动前**逐字节相同**。
  */
 export type RenderOpts = RenderFontMeta & { assets?: RenderAssets }
+
+/**
+ * adj1068（用户 2026-10-22）：调号显示口径——`1 = ` + 字母 + 左上角 ♯/♭ 角标。
+ *
+ * 描述头调式行（`drawKeyName`）和动态视频片头卡必须共用这份解析，否则会出现
+ * `1=C#`（字母后、普通 #）和预览的 `1 = ♯C`（角标）两种样子。
+ */
+export interface KeySignature {
+  /** 调名前的固定文字（与描述头预览同口径） */
+  prefix: string
+  /** 调号字母（非法输入时原样返回） */
+  letter: string
+  /** 升降号字形（'' / '♯' / '♭'） */
+  accidental: '' | '♯' | '♭'
+}
+
+export function keySignatureOf(keyRaw: string): KeySignature {
+  const m = /^([#$b]?)([A-G])([#$b]?)$/.exec((keyRaw ?? '').trim())
+  const letter = m ? m[2] : (keyRaw ?? '').trim()
+  const acc = m ? m[1] || m[3] : ''
+  const accidental = acc ? (acc === '#' ? '♯' : '♭') : ''
+  return { prefix: '1 = ', letter, accidental }
+}
+
 /**
  * adj627c（用户要求）：把**调名**画成与描述头 `1 = Ab` 完全同一套效果——
  * 字母 + **左上角 ♯/♭ 角标**（角标字号 = 字母 3/4、上移 0.35×字号；adj638 起两者**内联**排版，
@@ -362,10 +386,9 @@ function drawKeyName(o: {
   /** 写在 `<text>` 末尾的额外属性（如 ` data-keychange="转1=Ab"`） */
   tailAttrs?: string
 }): { parts: string[]; letter: string; accShift: number } {
-  const m = /^([#$b]?)([A-G])([#$b]?)$/.exec((o.keyRaw ?? '').trim())
-  const letter = m ? m[2] : (o.keyRaw ?? '').trim() // 调号字母（无效时原样）
-  const acc = m ? m[1] || m[3] : '' // 升降号（# 或 $/b）
-  const symb = acc ? (acc === '#' ? '♯' : '♭') : '' // 升降号字形（$ 与 b 等价 → ♭）
+  const sig = keySignatureOf(o.keyRaw)
+  const letter = sig.letter // 调号字母（无效时原样）
+  const symb = sig.accidental // 升降号字形（♯ / ♭）
   const symSize = symb ? o.size * (3 / 4) : 0 // 角标字号 = 字母 3/4
   const raise = symb ? 0.35 * o.size : 0 // 角标上移量（下沿贴字母中线）
   /**

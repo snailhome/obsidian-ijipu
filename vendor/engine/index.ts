@@ -70,6 +70,35 @@ export {
   playheadPosIn,
 } from './playback/playhead'
 export type { PlayheadPos, PlayheadSegAt } from './playback/playhead'
+// 动态谱（视频出片 / 后续 H5）：时间轴 → 流式视图 → 帧；画布预设
+export {
+  buildRectTrack,
+  rectsActiveAt,
+  RECT_ABOVE_RATIO,
+  RECT_BELOW_RATIO,
+  buildFlowView,
+  ROW_MERGE_RATIO,
+  frameAt,
+  scrollYOfRow,
+  frameTimeMs,
+  frameIndexAt,
+  ballAt,
+  beatPhaseOf,
+  BALL_LANDING_TIMING,
+  BALL_SQUASH_X,
+  BALL_SQUASH_Y,
+  buildCameraTrack,
+  cameraAt,
+  CAMERA_FOLLOW_ZOOM,
+  CAMERA_INTRO_MS,
+  CAMERA_LINE_MS,
+  CAMERA_PAN_MS,
+  CAMERA_SAFE_HALF,
+  DYNAMIC_PRESETS,
+  DEFAULT_DYNAMIC_PRESET,
+  dynamicPageConfig,
+} from './dynamic'
+export type { RectTrack, TimedRect, RectTrackOptions, FlowRow, FlowView, FrameRect, Frame, DynamicPreset, DynamicPresetId, CameraFrame, CameraTrack, CameraOptions, CameraRow, CameraPan, BallAnchor, BallPos, BallTiming } from './dynamic'
 // adj759（清单 B2）：解析问题的分级/排序/计数/展示行（应用与插件共用；宿主可传自己的品牌标签）
 export {
   DEFAULT_PROBLEM_LABELS,
@@ -81,8 +110,17 @@ export {
 } from './diagnostics/problems'
 export type { ProblemSeverity, ProblemLabels, ProblemRow, ProblemSummary } from './diagnostics/problems'
 // adj760（清单 B3）：音源库**清单**与**取用顺序策略**（列表/顺序/失败文案共用；IO 留宿主）
-export { HQ_LIBRARIES, getHqLibrary, planHqBankLoad, hqBankFailureText } from './playback/soundbanks'
-export type { HqSampleLibrary, HqBankSource } from './playback/soundbanks'
+// adj1009：补 `findKnownLibrary`（找不到返回 undefined，不再默默回退默认库）与
+// `hqBankManualOnlyText`（只能手动下载的库，如 FluidR3），并把两个旧符号标为迁移期保留。
+export { HQ_LIBRARIES, RECOMMENDED_BANKS, BASE_BANK, findKnownLibrary, getHqLibrary, resolveActiveLibrary, planHqBankLoad, hqBankFailureText, hqBankManualOnlyText } from './playback/soundbanks'
+export type { HqSampleLibrary, HqBankSource, ActiveLibrary } from './playback/soundbanks'
+// adj1009（多音色库 P1）：读 SF2 头部（库名/预设表）的纯函数——"音色数量与名字"的唯一出处。
+// 只读 RIFF 的 INFO 与 pdta/phdr，不碰采样数据；smoke 用手搓夹具 + 真文件双重断言。
+export { isSf2, isGitLfsPointer, readSf2Info, readSf2Presets, summarizeSf2Presets, matchKnownLibrary } from './playback/sf2'
+export type { Sf2Info, Sf2Preset, Sf2PresetSummary } from './playback/sf2'
+// adj1019：民族乐器的**拟声**映射（GM 里没有二胡/琵琶/古筝；显示一律带「（拟）」）
+export { ETHNIC_ALIASES, ethnicAliasOf, ethnicLabel, ethnicGmLabel } from './playback/ethnicVoices'
+export type { EthnicAlias } from './playback/ethnicVoices'
 // adj762（清单 B4）：整篇/逐行**高亮模型**（token + 行头 + 错误块 + 行级级别）——两端只做渲染映射
 export { highlightModel, highlightLineModel, groupBlocksByLine, lineLevelOf } from './highlight/model'
 export type { JpsLineModel, JpsHighlightModel, ProblemLevel } from './highlight/model'
@@ -110,7 +148,7 @@ export {
   MEASURE_BEATS_EPSILON,
 } from './measures'
 export { layoutScore } from './layout'
-export { renderScoreToSvg } from './render'
+export { renderScoreToSvg, keySignatureOf } from './render'
 // adj863（T-3）：**范围**（整页 / 墨迹 ± 每边 N px）的唯一实现 + SVG 外框改写（插件预览与导出、应用导出、
 // CLI `render --crop` 都消费这一份；墨迹盒由有 DOM 的宿主量好传进来，引擎不瞎估）
 export { rangeBox, applyRangeToSvg, readViewBoxOf, normalizeRangePad, normalizeMinInk, minInkFor, RANGE_PAD_DEFAULT, MIN_INK_FALLBACK, NEAR_PAGE_RATIO } from './render/range'
@@ -136,7 +174,7 @@ export type { AccidentalGlyphInk, AccidentalInkMetrics } from './layout/spacing'
 export { accidentalGeometry } from './layout/spaceLayout'
 export type { LayoutFontMeta } from './layout/index'
 // adj638：渲染端可选入参（宿主实测的 `1 = ` / ♯ / ♩ 宽）——应用与插件都按同一份口径传
-export type { RenderFontMeta } from './render/index'
+export type { RenderFontMeta, KeySignature } from './render/index'
 // adj965（方案「OVL」）：水印/背景层的运行时资源类型——宿主解析好图片后按这个形状传给引擎
 export type { RenderAssets, RenderOpts, OverlayAsset } from './render/index'
 // adj647：音符字体栈（宿主实测字形时必须与渲染用同一串 font-family）

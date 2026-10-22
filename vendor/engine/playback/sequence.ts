@@ -132,6 +132,21 @@ export interface PlaySequence {
   passMarks?: { atMs: number; pass: number }[]
   /** adj996：整首一共用了几遍（= `passMarks` 里最大的 `pass`），供"第 N / 共 M 遍"显示 */
   maxPass?: number
+  /**
+   * adj1058/adj1061（用户口径）：**展开后的小节起点时刻**（升序，主旋律各 Q 行）。
+   *
+   * 用户原话：「用小节的自然拍的位置，小节开始的第一个音总是第一拍的开始」。
+   * 跳跳球据此按**小节**重置拍网格——弱起/漂移不会累积到下一小节。
+   *
+   * adj1061（用户 2026-10-22 实报「反复之后球落点漂移、乱跳」）：必须**逐遍记录**——
+   * `|: … :|` / `&dc` / `&ds` 会把内容展开成多遍，第二遍起的小节起点 =
+   * **该遍偏移 + 源码小节起点**；旧实现只给源码小节线（只覆盖第一遍），
+   * 第二遍起拿第一遍的网格 ⇒ 相位越走越偏。
+   *
+   * 末尾那条是**「曲末」时刻**（= 整曲播放结束，不是下一小节的开头）：
+   * 用户 2026-10-22 口径「正好作为球自由下落的时刻」，`ballAt` 不拿它当拍网格原点。
+   */
+  barStartsMs?: number[]
 }
 
 /** 音符 id → `page_voice_group_index` 串（与 `data-notepos` / `activeNoteId` 同一形状） */
@@ -160,6 +175,37 @@ function rebasePassMarksOf(
     .filter((m) => m.atMs >= base - 0.5 && (endMs === undefined || m.atMs <= endMs + 0.5))
     .map((m) => ({ atMs: Math.max(0, m.atMs - base), pass: m.pass }))
   if (cur && (out.length === 0 || out[0].atMs > 0.5)) out.unshift({ atMs: 0, pass: cur.pass })
+  return out
+}
+
+/**
+ * adj1061：把**展开后的小节起点**搬到切片的新时间轴（0 点 = `base`）。
+ *
+ * 与 `rebasePassMarksOf` 同一口径，三条要求：
+ *  · 区间内的小节起点按 `base` 平移（**不能原样返回**：切片后事件从 0 起，未平移的数组会整体错位）；
+ *  · 起播点若落在**小节中间**，把该小节起点也带上（**可以是负值**）——
+ *    拍网格 `barStart + k×拍长` 因此保住"这一小节已经走了几拍"的相位；
+ *    若硬钳成 0，从八分音符起播时球会整体提前半拍（起点切片/练习段都会中招）；
+ *  · 末尾补一条**切片自己的「曲末」时刻**（`endMs`）：球从这一刻开始自由落体。
+ *    源序列末尾那条「曲末」若超出切片范围会被过滤掉，这里补的是**切片的**结束时刻。
+ */
+function rebaseBarStartsOf(
+  bars: readonly number[] | undefined,
+  base: number,
+  endMs: number,
+): number[] {
+  if (!bars || bars.length === 0) return []
+  const cur = [...bars].reverse().find((s) => s <= base + 0.5)
+  const out: number[] = []
+  for (const s of bars) {
+    const t = s - base
+    if (t < -0.5) continue
+    if (t > endMs + 0.5) break
+    out.push(t)
+  }
+  // 起播点在小节中间：补上当前小节的起点（负值 = 保住拍位相位）
+  if (cur !== undefined && (out.length === 0 || out[0] > 0.5)) out.unshift(cur - base)
+  if (out.length === 0 || endMs > out[out.length - 1] + 0.5) out.push(endMs)
   return out
 }
 
@@ -206,6 +252,8 @@ export function slicePlaySequenceByNoteRange(
     // adj1006：遍次读数跟随切片重排（与 `slicePlaySequenceByRange` 同一口径）
     passMarks: rebasePassMarksOf(seq.passMarks, base, rangeMs),
     maxPass: seq.maxPass,
+    // adj1061：小节起点同样重基（切片后事件从 0 起；末尾补切片自己的「曲末」）
+    barStartsMs: rebaseBarStartsOf(seq.barStartsMs, base, rangeMs),
   }
 }
 
@@ -422,7 +470,16 @@ export function slicePlaySequenceByRange(
    * adj1006：从某遍**中间**起播时，0 点还要补当前那一遍（`rebasePassMarksOf` 统一处理）。
    */
   const passMarks = rebasePassMarksOf(seq.passMarks, base, rangeMs)
-  return { events, totalMs: rangeMs, bpm: seq.bpm, rangeMs, passMarks, maxPass: seq.maxPass }
+  return {
+    events,
+    totalMs: rangeMs,
+    bpm: seq.bpm,
+    rangeMs,
+    passMarks,
+    maxPass: seq.maxPass,
+    // adj1061：小节起点跟着切片重基（否则练习段里球还用着整曲的时间轴 ⇒ 整体错位/乱跳）
+    barStartsMs: rebaseBarStartsOf(seq.barStartsMs, base, rangeMs),
+  }
 }
 
 /**
@@ -1736,6 +1793,22 @@ export function buildPlaySequence(
     const last = passIdxMarks[passIdxMarks.length - 1]
     if (last.pass !== pass) passIdxMarks.push({ idx: events.length, pass })
   }
+  /**
+   * adj1061：**展开后的小节起点**（跳跳球按小节重置拍网格）。
+   *
+   * 用户 2026-10-22 实报「反复之后球落点漂移、乱跳」，根因：
+   * 旧实现直接拿 `barStartMsInGroup[0]`（**源码小节线**累加），只覆盖第一遍；
+   * 而下面这段走查会把 `|: … :|`、`&dc` / `&ds` 展开成多遍 ⇒
+   * 第二遍起继续用第一遍的小节起点当拍网格原点，相位错开，越走越偏。
+   *
+   * 现在在走查里**逐遍、逐 Q 行**记录：`passMs + groupStartMs[g] + 源码小节起点`
+   * （= 本音符的 `atMs` 减去它在本小节内的拍偏移，也就是"这一遍这一小节从哪一刻开始"）。
+   * 升序去重（多声部块里各声部起点相同）。
+   */
+  const barStartsMs: number[] = []
+  const recordBarStart = (t: number): void => {
+    if (barStartsMs.length === 0 || t > barStartsMs[barStartsMs.length - 1] + 0.5) barStartsMs.push(t)
+  }
   let pass = 1 // 当前反复遍次（1 起；**整曲连续**：|:/:|: 不再归 1，只有跳跃/repeat 前进时 +1）
   /**
    * adj997（用户 2026-10-19 口径「整曲连续遍次」）：**本反复段的起始遍次**。
@@ -2254,6 +2327,18 @@ export function buildPlaySequence(
         pendingJumpMs = -1
       }
       /**
+       * adj1061：**逐遍**记下本小节的起点（该遍 `passMs` 偏移 + 源码小节起点）。
+       *
+       * 放在"替谱静音"之前：被 `{tp}` 替代的主旋律音虽然不发声，它所在的小节仍然客观存在
+       * （球在这一遍照样要吃这一小节的拍网格），漏记会让该小节的网格退化成上一小节。
+       *
+       * ⚠ **不能只收 group 0**：一份谱的主旋律按 Q 行分成多个 group（一行一个），
+       * 旧实现直接取 `barStartMsInGroup[0]`，真谱实测**只记到第一行的 6 个小节**，
+       * 第二行起球就只能沿用上一小节的网格（这才是"整曲都在漂"的主因）。
+       * 多声部块里各声部的 `groupStartMs` 与小节长相同 ⇒ 起点相同，靠 `recordBarStart` 去重。
+       */
+      recordBarStart(passMs + groupStartMs[g] + (barStartMsInGroup[g][bi] ?? 0))
+      /**
        * adj629k：**补发临时段要放在"静音判定"之前**。
        *
        * 静音（`replacedByTp`）是"这一遍主旋律不发声"，与"替谱层什么时候把事件补发出去"无关；
@@ -2540,9 +2625,14 @@ export function buildPlaySequence(
           // 否则 `prevBeat` 会从 0 起算、色块与已有段重叠。
           const blockEv = events[lastBlockEvIdx >= 0 ? lastBlockEvIdx : lastMainEvIdx]
           const prevBeat = (blockEv.playheadSegs ?? []).reduce((a, s) => a + s.beats, 0)
-          // adj451：并入的拍段力度取**发声事件（prev）的 gain**——合并后是一个 noteOn，
-          // 音频只可能用一个力度，色块轨道必须跟着它，二者不能各说各话。
-          const prevGain = prev.gain ?? 1
+          /**
+           * adj451/adj1062：并入的拍段力度取**承载色块的那个事件**的 gain（`blockEv`）。
+           *
+           * adj1062 起色块挂在"本音符最早事件"上——前倚音时它是**前倚音事件**（短倚音 gain=0.9），
+           * 不再是主音事件（gain=1）。拍段与承载者同源，`AQ1` 才成立；
+           * 音频仍由下面的 `prev`（主音事件）发声，色块轨只是视觉/预留力度提示。
+           */
+          const prevGain = blockEv.gain ?? 1
           blockEv.playheadSegs = (blockEv.playheadSegs ?? []).concat(
             buildPlayheadSegs(item.note!, prevBeat, rightEdgeByNoteIdx.get(item.note!.id.index), computeColorBounds(item.note!, pageByNoteIdx.get(item.note!.id.index)!, voiceBlockByNoteIdx, noteSize)).map((s) => ({ ...s, instrument: blockEv.instrument, playVoice: item.note!.playVoice, gain: prevGain })),
           )
@@ -2564,6 +2654,17 @@ export function buildPlaySequence(
           continue
         }
       }
+      /**
+       * adj1062（用户 2026-10-22 口径：「色块总是在当前音符，球落的拍子开头总是在色块在音符的时候」）：
+       * 色块要挂在**本音符最早的那个事件**上（前倚音 / 装饰短音 / 主音…），而不是主音事件上。
+       *
+       * 为什么：前倚音占本音符的**开头**（adj623），主音事件比拍点晚一个倚音组；色块挂在主音上
+       * ⇒ 拍点上根本没有块，球只能落在空处（用户看到"落点不在色块上"）。
+       * 挂到最早事件后，色块从 `atMs`（拍点）开始，正好是音符的起点。
+       *
+       * 注意：这个下标必须在 `emitSegmentEvents` 之后、本音符任何事件 push 之前取。
+       */
+      const noteFirstEvIdx = events.length
       if (gn && !gn.after && gracePitches.length > 0) {
         // adj623：前倚音一律从**本音符自己的拍点**起奏（占用本音符的时值），主音符顺延到倚音之后。
         let gAt = atMs
@@ -2580,10 +2681,9 @@ export function buildPlaySequence(
       // adj375：新事件开始 → 上一个事件已完成（不会再被连音合并）→ 结算它的呼吸静音
       settleBreath()
       // adj502/adj635/adj636：演奏型装饰与滑音的**前置短音**（装饰短音 / 滑音半音阶梯）
-      // ——首个短音顺便携带色块（色块要与"音符起奏"对齐，否则会晚一个短音的长度才亮）
       const playheadSegs = buildPlayheadSegs(item.note!, 0, rightEdgeByNoteIdx.get(item.note!.id.index), computeColorBounds(item.note!, pageByNoteIdx.get(item.note!.id.index)!, voiceBlockByNoteIdx, noteSize)).map((s) => ({ ...s, instrument, playVoice: item.note!.playVoice, gain }))
-      // adj503：色块挂在**首个前置短音**上（有装饰/滑音时）或主事件上（都没有）——记下来供连音合并追加拍段
-      const blockEvIdx = preSeq.length > 0 ? events.length : -1
+      // adj1062：色块挂在**本音符最早的事件**上（见上面 `noteFirstEvIdx` 的说明）
+      const blockEvIdx = noteFirstEvIdx
       {
         let at = mainAtMs
         for (let si = 0; si < preSeq.length; si++) {
@@ -2598,7 +2698,6 @@ export function buildPlaySequence(
             gain,
             playVoice: playRole,
             ...(hasExplicitInst ? { explicitInstrument: true } : {}),
-            ...(si === 0 ? { playheadSegs } : {}),
           })
           at += st.ms
         }
@@ -2616,9 +2715,19 @@ export function buildPlaySequence(
         ...(pitch && pitch !== placed.audioPitch ? { pitch } : {}),
         // adj434：`@乐器名@` 显式指定 → 播放端保留该音色（不被「试听音色」全局覆盖压掉）
         ...(hasExplicitInst ? { explicitInstrument: true } : {}),
-        // 有色块的话，色块已挂在首个前置短音上（见上）
-        ...(preSeq.length === 0 ? { playheadSegs } : {}),
       })
+      /**
+       * adj1062：**所有事件都 push 完再挂色块**——挂到本音符最早的事件上。
+       * （前倚音时最早事件在 `atMs`；没有倚音/装饰时就是主音事件，与旧口径一致。）
+       *
+       * 拍段的 `gain` 跟着**承载者**走：前倚音事件是短倚音（gain=0.9），主音事件是 1。
+       * 色块轨与承载者同源（`AQ1` 的判据），音频仍由主音事件发声，两者不矛盾。
+       */
+      const blockOwner = events[noteFirstEvIdx]
+      if (blockOwner) {
+        const ownerGain = blockOwner.gain ?? 1
+        blockOwner.playheadSegs = playheadSegs.map((s) => ({ ...s, gain: ownerGain }))
+      }
       // adj623：前倚音只吃**本音符自己的时值** ⇒ 无需再回改上一个主音符事件
       // （adj508 的旧口径会把上一个音符截短来给倚音腾出"拍点前"的时间，现已废弃）。
       // adj375：本音符是某 &hx 的作用对象 → 标记该事件待结算（连音合并会累加时值后再一起算）
@@ -2924,6 +3033,16 @@ export function buildPlaySequence(
   // adj361：总时长 = 实际播放到的时刻（= 所有事件的最大结束时刻，含反复遍）
   // adj427：再与段层事件末刻取最大（段落比其后主旋律长时不被截断）
   totalMs = Math.max(lastEndMs, segEndMs)
+  /**
+   * adj1061：末尾保留**「曲末」时刻**（用户 2026-10-22 口径：正好是球自由下落的时刻）。
+   *
+   * 它**不是**"下一小节的开头"：`ballAt` 只把**早于最后一个音结束**的条目当拍网格原点
+   * （见 `dynamic/ball.ts`），所以它只承担"整曲到此结束"这一个语义。
+   * 旧数组末尾本来就有这一条（源码最后一小节的总长），重建时不能把它丢掉。
+   */
+  if (barStartsMs.length === 0 || totalMs > barStartsMs[barStartsMs.length - 1] + 0.5) {
+    barStartsMs.push(totalMs)
+  }
 
   /**
    * adj723u：**按 `atMs` 稳定排序**——修「含 `{dsb}` 时演奏/色块顺序乱」。
@@ -3021,12 +3140,20 @@ export function buildPlaySequence(
       const base = events[from].atMs
       const sliced = events.slice(from).map((e) => ({ ...e, atMs: Math.max(0, e.atMs - base) }))
       // adj1006：遍次时间轴跟随切片重排（见 `rebasePassMarksOf`）
-      return { events: sliced, totalMs: totalMs - base, bpm, passMarks: rebasePassMarksOf(passMarks, base), maxPass }
+      // adj1061：小节起点同样重基（起播点可能在小节中间 ⇒ 该小节起点一起带上，可为负值）
+      return {
+        events: sliced,
+        totalMs: totalMs - base,
+        bpm,
+        passMarks: rebasePassMarksOf(passMarks, base),
+        maxPass,
+        barStartsMs: rebaseBarStartsOf(barStartsMs, base, totalMs - base),
+      }
     }
-    if (from === 0) return { events, totalMs, bpm, passMarks, maxPass }
+    if (from === 0) return { events, totalMs, bpm, passMarks, maxPass, barStartsMs }
     // 起点音符不在事件中（隐藏休止符等）→ 从第一个可播放事件开始
-    return { events, totalMs, bpm, passMarks, maxPass }
+    return { events, totalMs, bpm, passMarks, maxPass, barStartsMs }
   }
 
-  return { events, totalMs, bpm, passMarks, maxPass }
+  return { events, totalMs, bpm, passMarks, maxPass, barStartsMs }
 }

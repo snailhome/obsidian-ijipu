@@ -1088,7 +1088,7 @@ export type NoteSpaceLayout = 'duration' | 'space'
 
 export interface PageConfig {
   /** 纸张：A4 | A5 | A4_horizontal | A5_horizontal */
-  page: 'A4' | 'A5' | 'A4_horizontal' | 'A5_horizontal'
+  page: 'A4' | 'A5' | 'A4_horizontal' | 'A5_horizontal' | 'DYN_9x16' | 'DYN_1x1' | 'DYN_16x9'
   margin_top: number
   margin_bottom: number
   margin_left: number
@@ -1329,4 +1329,14 @@ export const PAPER_SIZE: Record<PageConfig['page'], { width: number; height: num
   A5: { width: 419.53, height: 595.28 },
   A4_horizontal: { width: 841.89, height: 595.28 },
   A5_horizontal: { width: 595.28, height: 419.53 },
+  /**
+   * 动态谱（视频出片）画布：**这三项不是"纸"，是像素**（1 单位 = 1 px，由
+   * `dynamic/presets.ts` 推导出配套的字号与边距）。
+   *
+   * 为什么放进 `PAPER_SIZE`：布局只认这一张表（`layout/index.ts` 的 `PAPER_SIZE[config.page]`），
+   * 放进来才能"不改排版引擎就换画布"。它们**不会出现在页面下拉里**（那个下拉是手写的 4 个 option）。
+   */
+  DYN_9x16: { width: 1080, height: 1920 },
+  DYN_1x1: { width: 1080, height: 1080 },
+  DYN_16x9: { width: 1920, height: 1080 },
 }

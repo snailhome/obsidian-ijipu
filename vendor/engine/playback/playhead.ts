@@ -238,6 +238,10 @@ export interface PlayheadPos {
 /**
  * 在一组的拍段序列里定位当前色块（二分：最后一个 `atMs <= currentMs` 的段）。
  * 返回 null = 未播放 / 不在本页 / 该段已播完（段间空隙不残留旧块）。
+ *
+ * adj1062：**时间源只有一个 = 色块的 `atMs`**。球的拍点会吸附到同一个 `atMs`
+ * （见 `dynamic/ball.ts` 的 `beatTimesOf`），所以这里不需要任何提前/容差；
+ * 两边在同一个数上切换。
  */
 export function playheadPosIn(
   segs: PlayheadSegAt[],

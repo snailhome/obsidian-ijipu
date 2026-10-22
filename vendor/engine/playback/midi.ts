@@ -11,6 +11,8 @@
 import type { PlayEvent } from './sequence'
 import { matchInstrument, type InstrumentId } from './instruments'
 import { gmVoiceProgram } from './gmVoices'
+// adj1019：民族乐器「拟声」映射（GM 里没有二胡/琵琶/古筝…）
+import { ethnicAliasOf, isEthnicUsable } from './ethnicVoices'
 
 /** 简谱音名（如 C4 / F#5）→ MIDI 音符号（C4 = 60） */
 export function pitchToMidiNote(name: string): number {
@@ -41,17 +43,18 @@ const GM_PROGRAMS: Record<InstrumentId, number> = {
 const GM_NAME_PROGRAMS: Record<string, number> = {
   钢琴: 0, 亮音钢琴: 1, 电钢琴: 4, 酒吧钢琴: 3, 八音盒: 10, 颤音琴: 11, 马林巴: 12, 木琴: 13, 管钟: 14,
   风琴: 19, 手风琴: 21, 口琴: 22,
-  原声吉他: 24, 电吉他: 25, 木贝斯: 32, 电贝斯: 34, 无品贝斯: 35,
-  小提琴: 40, 中提琴: 41, 大提琴: 42, 低音提琴: 43, 竖琴: 45, 弦乐: 48,
+  原声吉他: 24, 电吉他: 27, 木贝斯: 32, 电贝斯: 33, 无品贝斯: 35,
+  小提琴: 40, 中提琴: 41, 大提琴: 42, 低音提琴: 43, 竖琴: 46, 弦乐: 48,
   合唱: 52, 人声: 53,
   小号: 56, 长号: 57, 圆号: 60, 铜管: 61,
   双簧管: 68, 单簧管: 71, 巴松: 70,
-  短笛: 72, 长笛: 73, 竖笛: 75, 排箫: 80,
-  萨克斯: 65, 爵士吉他: 31,
+  短笛: 72, 长笛: 73, 竖笛: 74, 排箫: 75,
+  萨克斯: 65, 爵士吉他: 26,
 }
 
 /** 乐器/声部名 → GM 程序号。支持 `音色名` 与 `库id:音色名`（取音色名部分）；
  *  adj447：**先**查 `GM_VOICES`（128 音色全表，含应用内显示名 `N 名称` 与纯编号两种写法），
+ *  adj1019：再查**民族乐器拟声表**（二胡→Fiddle、琵琶→Banjo…；界面一律显示「（拟）」），
  *  再退回旧别名表 `GM_NAME_PROGRAMS`（风琴/弦乐/小提琴…这类简称），最后按乐器族关键词兜底；
  *  全不中回退钢琴 0。
  *  表序很重要：旧表把 `电钢琴` 映射成 4（GM 标准里 4 是「电钢琴1」、2 才是「电钢琴」），
@@ -62,6 +65,11 @@ export function instrumentToProgram(name: string | undefined): number {
   const trimmed = n.trim()
   const byVoice = gmVoiceProgram(trimmed)
   if (byVoice !== null) return byVoice
+  // adj1019：民族乐器（拟声）——放在 GM 全表之后、旧别名表之前：
+  // 用户写了 `长笛` 仍走 73，只有写了 `笛子/二胡/琵琶` 这些 GM 里没有的名字才落到这里。
+  // adj1028：还要**勾选过**才生效（`isEthnicUsable`）；没勾就按"不认识"继续往下走。
+  const ethnic = ethnicAliasOf(trimmed)
+  if (ethnic && isEthnicUsable(trimmed)) return ethnic.program
   const alias = GM_NAME_PROGRAMS[trimmed]
   if (alias !== undefined) return alias
   return GM_PROGRAMS[matchInstrument(name)] ?? 0
