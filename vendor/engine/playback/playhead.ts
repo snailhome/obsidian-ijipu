@@ -87,9 +87,15 @@ export function trackKeysOf(track: PlayheadSegAt[]): Map<string, PlayheadSegAt[]
 }
 
 /**
- * adj427：按**音色**分配调色板序号——不同音色不同颜色，同一音色恒定同色。
- * 分配规则（保证既有观感不回退）：① 先把 voice 1 的音色排到第 1 位
- * （⇒ 单声部仍是红块、多声部 Q1 仍红、Q2 仍蓝）；② 其余按在轨道中出现的先后依次取色。
+ * adj427 / **adj1095（用户 2026-10-23 实报「多声部各声部色块颜色没有区分开」）**：
+ * 按 **（声部, 音色）** 分配调色板序号——**不同声部不同颜色**，同一声部内再按音色分。
+ *
+ * 以前只按音色名去重 ⇒ 两个声部用同一个音色（都写 `Y: 大钢琴`、或都没写 Y 而落到同一个默认音色）时
+ * 色块**同色**，多声部在谱面上分不出来。用户口径是"各声部要能一眼分清"⇒ 声部先于音色：
+ * 同一音色在不同声部也分色；同一"声部 + 音色"仍恒定同色。
+ *
+ * 分配规则（保证既有观感不回退）：① 先把 voice 1 的键排到最前（单声部仍是红块、主声部仍是红）；
+ * ② 其余按在轨道里出现的先后依次取色。
  *
  * ⚠ **adj905（用户实测）：规则 ① 必须排除"段内声部"（带 `playVoice` 的项）**。
  *
@@ -102,22 +108,33 @@ export function trackKeysOf(track: PlayheadSegAt[]): Map<string, PlayheadSegAt[]
  *
  * 段内声部（`accomp` / `second` / `main`）的颜色由 `segVoiceColor` 固定给出，
  * **不该参与调色板分配** —— 排除它们，主旋律才能稳稳拿回红色。
+ *
+ * @param track 只读 `voice` / `instrument` / `playVoice` 三个字段（视频侧的 `TimedRect`
+ *   也能直接传进来，所以参数用最小形状而不是 `PlayheadSegAt`）
  */
+const colorKeyOf = (voice: number, instrument?: string): string => `${voice}|${instrument ?? ''}`
 let colorTrackCache: unknown = null
 let colorCache = new Map<string, number>()
-export function instrumentColorMap(track: PlayheadSegAt[]): Map<string, number> {
+export function instrumentColorMap(
+  track: readonly {
+    voice: number
+    instrument?: string
+    playVoice?: 'accomp' | 'main' | 'second'
+  }[],
+): Map<string, number> {
   if (colorTrackCache === track) return colorCache
   const order: string[] = []
-  const push = (inst: string | undefined): void => {
-    const k = inst ?? ''
+  const push = (t: { voice: number; instrument?: string }): void => {
+    const k = colorKeyOf(t.voice, t.instrument)
     if (!order.includes(k)) order.push(k)
   }
   /** 段内声部（有 playVoice）有固定色，不参与调色板（adj905） */
-  const isInsideSegment = (t: PlayheadSegAt): boolean => t.playVoice !== undefined
-  for (const t of track) if (t.voice === 1 && !isInsideSegment(t)) push(t.instrument)
-  for (const t of track) if (!isInsideSegment(t)) push(t.instrument)
+  const isInsideSegment = (t: { playVoice?: 'accomp' | 'main' | 'second' }): boolean =>
+    t.playVoice !== undefined
+  for (const t of track) if (t.voice === 1 && !isInsideSegment(t)) push(t)
+  for (const t of track) if (!isInsideSegment(t)) push(t)
   const map = new Map<string, number>()
-  order.forEach((inst, i) => map.set(inst, i % PLAYHEAD_COLORS.length))
+  order.forEach((k, i) => map.set(k, i % PLAYHEAD_COLORS.length))
   colorTrackCache = track
   colorCache = map
   return map
@@ -214,13 +231,17 @@ export function alignSameBeatSegs(
   }
 }
 
-/** 取某拍段的半透明基色（adj432：声部角色优先 → 音色 → 声部序号） */
+/**
+ * 取某拍段的半透明基色（adj432：声部角色优先 → **声部 + 音色**盘 → 声部序号兜底）。
+ *
+ * adj1095：调色键与 `instrumentColorMap` 同源（`声部|音色`），所以"同音色不同声部"也分色。
+ */
 export function playheadBaseOf(
   pos: { voice: number; instrument?: string; playVoice?: 'accomp' | 'main' | 'second' },
   map: Map<string, number>,
 ): string {
   if (pos.playVoice) return segVoiceColor(pos.playVoice)
-  const idx = map.get(pos.instrument ?? '') ?? (pos.voice - 1) % PLAYHEAD_COLORS.length
+  const idx = map.get(colorKeyOf(pos.voice, pos.instrument)) ?? (pos.voice - 1) % PLAYHEAD_COLORS.length
   return PLAYHEAD_COLORS[idx]
 }
 

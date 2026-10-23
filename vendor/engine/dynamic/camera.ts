@@ -115,17 +115,25 @@ export interface CameraOptions {
   /**
    * adj1086（用户口径）：行中平移方式（取值见 `PanMode`）。
    *
-   * - `follow`（默认）：色块到画面右 4/5 才推，一次推到左 1/5；
+   * - `follow`：色块到画面右 4/5 才推，一次推到左 1/5；
    * - `beat`：每**拍**移一次，尽量把当前拍的色块放在画面中间；
-   * - `bar`：每**小节**移一次，同上。
+   * - `bar`：每**小节**移一次，同上（小节内越过 4/5 时另有安全推）。
    *
    * 三种都受"左右露白 ≤ 画面 10%"约束（见 `CAMERA_WHITE_MARGIN` / `clampRowCenter`）。
+   * ⚠ 引擎缺省仍是 `follow`（库层不猜用户偏好）；**应用/命令行宿主默认传 `beat`**（adj1094 起）。
    */
   panMode?: PanMode
   /** 一拍多少毫秒（`beat` 模式要） */
   beatMs?: number
   /** 小节起点时刻（`bar` 模式要；与 track 同一时间轴，升序） */
   bars?: readonly number[]
+  /**
+   * adj1094：**行末提前平移量**（ms）——换到下一行（横向平移 + 纵向换行）提前这么多毫秒**完成**。
+   *
+   * 用户口径：默认半拍、可调到最多 2 拍；`0` = 正好在行首那一下换行（旧行为）。
+   * 宿主按 `beatMs × 拍数` 换算后传进来，引擎不猜拍速。
+   */
+  rowLeadMs?: number
 }
 
 /**
@@ -184,6 +192,11 @@ export interface CameraTrack {
   introMs: number
   lineMs: number
   panMs: number
+  /**
+   * adj1094：**行末提前平移量**（ms）——换行（横向 + 纵向）提前这么多毫秒**完成**。
+   * 0 = 正好在行首那一下换行（旧行为）；默认由宿主按"半拍"换算传进来。
+   */
+  rowLeadMs: number
   /** 片头对准的纵向中心（描述头中间） */
   headerCy: number
 }
@@ -214,6 +227,11 @@ export function buildCameraTrack(
   const introMs = skipIntro ? 0 : (opts.introMs ?? CAMERA_INTRO_MS)
   const lineMs = opts.lineMs ?? CAMERA_LINE_MS
   const panMs = opts.panMs ?? CAMERA_PAN_MS
+  /**
+   * adj1094：行末提前平移量（换行完成的时刻 = 行首 − 它）。
+   * 默认 0（引擎不猜拍速）；宿主按"半拍/1 拍…"换算后传进来。
+   */
+  const rowLeadMs = Math.max(0, opts.rowLeadMs ?? 0)
 
   // 段导出不演"满宽片头"：一上来就是跟拍倍数
   const zoomFit = skipIntro ? zoomFollow : viewW / paper.width
@@ -303,46 +321,108 @@ export function buildCameraTrack(
       }
       return -1
     }
+    /** 此刻没有色块（休止/呼吸缝）⇒ 找**下一块**：镜头先到它那儿等着，别留在上一块 */
+    const nextRectAtOrAfter = (t: number): number => {
+      let best = -1
+      for (let i = 0; i < track.rects.length; i++) {
+        const r = track.rects[i]
+        if (r.t0 >= t && (best < 0 || r.t0 < track.rects[best].t0)) best = i
+      }
+      return best
+    }
     const bt = opts.beatMs ?? 0
-    /** 拍/小节 tick；`rowStart` = 行首补位（换行那一下必须归位，不能等下一拍） */
-    const ticks: { t: number; rowStart: boolean }[] = []
+    const barList = (opts.bars ?? []).filter((b) => b >= firstT && b <= track.endMs)
+    /** 拍/小节 tick；`rectIndex` = 行首那条（时间取该行第一块自己的 t0，不取网格时刻） */
+    const ticks: { t: number; rowStart: boolean; rectIndex?: number }[] = []
     if (panMode === 'beat' && bt > 0) {
       for (let t = firstT; t <= track.endMs; t += bt) ticks.push({ t, rowStart: false })
     } else if (panMode === 'bar') {
-      for (const b of opts.bars ?? []) if (b >= firstT && b <= track.endMs) ticks.push({ t: b, rowStart: false })
+      for (const b of barList) ticks.push({ t: b, rowStart: false })
     }
     /**
-     * adj1089：**行首补位**。
+     * adj1092（用户实报「按小节时，从行末移到行首不会平移，行首那一小节看不到」）：
+     * **每个曲行无条件补一条行首关键帧**。
      *
-     * 注释早就写着"换行时仍以行首那条色块为准"，但 adj1088 的实现把 `pans` 清空后只按拍/小节重建：
-     * 行首若不在拍/小节 tick 上（弱起行、行内切分小节），相机要等下一拍才归位，
-     * 中间那一段就露出大片空白（正是"露白 ≤10%"要防的）。这里只在该行起点**没有** tick 时补一条
-     * （有 tick 时不补，避免同一时刻两条关键帧打架）。
+     * 为什么必须无条件：拍/小节网格的时刻来自 `seq.barStartsMs`（按拍数累加），
+     * 而色块时刻来自事件（含呼吸缝/附点/倚音，二者会差几毫秒）；网格落在**上一块还没结束**的地方时，
+     * `rectIndexAt(网格时刻)` 拿到的是**上一行**的块 ⇒ 那条关键帧把镜头对回旧行，
+     * 新行行首就没有自己的平移（用户看到的就是"行首一小节看不到"，要等下一小节才回来）。
+     *
+     * 所以：行首关键帧的时刻取**该行第一块自己的 `t0`**、目标取**这一块的夹紧中心**，
+     * 并把同一时刻附近的拍/小节 tick **让位**（保留会互相覆盖，且那条可能是按旧行算的）。
      */
-    const rowStartT: number[] = rows.map(() => Number.NaN)
+    const rowFirstRect: number[] = rows.map(() => -1)
     for (let i = 0; i < track.rects.length; i++) {
       const ri = view.rectRow[i]
       if (ri < 0 || ri >= rows.length) continue
-      if (!Number.isFinite(rowStartT[ri])) rowStartT[ri] = track.rects[i].t0
+      if (rowFirstRect[ri] < 0) rowFirstRect[ri] = i
     }
-    for (const t of rowStartT) {
-      if (!Number.isFinite(t)) continue
-      if (ticks.some((k) => Math.abs(k.t - t) <= 0.5)) continue
-      ticks.push({ t, rowStart: true })
-    }
-    ticks.sort((a, b) => a.t - b.t || (a.rowStart === b.rowStart ? 0 : a.rowStart ? -1 : 1))
-    pans.length = 0
-    for (const k of ticks) {
-      const i = rectIndexAt(k.t)
+    for (const i of rowFirstRect) {
       if (i < 0) continue
-      const want = track.rects[i].x + track.rects[i].w / 2
-      const wantCx = Math.max(0, Math.min(paper.width, clampRow(view.rectRow[i], want)))
-      const last = pans[pans.length - 1]
-      if (last && Math.abs(last.cx - wantCx) < 0.5) continue
+      const t0 = track.rects[i].t0
+      // adj1094：换行**提前** rowLeadMs 完成（默认半拍）；0 = 正好在行首那一下
+      const t = Math.max(firstT, t0 - rowLeadMs)
+      for (let k = ticks.length - 1; k >= 0; k--) {
+        // 让位窗口：从"提前量的起点"到行首。窗口内的小节/拍 tick 若保留，会在行首平移**之后**
+        // 把镜头又拉回上一行（提前量越大越明显），所以一律让给行首平移。
+        if (ticks[k].t >= t - 0.5 && ticks[k].t <= t0 + 0.5) ticks.splice(k, 1)
+      }
+      ticks.push({ t, rowStart: true, rectIndex: i })
+    }
+    /**
+     * adj1093（用户 2026-10-23 实报）：**行内 4/5 安全推**。
+     *
+     * 用户原话：「有时下一小节已经很贴近右视界了，而按小节平移也要到色块接近小节线再平移，
+     * 这会导致一小节视谱偏晚而衔接不上……在到达视界 4/5 的时候，如果还没到达下一小节，也要平移；
+     * （除非是在一行的最后一个小节，可以不遵守 4/5 的要求，因为有露白 10% 的限制）」
+     *
+     * 做法：`bar` 模式下，除"行首"与"小节线"两个时刻外，**每个色块起点也作为检查点**：
+     * 当前镜头下它的中心越过 4/5（`cx + sweep`）就推一次（推到 1/5，与跟随模式同一手感），
+     * 但**本行最后一个小节里不推**——那里由"行末右侧露白 ≤10%"的夹紧接管，
+     * 推了反而看不到行末那几拍。
+     */
+    const lastBarOfRow: number[] = rows.map((r) => {
+      let last = Number.NEGATIVE_INFINITY
+      for (const b of barList) if (b >= r.t0 - 0.5 && b <= r.t1 - 0.5 && b > last) last = b
+      return last
+    })
+    type Checkpoint = { t: number; kind: 'row' | 'tick' | 'push'; rectIndex: number }
+    const checks: Checkpoint[] = []
+    for (const k of ticks) checks.push({ t: k.t, kind: k.rowStart ? 'row' : 'tick', rectIndex: k.rectIndex ?? -1 })
+    if (panMode === 'bar') {
+      for (let i = 0; i < track.rects.length; i++) {
+        const ri = view.rectRow[i]
+        if (ri < 0 || ri >= rows.length) continue
+        // 本行最后一个小节：不推（交给 10% 露白夹紧）
+        if (!Number.isFinite(lastBarOfRow[ri])) continue
+        if (track.rects[i].t0 >= lastBarOfRow[ri] - 0.5) continue
+        checks.push({ t: track.rects[i].t0, kind: 'push', rectIndex: i })
+      }
+    }
+    const rank = (k: Checkpoint['kind']): number => (k === 'row' ? 0 : k === 'tick' ? 1 : 2)
+    checks.sort((a, b) => a.t - b.t || rank(a.kind) - rank(b.kind))
+    pans.length = 0
+    let cx = paper.width / 2
+    for (const k of checks) {
+      let i = k.rectIndex
+      if (k.kind !== 'push') {
+        if (i < 0) i = rectIndexAt(k.t)
+        if (i < 0) i = nextRectAtOrAfter(k.t)
+        if (i < 0) continue
+      } else if (i < 0) continue
+      const ri = view.rectRow[i]
+      const rectCx = track.rects[i].x + track.rects[i].w / 2
+      if (k.kind === 'push' && rectCx <= cx + sweep) continue // 还没到 4/5
+      const wantCx = Math.max(0, Math.min(paper.width, clampRow(ri, rectCx)))
+      if (Math.abs(wantCx - cx) < 0.5) {
+        cx = wantCx
+        continue
+      }
+      cx = wantCx
       pans.push(
-        k.rowStart
-          ? { t: k.t, cx: wantCx, from: k.t, dur: 0 }
-          : { t: k.t, cx: wantCx, from: Math.max(firstT, k.t - panMs), dur: panMs },
+        k.kind === 'row'
+          ? { t: k.t, cx, from: k.t, dur: 0 }
+          : { t: k.t, cx, from: Math.max(rows[ri]?.t0 ?? firstT, k.t - panMs), dur: panMs },
       )
     }
   }
@@ -365,6 +445,7 @@ export function buildCameraTrack(
     introMs,
     lineMs,
     panMs,
+    rowLeadMs,
     headerCy,
   }
 }
@@ -399,7 +480,15 @@ function rowAt(cam: CameraTrack, t: number): { row: CameraRow; prev?: CameraRow 
  * 出相机。**必须是 t 的纯函数**（同一个 t 永远同一结果）。
  */
 export function cameraAt(cam: CameraTrack, t: number): CameraFrame {
-  const { row, prev } = rowAt(cam, t)
+  /**
+   * adj1094：换行的纵向/换页要**提前 `rowLeadMs` 完成**，因此行判定也提前
+   * `rowLeadMs + lineMs`（过渡时长）——这样过渡正好在 `行的第一块 − rowLeadMs` 结束，
+   * 而不是像旧行为那样在行首之后才慢慢移过去。
+   * `rowLeadMs = 0`（用户明确选"行首那一下才换行"）⇒ 不提前，仍在行首切换（瞬间归位）。
+   */
+  const leadShift = cam.rowLeadMs > 0 ? cam.rowLeadMs + cam.lineMs : 0
+  // `rowAt` 取"最后一个 t0 ≤ t 的矩形"所在行，超出末尾自然停在最后一行，不需要另外钳
+  const { row, prev } = rowAt(cam, t + leadShift)
 
   // 片头进度：0 = 整页满宽，1 = 完全进入跟拍。缩放、横移、纵移都按这一个 k 走，
   // 否则会出现"先跳过去再推近"（用户实测："刚开始播放时没有平移，色块不在视界里"）。
@@ -410,10 +499,11 @@ export function cameraAt(cam: CameraTrack, t: number): CameraFrame {
       : ease((t - (cam.firstT - cam.introMs)) / Math.max(1, cam.introMs))
   const zoom = cam.zoomFit + (cam.zoomFollow - cam.zoomFit) * introK
 
-  // 纵向：换行的平移从行边界开始（不提前离开上一行）
+  // 纵向：换行的平移**提前 rowLeadMs 完成**（adj1094）；不提前时就是原来的"从行边界开始"
   let cy = row.cy
   if (prev && row.t0 > prev.t0) {
-    const k = ease((t - row.t0) / Math.max(1, cam.lineMs))
+    const lineEnd = row.t0 - cam.rowLeadMs
+    const k = ease((t - (lineEnd - cam.lineMs)) / Math.max(1, cam.lineMs))
     cy = prev.cy + (row.cy - prev.cy) * k
   }
   // 片头从整页中心平滑过渡到当前行

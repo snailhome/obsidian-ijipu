@@ -1629,8 +1629,16 @@ console.log('[adj452] playhead blocks follow playVoice / instrument / engine bou
     const v1Inst = track.find((t) => t.voice === 1 && t.playVoice === undefined)?.instrument
     check('adj452 主旋律/单声部按音色取色（第 1 音色 = 红）',
       playheadBaseOf({ voice: 1, instrument: v1Inst }, cmap) === red, String(v1Inst))
-    check('adj452 同一音色恒定同色（map 稳定）',
-      playheadBaseOf({ voice: 2, instrument: v1Inst }, cmap) === playheadBaseOf({ voice: 3, instrument: v1Inst }, cmap))
+    const c2 = playheadBaseOf({ voice: 2, instrument: v1Inst }, cmap)
+    check('adj452/adj1095 同一声部同一音色恒定同色（map 稳定：同一入参两次查询相同）',
+      c2 === playheadBaseOf({ voice: 2, instrument: v1Inst }, cmap))
+    /**
+     * adj1095（应用侧 `E-2026-516`）：调色键改为「声部|音色」——**不同声部用同一音色也要分色**
+     * （旧口径"同一音色恒定同色"只对"同一声部内"成立）。
+     */
+    check('adj1095 不同声部同一音色 ⇒ 分色（键 = 声部|音色）',
+      c2 !== playheadBaseOf({ voice: 3, instrument: v1Inst }, cmap),
+      `${c2} vs ${playheadBaseOf({ voice: 3, instrument: v1Inst }, cmap)}`)
   }
   // ⑥ 多声部：Q1/Q2 是两个曲行（group），各画一块且纵向不重叠
   {

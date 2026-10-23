@@ -83,6 +83,7 @@ export {
   frameIndexAt,
   ballAt,
   beatPhaseOf,
+  primaryVoiceOf,
   BALL_LANDING_TIMING,
   BALL_SQUASH_X,
   BALL_SQUASH_Y,

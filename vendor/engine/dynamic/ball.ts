@@ -490,3 +490,27 @@ export function ballAt(
     ...pageOf(p0),
   }
 }
+
+/**
+ * adj1095（用户 2026-10-23 口径）：跳跳球只落在**第一声部**（主声部）上。
+ *
+ * 用户原话：「通常跳跳球应该在第一声部上跳，这才是主声部」。
+ * 以前锚点表是"所有主声部角色 + 所有声部"混在一起，再用"取最晚开始的那条"消重叠 ⇒
+ * 多声部同时起音时球落在**最后**一个声部（Q2/Q3）上，看起来主次颠倒。
+ *
+ * 规则：先只留主声部角色（`playVoice` 为空或 `'main'`；`accomp`/`second` 是临时段层，排除），
+ * 其中**有 voice 1 就只用 voice 1**；一行里没有 voice 1（例如只写了 Q2/Q3）才退到最小声部号。
+ * 两处消费（视频 `renderer.ts` 与试听 `PreviewPane.tsx`）都调它，避免各挑各的。
+ *
+ * 返回要用的声部号（找不到任何项时给 1，让调用方过滤成空表——总比乱跳好）。
+ */
+export function primaryVoiceOf(
+  items: readonly { voice: number; playVoice?: 'accomp' | 'main' | 'second' }[],
+): number {
+  let best = Number.POSITIVE_INFINITY
+  for (const it of items) {
+    if (it.playVoice !== undefined && it.playVoice !== 'main') continue
+    if (it.voice < best) best = it.voice
+  }
+  return Number.isFinite(best) ? best : 1
+}

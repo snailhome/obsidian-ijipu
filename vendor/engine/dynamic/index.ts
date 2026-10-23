@@ -9,7 +9,7 @@ export type { RectTrackOptions } from './timeline'
 export { buildFlowView } from './flowView'
 export type { FlowViewOptions } from './flowView'
 export { frameAt, scrollYOfRow, frameTimeMs, frameIndexAt } from './frame'
-export { ballAt, beatPhaseOf, BALL_LANDING_TIMING, BALL_SQUASH_X, BALL_SQUASH_Y } from './ball'
+export { ballAt, beatPhaseOf, primaryVoiceOf, BALL_LANDING_TIMING, BALL_SQUASH_X, BALL_SQUASH_Y } from './ball'
 export type { BallAnchor, BallPos, BallTiming } from './ball'
 export {
   buildCameraTrack,
