@@ -36,6 +36,59 @@ export const CAMERA_LINE_MS = 350
 export const CAMERA_PAN_MS = 450
 /** 安全区半宽（占取景框宽的比例）：当前音超出这个范围才推镜头 */
 export const CAMERA_SAFE_HALF = 0.25
+/**
+ * adj1086/adj1089：左右露白的上限（占取景框宽的比例）。
+ *
+ * 口径：**按行内容**（色块覆盖范围）算，不是纸张边距——
+ *   · 行首时，行内容左缘离画面左缘不许超过 10%；
+ *   · 行末时，行内容右缘离画面右缘不许超过 10%；
+ *   · 整行放得下（行宽 + 两侧 10% 余量 ≤ 视宽）⇒ 取行中心、不平移。
+ *
+ * 预览（`src/preview/followScroll.ts`）与出片（本文件）**共用这一个值**，
+ * 免得两边各写 0.1、改一处忘一处（AGENTS 六之二·4「数值口径必须同源」）。
+ */
+export const CAMERA_WHITE_MARGIN = 0.1
+
+/**
+ * adj1089：把一个"相机中心 cx"夹到某一行内容的允许范围里（出片与预览共用同一套算式）。
+ *
+ * ## 推导（为什么符号是加 halfW）
+ *
+ * `cx` 是**取景框中心**，取景框半宽 `halfW = worldW / 2`（都是页面单位）。
+ * 行内容左右缘 `x0..x1`，露白上限 `m = worldW × marginRatio`：
+ * ```
+ * 行首露白 = x0 − (cx − halfW) ≤ m   ⇒ cx ≥ x0 + halfW − m
+ * 行末露白 = (cx + halfW) − x1 ≤ m   ⇒ cx ≤ x1 − halfW + m
+ * ```
+ * ⇒ `cx ∈ [x0 + halfW − m, x1 − halfW + m]`。
+ *
+ * 区间为空（`leftLimit ≥ rightLimit`，即 `行宽 + 2m ≤ worldW`）⇒ 整行放得下，取行中心。
+ *
+ * ⚠ **adj1089 修正**：adj1088 提交时把两个 halfW 的符号写反了
+ * （写成 `x0 − halfW + m` / `x1 + halfW − m`），那组边界实际只约束"露白 ≤ 90%"，
+ * 于是行首/行末可以露出大半个画面，而"整行放得下"分支永远不会命中。
+ * 断言见 smoke `[D] 相机平移模式`。
+ *
+ * @param x0/x1     行内容的左右缘（页面单位；没量到可传 ±Infinity）
+ * @param worldW    取景框宽（页面单位，= 画布像素宽 / 缩放）
+ * @param marginRatio 露白上限占取景框宽的比例（正常是 `CAMERA_WHITE_MARGIN`）
+ * @param want      想放的中心
+ */
+export function clampRowCenter(
+  x0: number,
+  x1: number,
+  worldW: number,
+  marginRatio: number,
+  want: number,
+): number {
+  if (!Number.isFinite(x0) || !Number.isFinite(x1)) return want
+  const halfW = worldW / 2
+  const m = worldW * marginRatio
+  const leftLimit = x0 + halfW - m
+  const rightLimit = x1 - halfW + m
+  if (leftLimit >= rightLimit) return (x0 + x1) / 2
+  return Math.max(leftLimit, Math.min(rightLimit, want))
+}
 
 export interface CameraOptions {
   /** 成片画布像素宽高 */
@@ -59,7 +112,29 @@ export interface CameraOptions {
    * 缺省按页高 15% 兜底。
    */
   headerCy?: number
+  /**
+   * adj1086（用户口径）：行中平移方式（取值见 `PanMode`）。
+   *
+   * - `follow`（默认）：色块到画面右 4/5 才推，一次推到左 1/5；
+   * - `beat`：每**拍**移一次，尽量把当前拍的色块放在画面中间；
+   * - `bar`：每**小节**移一次，同上。
+   *
+   * 三种都受"左右露白 ≤ 画面 10%"约束（见 `CAMERA_WHITE_MARGIN` / `clampRowCenter`）。
+   */
+  panMode?: PanMode
+  /** 一拍多少毫秒（`beat` 模式要） */
+  beatMs?: number
+  /** 小节起点时刻（`bar` 模式要；与 track 同一时间轴，升序） */
+  bars?: readonly number[]
 }
+
+/**
+ * adj1089：行中平移方式（`uiStore` 的 L1 偏好、出片与试听共用这一份取值）。
+ *
+ * 为什么放进引擎：它是**相机行为的取值域**，不是界面文案——宿主只负责记住用户选了哪个，
+ * 校验规则必须与 `buildCameraTrack` 认的三种一致（写错一个值就静默变成 follow）。
+ */
+export type PanMode = 'follow' | 'beat' | 'bar'
 
 /** 相机某一刻的位置（页面坐标系 + 缩放） */
 export interface CameraFrame {
@@ -162,6 +237,26 @@ export function buildCameraTrack(
    */
   const halfW = viewW / zoomFollow / 2
   const sweep = halfW * 0.6
+  /**
+   * adj1086（用户口径）：**左右露白 ≤ 画面 10%**，三种平移模式共用的夹紧。
+   *
+   * - 一行谱整行放得下（行宽 + 两侧 10% 余量 ≤ 视宽）⇒ **不平移**，取行中心；
+   * - 放不下 ⇒ 行首时左侧露白 ≤10%，行末时右侧露白 ≤10%。
+   *
+   * "露白"按**行内容**（色块覆盖范围）算，不看纸张边距。
+   * 算式与常量都收敛在 `clampRowCenter`（adj1089 修正符号；预览侧共用同一个函数）。
+   */
+  const rowX0: number[] = rows.map(() => Number.POSITIVE_INFINITY)
+  const rowX1: number[] = rows.map(() => Number.NEGATIVE_INFINITY)
+  for (let i = 0; i < track.rects.length; i++) {
+    const ri = view.rectRow[i]
+    if (ri < 0 || ri >= rows.length) continue
+    rowX0[ri] = Math.min(rowX0[ri], track.rects[i].x)
+    rowX1[ri] = Math.max(rowX1[ri], track.rects[i].x + track.rects[i].w)
+  }
+  const worldW = viewW / zoomFollow
+  const clampRow = (rowIdx: number, want: number): number =>
+    clampRowCenter(rowX0[rowIdx], rowX1[rowIdx], worldW, CAMERA_WHITE_MARGIN, want)
   const pans: CameraPan[] = []
   let cx = paper.width / 2
   let lastRow = -1
@@ -184,7 +279,8 @@ export function buildCameraTrack(
     } else {
       cx = rectCx + sweep
     }
-    // 只保证中心落在页内（允许取景框探出页边 ⇒ 色块才能真的落在 1/4 处）
+    // adj1086：先按"露白 ≤10%"夹紧（整行放得下就居中、不平移），再保证中心落在页内
+    cx = clampRow(rowIdx, cx)
     cx = Math.max(0, Math.min(paper.width, cx))
     const last = pans[pans.length - 1]
     if (last && Math.abs(last.cx - cx) < 0.5) continue
@@ -194,6 +290,63 @@ export function buildCameraTrack(
         : { t: r.t0, cx, from: Math.max(rowStartT, r.t0 - panMs), dur: panMs },
     )
   }
+  /**
+   * adj1086：`beat` / `bar` 两种模式——按拍或按小节，把当前色块尽量放到画面中间，
+   * 再走同一套"露白 ≤10%"夹紧。换行时仍以行首那条色块为准。
+   */
+  const panMode = opts.panMode ?? 'follow'
+  if (panMode !== 'follow') {
+    const rectIndexAt = (t: number): number => {
+      for (let i = 0; i < track.rects.length; i++) {
+        const r = track.rects[i]
+        if (r.t0 <= t && t < r.t1) return i
+      }
+      return -1
+    }
+    const bt = opts.beatMs ?? 0
+    /** 拍/小节 tick；`rowStart` = 行首补位（换行那一下必须归位，不能等下一拍） */
+    const ticks: { t: number; rowStart: boolean }[] = []
+    if (panMode === 'beat' && bt > 0) {
+      for (let t = firstT; t <= track.endMs; t += bt) ticks.push({ t, rowStart: false })
+    } else if (panMode === 'bar') {
+      for (const b of opts.bars ?? []) if (b >= firstT && b <= track.endMs) ticks.push({ t: b, rowStart: false })
+    }
+    /**
+     * adj1089：**行首补位**。
+     *
+     * 注释早就写着"换行时仍以行首那条色块为准"，但 adj1088 的实现把 `pans` 清空后只按拍/小节重建：
+     * 行首若不在拍/小节 tick 上（弱起行、行内切分小节），相机要等下一拍才归位，
+     * 中间那一段就露出大片空白（正是"露白 ≤10%"要防的）。这里只在该行起点**没有** tick 时补一条
+     * （有 tick 时不补，避免同一时刻两条关键帧打架）。
+     */
+    const rowStartT: number[] = rows.map(() => Number.NaN)
+    for (let i = 0; i < track.rects.length; i++) {
+      const ri = view.rectRow[i]
+      if (ri < 0 || ri >= rows.length) continue
+      if (!Number.isFinite(rowStartT[ri])) rowStartT[ri] = track.rects[i].t0
+    }
+    for (const t of rowStartT) {
+      if (!Number.isFinite(t)) continue
+      if (ticks.some((k) => Math.abs(k.t - t) <= 0.5)) continue
+      ticks.push({ t, rowStart: true })
+    }
+    ticks.sort((a, b) => a.t - b.t || (a.rowStart === b.rowStart ? 0 : a.rowStart ? -1 : 1))
+    pans.length = 0
+    for (const k of ticks) {
+      const i = rectIndexAt(k.t)
+      if (i < 0) continue
+      const want = track.rects[i].x + track.rects[i].w / 2
+      const wantCx = Math.max(0, Math.min(paper.width, clampRow(view.rectRow[i], want)))
+      const last = pans[pans.length - 1]
+      if (last && Math.abs(last.cx - wantCx) < 0.5) continue
+      pans.push(
+        k.rowStart
+          ? { t: k.t, cx: wantCx, from: k.t, dur: 0 }
+          : { t: k.t, cx: wantCx, from: Math.max(firstT, k.t - panMs), dur: panMs },
+      )
+    }
+  }
+
   if (pans.length === 0) pans.push({ t: firstT, cx: paper.width / 2, from: firstT, dur: 0 })
 
   return {

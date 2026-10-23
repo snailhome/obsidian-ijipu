@@ -16,58 +16,44 @@
  * 反复段展开成"重复行"就是**同一组 src 区间出现多条 FlowRow**（`pass` 递增），
  * 不复制任何几何数据、不多占位图内存。
  *
- * ## 行的判定
+ * ## 行的判定（adj1091 起：与试听同一套「按曲行」）
  *
- * 用引擎自己的 `computeRowGuides()`（它已经处理了多声部 `voiceIdx`、临时段层、歌词行）。
- * 相邻两条 guide 的纵向间隙小于 `0.8×字号` 就并成**同一视觉行**——多声部堆叠、`{bz}`/`{dsb}`
- * 叠加层的间距都在这个量级，而行与行之间隔着歌词，远大于它。
+ * 行 = **曲行**（`layout/guides.ts` 的 `rowSpansOfPage`）：多声部块内的所有声部行算一行，
+ * 临时段层（`{bz}`/`{dsb}`/`{tp}`）并入所属曲行，行底取到**最后一行歌词**。
+ *
+ * 旧口径是"相邻行空隙 ≤ 0.8×字号就并成同一视觉行"（adj759 时期的估计）——
+ * 实测多声部行距**把歌词区一起算了进去**（Q1/Q2 行顶差 87、字号 13 ⇒ 空隙 65），
+ * 于是同一组的两个声部被拆成两条行：相机同一时刻在两行之间来回对，
+ * 观众看到的就是"唱的时候只框住一个声部"（试听侧同类缺陷见 E-2026-513）。
+ * 现在两端共用 `rowSpansOfPage`，**不再按间距猜行**。
  */
 import { PAPER_SIZE, type PageConfig, type ScoreLayout } from '../types'
-import { computeRowGuides } from '../layout/guides'
+import { rowSpansOfPage } from '../layout/guides'
 import type { FlowRow, FlowView, RectTrack } from './types'
-
-/** 纵向间隙小于这个比例（×字号）的相邻行并入同一条视觉行 */
-export const ROW_MERGE_RATIO = 0.8
 
 export interface FlowViewOptions {
   /** 可视高（缺省 = 页面高）。视频里就是画布高 */
   viewH?: number
 }
 
-/** 页面上的一条视觉行（含多声部/歌词的纵向范围） */
+/** 页面上的一条行（含多声部/段层/歌词的纵向范围） */
 interface VisualRow {
   top: number
   bottom: number
-  /**
-   * **只算音符**的下沿（不含歌词）。合并判定必须用它。
-   *
-   * 为什么：带歌词时，上一行的歌词几乎顶到下一行的音符，按"行底（含歌词）"算间隙会 ≤ 0，
-   * 于是相邻几行全被并成一行 —— 相机对到整块中间，第一行的色块掉出取景框（用户实报）。
-   */
-  notesBottom: number
 }
 
-/** 每页的视觉行 */
+/**
+ * 每页的行（= 曲行）。
+ *
+ * adj1091：直接复用 `rowSpansOfPage`（试听纵向滚动用的是同一个函数）——
+ * 「同一组多声部 + 它的歌词」在两端都是**同一个纵向范围**，不可能一边框住、一边全。
+ */
 function visualRowsOfPage(layout: ScoreLayout, pageIndex: number, cfg: PageConfig): VisualRow[] {
-  const nSize = cfg.note_size
-  const guides = computeRowGuides(layout, { quci: cfg.height_quci, geci: cfg.geci_size }, nSize)[pageIndex] ?? []
-  const rows: VisualRow[] = []
-  const sorted = [...guides].sort((a, b) => a.yTop - b.yTop)
-  for (const g of sorted) {
-    // 行底取"曲部内容下沿"与"歌词下沿"的较大者：歌词也是这一行的内容，不能被切掉
-    const notesBottom = g.yBottom
-    const bottom = Math.max(g.yBottom, g.lyricBottom ?? g.yBottom)
-    const last = rows[rows.length - 1]
-    // 合并判定只看**音符**间隙（歌词会填满行间空档，用它判会把相邻行并成一行）
-    if (last && g.yTop - last.notesBottom <= nSize * ROW_MERGE_RATIO) {
-      last.bottom = Math.max(last.bottom, bottom)
-      last.notesBottom = Math.max(last.notesBottom, notesBottom)
-      last.top = Math.min(last.top, g.yTop)
-    } else {
-      rows.push({ top: g.yTop, bottom, notesBottom })
-    }
-  }
-  return rows
+  return rowSpansOfPage(layout, pageIndex, {
+    quci: cfg.height_quci,
+    geci: cfg.geci_size,
+    noteSize: cfg.note_size,
+  }).map((s) => ({ top: s.top, bottom: s.bottom }))
 }
 
 /**

@@ -173,6 +173,85 @@ export function computeRowGuides(
 /** 歌词文字上升部与字号的比值（微软雅黑 ascent≈0.86em，取 0.85 保守，保证 quci 虚线不穿歌词文字） */
 export const LYRIC_ASCENT_RATIO = 0.85
 
+/** adj1090：一个**曲行**的纵向范围（曲部 + 词部） */
+export interface RowSpan {
+  /** 行顶（这一组最上面那条声部/段层的 yTop） */
+  top: number
+  /** 行底（曲部下沿与**最后一行歌词**下沿的较大者） */
+  bottom: number
+  /** 这一组覆盖了哪些 guide 行（各自的 yTop；排查与断言用） */
+  tops: number[]
+}
+
+/**
+ * adj1090（用户 2026-10-23 口径）：把一页的 guide 行按**曲行**归组，给出"曲部 + 词部"的纵向范围。
+ *
+ * 为什么不能直接用 `dynamic/flowView` 里那套"视觉行"：那里按"行间空隙 ≤ 0.8×字号"合并，
+ * 而**多声部**的行距把歌词区一起算了进去（实测 Q1/Q2 的行顶差 87、字号 13 ⇒ 空隙 65），
+ * 于是两个声部被拆成两条视觉行 —— 试听换行时只看得到其中一个声部，
+ * 而用户要求「同一组的多声部及歌词显示在同一视界」。
+ *
+ * 这里改用**结构信息**归组，不靠间距猜：
+ *  · `page.voiceBlocks` 标出多声部块（= 同一曲行的所有声部行）⇒ 块内的行合成一组；
+ *  · 临时叠加段（`{bz}` / `{dsb}` / `{tp}`）的行按纵向距离并入最近的普通组（它们同属一个曲行）；
+ *  · 其余行各自成组（单声部曲行）。
+ *
+ * 行底取「曲部下沿」与「该组最后一行歌词下沿（基线 + geci）」的较大者 ⇒ **多行歌词都在里面**。
+ */
+export function rowSpansOfPage(
+  layout: ScoreLayout,
+  pageIndex: number,
+  cfg: { quci: number; geci: number; noteSize?: number },
+): RowSpan[] {
+  const guides = computeRowGuides(layout, { quci: cfg.quci, geci: cfg.geci }, cfg.noteSize ?? 18)[pageIndex] ?? []
+  const page = layout.pages[pageIndex]
+  if (!page || guides.length === 0) return []
+  const blocks = page.voiceBlocks.map((b) => [b.yTop, b.yBottom] as const)
+  type Grp = { rows: RowGuide[] }
+  const groups: Grp[] = []
+  const byBlock = new Map<number, Grp>()
+  /** 段层行先攒着：等普通组都建好，再按纵向距离挂过去 */
+  const pending: RowGuide[] = []
+  for (const g of [...guides].sort((a, b) => a.yTop - b.yTop)) {
+    const bi = blocks.findIndex(([t, b]) => g.yTop >= t - 0.5 && g.yTop <= b - 0.5)
+    if (bi >= 0) {
+      let grp = byBlock.get(bi)
+      if (!grp) {
+        grp = { rows: [] }
+        byBlock.set(bi, grp)
+        groups.push(grp)
+      }
+      grp.rows.push(g)
+    } else if (g.segType !== undefined) {
+      pending.push(g)
+    } else {
+      groups.push({ rows: [g] })
+    }
+  }
+  const boundsOf = (grp: Grp): { top: number; bottom: number } => ({
+    top: Math.min(...grp.rows.map((r) => r.yTop)),
+    bottom: Math.max(...grp.rows.map((r) => Math.max(r.yBottom, r.lyricBottom ?? r.yBottom))),
+  })
+  for (const g of pending) {
+    let best: Grp | null = null
+    let bestD = Number.POSITIVE_INFINITY
+    for (const grp of groups) {
+      if (grp.rows.every((r) => r.segType !== undefined)) continue
+      const { top, bottom } = boundsOf(grp)
+      const d = g.yTop < top ? top - g.yTop : g.yTop > bottom ? g.yTop - bottom : 0
+      if (d < bestD) {
+        bestD = d
+        best = grp
+      }
+    }
+    if (best) best.rows.push(g)
+    else groups.push({ rows: [g] })
+  }
+  return groups
+    .map((grp) => ({ ...boundsOf(grp), tops: grp.rows.map((r) => r.yTop) }))
+    .sort((a, b) => a.top - b.top)
+}
+
 /**
  * quci 虚线显示位置：钳制在「曲部内容下沿」与「歌词文字上沿」之间（adj53）。
  * - 向上最多到曲部内容下沿（不进入曲部内容区）；

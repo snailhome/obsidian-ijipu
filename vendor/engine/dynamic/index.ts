@@ -6,7 +6,7 @@
  */
 export { buildRectTrack, rectsActiveAt, RECT_ABOVE_RATIO, RECT_BELOW_RATIO } from './timeline'
 export type { RectTrackOptions } from './timeline'
-export { buildFlowView, ROW_MERGE_RATIO } from './flowView'
+export { buildFlowView } from './flowView'
 export type { FlowViewOptions } from './flowView'
 export { frameAt, scrollYOfRow, frameTimeMs, frameIndexAt } from './frame'
 export { ballAt, beatPhaseOf, BALL_LANDING_TIMING, BALL_SQUASH_X, BALL_SQUASH_Y } from './ball'
@@ -14,13 +14,15 @@ export type { BallAnchor, BallPos, BallTiming } from './ball'
 export {
   buildCameraTrack,
   cameraAt,
+  clampRowCenter,
   CAMERA_FOLLOW_ZOOM,
   CAMERA_INTRO_MS,
   CAMERA_LINE_MS,
   CAMERA_PAN_MS,
   CAMERA_SAFE_HALF,
+  CAMERA_WHITE_MARGIN,
 } from './camera'
-export type { CameraFrame, CameraTrack, CameraOptions, CameraRow, CameraPan } from './camera'
+export type { CameraFrame, CameraTrack, CameraOptions, CameraRow, CameraPan, PanMode } from './camera'
 export {
   DYNAMIC_PRESETS,
   DEFAULT_DYNAMIC_PRESET,
