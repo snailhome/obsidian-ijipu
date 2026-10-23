@@ -138,6 +138,10 @@ export { DEFAULT_NEW_JPS_TEMPLATE, DEFAULT_NEW_JPS_BASE, JPS_EXT } from './sampl
 export { configValuesEqual, isDefaultConfigValue, changedConfigKeys } from './settings/layers'
 // adj629h：歌词行里 `{tp … }` 替谱段的识别（格式化 / 编辑器着色都要在 `C…:` 行里找它）
 export { matchSegmentHead, findSegmentEnd } from './parser/tokenizer'
+// adj1118：间奏标记 `{jz N}` 的识别（格式化 / 高亮 / 解析三处共用同一套判定）
+export { matchInterludeHead } from './parser/tokenizer'
+// adj1118：间奏时长的**唯一口径**（`{jz N}` 与注记 `间奏N拍`；播放/校验/宿主都问它）
+export { interludeBeatsOf, interludeExtraBeats, interludeDiagnostics } from './interlude'
 export { tokenDuration, durationMs } from './duration'
 // adj594（用户要求）：小节时值校验（纯函数，解析器已自动并入 ParseResult.errors）
 export {

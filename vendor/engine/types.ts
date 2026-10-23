@@ -249,6 +249,15 @@ export interface RestToken {
   tupletGroup?: number
   /** 装饰符号编码列表（& 开头，如 zkh/ykh 括号等，adj84） */
   symbols: string[]
+  /**
+   * 间奏拍数（`0{jz 16}` → 16）：**替换**这个休止符的播放时长（不是"再加 16 拍"）。
+   *
+   * **只影响播放时间轴，不影响排版**（零宽）——布局端只读 `tokenDuration`，不认识这个字段；
+   * 播放端（`playback/sequence.ts`）把它折算成"额外拍"加在小节起点/拍位累计里。
+   * 注记写法（`0"16拍间奏略"`）**不写这个字段**，用的时候从 `comment` 现读
+   * （见 `engine/interlude.ts` 的 `interludeBeatsOf`）。
+   */
+  interludeBeats?: number
   comment?: string
   /** 注释抬升级数（adj392，同音符） */
   commentPlus?: number

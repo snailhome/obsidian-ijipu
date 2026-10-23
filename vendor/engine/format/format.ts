@@ -9,7 +9,7 @@
  *  - "(" 前补空格；"|" 前补空格；":" 在 "|" 前补空格；"{" "}" 前补空格；
  *  - adj293：描述头属性与内容之间保留且只保留一个空格（如 Y:  钢琴 / Y:钢琴 → Y: 钢琴）。
  */
-import { matchSegmentHead, findSegmentEnd } from '../parser/tokenizer'
+import { matchSegmentHead, findSegmentEnd, matchInterludeHead } from '../parser/tokenizer'
 
 export function formatJps(source: string): string {
   const lines = source.replace(/\r\n/g, '\n').split('\n')
@@ -191,6 +191,24 @@ export function formatMusicBody(trimmed: string): string {
       ensureSpace()
       out.push(note)
     } else if (note === ':' && nextNote === '|') {
+      ensureSpace()
+      out.push(note)
+    } else if (note === '{' && matchInterludeHead(trimmed, x)) {
+      /**
+       * adj1118：**间奏标记 `{jz N}` 整段原样保留**（`{jz 16}` 里的 `16` 不是两个音符）。
+       *
+       * 这是本功能最容易踩的坑：通用规则"数字前补空格"会把 `{jz 16}` 拆成 `{jz 1 6 }`，
+       * 而 `autoFormat` 默认开着 ⇒ 用户打完就被改坏。这里把整段当一个块（与 `@乐器@` 同理），
+       * 并把内部空格归一成 `{jz 16}`（规范化后仍是它自己 ⇒ 幂等成立）。
+       */
+      const jz = matchInterludeHead(trimmed, x)
+      if (jz) {
+        ensureSpace()
+        out.push(`{jz ${jz.beats}}`)
+        x = jz.end - 1
+        lastNote = ''
+        continue
+      }
       ensureSpace()
       out.push(note)
     } else if (note === '{' || note === '}') {

@@ -22,6 +22,8 @@ import type {
   VoiceBlock,
 } from '../types'
 import { tokenDuration } from '../duration'
+// adj1118：间奏标记 `{jz N}`（与注记 `间奏N拍` 等价）——只在播放时间轴上生效，零宽
+import { interludeBeatsOf, interludeExtraBeats } from '../interlude'
 // adj1101：id 字符串函数搬到中立模块（layout 也要用），这里 import 一次供内部使用、再转出
 import { noteIdStringOf } from '../ids'
 import { parseKey, pitchToName, isVoltaCloserBarline } from '../layout/index'
@@ -994,6 +996,24 @@ export function countScoreInstrumentSwitches(result: ParseResult): number {
   return n
 }
 
+/**
+ * adj1118：**间奏休止的色块整段罩住**（不沿增时线逐格走）。
+ *
+ * 为什么：`0---{jz 16}` 的排版是"一个 0 + 三根增时线"，若沿用普通长音的分段色块，
+ * 高亮会依次走过三根增时线——那是"拖长音"的观感；间奏是"在这里等"，应当一整块停住。
+ * 用户 2026-10-24 的原话："色块停在这个 0 上、跳跳球在此处跳 16 下"。
+ *
+ * 只改 `playheadSegs`（**色块专用数据**），音高/时长/排版都不受影响。
+ */
+function collapseSegsForInterlude(segs: PlayheadSeg[], beats: number): PlayheadSeg[] {
+  if (segs.length === 0) return segs
+  const first = segs[0]
+  const last = segs[segs.length - 1]
+  const left = first.x
+  const right = last.x + last.width
+  return [{ ...first, beat: 0, beats, x: left, width: Math.max(0, right - left) }]
+}
+
 export function buildPlaySequence(
   result: ParseResult,
   layout: ScoreLayout,
@@ -1847,6 +1867,16 @@ export function buildPlaySequence(
   const beatMs = 60000 / bpm
   const groupStartMs: number[] = new Array(result.groups.length).fill(0)
   const barStartMsInGroup: number[][] = result.groups.map(() => [])
+  /**
+   * adj1118：**排版口径**的小节起点拍（不含间奏额外拍）。
+   *
+   * 为什么单开一份：`barStartMsInGroup` 里现在含间奏的额外拍（播放口径），而"跨小节绝对拍"
+   * 那套坐标（替谱段 `{tp}` 的覆盖区间、`placed.duration`）是**排版拍**口径，两者混用会错位。
+   */
+  const barStartBeatsInGroup: number[][] = result.groups.map(() => [])
+  /** 一块里某个 group 的"含间奏额外拍"总拍数（`blockBeatsOf` 与 `bsMsOf` 共用） */
+  const tokenBeatsWithInterlude = (tk: Extract<MusicToken, { kind: 'note' | 'rest' | 'rhythm' }>): number =>
+    tokenDuration(tk) + interludeExtraBeats(tk, tokenDuration(tk))
   let totalMs = 0
   {
     let ms = 0
@@ -1856,7 +1886,8 @@ export function buildPlaySequence(
       for (const gi of gis) {
         let b = 0
         for (const tk of result.groups[gi].music.tokens) {
-          if (tk.kind === 'note' || tk.kind === 'rest' || tk.kind === 'rhythm') b += tokenDuration(tk)
+          // adj1118：间奏的"额外拍"必须算进块长，否则下一块会提前开始
+          if (tk.kind === 'note' || tk.kind === 'rest' || tk.kind === 'rhythm') b += tokenBeatsWithInterlude(tk)
         }
         if (b > bb) bb = b
       }
@@ -1869,10 +1900,22 @@ export function buildPlaySequence(
       bsMs.push(0)
       for (const tk of result.groups[gi].music.tokens) {
         if (tk.kind === 'barline') bsMs.push(beats * beatMs)
-        else if (tk.kind === 'note' || tk.kind === 'rest' || tk.kind === 'rhythm') beats += tokenDuration(tk)
+        else if (tk.kind === 'note' || tk.kind === 'rest' || tk.kind === 'rhythm') beats += tokenBeatsWithInterlude(tk)
       }
       bsMs.push(beats * beatMs)
       return bsMs
+    }
+    /** adj1118：同一套口径、但输出**排版拍**（不含额外拍）——`{tp}` 的区间坐标用它 */
+    const bsBeatsOf = (gi: number) => {
+      const arr: number[] = []
+      let beats = 0
+      arr.push(0)
+      for (const tk of result.groups[gi].music.tokens) {
+        if (tk.kind === 'barline') arr.push(beats)
+        else if (tk.kind === 'note' || tk.kind === 'rest' || tk.kind === 'rhythm') beats += tokenDuration(tk)
+      }
+      arr.push(beats)
+      return arr
     }
     /**
      * adj595（用户要求）：**按源码顺序把曲行切成"块"，再逐块累加时间**。
@@ -1896,6 +1939,7 @@ export function buildPlaySequence(
       for (const gi of chunk) {
         groupStartMs[gi] = ms
         barStartMsInGroup[gi] = bsMsOf(gi)
+        barStartBeatsInGroup[gi] = bsBeatsOf(gi)
       }
       ms += bb * beatMs
       chunk = []
@@ -1916,6 +1960,43 @@ export function buildPlaySequence(
     }
     flushChunk()
     totalMs = ms
+  }
+
+  /**
+   * adj1118：**间奏"断点"表** —— 每个 group 里哪些小节、小节内哪个拍位之后要额外顺延多少拍。
+   *
+   * 为什么要按 `(bar, beat)` 存：事件时刻是
+   * `passMs + groupStartMs + barStartMsInGroup[bar] + beatPos × beatMs` 算出来的。
+   * 间奏的额外拍已经进了 `barStartMsInGroup`（⇒ 后面小节的起点自动对），但**同一个小节内**
+   * 排在间奏之后的音符，`beatPos` 还是排版拍位 —— 必须在这一格里补上差额，否则它们会提前唱。
+   *
+   * 口径与 layout 完全一致：`小节线 → bar+1、beat 归零`（layout 的 `barIdx` 是"行内第几段"，
+   * 段就是按小节线切的，两者同源）。
+   */
+  const interludeCuts: { bar: number; at: number; extra: number }[][] = result.groups.map(() => [])
+  for (let gi = 0; gi < result.groups.length; gi++) {
+    let bar = 0
+    let beat = 0
+    for (const tk of result.groups[gi].music.tokens) {
+      if (tk.kind === 'barline') {
+        bar += 1
+        beat = 0
+        continue
+      }
+      if (tk.kind !== 'note' && tk.kind !== 'rest' && tk.kind !== 'rhythm') continue
+      const dur = tokenDuration(tk)
+      const extra = interludeExtraBeats(tk, dur)
+      if (extra > 0) interludeCuts[gi].push({ bar, at: beat, extra })
+      beat += dur + extra
+    }
+  }
+  /** 播放口径的小节内拍位（排版拍位 + 本小节里排在前面的间奏额外拍） */
+  const playBeatOf = (group: number, bar: number, beatPos: number): number => {
+    const cuts = interludeCuts[group]
+    if (cuts === undefined || cuts.length === 0) return beatPos
+    let extra = 0
+    for (const c of cuts) if (c.bar === bar && c.at < beatPos - 1e-6) extra += c.extra
+    return beatPos + extra
   }
 
   const events: PlayEvent[] = []
@@ -2061,8 +2142,9 @@ export function buildPlaySequence(
    * 替谱替代的只能是**它自己那一行**，故判据里加上组号。
    */
   const TP_EPS = 1e-6
+  // adj1118：**排版拍**口径（不含间奏额外拍）；`barStartBeatsInGroup` 与 `placed.duration` 同源
   const absBeatOf = (g: number, bar: number, beat: number): number =>
-    (barStartMsInGroup[g]?.[bar] ?? 0) / beatMs + beat
+    (barStartBeatsInGroup[g]?.[bar] ?? 0) + beat
   const tpSpans: { g: number; from: number; to: number; pass: number }[] = []
   for (const it of seq) {
     if (it.kind !== 'segment' || it.seg?.type !== 'tp') continue
@@ -2213,7 +2295,7 @@ export function buildPlaySequence(
       const placed = segPlacedByToken.get(t)
       if (!placed) continue
       const g2 = placed.id.group
-      const at2 = passMsNow + groupStartMs[g2] + (barStartMsInGroup[g2][placed.barIndex] ?? 0) + placed.beatPos * beatMs
+      const at2 = passMsNow + groupStartMs[g2] + (barStartMsInGroup[g2][placed.barIndex] ?? 0) + playBeatOf(g2, placed.barIndex, placed.beatPos) * beatMs
       const dur2 = (tokenDuration(t) * 60000) / bpm
       const isSec = placed.playVoice === 'accomp' || placed.playVoice === 'second'
       const ov = overriddenByVoice.get(placed.id.voice)
@@ -2456,7 +2538,8 @@ export function buildPlaySequence(
       const g = placed.id.group
       const bi = placed.barIndex
       const bp = placed.beatPos
-      const clock = groupStartMs[g] + (barStartMsInGroup[g][bi] ?? 0) + bp * beatMs
+      // adj1118：小节内拍位用**播放口径**（同小节里排在前面的间奏要顺延后续音符）
+      const clock = groupStartMs[g] + (barStartMsInGroup[g][bi] ?? 0) + playBeatOf(g, bi, bp) * beatMs
       // adj361：若有待跳时刻，先把 passMs 对齐（使本事件 atMs = 待跳时刻 → 无缝衔接）
       if (pendingJumpMs >= 0) {
         passMs = pendingJumpMs - clock
@@ -2491,7 +2574,16 @@ export function buildPlaySequence(
         i++
         continue
       }
-      const durationMs = (tokenDuration(token) * 60000) / bpm
+      /**
+       * adj1118：带 `{jz N}` 的休止符**自己的事件时长就是 N 拍**。
+       *
+       * 为什么改这里（而不是另加一个"静默事件"）：
+       *  · 休止符本来就不发声（`midi.ts` 见 `!placed.audioPitch` 就跳过）⇒ 改时长不影响声音；
+       *  · 但 `lastEndMs`、色块（`playheadSegs`）、`totalMs` 都看它 ⇒ 曲末间奏也能撑长视频；
+       *  · 顺带让"色块停在 0 上、球原地跳 N 下"成为免费效果（见下面 playheadSegs 的处理）。
+       */
+      const jzBeats = interludeBeatsOf(token)
+      const durationMs = ((jzBeats ?? tokenDuration(token)) * 60000) / bpm
       // adj627：音高按**当前生效调号**现算（有临时转调时 `placed.audioPitch` 只反映"第一遍"的调号，
       // 反复/跳转后同一音符可能落在不同的调上；这里用 `curKey` 与走查位置严格对应）
       const pitch = token.kind === 'note' ? pitchToName(token.pitch, token.octaveShift, token.accidental, curKey) : placed.audioPitch
@@ -2817,7 +2909,9 @@ export function buildPlaySequence(
       // adj375：新事件开始 → 上一个事件已完成（不会再被连音合并）→ 结算它的呼吸静音
       settleBreath()
       // adj502/adj635/adj636：演奏型装饰与滑音的**前置短音**（装饰短音 / 滑音半音阶梯）
-      const playheadSegs = buildPlayheadSegs(item.note!, 0, rightEdgeByNoteIdx.get(item.note!.id.index), computeColorBounds(item.note!, pageByNoteIdx.get(item.note!.id.index)!, voiceBlockByNoteIdx, noteSize)).map((s) => ({ ...s, instrument, playVoice: item.note!.playVoice, gain }))
+      const segsBase = buildPlayheadSegs(item.note!, 0, rightEdgeByNoteIdx.get(item.note!.id.index), computeColorBounds(item.note!, pageByNoteIdx.get(item.note!.id.index)!, voiceBlockByNoteIdx, noteSize))
+      // adj1118：间奏休止的色块整段罩住、且时长 = N 拍（球原地跳 N 下，见 collapseSegsForInterlude）
+      const playheadSegs = (jzBeats !== null ? collapseSegsForInterlude(segsBase, jzBeats) : segsBase).map((s) => ({ ...s, instrument, playVoice: item.note!.playVoice, gain }))
       // adj1062：色块挂在**本音符最早的事件**上（见上面 `noteFirstEvIdx` 的说明）
       const blockEvIdx = noteFirstEvIdx
       {

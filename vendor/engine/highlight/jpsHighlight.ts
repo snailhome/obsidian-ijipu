@@ -16,7 +16,7 @@
  *  - `&` 装饰编码、`<` `>` `!` → `decoration`；其余 → `plain`。
  *  - adj629h：歌词行里的 `{tp … }` 替谱段**段内按曲部规则着色**，段头 `{tp` 与 `}` 用行头色。
  */
-import { matchSegmentHead, findSegmentEnd } from '../parser/tokenizer'
+import { matchSegmentHead, findSegmentEnd, matchInterludeHead } from '../parser/tokenizer'
 
 /** 与 parser 的 `HEADER_KEYS` 一致（V/B/Z/D/P/J/Y/S + Q/C） */
 const HEADER_KEYS = 'QCBZDPJVYS'
@@ -110,6 +110,14 @@ export function tokenizeJpsMusic(content: string): JpsToken[] {
       i = j
       continue
     } else if (c === ')' || c === '{' || c === '}') {
+      // adj1118：间奏标记 `{jz 16}` 整段按"装饰"着色（与 `&` 编码同色）——
+      // 它既不是小节线、也不是段头，按上面的 `{`/`}` 上色会让人以为是个分段括号。
+      const jz = c === '{' ? matchInterludeHead(content, i) : null
+      if (jz) {
+        parts.push({ cls: 'decoration', text: content.slice(i, jz.end) })
+        i = jz.end
+        continue
+      }
       parts.push({ cls: 'barline', text: c })
     } else {
       parts.push({ cls: 'plain', text: c })

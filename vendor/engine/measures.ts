@@ -25,6 +25,7 @@
 import type { MusicLine, MusicToken, ParseError, ParseResult } from './types'
 import { errAt } from './parser/errors'
 import { tokenDuration } from './duration'
+import { interludeBeatsOf } from './interlude'
 
 /** 拍数比较的浮点容差（`3/2` vs `1.5` 这类二进制小数误差） */
 export const MEASURE_BEATS_EPSILON = 1e-6
@@ -131,9 +132,23 @@ export function checkMeasureBeats(result: ParseResult): ParseError[] {
        * 其余小节仍必须等于当前拍号。
        */
       const isFirst = measureNo === 1
-      const ok = isFirst
-        ? Math.abs(sum - Math.round(sum)) <= MEASURE_BEATS_EPSILON
-        : Math.abs(sum - beats) <= MEASURE_BEATS_EPSILON
+      /**
+       * adj1118（用户 2026-10-24 拍板）：**含间奏标记的小节跳过"拍数不符"校验**。
+       *
+       * 理由：`0{jz 16}` 是"这个休止符一共响 16 拍"，而排版只占 1 拍（零宽原则）——
+       * 按拍号数这一小节永远是"不符"的，那是**预期**，不是错误。
+       * 想让这一小节按拍号正常计拍就写 `0---{jz 16}`（排版 4 拍、播放 16 拍）。
+       *
+       * ⚠ 偏差记录：方案文档原写"改报 info 提示"，但引擎的 `ParseError.severity`
+       * 只有 `error|warning` 两级 —— 加一级会牵动应用/插件的展示与计数。P0 先**静默豁免**
+       * （不报任何东西），要比"报一条解释性告警"更干净；要不要 info 级别以后单独定。
+       */
+      const hasInterlude = measure.some((t) => interludeBeatsOf(t) !== null)
+      const ok = hasInterlude
+        ? true
+        : isFirst
+          ? Math.abs(sum - Math.round(sum)) <= MEASURE_BEATS_EPSILON
+          : Math.abs(sum - beats) <= MEASURE_BEATS_EPSILON
       if (!ok) {
         const at = firstTok ?? measure[0]
         const message = isFirst

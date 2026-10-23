@@ -163,6 +163,13 @@ export function tokenizeMusicLine(
   const HINT_SEGMENT_CLOSE = '临时段要成对闭合：`{bz … }` / `{dsb … }`，如 `3 4 | {bz 1 2 3 4} 5 6 |`'
   const HINT_SEGMENT_NEST = '临时段**不支持嵌套**；请先 `}` 关闭外层段，再开新段'
   const HINT_SEGMENT_STRAY = '`}` 只能用于关闭 `{bz` / `{dsb` / `{tp` 临时段，不能单独出现'
+  // adj1118：间奏标记（`{jz N}`）的提示
+  const HINT_INTERLUDE_HEAD =
+    '间奏标记写成 `{jz 16}`（`jz` + 拍数 + `}`，如 `0{jz 16}`、`0---{jz 16}`、`8{jz 16}`）；' +
+    '拍数是**这个休止符一共响几拍**（替换，不是"再加"）'
+  const HINT_INTERLUDE_HOST =
+    '间奏标记要紧跟在**休止符**后面（可见 `0` 或隐藏 `8`），如 `0{jz 16}`；' +
+    '想让这一小节还是 4 拍宽就写 `0---{jz 16}`（排版 4 拍、播放 16 拍）'
   const HINT_TP_IN_LYRIC =
     '替谱段 `{tp … }` 写在**歌词行**里（`C:` = 第 1 遍、`C2:` = 第 2 遍……），段内写"这一遍不同"的那几个音；如 `C2: … 借 {tp 4/ 3// 6,/ 6,// 1/ .1 -} 一 丝 懵 懂 …`'
   const HINT_VOLTA = '跳房子 `[` 要紧跟在小节线之后；行首跳房子请先用隐藏小节线 `|/`，如 `|/ ["1." 1 2 3 |]`'
@@ -319,6 +326,50 @@ export function tokenizeMusicLine(
     // 段头边界校验见 matchSegmentHead（段头后必须是空白或 `}`）；段结束扫描见
     // findSegmentEnd（跳过引号内的 `}`）；段内**不嵌套**（段内再遇段头报"嵌套"错）。
     if (c === '{') {
+      /**
+       * adj1118（用户 2026-10-24 拍板）：**间奏标记 `{jz N}`**。
+       *
+       * 它不是临时段——**不产生任何 token**，只给"前一个休止符"挂一个 `interludeBeats`
+       * （所以 layout 完全看不见它，排版一个像素都不动）。为什么用 `{}` 而不是 `&jz16`：
+       * `&` 后只收字母，`16` 会被当成两个音符；`}` 是硬边界，`0{jz 16}0` 也没有歧义。
+       *
+       * 三种写法等价：`0{jz 16}` / `0 {jz 16}` / `{jz16}`；格式化会把前者补成 `0 {jz 16}`。
+       */
+      const jzHead = matchInterludeHead(content, i)
+      if (jzHead) {
+        const host = tokens.length > 0 ? tokens[tokens.length - 1] : undefined
+        if (opts.inSegment) {
+          errors.push(
+            err('间奏标记 "{jz N}" 不能写在临时段（{bz}/{dsb}/{tp}）里', { line: pos.line, col: pos.col + i }, 'warning', HINT_INTERLUDE_HOST),
+          )
+        } else if (!host || host.kind !== 'rest') {
+          errors.push(
+            err('间奏标记 "{jz N}" 要紧跟在休止符后面，如 `0{jz 16}`、`8{jz 16}`', { line: pos.line, col: pos.col + i }, 'warning', HINT_INTERLUDE_HOST),
+          )
+        } else {
+          if (host.interludeBeats !== undefined) {
+            errors.push(
+              err('同一个休止符写了多个 "{jz N}"（以最后写的为准）', { line: pos.line, col: pos.col + i }, 'warning', HINT_INTERLUDE_HEAD),
+            )
+          }
+          host.interludeBeats = jzHead.beats
+          // 块间空格校验从这里继续数（`0{jz 16}  0` 的"两个空格"仍能提示）
+          lastBlockEnd = jzHead.end
+          lastBlockCounts = true
+        }
+        i = jzHead.end
+        continue
+      }
+      // `{jz` 但拍数没写 / 没闭合：给**专门的**提示，别落到"无法识别的符号"（用户写了就看得懂）
+      if (content.startsWith('{jz', i)) {
+        errors.push(
+          err('间奏标记要写成 "{jz 16}"（拍数 + "}"）', { line: pos.line, col: pos.col + i }, 'warning', HINT_INTERLUDE_HEAD),
+        )
+        const close = content.indexOf('}', i + 3)
+        // 顺手跳过 `}`，免得再报一条"多余的 }"
+        i = close === -1 ? i + 3 : close + 1
+        continue
+      }
       const segType = matchSegmentHead(content, i)
       if (segType) {
         // adj629：`{tp … }` 的"第几遍"由**歌词行序号**决定（见 types.ts 的 LyricVariant）——
@@ -1080,8 +1131,37 @@ export function matchSegmentHead(content: string, at: number): SegmentKind | nul
 }
 
 /**
- * 从 `from` 起找段结束 `}` 的下标；找不到返回 -1。
+ * adj1118：判断 `content[at]` 处是否为**间奏标记** `{jz N}`，是则返回拍数与 `}` 之后的位置。
  *
+ * 语法：`{` + `jz` + 0~n 个空格 + 拍数（整数，也容忍小数）+ 0~n 个空格 + `}`。
+ * 例：`{jz 16}`、`{jz16}`、`{jz  16 }`。
+ *
+ * **为什么不算临时段**：它不产生 token、不参与排版，只给前面的休止符挂一个
+ * `interludeBeats`（见 `types.ts` 的 `RestToken`）。段有"包络/括号/压行高"一整套，
+ * 间奏标记要是走那条路，排版就变了。
+ *
+ * 返回 `null` 的两种情形（调用方要区分）：不是 `{jz` 开头；或写了 `{jz` 但拍数/`}` 不完整。
+ */
+export function matchInterludeHead(
+  content: string,
+  at: number,
+): { beats: number; end: number } | null {
+  if (content[at] !== '{') return null
+  if (!content.startsWith('jz', at + 1)) return null
+  let k = at + 3
+  while (k < content.length && (content[k] === ' ' || content[k] === '\t')) k++
+  const numStart = k
+  while (k < content.length && /[0-9.]/.test(content[k])) k++
+  if (k === numStart) return null
+  const beats = Number(content.slice(numStart, k))
+  while (k < content.length && (content[k] === ' ' || content[k] === '\t')) k++
+  if (content[k] !== '}') return null
+  if (!Number.isFinite(beats) || !(beats > 0)) return null
+  return { beats, end: k + 1 }
+}
+
+/**
+ * 从 `from` 起找段结束 `}` 的下标；找不到返回 -1。 *
  * **跳过引号内内容**：`"…"` 注释里的 `}` 不算段结束
  * （如 `{bz 1"渐强}注" 2}` 的 `}` 在引号内）——与 tokenizer 其它部分对引号的处理保持一致。
  */
@@ -1094,6 +1174,19 @@ export function findSegmentEnd(content: string, from: number): number {
       continue
     }
     if (inQuote) continue
+    /**
+     * adj1118：段内写了间奏标记 `{jz 16}` 时，**跳过它自己的 `}`** 再找段结束。
+     * 否则 `{bz 0{jz 16} 1}` 会在这里被截断成 `0{jz 16`（段内容少了右括号），
+     * 内层解析只能报"`{jz` 要写成 {jz 16}"——文案会误导（用户明明写了）。
+     * 跳过之后内层能正常认出它，并给出**正确**的提示「间奏标记不能写在临时段里」。
+     */
+    if (ch === '{') {
+      const jz = matchInterludeHead(content, k)
+      if (jz) {
+        k = jz.end - 1
+        continue
+      }
+    }
     if (ch === '}') return k
   }
   return -1

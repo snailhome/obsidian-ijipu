@@ -27,6 +27,7 @@ import { errAt } from './errors'
 import { inspectJpsConfigLine, JPS_CONFIG_PREFIX } from '../settings'
 // adj594（用户要求）：小节时值校验（按拍号 + `|"p:2/4"` 临时拍号，不符给 warning）
 import { checkMeasureBeats } from '../measures'
+import { interludeDiagnostics } from '../interlude'
 // adj973：连音线配对（唯一一份纯函数；布局改为消费它的结果，见 `parser/slurPairs.ts` 文件头）
 import { pairSlurs } from './slurPairs'
 
@@ -392,6 +393,8 @@ export function parseJps(source: string): ParseResult {
    */
   const preliminary: ParseResult = { header, lines, groups, errors }
   errors.push(...checkMeasureBeats(preliminary))
+  // adj1118：间奏写法（注记老写法）的两条迁移提示——只提醒"注记 vs 显式 `{jz N}`"的差异
+  errors.push(...interludeDiagnostics(preliminary))
 
   /**
    * adj973（**用户 2026-10-18 实报**）：**连音线配对**从布局搬到这里（唯一一份纯函数），
