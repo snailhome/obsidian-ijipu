@@ -165,6 +165,9 @@ export { insertPngPhys, readPngPhys, crc32, isPng, dpiForScale, pixelsPerMeterFo
 export { buildPlaySequence, inferBpm, countScoreInstrumentSwitches, noteIdStringOf, slicePlaySequenceByNoteRange, resolvePracticeRange, slicePlaySequenceByRange, extendRangeEndToSlurEnd, createBackend, schedulePlay, SynthBackend, SamplerBackend, pitchToFreq, renderSynthNote, INSTRUMENT_OPTIONS, INSTRUMENT_LIB_NAMES, INSTRUMENT_PRESETS, matchInstrument, resolveInstrument, SAMPLER_LIBRARIES, getSamplerLibrary, classifyNetwork, eventsToMidi, pitchToMidiNote, instrumentToProgram, pcmToWav, GmChannelAllocator, GM_MELODIC_CHANNELS, GM_VOICES, GM_GROUPS, gmVoiceProgram, gmVoiceRef } from './playback'
 export { codePosToNoteId, noteIdToCodePos, parseNoteId, buildIndexToPage } from './cursorMap'
 export { computeRowTops, computeRowGuides, dragDelta, clamp, metaAreaH, GUIDE_ITEMS, GUIDE_LIMITS, GUIDE_LIMITS_EX, computeDebugBounds } from './layout/guides'
+// adj1101：全局小节号/拍位的**唯一口径**（界面标记段显示 `33:1 - 34:2` 与命令行 `--from 33:1` 共用）
+export { flattenScoreNotes, totalBarsOf, measureSpotOf, spotOfIn, hasNoteId, resolveBarBeatRange, BEAT_EPS } from './layout/measureMap'
+export type { ScoreSpotNote, BarBeatRange } from './layout/measureMap'
 export { metaAnchorOf, metaAnchorPt, clampMetaPos, metaCornerOffsets, metaAuthorRowY } from './layout/metaAnchors'
 export { splitNoteDur, digitSlotW, dotBodyW, augBodyW, slideBodyW, bracketBodyW, noteBodyW, nonDurGap, accidentalBodyW, accidentalPenDx, accidentalInkLeftDx, accidentalInkRightDx, accidentalFontSize, accidentalGlyphOf, braceInkRightOffset, BRACE_LINE_DX, hxBodyW, slideGlyphInk, slideExtraW, graceSlotLayout, graceSlideInk, mordentInkW } from './layout/spaceLayout'
 // adj630b：谱尾说明（`S:`）的行基线——渲染端与预览端拖拽基准共用（不得各写一份）

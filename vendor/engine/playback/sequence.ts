@@ -22,6 +22,8 @@ import type {
   VoiceBlock,
 } from '../types'
 import { tokenDuration } from '../duration'
+// adj1101：id 字符串函数搬到中立模块（layout 也要用），这里 import 一次供内部使用、再转出
+import { noteIdStringOf } from '../ids'
 import { parseKey, pitchToName, isVoltaCloserBarline } from '../layout/index'
 import { graceGroupBeats, gracePerNoteBeats } from '../layout/spaceLayout'
 // adj629d：段层/替谱音符 id 判定（试听"点音符跳过去"要按 id 精确命中事件）
@@ -149,10 +151,13 @@ export interface PlaySequence {
   barStartsMs?: number[]
 }
 
-/** 音符 id → `page_voice_group_index` 串（与 `data-notepos` / `activeNoteId` 同一形状） */
-export function noteIdStringOf(id: { page: number; voice: number; group: number; index: number }): string {
-  return `${id.page}_${id.voice}_${id.group}_${id.index}`
-}
+/**
+ * 音符 id → `page_voice_group_index` 串（与 `data-notepos` / `activeNoteId` 同一形状）
+ *
+ * adj1101：实现搬到 `engine/ids.ts`（中立模块，layout 也能用而不形成反向依赖）；这里转出，
+ * 保持所有既有 import 路径不变。
+ */
+export { noteIdStringOf } from '../ids'
 
 /**
  * adj1006：把遍次时间轴**搬到新时间轴**（0 点 = `base`）。
@@ -298,7 +303,23 @@ export interface ResolvedPracticeRange {
   missing?: 'start' | 'end'
 }
 
-export function resolvePracticeRange(seq: PlaySequence, startId: string, endId: string): ResolvedPracticeRange {
+export interface PracticeRangeOptions {
+  /**
+   * 终点 id 在**当前排版**里确实存在（标记是点音符产生的）。
+   *
+   * adj1102：存在但没有事件 ⇒ 它被连音线/同音合并并进了前一个音 ⇒ 按"紧邻的前一个音"去配
+   * （`target − 1`），配不上就跳过那一遍。为 `false`（缺省）时保持 adj990 的旧口径：
+   * 端点对不上就夹到序列一端，绝不给 `missing`。
+   */
+  endInLayout?: boolean
+}
+
+export function resolvePracticeRange(
+  seq: PlaySequence,
+  startId: string,
+  endId: string,
+  opts: PracticeRangeOptions = {},
+): ResolvedPracticeRange {
   const idOf = (e: PlayEvent): string => noteIdStringOf(e.placed.id)
   /**
    * 宽松匹配（adj987g 起）——**先整串、再退到"组号+序号"**（预览与试听排版不同，页号/声部号可能变）。
@@ -398,9 +419,40 @@ export function resolvePracticeRange(seq: PlaySequence, startId: string, endId: 
   const vStart = starts0.length > 0 ? seq.events[starts0[0]].placed.id.voice : null
   const starts = starts0.length > 0 ? starts0 : clampNear(startId, null, 'after')
   const ends0 = pickIdx(endId, vStart)
-  const ends = ends0.length > 0 ? ends0 : clampNear(endId, vStart, 'before')
   if (starts.length === 0) return { pick: 0, candidates: [], missing: 'start' }
-  if (ends.length === 0) return { pick: 0, candidates: [], missing: 'end' }
+  /**
+   * adj1102（用户 2026-10-23 实报：标记段 `33:1→34:2` 出现 **3 个候选**、每个切片都长得离谱）：
+   *
+   * 终点音符可能**没有独立事件**——被连音线 / 同音合并并进了前一个音（实测 `赤伶` 的标记终点
+   * `0_1_6_187` 在布局里有、序列里没有，它被并进 `0_1_6_186`）。旧兜底 `clampNear('before')` 扫**整个序列**
+   * 取"最后一个序号 ≤ 目标的同组事件"⇒ 在多遍的谱里落到**最后一遍**（实测 147s / 34s / 3.9s 三个候选）。
+   *
+   * 新口径：**只在这个起点之后**找，取"源码序号 ≤ 目标且最大"的那一组里**最早出现**的事件
+   * （= 被并进去的那个音）；找不到就**不给这个起点配候选**（那一遍确实到不了这个终点）。
+   */
+  const nearestEndAfter = (want: string, voice: number | null, i0: number): number | null => {
+    const m = /^(\d+)_(\d+)_(\d+)_(\d+)$/.exec(want)
+    if (!m) return null
+    const g = Number(m[3])
+    /**
+     * 只认**紧邻的前一个音**（`target − 1`）：同音合并/连音线并进去时，源序号只差 1。
+     * 不能放宽成"≤ 目标的任意较大序号"——多遍的谱里到处都有较小的序号，
+     * 那样又会配到毫不相干的音上（实测 pass 2 的 `184`）。
+     */
+    const wantPrev = Number(m[4]) - 1
+    if (wantPrev < 0) return null
+    const pickIn = (sameGroup: boolean): number | null => {
+      for (let i = i0 + 1; i < seq.events.length; i++) {
+        const id = seq.events[i].placed.id
+        if (sameGroup && id.group !== g) continue
+        if (voice !== null && id.voice !== voice) continue
+        if (id.index !== wantPrev) continue
+        return i
+      }
+      return null
+    }
+    return pickIn(true) ?? pickIn(false)
+  }
 
   /** 源码位置是否"倒退"（跨反复 / D.S. / D.C. 的特征） */
   const srcKey = (e: PlayEvent): [number, number] => [e.placed.id.group, e.placed.id.index]
@@ -418,19 +470,69 @@ export function resolvePracticeRange(seq: PlaySequence, startId: string, endId: 
   const seen = new Set<string>()
   for (let k = 0; k < starts.length; k++) {
     const i0 = starts[k]
-    const i1 = ends.find((j) => j > i0)
+    const i1 =
+      ends0.length > 0
+        ? ends0.find((j) => j > i0)
+        : opts.endInLayout === true
+          ? // adj1102：终点在排版里存在但没有事件 ⇒ 按"紧邻的前一个音"配；配不上就跳过这一遍
+            (nearestEndAfter(endId, vStart, i0) ?? undefined)
+          : // adj990 旧口径（端点 id 是脏值/对不上）：夹到序列一端，绝不给 missing
+            (() => {
+              const clamped = clampNear(endId, vStart, 'before')[0]
+              return clamped !== undefined && clamped > i0 ? clamped : undefined
+            })()
     if (i1 === undefined) continue
     const key = `${i0}:${i1}`
     if (seen.has(key)) continue
     seen.add(key)
     candidates.push({ i0, i1, startOccurrence: k + 1, containsJump: hasJump(i0, i1) })
   }
-  if (candidates.length === 0) return { pick: 0, candidates: [], missing: 'end' }
-  // 默认：优先"不含跳越"的、其次最早
+  /**
+   * adj1103（用户 2026-10-23 口径，三条一起）：
+   *  ① 起点/终点在某一遍里**到不了** ⇒ 那一遍不加入候选（由上面的配法自然保证）；
+   *  ② 只有**中间走的路不同**才需要多个遍次（不同跳房子/不同走线）；
+   *  ③ 反复多次走**同一条线路**（内容完全一样）⇒ 只留一个遍次。
+   *
+   * 判据：候选区间的**内容签名**（事件 id + 音高 + 音色）。同一份内容被展开成多遍时签名相同 ⇒ 去重；
+   * `{tp}` 替谱段 / 转调 / 跳房子走不同支路时内容不同 ⇒ 签名不同，各自保留。
+   */
+  const sigOf = (i0: number, i1: number): string => {
+    let sig = ''
+    for (let i = i0; i <= i1; i++) {
+      const e = seq.events[i]
+      sig += `${noteIdStringOf(e.placed.id)}|${e.pitch ?? ''}|${e.instrument ?? ''}|`
+    }
+    return sig
+  }
+  const bySig = new Map<string, PracticeRangeCandidate>()
+  for (const c of candidates) {
+    const sig = sigOf(c.i0, c.i1)
+    if (!bySig.has(sig)) bySig.set(sig, c)
+  }
+  const unique = [...bySig.values()].sort((a, b) => a.i0 - b.i0)
+  /**
+   * adj1104 **已撤销**（用户 2026-10-23 口径，`段 [27:1 - 46:2]`）：
+   * 「标记应该有 3 遍次，第一遍最长最完整，第二遍是第一遍的后面一部分，第三遍是第二遍的后面一部分」。
+   *
+   * ⇒ **嵌套候选是合法的**（每一遍从不同的重复/跳越入口重新走到同一个终点），不能再"被包住就丢"。
+   * 需要去掉的是"根本到不了的那一遍"（adj1102 的到达性判定）与"内容完全相同的重复"（adj1103 的内容签名去重）。
+   */
+  if (unique.length === 0) return { pick: 0, candidates: [], missing: 'end' }
+  /** 去重后重新编号（UI 的「第 N 遍」= 候选序号，不是"第几次出现"） */
+  const deduped = unique.map((c, i) => ({ ...c, startOccurrence: i + 1 }))
+  /**
+   * 默认选哪个：**嵌套候选**（每一遍都是上一遍的后半截，用户 `27:1→46:2` 的三遍正是这样）
+   * ⇒ 取**最完整的第一遍**；否则仍旧"优先不含跳越、其次最早"。
+   */
+  const nested =
+    deduped.length > 1 &&
+    deduped.every((c, i) => i === 0 || (deduped[i - 1].i0 <= c.i0 && deduped[i - 1].i1 >= c.i1))
   let pick = 0
-  const clean = candidates.findIndex((c) => !c.containsJump)
-  if (clean >= 0) pick = clean
-  return { pick, candidates }
+  if (!nested) {
+    const clean = deduped.findIndex((c) => !c.containsJump)
+    if (clean >= 0) pick = clean
+  }
+  return { pick, candidates: deduped }
 }
 
 /**
@@ -456,10 +558,35 @@ export function slicePlaySequenceByRange(
 ): (PlaySequence & { rangeMs: number }) | null {
   if (i0 < 0 || i1 < i0 || i1 >= seq.events.length) return null
   const endEvent = seq.events[i1]
-  const endT = endEvent.atMs + endEvent.durationMs
-  // adj987f：把"与结尾音符同时/在其时值窗口内发声"的事件一并纳入（后倚音、同时值的别声部…）
+  let endT = endEvent.atMs + endEvent.durationMs
   let last = i1
-  while (last + 1 < seq.events.length && seq.events[last + 1].atMs < endT - 0.5) last++
+  /**
+   * adj1100（用户 2026-10-23 实报：`33:1 → 34:2` 的段**停止音只响一小截**）：
+   * 同一个音符可能被拆成**连续的几段事件**（后倚音 / 连音线把尾音切开时就是这样，
+   * 实测 `(6/[7/] 6)--` 处同一个 `6` 拆成 107ms + 2893ms 两段，`placed.id` 完全相同）。
+   * 只切到第一段 ⇒ 停止音被截短。这里把"同 id 且首尾相接"的后续段一起带上；
+   * 顺便也继续带入"与结尾同时/在其时值窗口内发声"的其它事件（adj987f 的原有口径）。
+   */
+  const endId = noteIdStringOf(endEvent.placed.id)
+  for (;;) {
+    let advanced = false
+    while (
+      last + 1 < seq.events.length &&
+      noteIdStringOf(seq.events[last + 1].placed.id) === endId &&
+      seq.events[last + 1].atMs <= endT + 0.5
+    ) {
+      last++
+      endT = Math.max(endT, seq.events[last].atMs + seq.events[last].durationMs)
+      advanced = true
+    }
+    // adj987f：把"与结尾音符同时/在其时值窗口内发声"的事件一并纳入（后倚音、同时值的别声部…）
+    while (last + 1 < seq.events.length && seq.events[last + 1].atMs < endT - 0.5) {
+      last++
+      endT = Math.max(endT, seq.events[last].atMs + seq.events[last].durationMs)
+      advanced = true
+    }
+    if (!advanced) break
+  }
   const base = seq.events[i0].atMs
   const events = seq.events.slice(i0, last + 1).map((e) => ({ ...e, atMs: Math.max(0, e.atMs - base) }))
   const lastEv = events[events.length - 1]
@@ -470,6 +597,15 @@ export function slicePlaySequenceByRange(
    * adj1006：从某遍**中间**起播时，0 点还要补当前那一遍（`rebasePassMarksOf` 统一处理）。
    */
   const passMarks = rebasePassMarksOf(seq.passMarks, base, rangeMs)
+  /**
+   * adj1100（用户 2026-10-23）：**「共 M 遍」到底算谁的**——
+   *
+   * · 切片这里仍保留**整曲**遍数（adj1006 的口径：「共 M 遍」是"整首一共几遍"，不是"还剩几遍"，
+   *   也不是"这一段里有几遍"）；
+   * · 但**标记段**的"这一段有几遍"必须按**候选个数**算（同一对起止在展开序列里配出几个区间），
+   *   由调用方传给 `passLabel` —— 用户实报：`赤伶 33:1→34:2` 要进跳房子 1，必然只有 1 遍，
+   *   而整曲有反复 + `&ds` 共 3 遍，界面却显示"共 3 遍"。
+   */
   return {
     events,
     totalMs: rangeMs,
