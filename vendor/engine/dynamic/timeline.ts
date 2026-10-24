@@ -88,6 +88,8 @@ export function buildRectTrack(seq: PlaySequence, opts: RectTrackOptions = {}): 
         group: s.group,
         ...(s.instrument !== undefined ? { instrument: s.instrument } : {}),
         ...(s.playVoice !== undefined ? { playVoice: s.playVoice } : {}),
+        // adj1118：间奏块（中性灰）——透传给 `playheadBaseOf`
+        ...(s.interlude === true ? { interlude: true } : {}),
         ...(s.gain !== undefined ? { gain: s.gain } : {}),
       })
     }

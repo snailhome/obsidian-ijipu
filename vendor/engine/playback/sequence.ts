@@ -78,6 +78,8 @@ export interface PlayheadSeg {
    *  bz upper = 'accomp' (accompaniment color), dsb lower = 'second' (second-voice color),
    *  dsb upper = 'main' (matches primary). */
   playVoice?: 'accomp' | 'main' | 'second'
+  /** adj1118：间奏块（`{jz N}` 的休止段）——固定中性灰，见 `playhead.ts` 的 `INTERLUDE_COLOR` */
+  interlude?: boolean
   /**
    * adj451：该拍段所属事件的**力度倍率**（与 `PlayEvent.gain` 同源，缺省 1）——
    * 色块轨道与音频事件共用同一个力度变量：目前由 adj427 写入（重叠伴奏/第二声部 0.75），
@@ -1011,7 +1013,8 @@ function collapseSegsForInterlude(segs: PlayheadSeg[], beats: number): PlayheadS
   const last = segs[segs.length - 1]
   const left = first.x
   const right = last.x + last.width
-  return [{ ...first, beat: 0, beats, x: left, width: Math.max(0, right - left) }]
+  // adj1118：打上 `interlude` ⇒ 取色走中性灰（`playheadBaseOf`），不按音色着色
+  return [{ ...first, beat: 0, beats, x: left, width: Math.max(0, right - left), interlude: true }]
 }
 
 export function buildPlaySequence(

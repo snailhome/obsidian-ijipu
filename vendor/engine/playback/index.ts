@@ -15,6 +15,17 @@ import { SamplerBackend } from './sampler'
 
 export { buildPlaySequence, inferBpm, countScoreInstrumentSwitches, noteIdStringOf, slicePlaySequenceByNoteRange, resolvePracticeRange, slicePlaySequenceByRange, extendRangeEndToSlurEnd } from './sequence'
 export type { PlayEvent, PlaySequence, PracticeRangeCandidate, ResolvedPracticeRange } from './sequence'
+// adj1118：伴奏对拍的纯数学（锚点 → 拍速/偏移；拍 ↔ 音频毫秒；界面/出片/命令行共用）
+export {
+  fitSync,
+  audioMsOfBeat,
+  beatOfAudioMs,
+  residualBeatsOf,
+  bpmOfFit,
+  inTrimRange,
+  displayBpm,
+} from './sync'
+export type { SyncAnchor, SyncSegmentStat, SyncFit, SyncTrim } from './sync'
 export { SynthBackend, renderSynthNote, pitchToFreq } from './synth'
 export { SamplerBackend }
 export type { AudioBackend, BackendKind } from './types'

@@ -70,6 +70,18 @@ export {
   playheadPosIn,
 } from './playback/playhead'
 export type { PlayheadPos, PlayheadSegAt } from './playback/playhead'
+// adj1118：伴奏对拍的纯数学（锚点 → 拍速/偏移；拍 ↔ 音频毫秒；界面/出片/命令行共用）
+export {
+  fitSync,
+  audioMsOfBeat,
+  beatOfAudioMs,
+  residualBeatsOf,
+  bpmOfFit,
+  inTrimRange,
+  displayBpm,
+} from './playback/sync'
+export type { SyncAnchor, SyncSegmentStat, SyncFit, SyncTrim } from './playback/sync'
+export { INTERLUDE_COLOR } from './playback/playhead'
 // 动态谱（视频出片 / 后续 H5）：时间轴 → 流式视图 → 帧；画布预设
 export {
   buildRectTrack,

@@ -40,6 +40,8 @@ export interface TimedRect {
   instrument?: string
   /** 段内声部角色：`accomp` / `main` / `second`（决定固定配色） */
   playVoice?: 'accomp' | 'main' | 'second'
+  /** adj1118：间奏块（`{jz N}` 的休止段）——固定中性灰，不按音色着色 */
+  interlude?: boolean
   /** 力度倍率（与音频事件同源，预留给强弱记号） */
   gain?: number
 }

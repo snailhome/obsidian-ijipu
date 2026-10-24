@@ -39,6 +39,14 @@ export type PlayheadSegAt = {
   yBottomMax?: number
   /** adj432：段内声部角色（bz upper = 'accomp' / dsb upper = 'main' / dsb lower = 'second'） */
   playVoice?: 'accomp' | 'main' | 'second'
+  /**
+   * adj1118：**间奏块**（`{jz N}` 的休止段）——固定中性灰，不按音色着色。
+   *
+   * 为什么必须单独标：间奏是"在这里等"，用主旋律的红色会让人以为还在唱。
+   * 由 `buildPlaySequence` 的 `collapseSegsForInterlude` 打上，经 `buildRectTrack` /
+   * 试听轨道一路透传给 `playheadBaseOf`。
+   */
+  interlude?: boolean
 }
 
 /** 播放色块调色板（两端一致：红/蓝/绿/橙/紫/青/粉/橄榄） */
@@ -232,14 +240,24 @@ export function alignSameBeatSegs(
 }
 
 /**
+ * adj1118：**间奏块**的固定色（中性灰）。
+ *
+ * 为什么不用调色盘里的任何一色：间奏段在谱面上就是一个 `0`，"红块停在 0 上 16 拍"
+ * 看起来像还在唱；灰色是"此处静默等待"的通用语言（与色块/跳跳球同一套透明度）。
+ */
+export const INTERLUDE_COLOR = 'rgba(120, 124, 130,'
+
+/**
  * 取某拍段的半透明基色（adj432：声部角色优先 → **声部 + 音色**盘 → 声部序号兜底）。
  *
  * adj1095：调色键与 `instrumentColorMap` 同源（`声部|音色`），所以"同音色不同声部"也分色。
+ * adj1118：间奏块优先取中性灰（`interlude: true`）。
  */
 export function playheadBaseOf(
-  pos: { voice: number; instrument?: string; playVoice?: 'accomp' | 'main' | 'second' },
+  pos: { voice: number; instrument?: string; playVoice?: 'accomp' | 'main' | 'second'; interlude?: boolean },
   map: Map<string, number>,
 ): string {
+  if (pos.interlude) return INTERLUDE_COLOR
   if (pos.playVoice) return segVoiceColor(pos.playVoice)
   const idx = map.get(colorKeyOf(pos.voice, pos.instrument)) ?? (pos.voice - 1) % PLAYHEAD_COLORS.length
   return PLAYHEAD_COLORS[idx]
@@ -254,6 +272,8 @@ export interface PlayheadPos {
   voice: number
   instrument?: string
   playVoice?: 'accomp' | 'main' | 'second'
+  /** adj1118：间奏块（中性灰） */
+  interlude?: boolean
 }
 
 /**
@@ -310,5 +330,7 @@ export function playheadPosIn(
     voice: a.voice,
     ...(a.instrument !== undefined ? { instrument: a.instrument } : {}),
     ...(a.playVoice !== undefined ? { playVoice: a.playVoice } : {}),
+    // adj1118：间奏块一路传到取色（`playheadBaseOf` 见 interlude 就返回中性灰）
+    ...(a.interlude === true ? { interlude: true } : {}),
   }
 }
