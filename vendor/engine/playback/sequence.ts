@@ -153,6 +153,12 @@ export interface PlaySequence {
    * 用户 2026-10-22 口径「正好作为球自由下落的时刻」，`ballAt` 不拿它当拍网格原点。
    */
   barStartsMs?: number[]
+  /**
+   * adj1144：与 `barStartsMs` 一一对应的**源码小节号**（1 起）。
+   * 反复段会让同一个小节出现两次（`barStartsMs` 本来就是这样），这里就出现两次同一个号。
+   * ⚠ 只在整曲（未切片）结果里给；切片结果不带，界面上回退到"下标 + 1"。
+   */
+  barNos?: number[]
 }
 
 /**
@@ -2026,8 +2032,28 @@ export function buildPlaySequence(
    * 升序去重（多声部块里各声部起点相同）。
    */
   const barStartsMs: number[] = []
-  const recordBarStart = (t: number): void => {
-    if (barStartsMs.length === 0 || t > barStartsMs[barStartsMs.length - 1] + 0.5) barStartsMs.push(t)
+  /**
+   * adj1144（用户 2026-10-25 实报「台面小节序号比谱面差 1」）：
+   * 与 `barStartsMs` **一一对应**的**源码小节号**（1 起，和谱面画的小节数字同一个编号）。
+   *
+   * 为什么不能再用"下标 + 1"：`barStartsMs` 是**走查时逐遍记录**的，反复段会让同一个小节出现两次
+   * （条数 ≥ 源码小节数），用下标当序号必然错位，而且一错就是一整首。这里在记录起点时**顺手带上
+   * 它的源码小节号**（`barBaseOf(g) + bi`），反复段就是"同一个号出现两次"——正是谱面上看到的样子。
+   */
+  const barNos: number[] = []
+  /** 每个 group 的第一小节号码（1 起）：按前面各 group 的小节数累加
+   *  ⚠ `barStartMsInGroup[g]` 的结构是 `[0, 各小节线…, 曲末]` ⇒ 小节数 = `length - 2`
+   *  （第一版的 `- 1` 把"曲末"也当成一小节，于是每组多 1、整首漂 14 个号）。 */
+  const barBaseOf = (g: number): number => {
+    let n = 1
+    for (let k = 0; k < g; k++) n += Math.max(0, (barStartMsInGroup[k]?.length ?? 2) - 2)
+    return n
+  }
+  const recordBarStart = (t: number, no: number): void => {
+    if (barStartsMs.length === 0 || t > barStartsMs[barStartsMs.length - 1] + 0.5) {
+      barStartsMs.push(t)
+      barNos.push(no)
+    }
   }
   let pass = 1 // 当前反复遍次（1 起；**整曲连续**：|:/:|: 不再归 1，只有跳跃/repeat 前进时 +1）
   /**
@@ -2559,7 +2585,7 @@ export function buildPlaySequence(
        * 第二行起球就只能沿用上一小节的网格（这才是"整曲都在漂"的主因）。
        * 多声部块里各声部的 `groupStartMs` 与小节长相同 ⇒ 起点相同，靠 `recordBarStart` 去重。
        */
-      recordBarStart(passMs + groupStartMs[g] + (barStartMsInGroup[g][bi] ?? 0))
+      recordBarStart(passMs + groupStartMs[g] + (barStartMsInGroup[g][bi] ?? 0), barBaseOf(g) + bi)
       /**
        * adj629k：**补发临时段要放在"静音判定"之前**。
        *
@@ -3388,5 +3414,5 @@ export function buildPlaySequence(
     return { events, totalMs, bpm, passMarks, maxPass, barStartsMs }
   }
 
-  return { events, totalMs, bpm, passMarks, maxPass, barStartsMs }
+  return { events, totalMs, bpm, passMarks, maxPass, barStartsMs, barNos }
 }
