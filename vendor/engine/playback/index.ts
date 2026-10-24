@@ -24,6 +24,7 @@ export {
   bpmOfFit,
   inTrimRange,
   displayBpm,
+  sessionMsOfAudioMs,
 } from './sync'
 export type { SyncAnchor, SyncSegmentStat, SyncFit, SyncTrim } from './sync'
 export { SynthBackend, renderSynthNote, pitchToFreq } from './synth'

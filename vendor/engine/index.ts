@@ -79,6 +79,7 @@ export {
   bpmOfFit,
   inTrimRange,
   displayBpm,
+  sessionMsOfAudioMs,
 } from './playback/sync'
 export type { SyncAnchor, SyncSegmentStat, SyncFit, SyncTrim } from './playback/sync'
 export { INTERLUDE_COLOR } from './playback/playhead'

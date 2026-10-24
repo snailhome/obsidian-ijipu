@@ -172,6 +172,20 @@ export function inTrimRange(trim: SyncTrim | undefined, audioMs: number): boolea
 }
 
 /**
+ * 对拍台**动态谱预览**：音频时刻 → 放映会话时刻（`adj1123`）。
+ *
+ * 预览会话按**谱面 `J:`** 建（一次建好、不随微调重建），而伴奏可能是另一个速度，
+ * 所以这里按拍速比例缩放：`t = (audioMs − offsetMs) × beatMsSession / beatMsFit`。
+ *
+ * 为什么这样可以：谱面的"音乐时间"只由拍数决定 —— `audioMs = offset + 拍 × beatMsFit`，
+ * 代入后 `t = 拍 × beatMsSession`，正是"第几拍"在会话里的位置。**拍数不变，只换秒数**，
+ * 所以微调 ±5ms 不需要重建会话（重建一次几百毫秒，会把手感拖垮）。
+ */
+export function sessionMsOfAudioMs(audioMs: number, fit: Tempo, sessionBeatMs: number): number {
+  return (audioMs - fit.offsetMs) * (sessionBeatMs / fit.beatMs)
+}
+
+/**
  * 段落"实际节拍数"（BPM）的**显示口径**：取整。
  * 单独一个函数是为了让界面与命令行说同一个数（AGENTS「数值口径同源」）。
  */
