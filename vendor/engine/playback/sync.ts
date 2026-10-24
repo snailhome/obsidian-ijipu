@@ -165,6 +165,29 @@ export function bpmOfFit(fit: Pick<Tempo, 'beatMs'>): number {
   return 60000 / fit.beatMs
 }
 
+/**
+ * **有效拟合**：锚点只在"能定速度"时才定速度（用户 2026-10-24 确认的口径）。
+ *
+ * | 锚点数 | 速度（`beatMs`） | 偏移（`offsetMs`） |
+ * |---|---|---|
+ * | 0 | ——（返回 `null`，调用方按"谱面从音频 0 开始"兜底） | —— |
+ * | **1** | **谱面头部 `J:` 的拍速**（`scoreBeatMs`，不由锚点推） | 由这条锚点解：`audioMs − 拍 × scoreBeatMs` |
+ * | 2+ | 由 `fitSync` 最小二乘解出（**不再用 `J:`**） | 同上 |
+ *
+ * 为什么 1 条锚点时速度必须取 `J:`：一条 (拍, 时刻) 只能定一个未知量；
+ * 若拿它同时定速度和偏移（等于假设"谱面第 0 拍 = 音频 0"），得到的拍速会是
+ * `audioMs / beat`——随手填错的拍号会算出 ♩≈250 这种离谱速度，且没有任何地方能提示。
+ * 现在这样：速度是谱面权威值，拍号填错只会表现为"偏移很大"（台面有红字提醒）。
+ */
+export function effectiveFitOf(anchors: readonly SyncAnchor[], scoreBeatMs: number): SyncFit | null {
+  const fit = fitSync(anchors)
+  if (fit !== null) return fit
+  const pts = anchors.filter((a) => Number.isFinite(a.beat) && Number.isFinite(a.audioMs))
+  if (pts.length === 0 || !(scoreBeatMs > 0)) return null
+  const a = pts[0]
+  return { beatMs: scoreBeatMs, offsetMs: a.audioMs - a.beat * scoreBeatMs, residualsMs: [0], segments: [] }
+}
+
 /** 这个绝对时刻在保留段里吗（导出/播放都先问它；`trim` 缺省视为整段） */
 export function inTrimRange(trim: SyncTrim | undefined, audioMs: number): boolean {
   if (!trim) return true

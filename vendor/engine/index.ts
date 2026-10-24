@@ -73,6 +73,7 @@ export type { PlayheadPos, PlayheadSegAt } from './playback/playhead'
 // adj1118：伴奏对拍的纯数学（锚点 → 拍速/偏移；拍 ↔ 音频毫秒；界面/出片/命令行共用）
 export {
   fitSync,
+  effectiveFitOf,
   audioMsOfBeat,
   beatOfAudioMs,
   residualBeatsOf,
