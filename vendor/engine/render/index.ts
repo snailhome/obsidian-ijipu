@@ -1196,6 +1196,28 @@ function renderNote(note: PlacedToken, config: PageConfig): string {
     )
   }
 
+  // adj1161（用户 2026-10-25）：「0{jz 16}」在预览里只有一个 0，看不出这是间奏——
+  // 在 0 正上方标一行「间奏16拍」。位置按**已有上层元素**（装饰/注释/乐器名）继续往上叠，
+  // 与音符注释同一套字号/留白，不改排版宽度（间奏仍是零宽、只影响播放时长）。
+  if (t.kind === 'rest' && t.interludeBeats !== undefined) {
+    const ifs0 = Math.max(7, Math.round(size * NOTE_COMMENT_FONT_RATIO))
+    let top = y - size * DIGIT_HEIGHT_RATIO
+    if (t.symbols.length > 0) {
+      const SYM_FS = Math.round(10 * s)
+      top -= t.symbols.length * (SYM_FS * (DIGIT_HEIGHT_RATIO + DESC_RATIO) + LAYER_GAP * s)
+    }
+    if (t.comment) {
+      top -= LAYER_GAP * s + ifs0 * DESC_RATIO + ifs0 + commentRaise * NOTE_COMMENT_RAISE
+    }
+    if (config.showInstrument === true && note.instrumentLabel) {
+      top -= LAYER_GAP * s + ifs0 * DESC_RATIO + ifs0
+    }
+    const base = top - LAYER_GAP * s - ifs0 * DESC_RATIO
+    parts.push(
+      `<text class="jp-interlude-label" x="${r1n(x + digitW / 2)}" y="${r1n(base)}" text-anchor="middle" font-size="${ifs0}" font-family="${FONT_CN}" fill="#555">间奏${t.interludeBeats}拍</text>`,
+    )
+  }
+
   return parts.join('\n')
 }
 
