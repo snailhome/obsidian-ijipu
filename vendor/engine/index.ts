@@ -103,6 +103,7 @@ export {
   BALL_SQUASH_Y,
   buildCameraTrack,
   cameraAt,
+  clampCameraCenterX,
   clampRowCenter,
   CAMERA_FOLLOW_ZOOM,
   CAMERA_INTRO_MS,

@@ -14,6 +14,7 @@ export type { BallAnchor, BallPos, BallTiming } from './ball'
 export {
   buildCameraTrack,
   cameraAt,
+  clampCameraCenterX,
   clampRowCenter,
   CAMERA_FOLLOW_ZOOM,
   CAMERA_INTRO_MS,

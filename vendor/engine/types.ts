@@ -1311,9 +1311,10 @@ export const defaultPageConfig: PageConfig = {
   // adj965c（用户 2026-10-15 裁定）：两个"总开关"默认 **false**（必须显式勾上才画）
   wmEnabled: false,
   wmType: 'text',
-  wmText: '',
+  // adj1189（用户 2026-11-03）：默认水印文本与字号；仍受 wmEnabled=false 约束，不勾选不画
+  wmText: '爱记谱・iJipu',
   wmImage: '',
-  wmSize: 36,
+  wmSize: 22,
   wmScale: 100,
   // adj965b（用户 2026-10-15 裁定）：默认旋转由 +45 改为 **-45**
   wmRotate: -45,

@@ -90,6 +90,27 @@ export function clampRowCenter(
   return Math.max(leftLimit, Math.min(rightLimit, want))
 }
 
+/**
+ * adj1188（用户 2026-11-02 实报「片段从曲部行右侧开始会显示一大块空白」）：
+ * 把相机中心夹到**页面内**，使取景框 `[cx−hw, cx+hw]` 完全落在 `[0, pageW]` 里。
+ *
+ * - 取景框比页面宽（片头满宽）⇒ 页面居中；
+ * - 否则 `cx ∈ [hw, pageW−hw]`。
+ *
+ * 与 `clampRowCenter` 的分工：那个管"行内容露白 ≤10%"，这个管"视口不许出纸"；
+ * 两者叠加时以本函数为最终边界（同一时刻只允许一个最终夹紧）。
+ */
+export function clampCameraCenterX(
+  cx: number,
+  pageW: number,
+  viewW: number,
+  zoom: number,
+): number {
+  const hw = viewW / Math.max(1e-9, zoom) / 2
+  if (pageW <= 2 * hw) return pageW / 2
+  return Math.max(hw, Math.min(pageW - hw, cx))
+}
+
 export interface CameraOptions {
   /** 成片画布像素宽高 */
   viewW: number
@@ -542,13 +563,14 @@ export function cameraAt(cam: CameraTrack, t: number): CameraFrame {
   cx = cam.pageW / 2 + (cx - cam.pageW / 2) * introK
 
   /**
-   * 夹紧：
-   *  - 取景框比页面宽（片头）⇒ 必须整页居中，否则一侧露白；
-   *  - 已经推近 ⇒ 只要求"页面还有一块在框里"，**允许探出页边**——
-   *    首行的音靠左边距，不放行的话它就永远停在 18% 的位置（用户实测就是这个）。
+   * 夹紧（adj1188，用户 2026-11-02 实报「片段从曲部行右侧开始会显示一大块空白」）：
+   *  - 取景框比页面宽（片头）⇒ 整页居中；
+   *  - 已经推近 ⇒ **取景框必须完全落在页面内**：`cx ∈ [hw, pageW − hw]`。
+   *
+   * 旧行为只把**中心**夹到 `[0, pageW]`，于是行末/段首靠右时，取景框右半边会探出纸张，
+   * 屏幕上就是一大块空白。用户口径是"显示范围不出页面范围之外"，所以这里改成夹**视口**。
    */
-  const hw = cam.viewW / zoom / 2
-  cx = cam.pageW <= 2 * hw ? cam.pageW / 2 : Math.max(0, Math.min(cam.pageW, cx))
+  cx = clampCameraCenterX(cx, cam.pageW, cam.viewW, zoom)
 
   // 片头那一段属于第一行的页（描述头在第 1 页）
   const pageIndex = introK < 1 ? (cam.rows[0]?.pageIndex ?? row.pageIndex) : row.pageIndex
