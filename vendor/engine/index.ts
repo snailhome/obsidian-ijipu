@@ -11,7 +11,9 @@
  *  具体算法与代码组织均为本项目原创。
  */
 export * from './types'
+export * from './scoreMeta'
 export { parseJps } from './parser'
+export { tempoLabel } from './parser/parser'
 // adj965d（方案 OVL，EP-13）：水印/背景层的**手势口径**——应用与 Obsidian 插件共用这一份
 // （插件经 `vendor/engine` 逐字节同步；两端各自只负责"接线"）
 export {

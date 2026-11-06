@@ -1219,7 +1219,7 @@ export interface PageConfig {
   wmRotate: number
   /**
    * **重复水印**（用户 2026-10-15 要求）：勾选后按"一定行列间隔"把水印**平铺满页面**，
-   * 而不是只画正中一个。默认 `false`（单个居中 = 经典水印；也保证不用这功能的谱零变化）。
+   * 而不是只画正中一个。默认 `true`（用户 2026-11-04 调整：默认铺满）。
    */
   wmRepeat: boolean
   /**
@@ -1227,7 +1227,7 @@ export interface PageConfig {
    * ⇒ `100`（默认）时步进 = 自身尺寸的 2 倍。只在 `wmRepeat` 打开时有意义。
    */
   wmRepeatGap: number
-  /** 水印不透明度（0~100；100 = 完全不透明） */
+  /** 水印不透明度（0~100；100 = 完全不透明）。默认 15（用户 2026-11-04 调整） */
   wmOpacity: number
   /** 水印中心相对**页面中心**的横向偏移（pt） */
   wmOffsetX: number
@@ -1318,10 +1318,11 @@ export const defaultPageConfig: PageConfig = {
   wmScale: 100,
   // adj965b（用户 2026-10-15 裁定）：默认旋转由 +45 改为 **-45**
   wmRotate: -45,
-  wmRepeat: false,
+  // adj1207（用户 2026-11-04）：重复铺满默认 **勾选**；透明度默认 **15**（更淡）
+  wmRepeat: true,
   // adj965f（用户 2026-10-15 裁定）：默认平铺间隔由 100 改为 **300**（100 太密）
   wmRepeatGap: 300,
-  wmOpacity: 25,
+  wmOpacity: 15,
   wmOffsetX: 0,
   wmOffsetY: 0,
   bgEnabled: false,
