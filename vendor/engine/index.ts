@@ -194,6 +194,9 @@ export { computeRowTops, computeRowGuides, dragDelta, clamp, metaAreaH, GUIDE_IT
 export { flattenScoreNotes, totalBarsOf, measureSpotOf, spotOfIn, hasNoteId, resolveBarBeatRange, BEAT_EPS } from './layout/measureMap'
 export type { ScoreSpotNote, BarBeatRange } from './layout/measureMap'
 export { metaAnchorOf, metaAnchorPt, clampMetaPos, metaCornerOffsets, metaAuthorRowY } from './layout/metaAnchors'
+// adj1304：作者（Z:）两端对齐的纯几何（拆分最后空格 / 列宽）
+export { splitAuthorLine, authorGlyphW, alignAuthorLines } from './layout/authorAlign'
+export type { AuthorLine, AuthorAlign } from './layout/authorAlign'
 export { splitNoteDur, digitSlotW, dotBodyW, augBodyW, slideBodyW, bracketBodyW, noteBodyW, nonDurGap, accidentalBodyW, accidentalPenDx, accidentalInkLeftDx, accidentalInkRightDx, accidentalFontSize, accidentalGlyphOf, braceInkRightOffset, BRACE_LINE_DX, hxBodyW, slideGlyphInk, slideExtraW, graceSlotLayout, graceSlideInk, mordentInkW } from './layout/spaceLayout'
 // adj630b：谱尾说明（`S:`）的行基线——渲染端与预览端拖拽基准共用（不得各写一份）
 export { notesRowBaseline, NOTES_LINE_H_RATIO, NOTES_BOTTOM_GAP, NOTES_DESCENT_RATIO } from './layout/spacing'

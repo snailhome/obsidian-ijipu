@@ -57,6 +57,8 @@ export const DEFS: SettingDef[] = [
   { group: '页面', key: 'margin_right', label: '右边距', type: 'number' },
   { group: '页面', key: 'body_margin_top', label: '首行至描述头间距', type: 'number' },
   { group: '页面', key: 'descAreaH', label: '描述头高', type: 'number' },
+  // adj1304（跟随应用 0.81.0）：作者（Z:）两端对齐——多个 Z: 行时把最后一个空格前的标签按最长行拉齐
+  { group: '页面', key: 'author_justify', label: '作者两端对齐', type: 'toggle' },
   { group: '页面', key: 'align_min_bars', label: '两端对齐最小小节数', type: 'number' },
   { group: '页面', key: 'noteSpaceLayout', label: '布局模式', type: 'select', options: [
     { label: '空间优先', value: 'space' },

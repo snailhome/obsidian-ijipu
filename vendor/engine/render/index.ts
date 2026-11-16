@@ -19,6 +19,8 @@ import type { PageConfig, PlacedBarline, PlacedBarNumber, PlacedDynamic, PlacedL
 import { GRACE_MORDENT_CODES } from '../types'
 import { tokenDuration } from '../duration'
 import { metaAnchorOf, metaAnchorPt, metaAuthorRowY, metaCornerOffsets } from '../layout/metaAnchors'
+// adj1304：作者（Z:）两端对齐的纯几何（只动最后一个空格之前的 label；整行仍右对齐）
+import { alignAuthorLines } from '../layout/authorAlign'
 import {
   DOT_R,
   DOT_R_DOT,
@@ -565,10 +567,48 @@ function renderMeta(page: ScorePage, config: PageConfig, opts?: RenderFontMeta):
   }
 
   // ---- 作者（右下锚，从底部往上：**末行贴区域下沿**，adj629u） ----
+  /**
+   * adj1304（用户要求）：**作者两端对齐**（`config.author_justify`）。
+   *
+   * 没勾选 ⇒ 逐字节保持旧输出（一行一个 `<text data-meta="author_i" text-anchor="end">`）。
+   * 勾选且确有多余 label ⇒ 每行拆成「label + value」：
+   *  · label 统一拉伸到**最长 label 的宽度**（`textLength` + `lengthAdjust="spacing"`），
+   *    右缘固定在 `右边界 − 最宽 value − 半字间隙`；
+   *  · value 仍 `text-anchor="end"` 钉在右边界（Z 块整体右对齐到右边距不变）。
+   * 行高/纵坐标与旧版完全一致（`metaAuthorRowY`）。
+   */
+  const authorSize = Math.max(9, mSize - 1)
+  const authorCols = config.author_justify ? alignAuthorLines(page.meta.authors, authorSize) : null
+  const authorTable = authorCols !== null && authorCols.hasLabel ? authorCols : null
+  const num = (v: number): string => String(Math.round(v * 100) / 100)
   for (let i = 0; i < page.meta.authors.length; i++) {
     const pos = posOf(`author_${i}`, { x: 0, y: metaAuthorRowY(i, page.meta.authors.length, mSize) })
+    const fontAttrs = `font-size="${authorSize}" font-family="${mFont}" fill="#1b1b1b"`
+    if (authorTable === null) {
+      parts.push(
+        `<text data-meta="author_${i}" x="${pos.x}" y="${pos.y}" text-anchor="end" ${fontAttrs}>${linkifyText(page.meta.authors[i])}</text>`,
+      )
+      continue
+    }
+    const row = authorTable.rows[i]
+    const valueRight = pos.x
+    const labelRight = valueRight - authorTable.valueW - authorTable.gap
+    if (row.label !== '' && row.value !== '') {
+      // 多字 label：左对齐 + 拉伸到 labelW；单字：贴列右缘（单字没有字间距可拉）
+      const labelAttr =
+        [...row.label].length > 1
+          ? `x="${num(labelRight - authorTable.labelW)}" text-anchor="start" textLength="${num(authorTable.labelW)}" lengthAdjust="spacing"`
+          : `x="${num(labelRight)}" text-anchor="end"`
+      parts.push(`<text class="meta-author-label" ${labelAttr} y="${pos.y}" ${fontAttrs}>${xmlEsc(row.label)}</text>`)
+      parts.push(
+        `<text data-meta="author_${i}" x="${num(valueRight)}" y="${pos.y}" data-meta-anchor-x="${num(valueRight)}" text-anchor="end" ${fontAttrs}>${linkifyText(row.value)}</text>`,
+      )
+      continue
+    }
+    // 没有 label（整行都是值）或值空：退回"整行右对齐"，保证不丢字
+    const text = row.value !== '' ? row.value : row.label
     parts.push(
-      `<text data-meta="author_${i}" x="${pos.x}" y="${pos.y}" text-anchor="end" font-size="${Math.max(9, mSize - 1)}" font-family="${mFont}" fill="#1b1b1b">${linkifyText(page.meta.authors[i])}</text>`,
+      `<text data-meta="author_${i}" x="${num(valueRight)}" y="${pos.y}" data-meta-anchor-x="${num(valueRight)}" text-anchor="end" ${fontAttrs}>${linkifyText(text)}</text>`,
     )
   }
 

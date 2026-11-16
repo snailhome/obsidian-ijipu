@@ -152,6 +152,7 @@ Q: 1 2 3 4 |
 | 右边距 | `margin_right` | 数字 | 默认 50 |
 | 正文上间距 | `body_margin_top` | 数字 | 默认 20 |
 | 描述头区高 | `descAreaH` | 数字 | 默认 80 |
+| 作者两端对齐 | `author_justify` | boolean | true / false（默认 true；多个 `Z:` 行时把最后一个空格前的标签按最长行拉齐） |
 | 小节间距 | `bar_gap` | 数字 | 默认 0（设置面板未提供控件，仍可手写进 `# jps-config`） |
 | 两端对齐最小小节数 | `align_min_bars` | 数字 | 默认 4 |
 | 音符布局模式 | `noteSpaceLayout` | 枚举 | space（空间优先）/ duration（时值优先），默认 space |

@@ -1168,6 +1168,13 @@ export interface PageConfig {
   /** adj303：是否显示乐器名注释（@乐器名 / @@ 切换后的下一个音符上方；缺省 false 不显示） */
   showInstrument?: boolean
   /**
+   * adj1304（用户 2026-11-16 要求）：**作者两端对齐**——多个描述头 `Z:` 行时，
+   * 把每行**最后一个空格之前**的字符（通常是「作曲 / 作词 / 编曲」这类标签）拉到
+   * **最长标签的宽度**做两端对齐；`Z:` 整体仍**右对齐到右边距**（值部分不动）。
+   * adj1304 第二轮：用户要求**默认打开**（空配置下就按新排法出谱）。
+   */
+  author_justify: boolean
+  /**
    * adj428：临时叠加段（`{bz … }` / `{dsb … }` / adj629 `{tp … }`）上下两行之间的纵向间距（px）。
    *  - `bz`：主旋律行不动，段层抬 `segmentRowGap.bz`。
    *  - `dsb`：上下两层各偏移 `segmentRowGap.dsb / 2`，整块关于主旋律基线居中。
@@ -1306,6 +1313,8 @@ export const defaultPageConfig: PageConfig = {
   // adj630c（用户要求）：默认由**关闭**改为**勾选**（新谱/未写过该项的谱都显示序号）
   showBarCount: true,
   barCountInterval: 4,
+  // adj1304：作者两端对齐**默认打开**（用户 2026-11-16 拍板；勾掉即回旧排法）
+  author_justify: true,
   lianyinxian_type: 0,
   // adj965：水印 / 背景（默认全为"不画"或"等于默认" ⇒ 差量写入不落任何键，既有谱零变化）
   // adj965c（用户 2026-10-15 裁定）：两个"总开关"默认 **false**（必须显式勾上才画）
