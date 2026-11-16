@@ -101,6 +101,7 @@ export {
   beatPhaseOf,
   primaryVoiceOf,
   BALL_LANDING_TIMING,
+  BALL_LEAD_MS,
   BALL_SQUASH_X,
   BALL_SQUASH_Y,
   buildCameraTrack,
@@ -118,6 +119,9 @@ export {
   dynamicPageConfig,
 } from './dynamic'
 export type { RectTrack, TimedRect, RectTrackOptions, FlowRow, FlowView, FrameRect, Frame, DynamicPreset, DynamicPresetId, CameraFrame, CameraTrack, CameraOptions, CameraRow, CameraPan, PanMode, BallAnchor, BallPos, BallTiming } from './dynamic'
+// adj1258：连续动态谱（单行滚动谱）——「排版 → 源小节表 → 按演奏顺序拼成一条线」
+export { buildLinearStrip, extractMeasures, stripXAt, stripRunAt, stripEndMs, stripBarlineTypeOf, stripBallAt } from './linear'
+export type { LinearStrip, LinearStripOptions, StripRun, StripNote, StripOnset, StripDropped, SrcMeasure, StripBall, StripBallOptions } from './linear'
 // adj759（清单 B2）：解析问题的分级/排序/计数/展示行（应用与插件共用；宿主可传自己的品牌标签）
 export {
   DEFAULT_PROBLEM_LABELS,

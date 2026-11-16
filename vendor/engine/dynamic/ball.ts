@@ -120,6 +120,20 @@ export const BALL_LANDING_TIMING: BallTiming = {
 export const BALL_SQUASH_X = 0.35
 export const BALL_SQUASH_Y = 0.45
 
+/**
+ * adj1286（用户 2026-11-11 实测）：**跳跳球整体提前 40ms** 的建议值。
+ *
+ * 现象：球落到色块上沿的那一刻，比色块切换晚 —— 看起来就是"色块已经走了，球才落下"。
+ * 做法：调用方把它作为 `ballAt(..., leadMs)` 传进来，引擎内部按 `t + leadMs` 计算。
+ *
+ * 数值调整：先按 100ms 试了一轮，用户反馈"偏早"，改成 40ms（即"在 100ms 的基础上推迟 60ms"）。
+ *
+ * 为什么做成参数而不是直接写死在 `ballAt` 里：断言的语义是"拍点 t 落地"，
+ * 写死会让 16 条球断言全部偏同一个量（实测全红）。参数化后**默认行为不变**，
+ * 由预览/出片两处调用显式传值 —— 口径清楚，也不动断言。
+ */
+export const BALL_LEAD_MS = 40
+
 /** 一个落点（页面坐标）：`x` = 横向落点，`top` = 色块上沿 */
 interface Landing {
   x: number
@@ -348,8 +362,12 @@ export function ballAt(
   amp: number,
   barStartsMs?: readonly number[],
   timing?: BallTiming,
+  /** adj1286：整体提前量（ms）；调用方传 `BALL_LEAD_MS` 让落点与色块切换对齐，缺省 0 = 旧行为 */
+  leadMs = 0,
 ): BallPos | null {
   if (beatMs <= 0 || anchors.length === 0) return null
+  // adj1286：按提前量把时间往后推（球按"未来 leadMs 的状态"画）
+  if (leadMs !== 0) t += leadMs
   const first = anchors[0]
   const last = anchors[anchors.length - 1]
   // 第一个音之前：不画球（片头标题卡阶段）
