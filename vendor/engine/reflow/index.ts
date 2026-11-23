@@ -74,6 +74,15 @@ function isBoundary(t: MusicToken): t is BarlineToken {
   return t.kind === 'barline' && t.voltaOnly !== true
 }
 
+/**
+ * Q 行里去掉**替谱段 `{tp … }`**：它们是 `injectLyricVariants()` 从歌词行注入的，
+ * 源码本来写在 `C:` 行里。重排 Q 行时不能再写一遍（否则解析器会报“只能写在歌词行”）。
+ * 歌词切片会保留 C 行里的 `{tp}` 原文。
+ */
+function qTokensOf(group: MusicGroup): MusicToken[] {
+  return group.music.tokens.filter((t) => !(t.kind === 'segment' && t.type === 'tp'))
+}
+
 /** 页面内容宽（多声部扣一点块首大括号/声部名留白，保守一点） */
 function availWidthOf(cfg: PageConfig, voices: number): number {
   const page = PAPER_SIZE[cfg.page]?.width ?? 595.28
@@ -191,7 +200,7 @@ function boundarySlotsOf(tokens: readonly MusicToken[], measureCount: number): n
 function forbiddenBreaksOf(parts: VoicePart[], measureCount: number): Set<number> {
   const out = new Set<number>()
   for (const p of parts) {
-    const tokens = p.group.music.tokens
+    const tokens = qTokensOf(p.group)
     const bounds = boundaryBeatsOf(tokens)
     for (const seg of computeSegments(tokens)) {
       const start = seg.startBeat
@@ -345,8 +354,8 @@ function planStarts(
   opts: ReflowOptions,
   cfg: PageConfig,
 ): { starts: number[]; measureCount: number; warnings: string[] } {
-  const parts: VoicePart[] = unit.groups.map((group) => ({ group, segs: splitBars(group.music.tokens) }))
-  const measureCount = Math.max(1, ...parts.map((p) => countMeasures(p.group.music.tokens)))
+  const parts: VoicePart[] = unit.groups.map((group) => ({ group, segs: splitBars(qTokensOf(group)) }))
+  const measureCount = Math.max(1, ...parts.map((p) => countMeasures(qTokensOf(p.group))))
   const fixed = fixedWidthsOf(parts, cfg.note_size)
   const avail = availWidthOf(cfg, unit.groups.length)
   const forbidden = forbiddenBreaksOf(parts, measureCount)
@@ -501,7 +510,7 @@ function reflowUnit(unit: UnitInfo, opts: ReflowOptions, cfg: PageConfig): UnitR
   const piecesByGroup = new Map<MusicGroup, MusicToken[][]>()
   const slotAtByGroup = new Map<MusicGroup, number[]>()
   for (const group of unit.groups) {
-    const tokens = group.music.tokens
+    const tokens = qTokensOf(group)
     piecesByGroup.set(group, splitVoiceTokens(tokens, starts, measureCount))
     slotAtByGroup.set(group, boundarySlotsOf(tokens, measureCount))
   }
