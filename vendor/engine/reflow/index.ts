@@ -699,19 +699,21 @@ function reflowRun(units: UnitInfo[], opts: ReflowOptions, cfg: PageConfig): Uni
   for (let row = 0; row < starts.length - 1; row++) {
     for (const p of parts) {
       const voice = p.voice
-      const name = voiceNames.get(voice)
-      const prefix = `Q${voice === 1 ? '' : voice}${name ? `"${name}"` : ''}:`
       const piece = ensureEndBarline(piecesByVoice.get(voice)?.[row] ?? [])
-      out.push(piece.length === 0 ? prefix : `${prefix} ${serializeTokens(piece)}`)
-
       const from = starts[row]
       const to = starts[row + 1]
       const slots = slotAtByVoice.get(voice) ?? []
       const fromSlot = slots[from] ?? 0
       const toSlot = slots[to] ?? fromSlot
       const streams = verseSlots.get(voice) ?? []
-      for (let k = 0; k < streams.length; k++) {
-        const text = joinLyricSlots(streams[k].slice(fromSlot, toSlot))
+      const texts = streams.map((stream) => joinLyricSlots(stream.slice(fromSlot, toSlot)))
+      // 声部在这一行已经结束（缩声部之后没有音、也没有词）⇒ 不输出空 Q/C 行
+      if (piece.length === 0 && texts.every((t) => t === '')) continue
+      const name = voiceNames.get(voice)
+      const prefix = `Q${voice === 1 ? '' : voice}${name ? `"${name}"` : ''}:`
+      out.push(piece.length === 0 ? prefix : `${prefix} ${serializeTokens(piece)}`)
+      for (let k = 0; k < texts.length; k++) {
+        const text = texts[k]
         // 单段词的空行不写；多段词必须逐行保留，否则“第几遍”会串
         if (text === '' && streams.length === 1) continue
         out.push(`C${voice === 1 ? '' : voice}:${text === '' ? '' : ` ${text}`}`)
@@ -735,22 +737,33 @@ function reflowRun(units: UnitInfo[], opts: ReflowOptions, cfg: PageConfig): Uni
 function buildRuns(units: UnitInfo[]): UnitInfo[][] {
   const runs: UnitInfo[][] = []
   let cur: UnitInfo[] = []
-  let curVoices = ''
+  /** 上一个单元的声部集合（只允许“缩声部”，不允许中途加声部；加了就另起一段） */
+  let prevVoices = ''
   let curTp = false
+  const setOf = (s: string): Set<number> =>
+    new Set(s === '' ? [] : s.split(',').map((v) => Number(v)))
   const flush = (): void => {
     if (cur.length === 0) return
     runs.push(cur)
     cur = []
-    curVoices = ''
+    prevVoices = ''
     curTp = false
   }
   for (const u of units) {
     const voices = u.groups.map((g) => g.music.voice).sort((a, b) => a - b).join(',')
     const tp = hasTpUnit(u)
     const volta = startsWithVoltaOnly(u)
-    if (cur.length > 0 && (u.pageBreakBefore || tp || curTp || volta || voices !== curVoices)) flush()
+    const prevSet = setOf(prevVoices)
+    const nextSet = setOf(voices)
+    const subset = cur.length > 0 && [...nextSet].every((v) => prevSet.has(v))
+    if (
+      cur.length > 0 &&
+      (u.pageBreakBefore || tp || curTp || volta || !subset)
+    ) {
+      flush()
+    }
     cur.push(u)
-    curVoices = voices
+    prevVoices = voices
     curTp = tp
     if (tp) flush()
   }
