@@ -236,6 +236,38 @@ function boundarySlotsOf(tokens: readonly MusicToken[], measureCount: number): n
 }
 
 /**
+ * 结构性**强制断点**：闭合跳房子 `]` / `]/` 所在小节之后必须换行。
+ * 用户 2026-11-23 的谱例里 `|]/` 是上一段第一结尾的收口；重排若把它当普通小节线，
+ * 会把前 3 小节排满、把第一结尾最后 1 小节挤到下一行（用户实报“只排了 1 小节”）。
+ */
+function forcedStartsOf(parts: VoicePart[]): Set<number> {
+  const out = new Set<number>()
+  for (const p of parts) {
+    let measure = 0
+    let sawNote = false
+    for (const t of p.tokens) {
+      if (isBoundary(t)) {
+        if (!(measure === 0 && !sawNote)) {
+          measure += 1
+          if (t.voltaEnd) out.add(measure)
+        }
+      } else if (isDurational(t)) {
+        sawNote = true
+      }
+    }
+  }
+  return out
+}
+
+/** 从 start 之后最近的强制断点（没有就 measureCount） */
+function nextForcedAfter(forced: Set<number>, start: number, measureCount: number): number {
+  let best = measureCount
+  for (const f of forced) {
+    if (f > start && f < best) best = f
+  }
+  return best
+}
+/**
  * 不可断的小节断点：段（`{bz}`/`{dsb}`/`{tp}`）跨越的小节边界、
  * 以及歌词 `{tp … }` 跨越的边界都不能断。
  */
@@ -283,6 +315,7 @@ function greedyPlan(
   maxMeasures: number,
   ratio: number,
   forbidden: Set<number>,
+  forced: Set<number>,
 ): Plan {
   const starts: number[] = [0]
   const warnings: string[] = []
@@ -291,9 +324,12 @@ function greedyPlan(
   const canBreak = (b: number): boolean => b === measureCount || allowed(b)
   let guard = 0
   while (start < measureCount && guard++ < measureCount + 2) {
+    // 闭合跳房子 `]` 之后是结构边界，不能把这一行排到它后面
+    const limit = nextForcedAfter(forced, start, measureCount)
     let end = start
     let sum = 0
     while (end < measureCount) {
+      if (end >= limit) break // 到强制断点就收
       const count = end - start + 1
       if (count > maxMeasures) break
       const next = sum + fixed[end]
@@ -303,16 +339,16 @@ function greedyPlan(
       if (end < measureCount && !canBreak(end)) continue // 段内不能断，继续往后吃
     }
     if (end <= start) end = start + 1
-    let cut = end
+    let cut = Math.min(end, limit)
     // 先向后找最近的合法断点；若超过 maxMeasures，回退到上限内最后一个合法断点
-    if (cut < measureCount && !canBreak(cut)) {
-      while (cut < measureCount && !canBreak(cut)) cut += 1
+    if (cut < measureCount && !canBreak(cut) && !forced.has(cut)) {
+      while (cut < measureCount && !canBreak(cut) && !forced.has(cut)) cut += 1
     }
     if (cut > measureCount) cut = measureCount
     if (cut - start > maxMeasures) {
       let best = -1
       for (let c = start + 1; c <= Math.min(measureCount, start + maxMeasures); c++) {
-        if (canBreak(c)) best = c
+        if (canBreak(c) || forced.has(c)) best = c
       }
       if (best > start) cut = best
       else warnings.push(`第 ${start + 1} 小节起有一段跨小节结构，本行超过最多 ${maxMeasures} 小节`)
@@ -333,11 +369,14 @@ function targetPlan(
   maxMeasures: number,
   ratio: number,
   forbidden: Set<number>,
+  forced: Set<number>,
   target: number,
 ): Plan {
   const warnings: string[] = []
-  const allowedEnd = (b: number): boolean => b === measureCount || (b > 0 && b < measureCount && !forbidden.has(b))
-  const maxK = Math.min(Math.max(1, target), measureCount)
+  const allowedEnd = (b: number): boolean =>
+    b === measureCount || forced.has(b) || (b > 0 && b < measureCount && !forbidden.has(b))
+  // 闭合跳房子会额外增加断点；DP 行数上限要留出这些结构性断点
+  const maxK = Math.min(measureCount, Math.max(1, target) + forced.size + 1)
   const INF = Number.POSITIVE_INFINITY
   // dp[k][i] = 前 i 小节分成 k 行的最小代价
   const dp: number[][] = Array.from({ length: maxK + 1 }, () => new Array<number>(measureCount + 1).fill(INF))
@@ -348,6 +387,8 @@ function targetPlan(
       if (!allowedEnd(i)) continue
       for (let j = k - 1; j < i; j++) {
         if (dp[k - 1][j] === INF) continue
+        // 行不能跨过闭合跳房子的结构断点
+        if (i > nextForcedAfter(forced, j, measureCount)) continue
         const count = i - j
         if (count > maxMeasures) continue
         let sum = 0
@@ -363,16 +404,22 @@ function targetPlan(
       }
     }
   }
-  // 目标行数不可行时，找最近可行行数
+  // 目标行数不可行时，找**最接近**的可行行数（先看正好 target，再左右扩）
   let chosen = -1
-  for (let k = maxK; k >= 1; k--) {
-    if (dp[k][measureCount] !== INF) {
-      chosen = k
-      break
+  if (target <= maxK && dp[target][measureCount] !== INF) {
+    chosen = target
+  } else {
+    for (let d = 1; d <= maxK && chosen < 0; d++) {
+      for (const k of [target - d, target + d]) {
+        if (k >= 1 && k <= maxK && dp[k][measureCount] !== INF) {
+          chosen = k
+          break
+        }
+      }
     }
   }
   if (chosen < 0) {
-    return greedyPlan(fixed, avail, measureCount, maxMeasures, ratio, forbidden)
+    return greedyPlan(fixed, avail, measureCount, maxMeasures, ratio, forbidden, forced)
   }
   if (chosen !== target) warnings.push(`目标 ${target} 行做不到，按 ${chosen} 行重排`)
   const cuts: number[] = []
@@ -400,6 +447,7 @@ function planStartsForParts(
   const fixed = fixedWidthsOf(parts, cfg.note_size)
   const avail = availWidthOf(cfg, parts.length)
   const forbidden = forbiddenBreaksOf(parts, measureCount)
+  const forced = forcedStartsOf(parts)
 
   const hasTarget = Number.isFinite(opts.targetLineCount) && (opts.targetLineCount ?? 0) > 0
   const maxMeasures = Number.isFinite(opts.maxMeasuresPerLine) && (opts.maxMeasuresPerLine ?? 0) > 0
@@ -410,8 +458,8 @@ function planStartsForParts(
   const ratioRaw = opts.fixedInkRatio
   const ratio = ratioRaw === undefined ? 1 : Math.min(1, Math.max(0.05, ratioRaw))
   const plan = hasTarget
-    ? targetPlan(fixed, avail, measureCount, maxMeasures, ratio, forbidden, Math.floor(opts.targetLineCount as number))
-    : greedyPlan(fixed, avail, measureCount, maxMeasures, ratio, forbidden)
+    ? targetPlan(fixed, avail, measureCount, maxMeasures, ratio, forbidden, forced, Math.floor(opts.targetLineCount as number))
+    : greedyPlan(fixed, avail, measureCount, maxMeasures, ratio, forbidden, forced)
   return { starts: plan.starts, measureCount, warnings: plan.warnings }
 }
 
