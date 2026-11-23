@@ -1595,6 +1595,7 @@ function renderVoltaLine(
   pageWidth = 595.28,
   marginRight = 80,
   firstOfRow?: Map<number, PlacedBarline>,
+  openRightX?: number,
 ): string {
   const plus = start.voltaStart?.plus ?? 0
   const minus = start.voltaStart?.minus ?? 0
@@ -1641,7 +1642,7 @@ function renderVoltaLine(
     }
     return parts.join('\n')
   }
-  const x2 = end ? end.x - 2 : start.x + 60
+  const x2 = end ? end.x - 2 : Math.max(x1, openRightX ?? start.x + 60)
   // 水平线（adj150 线宽 0.8）
   parts.push(
     `<line x1="${x1}" y1="${y}" x2="${x2}" y2="${y}" stroke="#1b1b1b" stroke-width="0.8"/>`,
@@ -1706,6 +1707,23 @@ function renderVoltas(
     const lead = firstNoteX !== undefined ? arr.find((b) => b.x < firstNoteX) : undefined
     if (lead) firstOfRow.set(y, lead)
   }
+  const rightEdge = pageWidth - marginRight
+  /**
+   * 右侧开放的跳房子（没有 `]`）：按用户口径画 **2 小节**；不足 2 小节就画到行右缘。
+   * 旧行为是固定 `start.x + 60`，行宽/断行一变就既不是 2 小节、也可能戳出右边距。
+   * 这里只看**同一行、起点之后**的小节线（去重），第二根就是第 2 小节末。
+   */
+  const openRightXOf = (start: PlacedBarline): number => {
+    const xs = [
+      ...new Set(
+        barlines
+          .filter((b) => Math.abs(b.yTop - start.yTop) < 1 && b.x > start.x + 0.5)
+          .map((b) => Math.round(b.x * 100) / 100),
+      ),
+    ].sort((a, b) => a - b)
+    const x2 = xs.length >= 2 ? xs[1] - 2 : rightEdge
+    return Math.max(start.x + 2, Math.min(rightEdge, x2))
+  }
   let open: PlacedBarline | null = null
   for (const bar of barlines) {
     // adj139：一根小节线可同时 voltaEnd（闭合上一段）与 voltaStart（开启下一段）
@@ -1715,11 +1733,11 @@ function renderVoltas(
       open = null
     }
     if (bar.voltaStart) {
-      if (open) parts.push(renderVoltaLine(open, null, noteSize, marginLeft, pageWidth, marginRight, firstOfRow)) // 未闭合上一段
+      if (open) parts.push(renderVoltaLine(open, null, noteSize, marginLeft, pageWidth, marginRight, firstOfRow, openRightXOf(open))) // 未闭合上一段
       open = bar
     }
   }
-  if (open) parts.push(renderVoltaLine(open, null, noteSize, marginLeft, pageWidth, marginRight, firstOfRow))
+  if (open) parts.push(renderVoltaLine(open, null, noteSize, marginLeft, pageWidth, marginRight, firstOfRow, openRightXOf(open)))
   return parts.join('\n')
 }
 

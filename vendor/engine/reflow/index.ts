@@ -4,13 +4,18 @@
  * 用户 2026-11-23 定稿：只在小节线后断行；多声部按同一小节断；歌词一起拆；
  * `{bz}` / `{dsb}` / `{tp}` 段覆盖的区间不可断；`[fenye]` 保留；每行末尾缺小节线补 `|`。
  *
- * 实现策略：**不碰 `placeVoiceBlock`**。重排把长多声部块切成多个“一块一行”的块，
+ * 实现策略：**先合并、再拆分**——把同一“声部集合”的连续 Q 行首尾相接成一条连续谱，
+ * 按规则重新断行；不是逐条 Q 行各自重排。换声部集合、`[fenye]`、带 `{tp}` 的单元、
+ * 行首裸 `[` 才断开（这些是硬边界）。
+ *
+ * 排版仍然**不碰 `placeVoiceBlock`**：重排把长块切成多个“一块一行”的块，
  * 现有排版已经支持多个多声部块（大括号/声部名/块间对齐都是现成的）。
  *
  * 纯函数、零 DOM；应用对话框、以后 CLI 都只调 `reflowJps()`。
  */
 import type {
   BarlineToken,
+  LyricChar,
   LyricLine,
   MusicGroup,
   MusicLine,
@@ -21,6 +26,7 @@ import type {
 import { defaultPageConfig, PAPER_SIZE } from '../types'
 import { parseJps } from '../parser/parser'
 import { splitBars, countMeasures } from '../parser/bars'
+import { joinBarlineTokens } from '../parser/barlineJoin'
 import { computeSegments } from '../layout/segments'
 import { measureFixedWidth } from '../layout/index'
 import { tokenDuration } from '../duration'
@@ -57,11 +63,16 @@ interface UnitInfo {
   skip: Set<number>
   /** 单元内部夹着的注释/空行（重排时原样放在这一块之前，别丢） */
   preamble: string[]
+  /** 本单元前面是否紧跟 `[fenye]`（分页是硬边界，重排不能跨过去合并） */
+  pageBreakBefore: boolean
 }
 
 interface VoicePart {
-  group: MusicGroup
+  voice: number
+  /** Q 行 token（已去掉歌词行注入的 `{tp}`） */
+  tokens: MusicToken[]
   segs: ReturnType<typeof splitBars>
+  lyrics: LyricLine[]
 }
 
 const EPS = 1e-6
@@ -83,6 +94,32 @@ function qTokensOf(group: MusicGroup): MusicToken[] {
   return group.music.tokens.filter((t) => !(t.kind === 'segment' && t.type === 'tp'))
 }
 
+/** 这个单元里有没有歌词行注入的 `{tp}`（有就单独重排，保留 C 行原文） */
+function hasTpUnit(unit: UnitInfo): boolean {
+  return unit.groups.some((g) => g.music.tokens.some((t) => t.kind === 'segment' && t.type === 'tp'))
+}
+
+/** 行首是裸 `[` 跳房子标注 ⇒ 必须留在行首，不能和前一行合并 */
+function startsWithVoltaOnly(unit: UnitInfo): boolean {
+  for (const g of unit.groups) {
+    const first = qTokensOf(g)[0]
+    if (first && first.kind === 'barline' && first.voltaOnly) return true
+  }
+  return false
+}
+
+function barOf(type: BarlineToken['type'] = '|'): BarlineToken {
+  return { kind: 'barline', type, pos: 0, raw: type }
+}
+
+/** 一组声部 → 重排用的 parts（Q token 去掉 tp） */
+function partsOfGroups(groups: MusicGroup[]): VoicePart[] {
+  return groups.map((g) => {
+    const tokens = qTokensOf(g)
+    return { voice: g.music.voice, tokens, segs: splitBars(tokens), lyrics: g.lyrics }
+  })
+}
+
 /** 页面内容宽（多声部扣一点块首大括号/声部名留白，保守一点） */
 function availWidthOf(cfg: PageConfig, voices: number): number {
   const page = PAPER_SIZE[cfg.page]?.width ?? 595.28
@@ -100,6 +137,8 @@ function buildUnits(result: ParseResult): UnitInfo[] {
   const units: UnitInfo[] = []
   let cur: MusicLine[] = []
   let voices = new Set<number>()
+  /** 上一个单元后面是否紧跟 `[fenye]`（分页硬边界） */
+  let pageBreakPending = false
   const flush = (): void => {
     if (cur.length === 0) return
     const groups = cur.map((m) => groupOfMusic.get(m)).filter((g): g is MusicGroup => g !== undefined)
@@ -130,13 +169,16 @@ function buildUnits(result: ParseResult): UnitInfo[] {
       startLine,
       skip,
       preamble,
+      pageBreakBefore: pageBreakPending,
     })
+    pageBreakPending = false
     cur = []
     voices = new Set()
   }
   for (const line of result.lines) {
     if (line.kind === 'pagebreak') {
       flush()
+      pageBreakPending = true
       continue
     }
     if (line.kind !== 'music') continue
@@ -200,7 +242,7 @@ function boundarySlotsOf(tokens: readonly MusicToken[], measureCount: number): n
 function forbiddenBreaksOf(parts: VoicePart[], measureCount: number): Set<number> {
   const out = new Set<number>()
   for (const p of parts) {
-    const tokens = qTokensOf(p.group)
+    const tokens = p.tokens
     const bounds = boundaryBeatsOf(tokens)
     for (const seg of computeSegments(tokens)) {
       const start = seg.startBeat
@@ -211,7 +253,7 @@ function forbiddenBreaksOf(parts: VoicePart[], measureCount: number): Set<number
       }
     }
     const slotAt = boundarySlotsOf(tokens, measureCount)
-    for (const ly of p.group.lyrics) {
+    for (const ly of p.lyrics) {
       for (const v of ly.variants ?? []) {
         const n = v.tokens.filter(isDurational).length
         if (n <= 0) continue
@@ -349,15 +391,14 @@ function targetPlan(
   return { starts, warnings }
 }
 
-function planStarts(
-  unit: UnitInfo,
+function planStartsForParts(
+  parts: VoicePart[],
   opts: ReflowOptions,
   cfg: PageConfig,
 ): { starts: number[]; measureCount: number; warnings: string[] } {
-  const parts: VoicePart[] = unit.groups.map((group) => ({ group, segs: splitBars(qTokensOf(group)) }))
-  const measureCount = Math.max(1, ...parts.map((p) => countMeasures(qTokensOf(p.group))))
+  const measureCount = Math.max(1, ...parts.map((p) => countMeasures(p.tokens)))
   const fixed = fixedWidthsOf(parts, cfg.note_size)
-  const avail = availWidthOf(cfg, unit.groups.length)
+  const avail = availWidthOf(cfg, parts.length)
   const forbidden = forbiddenBreaksOf(parts, measureCount)
 
   const hasTarget = Number.isFinite(opts.targetLineCount) && (opts.targetLineCount ?? 0) > 0
@@ -504,9 +545,10 @@ interface UnitReflow {
   warnings: string[]
 }
 
-/** 重排一个排版单元（一块一行或多声部块） */
+/** 重排一个排版单元（含 `{tp}` 的单元单独走这里，歌词按源码切片保 `{tp}` 原文） */
 function reflowUnit(unit: UnitInfo, opts: ReflowOptions, cfg: PageConfig): UnitReflow {
-  const { starts, measureCount, warnings } = planStarts(unit, opts, cfg)
+  const parts = partsOfGroups(unit.groups)
+  const { starts, measureCount, warnings } = planStartsForParts(parts, opts, cfg)
   const piecesByGroup = new Map<MusicGroup, MusicToken[][]>()
   const slotAtByGroup = new Map<MusicGroup, number[]>()
   for (const group of unit.groups) {
@@ -551,6 +593,172 @@ function reflowUnit(unit: UnitInfo, opts: ReflowOptions, cfg: PageConfig): UnitR
   }
 }
 
+/** 歌词槽位文本（含引号注释/后缀标点；`@` 仍写 `@`） */
+function lyricSlotTextOf(ch: LyricChar | undefined): string {
+  if (!ch || ch.skip) return '@'
+  let s = ch.raw || ch.text || ''
+  if (ch.note) s = `"${ch.note}" ${s}`
+  if (ch.trailing) s += ch.trailing
+  return s.trim() === '' ? '@' : s
+}
+
+/** 一条 C 行 → 按音符槽位补齐的字符串数组（缺的补 `@`） */
+function slotsOfLyricLine(ly: LyricLine | undefined, slotCount: number): string[] {
+  const out: string[] = []
+  const chars = ly?.chars ?? []
+  for (let i = 0; i < slotCount; i++) out.push(lyricSlotTextOf(chars[i]))
+  // 歌词比音符多（少见）：多出来的字并到最后一个槽，别静默丢
+  if (chars.length > slotCount && out.length > 0) {
+    const extra = chars.slice(slotCount).map((c) => lyricSlotTextOf(c)).join(' ')
+    out[out.length - 1] = `${out[out.length - 1]} ${extra}`.trim()
+  }
+  return out
+}
+
+/** 槽位数组 → 一段 C 行文本；行末 `@` 删除 */
+function joinLyricSlots(slots: string[]): string {
+  const arr = [...slots]
+  while (arr.length > 0) {
+    const last = arr[arr.length - 1]
+    if (last === '@' || last.trim() === '') arr.pop()
+    else break
+  }
+  return arr.join(' ').trim()
+}
+
+/**
+ * 把一个 run 里同一声部的多个 Q 行**首尾相接**成一条连续 token 流。
+ * 单元边界补 `|`；两边都是小节线时按合并表并成一根（`|`+`|:` → `|:`、`:|`+`|:` → `:|:`），
+ * 不制造空小节。
+ */
+function mergedTokensOf(units: UnitInfo[], voice: number): MusicToken[] {
+  const merged: MusicToken[] = []
+  for (let ui = 0; ui < units.length; ui++) {
+    const group = units[ui].groups.find((g) => g.music.voice === voice)
+    if (!group) continue
+    const toks = qTokensOf(group)
+    if (toks.length === 0) continue
+    if (merged.length > 0 && !isBoundary(merged[merged.length - 1]) && hasNoteLike(toks)) {
+      merged.push(barOf('|'))
+    }
+    let start = 0
+    if (toks[0].kind === 'barline' && merged.length > 0) {
+      const last = merged[merged.length - 1]
+      if (last.kind === 'barline' && !last.voltaOnly) {
+        merged[merged.length - 1] = joinBarlineTokens(last, toks[0]).token
+        start = 1
+      }
+    }
+    merged.push(...toks.slice(start))
+    if (ui < units.length - 1 && hasNoteLike(toks) && merged.length > 0 && !isBoundary(merged[merged.length - 1])) {
+      merged.push(barOf('|'))
+    }
+  }
+  return merged
+}
+
+/**
+ * 重排一个“同声部集合”的连续段：**先把段内所有 Q 行合并成一条连续谱**，
+ * 再按规则重新断行。这是用户 2026-11-23 明确要求的“整体合并再拆分”，
+ * 不是逐条 Q 行各自重排。
+ */
+function reflowRun(units: UnitInfo[], opts: ReflowOptions, cfg: PageConfig): UnitReflow {
+  const first = units[0]
+  const voices = first.groups.map((g) => g.music.voice)
+  const parts: VoicePart[] = []
+  const verseSlots = new Map<number, string[][]>()
+  const voiceNames = new Map<number, string | undefined>()
+
+  for (const voice of voices) {
+    const merged = mergedTokensOf(units, voice)
+    const groups = units
+      .map((u) => u.groups.find((g) => g.music.voice === voice))
+      .filter((g): g is MusicGroup => g !== undefined)
+    const maxVerses = Math.max(0, ...groups.map((g) => g.lyrics.length))
+    const streams: string[][] = Array.from({ length: maxVerses }, () => [])
+    for (const group of groups) {
+      const slotCount = qTokensOf(group).filter(isDurational).length
+      for (let k = 0; k < maxVerses; k++) {
+        streams[k].push(...slotsOfLyricLine(group.lyrics[k], slotCount))
+      }
+    }
+    parts.push({ voice, tokens: merged, segs: splitBars(merged), lyrics: [] })
+    verseSlots.set(voice, streams)
+    voiceNames.set(voice, groups.find((g) => g.music.voiceName)?.music.voiceName)
+  }
+
+  const { starts, measureCount, warnings } = planStartsForParts(parts, opts, cfg)
+  const piecesByVoice = new Map<number, MusicToken[][]>()
+  const slotAtByVoice = new Map<number, number[]>()
+  for (const p of parts) {
+    piecesByVoice.set(p.voice, splitVoiceTokens(p.tokens, starts, measureCount))
+    slotAtByVoice.set(p.voice, boundarySlotsOf(p.tokens, measureCount))
+  }
+
+  const out: string[] = []
+  for (let row = 0; row < starts.length - 1; row++) {
+    for (const p of parts) {
+      const voice = p.voice
+      const name = voiceNames.get(voice)
+      const prefix = `Q${voice === 1 ? '' : voice}${name ? `"${name}"` : ''}:`
+      const piece = ensureEndBarline(piecesByVoice.get(voice)?.[row] ?? [])
+      out.push(piece.length === 0 ? prefix : `${prefix} ${serializeTokens(piece)}`)
+
+      const from = starts[row]
+      const to = starts[row + 1]
+      const slots = slotAtByVoice.get(voice) ?? []
+      const fromSlot = slots[from] ?? 0
+      const toSlot = slots[to] ?? fromSlot
+      const streams = verseSlots.get(voice) ?? []
+      for (let k = 0; k < streams.length; k++) {
+        const text = joinLyricSlots(streams[k].slice(fromSlot, toSlot))
+        // 单段词的空行不写；多段词必须逐行保留，否则“第几遍”会串
+        if (text === '' && streams.length === 1) continue
+        out.push(`C${voice === 1 ? '' : voice}:${text === '' ? '' : ` ${text}`}`)
+      }
+    }
+  }
+
+  return {
+    lines: out,
+    breaks: starts.slice(0, -1).map((m) => ({ unit: first.index, measure: m + 1 })),
+    measureCount,
+    warnings,
+  }
+}
+
+/**
+ * 把单元切成“同声部集合”的连续 run。
+ * 换声部集合、`[fenye]`、带 `{tp}` 的单元、行首裸 `[` 都必须断开；
+ * 其余连续 Q 行合并成一条连续谱再重排。
+ */
+function buildRuns(units: UnitInfo[]): UnitInfo[][] {
+  const runs: UnitInfo[][] = []
+  let cur: UnitInfo[] = []
+  let curVoices = ''
+  let curTp = false
+  const flush = (): void => {
+    if (cur.length === 0) return
+    runs.push(cur)
+    cur = []
+    curVoices = ''
+    curTp = false
+  }
+  for (const u of units) {
+    const voices = u.groups.map((g) => g.music.voice).sort((a, b) => a - b).join(',')
+    const tp = hasTpUnit(u)
+    const volta = startsWithVoltaOnly(u)
+    if (cur.length > 0 && (u.pageBreakBefore || tp || curTp || volta || voices !== curVoices)) flush()
+    cur.push(u)
+    curVoices = voices
+    curTp = tp
+    if (tp) flush()
+  }
+  flush()
+  return runs
+}
+
+
 /** 从源码建页面配置（缺省读 `# jps-config`） */
 function configOf(source: string, opts: ReflowOptions): PageConfig {
   if (opts.pageConfig) return opts.pageConfig
@@ -559,7 +767,8 @@ function configOf(source: string, opts: ReflowOptions): PageConfig {
 }
 
 /**
- * 重排 `source`：只在小节线后断行，多声部按同一小节切块。
+ * 重排 `source`：先把同一“声部集合”的连续 Q 行整体合并成一条连续谱，
+ * 再按“最多 N 小节 / 固定占宽 / 目标行数”重新断行；多声部共用同一组小节断点。
  *
  * 纯函数：不读写全局、不碰 DOM；调用方负责把 `source` 写回文档（一步撤销）。
  */
@@ -567,8 +776,9 @@ export function reflowJps(source: string, opts: ReflowOptions = {}): ReflowResul
   const result = parseJps(source)
   const cfg = configOf(source, opts)
   const units = buildUnits(result)
-  const unitByStart = new Map<number, UnitInfo>()
-  for (const u of units) unitByStart.set(u.startLine, u)
+  const runs = buildRuns(units)
+  const runByStart = new Map<number, UnitInfo[]>()
+  for (const run of runs) runByStart.set(run[0].startLine, run)
   const skip = new Set<number>()
   for (const u of units) for (const i of u.skip) skip.add(i)
 
@@ -577,10 +787,11 @@ export function reflowJps(source: string, opts: ReflowOptions = {}): ReflowResul
   const warnings: string[] = []
   let measures = 0
   for (let i = 0; i < result.lines.length; i++) {
-    const unit = unitByStart.get(i)
-    if (unit) {
-      out.push(...unit.preamble)
-      const r = reflowUnit(unit, opts, cfg)
+    const run = runByStart.get(i)
+    if (run) {
+      for (const u of run) out.push(...u.preamble)
+      // 带 {tp} 的单元单独走源码切片；其余先合并整个 run 再拆分
+      const r = run.length === 1 && hasTpUnit(run[0]) ? reflowUnit(run[0], opts, cfg) : reflowRun(run, opts, cfg)
       out.push(...r.lines)
       breaks.push(...r.breaks)
       warnings.push(...r.warnings)
