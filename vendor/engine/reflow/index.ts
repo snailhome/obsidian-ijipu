@@ -235,33 +235,7 @@ function boundarySlotsOf(tokens: readonly MusicToken[], measureCount: number): n
   return out
 }
 
-/**
- * 结构性**强制断点**：闭合跳房子 `]` / `]/` 所在小节之后必须换行。
- * 用户 2026-11-23 的谱例里 `|]/` 是上一段第一结尾的收口；重排若把它当普通小节线，
- * 会把前 3 小节排满、把第一结尾最后 1 小节挤到下一行（用户实报“只排了 1 小节”）。
- */
-function forcedStartsOf(parts: VoicePart[]): Set<number> {
-  const out = new Set<number>()
-  for (const p of parts) {
-    let measure = 0
-    let sawNote = false
-    for (const t of p.tokens) {
-      if (isBoundary(t)) {
-        if (!(measure === 0 && !sawNote)) {
-          measure += 1
-          // 同一根线既 `]` 又 `[`（连续跳房子）时不能把断点放在它后面：
-          // 那会把新房子 `[` 留在上一行行末，下一行只有内容、没有起点。
-          if (t.voltaEnd && !t.voltaStart) out.add(measure)
-        }
-      } else if (isDurational(t)) {
-        sawNote = true
-      }
-    }
-  }
-  return out
-}
-
-/** 从 start 之后最近的强制断点（没有就 measureCount） */
+/** 从 start 之后最近的强制断点（当前不启用结构强制断点，保留给以后规则用） */
 function nextForcedAfter(forced: Set<number>, start: number, measureCount: number): number {
   let best = measureCount
   for (const f of forced) {
@@ -510,7 +484,9 @@ function planStartsForParts(
   const fixed = fixedWidthsOf(parts, cfg.note_size)
   const avail = availWidthOf(cfg, parts.length)
   const forbidden = forbiddenBreaksOf(parts, measureCount)
-  const forced = forcedStartsOf(parts)
+  // 用户 2026-11-24 拍板：`|]/` 随实际行宽调整，**不强制换行**；
+  // 跳房子端点只作为普通小节线参与填充，闭口由 closeVoltasInRow 处理。
+  const forced = new Set<number>()
 
   const hasTarget = Number.isFinite(opts.targetLineCount) && (opts.targetLineCount ?? 0) > 0
   const maxMeasures = Number.isFinite(opts.maxMeasuresPerLine) && (opts.maxMeasuresPerLine ?? 0) > 0
