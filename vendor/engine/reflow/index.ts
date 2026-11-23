@@ -244,6 +244,73 @@ function nextForcedAfter(forced: Set<number>, start: number, measureCount: numbe
   return best
 }
 
+/**
+ * 用户 2026-11-24：`|]/` 是**不封闭房子的视觉终点**，位置可以在本房子范围内移动；
+ * 重排先按小节排完，再把 `]/` 放到“本行最后一个仍在本房子范围内的小节线”上。
+ * 如果这个位置正好是房子的真实末尾（后面的 `:|`/跳跃线或它自己），改成闭口 `]`；
+ * 否则保留 `]/`（不封闭）。
+ *
+ * 真实末尾按 SYNTAX §2.8c：`]/` 之后最近的 `:|`/`:|:` 或带 `&ds`/`&dc`/`&fine` 的线；
+ * 找不到就退回 `]/` 自己。
+ */
+function repositionSlashEnds(parts: VoicePart[], starts: number[]): void {
+  for (const p of parts) {
+    const events: { token: BarlineToken; measure: number }[] = []
+    let measure = 0
+    let sawNote = false
+    for (const t of p.tokens) {
+      if (t.kind !== 'barline') {
+        if (isDurational(t)) sawNote = true
+        continue
+      }
+      if (t.voltaOnly) continue
+      const lead = measure === 0 && !sawNote
+      if (!lead) measure += 1
+      events.push({ token: t, measure: measure - 1 })
+    }
+    if (events.length === 0) continue
+    const measureCount = Math.max(...events.map((e) => e.measure)) + 1
+    const endOfRow = (row: number): number => {
+      if (row + 1 < starts.length) return starts[row + 1] - 1
+      return measureCount - 1
+    }
+    for (let i = 0; i < events.length; i++) {
+      const token = events[i].token
+      if (!token.voltaEndSlash || token.voltaStart) continue // 连续房子共用线不搬
+      const markerMeasure = events[i].measure
+      // 真实末尾：自身是反复线就取自己；否则往后找反复/跳跃线
+      let actualMeasure = isRepeatEndOf(token) ? markerMeasure : -1
+      if (actualMeasure < 0) {
+        for (let j = i + 1; j < events.length; j++) {
+          const b = events[j].token
+          if (b.voltaEnd || isRepeatEndOf(b) || b.marks?.some((m) => m === 'ds' || m === 'dc' || m === 'fine')) {
+            actualMeasure = events[j].measure
+            break
+          }
+        }
+      }
+      if (actualMeasure < 0) actualMeasure = markerMeasure
+      if (actualMeasure < markerMeasure) actualMeasure = markerMeasure
+      const row = rowOfMeasure(starts, markerMeasure)
+      const rowEnd = endOfRow(row)
+      // 目标：本行最后一个仍在房子范围内的线；范围在本行结束就用真实末尾
+      const targetMeasure = Math.min(rowEnd, actualMeasure)
+      if (targetMeasure === markerMeasure && actualMeasure === markerMeasure) {
+        // 就在真实末尾 ⇒ 闭口
+        token.voltaEnd = true
+        token.voltaEndSlash = false
+        continue
+      }
+      if (targetMeasure === markerMeasure) continue // 已在本行末尾，保留 `]/`
+      const target = [...events].reverse().find((e) => e.measure === targetMeasure)?.token
+      if (!target) continue
+      token.voltaEnd = false
+      token.voltaEndSlash = undefined
+      target.voltaEnd = true
+      target.voltaEndSlash = targetMeasure < actualMeasure
+    }
+  }
+}
 /** 小节 m 属于哪一行（starts 为每行起始小节，末项 = measureCount） */
 function rowOfMeasure(starts: number[], m: number): number {
   for (let r = 0; r < starts.length - 1; r++) {
@@ -637,6 +704,7 @@ function reflowUnit(unit: UnitInfo, opts: ReflowOptions, cfg: PageConfig): UnitR
   const parts = partsOfGroups(unit.groups)
   const { starts, measureCount, warnings } = planStartsForParts(parts, opts, cfg)
   closeVoltasInRow(parts, starts)
+  repositionSlashEnds(parts, starts)
   const piecesByGroup = new Map<MusicGroup, MusicToken[][]>()
   const slotAtByGroup = new Map<MusicGroup, number[]>()
   for (const group of unit.groups) {
@@ -777,6 +845,7 @@ function reflowRun(units: UnitInfo[], opts: ReflowOptions, cfg: PageConfig): Uni
 
   const { starts, measureCount, warnings } = planStartsForParts(parts, opts, cfg)
   closeVoltasInRow(parts, starts)
+  repositionSlashEnds(parts, starts)
   const piecesByVoice = new Map<number, MusicToken[][]>()
   const slotAtByVoice = new Map<number, number[]>()
   for (const p of parts) {
