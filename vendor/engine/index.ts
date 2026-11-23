@@ -14,6 +14,8 @@ export * from './types'
 export * from './scoreMeta'
 export { parseJps } from './parser'
 export { tempoLabel } from './parser/parser'
+// adj1323：两条 barline 的合并规则（解析期、多声部播放、宿主/重排共用同一份）
+export { joinBarlineTypes, joinBarlineTokens } from './parser/barlineJoin'
 // adj965d（方案 OVL，EP-13）：水印/背景层的**手势口径**——应用与 Obsidian 插件共用这一份
 // （插件经 `vendor/engine` 逐字节同步；两端各自只负责"接线"）
 export {

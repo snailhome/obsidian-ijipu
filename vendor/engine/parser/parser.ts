@@ -30,6 +30,8 @@ import { checkMeasureBeats } from '../measures'
 import { interludeDiagnostics } from '../interlude'
 // adj973：连音线配对（唯一一份纯函数；布局改为消费它的结果，见 `parser/slurPairs.ts` 文件头）
 import { pairSlurs } from './slurPairs'
+// adj1323：行首隐式小节线 / 相邻 barline 归并（解析期唯一入口）
+import { normalizeLineBoundaries } from './normalize'
 
 const HEADER_KEYS = new Set(['V', 'B', 'Z', 'D', 'P', 'J', 'Y', 'S'])
 
@@ -378,6 +380,11 @@ export function parseJps(source: string): ParseResult {
     lines.push({ kind: 'unknown', pos, raw })
     errors.push(errAt(`无法识别的行 "${trimmed.slice(0, 20)}${trimmed.length > 20 ? '…' : ''}"`, lineNo, 0, 'warning', '行首必须是：描述头（`V:` 版本 / `B:` 标题 / `Z:` 作者 / `D:` 调式 / `P:` 拍号 / `J:` 节拍 / `Y:` 乐器 / `S:` 说明）、曲行 `Q:`、词行 `C:`、`#` 注释行、`[fenye]` 分页标记或 `# jps-config:{...}` 设置行（详见「语法速查」）'))
   }
+
+  // ---- adj1323（用户 2026-11-23）：行首默认隐式隐藏小节线，行首 barline 归到上一行末 ----
+  // 必须放在 `injectLyricVariants()` / `checkMeasureBeats()` / `pairSlurs()` 之前：
+  // 它们都按 barline/token 顺序消费，先把边界收敛成一根线，下游自动同口径。
+  errors.push(...normalizeLineBoundaries({ lines, groups }))
 
   // ---- adj629（用户要求）：把歌词行里的替谱段 `{tp … }` 注入所属曲行的 token 流 ----
   errors.push(...injectLyricVariants(groups))

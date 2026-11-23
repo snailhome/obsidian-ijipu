@@ -1,10 +1,10 @@
 /**
  * engine/layout/measureMap.ts — 「全局小节号 + 拍位」的**唯一口径**（纯函数）
  *
- * 布局给的 `PlacedToken.barIndex` 是**曲行内**编号（每行从 0 起），而用户说的是"整份谱的第 27 小节"
- * ⇒ 必须先按曲行累加出全局小节号。这套换算原来写在 CLI 里（`packages/ijipu-cli/src/cli.ts`），
- * 现在搬到引擎：**界面（标记段下拉显示 `段1 [ 33:1 - 34:2 ]`）与命令行（`--from 33:1`）必须同一口径**，
- * 否则两边数出来的"第 33 小节"会差一位（AGENTS §五·9 的"数值口径必须同源"）。
+ * 布局给的 `PlacedToken.measureIndex` 是**曲行内**真实小节序号（每行从 0 起），
+ * 而用户说的是"整份谱的第 27 小节" ⇒ 必须先按曲行累加出全局小节号。
+ * `ScoreLayout.groupStartBar[group] + measureIndex` 就是这一份口径（adj1323）——
+ * 不要再按 `barIndex` 推：它是 seg 下标，行首空 seg 会多 1。
  *
  * 只取**主旋律、可发声**的音符：段层（`{bz}`/`{dsb}`/`{tp}`）与休止符不算"某一拍的那个音"，
  * 否则同一拍会命中好几个 id。
@@ -35,41 +35,20 @@ export function flattenScoreNotes(
   layout: ScoreLayout,
   opts: { includeRests?: boolean } = {},
 ): ScoreSpotNote[] {
-  /** 参与"行内几小节"统计的只有**可发声的主旋律音**（与 `--from/--to` 同一口径，含休止符会推移行偏移） */
+  /** 参与“哪个音是哪一拍”的只有主旋律可发声/休止音；段层（{bz}/{dsb}/{tp}）不算 */
   const isMain = (n: { segment?: unknown }): boolean => n.segment === undefined
-  const barsByRow = new Map<string, number>()
-  for (const page of layout.pages) {
-    for (const n of page.notes) {
-      if (!isMain(n) || !n.playable) continue
-      const key = `${page.index}:${n.id.group}`
-      const need = n.barIndex + 1
-      if (need > (barsByRow.get(key) ?? 0)) barsByRow.set(key, need)
-    }
-  }
-
-  // 行序按**数字**排（字符串排序会把 "0:10" 排到 "0:2" 前面）
-  const offset = new Map<string, number>()
-  let totalBars = 0
-  const rowKeys = Array.from(barsByRow.keys()).sort((a, b) => {
-    const [pa, ga] = a.split(':').map(Number)
-    const [pb, gb] = b.split(':').map(Number)
-    return pa !== pb ? pa - pb : ga - gb
-  })
-  for (const key of rowKeys) {
-    offset.set(key, totalBars)
-    totalBars += barsByRow.get(key) ?? 0
-  }
-
   const out: ScoreSpotNote[] = []
   for (const page of layout.pages) {
     for (const n of page.notes) {
       // 主旋律音；`includeRests` 时连休止符一起收（标记段端点可能点在休止符上，展示用）
       if (!isMain(n) || (!n.playable && opts.includeRests !== true)) continue
-      const key = `${page.index}:${n.id.group}`
-      const base = offset.get(key)
-      // 找不到行偏移（极少数畸形版面）：跳过而不是算成第 1 小节 —— 错位比缺失更难查
-      if (base === undefined) continue
-      out.push({ id: noteIdStringOf(n.id), bar: base + n.barIndex + 1, beatPos: n.beatPos, y: n.y })
+      /**
+       * adj1323：全局小节号 = 该组起始小节号 + 真实小节序号（`measureIndex`），
+       * 不再按 `barIndex + 1` 推 —— `barIndex` 是 seg 下标，行首空 seg 会多 1；
+       * 纯休止小节也会因为“没有可发声的音”被旧算法漏掉。
+       */
+      const start = layout.groupStartBar[n.id.group] ?? 1
+      out.push({ id: noteIdStringOf(n.id), bar: start + n.measureIndex, beatPos: n.beatPos, y: n.y })
     }
   }
   /**

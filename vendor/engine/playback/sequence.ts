@@ -36,6 +36,8 @@ import { ornamentOf, ornamentPlan, neighborDegree } from './ornaments'
 import { slideOf, slidePlan } from './slides'
 import { midiToPitchName, pitchToMidiNote } from './midi'
 import { parseInstrumentRef, accompInstrumentRef, voiceDefaultInstrumentRef } from './instruments'
+// adj1323：多声部同一根线的类型合并与解析期同一口径（`||` 合并时按结束看）
+import { joinBarlineTypes } from '../parser/barlineJoin'
 // adj905b：**同拍位、同时值、短于 1 拍的上下两层色块取交集对齐**
 // （只调色块显示，播放数据与布局一个字节都不动）
 import { alignSameBeatSegs } from './playhead'
@@ -1451,8 +1453,11 @@ export function buildPlaySequence(
     // adj723aa：小节线引号备注（旧式跳房子番号）——同样取首个非空；`raw` 取**首个非空**（配对要看 `[`/`]` 顺序）
     let comment: string | undefined
     let raw: string | undefined
+    // adj1323：多声部同一根线的类型按解析期同一份合并表收敛（不再直接取第一个声部的 type）
+    let type: PlacedBarline['type'] | undefined
     for (const it of bars) {
       const b = it.bar as PlacedBarline
+      type = type === undefined ? b.type : joinBarlineTypes(type, b.type)
       for (const m of b.marks ?? []) marks.add(m)
       if (voltaStart === undefined) voltaStart = b.voltaStart
       if (voltaEnd === undefined) voltaEnd = b.voltaEnd
@@ -1464,7 +1469,7 @@ export function buildPlaySequence(
     const first = bars[0].bar as PlacedBarline
     return {
       kind: 'bar',
-      bar: { type: first.type, marks: [...marks], voltaStart, voltaEnd, voltaEndSlash, keyChange, comment, raw },
+      bar: { type: type ?? first.type, marks: [...marks], voltaStart, voltaEnd, voltaEndSlash, keyChange, comment, raw },
     }
   }
   // 组装成 `seq`：单元 = 连续曲行（声部号在本单元内重复即另起单元，与排版同一规则；分页标记也断单元）
@@ -2038,17 +2043,10 @@ export function buildPlaySequence(
    *
    * 为什么不能再用"下标 + 1"：`barStartsMs` 是**走查时逐遍记录**的，反复段会让同一个小节出现两次
    * （条数 ≥ 源码小节数），用下标当序号必然错位，而且一错就是一整首。这里在记录起点时**顺手带上
-   * 它的源码小节号**（`barBaseOf(g) + bi`），反复段就是"同一个号出现两次"——正是谱面上看到的样子。
+   * 它的源码小节号**（`layout.groupStartBar[g] + placed.measureIndex`），反复段就是“同一个号
+   * 出现两次”——正是谱面上看到的样子。
    */
   const barNos: number[] = []
-  /** 每个 group 的第一小节号码（1 起）：按前面各 group 的小节数累加
-   *  ⚠ `barStartMsInGroup[g]` 的结构是 `[0, 各小节线…, 曲末]` ⇒ 小节数 = `length - 2`
-   *  （第一版的 `- 1` 把"曲末"也当成一小节，于是每组多 1、整首漂 14 个号）。 */
-  const barBaseOf = (g: number): number => {
-    let n = 1
-    for (let k = 0; k < g; k++) n += Math.max(0, (barStartMsInGroup[k]?.length ?? 2) - 2)
-    return n
-  }
   const recordBarStart = (t: number, no: number): void => {
     if (barStartsMs.length === 0 || t > barStartsMs[barStartsMs.length - 1] + 0.5) {
       barStartsMs.push(t)
@@ -2585,7 +2583,10 @@ export function buildPlaySequence(
        * 第二行起球就只能沿用上一小节的网格（这才是"整曲都在漂"的主因）。
        * 多声部块里各声部的 `groupStartMs` 与小节长相同 ⇒ 起点相同，靠 `recordBarStart` 去重。
        */
-      recordBarStart(passMs + groupStartMs[g] + (barStartMsInGroup[g][bi] ?? 0), barBaseOf(g) + bi)
+      recordBarStart(
+        passMs + groupStartMs[g] + (barStartMsInGroup[g][bi] ?? 0),
+        (layout.groupStartBar[g] ?? 1) + placed.measureIndex,
+      )
       /**
        * adj629k：**补发临时段要放在"静音判定"之前**。
        *

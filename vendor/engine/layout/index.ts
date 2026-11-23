@@ -30,6 +30,8 @@ import type {
   VoiceBlock,
 } from '../types'
 import { DIGIT_HEIGHT_RATIO, LAYER_GAP, SLUR_W, octaveTopY, octaveDotY, BRACKET_PAD, H_GAP, noteScaleOf, VOLTA_BAR_GAP, VOLTA_RAISE, DYN_HALF_H, barlinePad, barlineTotalW, DOT_AFTER_DIGIT_GAP, DOT_R, SEGMENT_ROW_GAP_DEFAULT, SEGMENT_LAYER_YSCALE, SEGMENT_LAYER_CLEARANCE, SEGMENT_BRACE_ASPECT, SEGMENT_BRACE_MIN_W, NOTE_BASELINE_RATIO, digitBottomY, beamBottomY, lowDotY, TP_BRACKET_GAP, slurApexY, VOLTA_INK_GAP, digitInkW, barNumberGapNeed, lyricCommentFontSize, lyricCommentWidth, LYRIC_COMMENT_GAP, markReserveRatio, type AccidentalInkMetrics, BAR_NUMBER_BOTTOM_GAP, barNumberBoxH, barNumberBoxW, barDownMarkInk, barDownMarkSpan, hasBarDownMark } from './spacing'
+// adj1323：按小节切分与“真实小节数”的唯一口径（解析期归一化 / 排版 / 播放共用）
+import { splitBars, countMeasures, type BarSeg } from '../parser/bars'
 // adj284：空间优先布局的度量（本体宽 / 时值拆分 / 非时值元素间距）
 import { splitNoteDur, noteBodyW, augBodyW, dotBodyW, accidentalBodyW, accidentalGeometry, markBodyW, digitSlotW, hxBodyW, graceAtTail, graceSlotLayout, nonDurGap, slideExtraW, braceInkRightOffset, BRACE_LINE_DX } from './spaceLayout'
 import { hairpinEvents, resolveHairpins, type DynEvent, type NoteAnchors } from './hairpins'
@@ -133,15 +135,21 @@ export function isVoltaCloserBarline(
  * 处**不再**自动回描述头调号。旧写法在这里 `cur = baseKey`，导致"第一次反复是调号 A，
  * 某处转调后第二次反复同一处却变成调号 B"（用户报的正是这个）。
  */
-function effectiveKeysOf(segs: BarSeg[], baseKey: number): number[] {
+function effectiveKeysOf(segs: BarSeg[], baseKey: number, headerKey = baseKey): number[] {
   const out: number[] = []
   let cur = baseKey
   for (const s of segs) {
     out.push(cur) // 本小节的音用"进入本小节时"的调号
     const kc = s.bar?.keyChange
-    if (kc) cur = kc.clear ? baseKey : kc.targetKey ?? cur // 该线之后换调
+    if (kc) cur = kc.clear ? headerKey : kc.targetKey ?? cur // 该线之后换调
   }
   return out
+}
+
+/** `d:` 恢复的是**描述头调号**（不是本单元起始调号）；`d:X` 是绝对赋值 */
+function keyAfter(cur: number, kc: { targetKey?: number; clear?: boolean } | undefined, headerKey: number): number {
+  if (!kc) return cur
+  return kc.clear ? headerKey : kc.targetKey ?? cur
 }
 
 /** 大调音阶级数 → 半音偏移（1→根音, 2→大二度, ... 7→大七度） */
@@ -588,26 +596,7 @@ function inkWOf(t: DurationalToken, noteSize: number): number {
   return digitSlotW(noteSize) + (sp.dotDur > 0 ? dotBodyW(noteSize) : 0) + sp.augCount * augBodyW(noteSize)
 }
 
-/** 按小节切分（每小节音符 + 小节后的 barline；行首 barline 在 segs[0].bar） */
-interface BarSeg {
-  notes: MusicToken[]
-  bar: (Extract<MusicToken, { kind: 'barline' }>) | null
-}
-
-function splitBars(tokens: MusicToken[]): BarSeg[] {
-  const segs: BarSeg[] = []
-  let cur: MusicToken[] = []
-  for (const t of tokens) {
-    if (t.kind === 'barline') {
-      segs.push({ notes: cur, bar: t })
-      cur = []
-    } else {
-      cur.push(t)
-    }
-  }
-  if (cur.length > 0) segs.push({ notes: cur, bar: null })
-  return segs
-}
+/** 按小节切分见 `parser/bars.ts`（adj1323：与解析期归一化、播放小节号共用一份口径） */
 
 /** 小节实际拍数（音符时值总和） */
 function segBeats(seg: BarSeg): number {
@@ -914,17 +903,12 @@ export function layoutScore(
   }
 
   /**
-   * adj627：**每组"每小节生效调号"**（口径见模块级 `effectiveKeysOf`）。
-   * 这里只加一层按组缓存——同一组在多个行/多个声部里会反复取用。
+   * adj1323：**每组的“每小节生效调号”**——按排版单元统一算，在 events 建好后填。
+   * 这里先声明，`placeGroup` / `placeVoiceBlock` 调用时已经填好。
    */
-  const effectiveKeysCache = new Map<number, number[]>()
-  const effectiveKeysByGroup = (groupIndex: number, segs: BarSeg[]): number[] => {
-    const hit = effectiveKeysCache.get(groupIndex)
-    if (hit && hit.length === segs.length) return hit
-    const out = effectiveKeysOf(segs, keySemitone)
-    effectiveKeysCache.set(groupIndex, out)
-    return out
-  }
+  const keysAtByGroup = new Map<number, number[]>()
+  const effectiveKeysByGroup = (groupIndex: number, segs: BarSeg[]): number[] =>
+    keysAtByGroup.get(groupIndex) ?? effectiveKeysOf(segs, keySemitone)
 
   /**
    * adj629（用户要求）：**当前正在排版的"视觉行"里，各歌词行上方的替谱层预留高度**
@@ -1024,6 +1008,8 @@ export function layoutScore(
     sp: Spacing,
     beatPos: number,
     barIndex: number,
+    /** adj1323：本组真实小节序号（`barIndex` 是 seg 下标，行首空 seg 会多 1） */
+    measureIndex: number,
     // adj314：多声部空间优先用「音符块本体在时值段内水平居中」（参考单声部 placeNoteSpace）——
     // 提供 space 时按本体居中定位 note.x/width；时值优先路径不传，行为不变。
     // adj319：augW/hxW 含增时线/hx 显示占宽，noteRightX 累加避免色块按段宽算时漏掉
@@ -1147,6 +1133,7 @@ export function layoutScore(
       duration: dur,
       beatPos,
       barIndex,
+      measureIndex,
       segments,
       // adj647：变音角标的几何由**布局**解析并存下来（宿主实测优先）——渲染直接消费，
       // 避免"布局按实测、渲染按常量表"两套账
@@ -1411,6 +1398,8 @@ export function layoutScore(
     isLastRowOfScore = false,
     /** adj625：组内每个 seg 的全曲小节序号（见 `barOrdinalsOf`；不传 = 不画小节序号） */
     ord: (number | null)[] = [],
+    /** adj1323：组内每个 seg 的**真实小节序号**（0 起；组首空 seg = -1） */
+    measureIndexOfSeg: number[] = [],
   ): number | undefined => {
     const page = pages[pageIndex]
     // adj627：本组"每小节生效调号"（`"d:..."` 临时转调之后的小节用新调）
@@ -1555,7 +1544,7 @@ export function layoutScore(
           offInBeat += s.piece * s.perBeat
           fIdx++
         }
-        placeNoteAt(rs.note, segments, yTop, pageIndex, groupIndex, voice, slotIndex, lyricMaps, geciSize, sp, rs.notePos, 0, undefined, keysAt[row.segIdx] ?? keySemitone)
+        placeNoteAt(rs.note, segments, yTop, pageIndex, groupIndex, voice, slotIndex, lyricMaps, geciSize, sp, rs.notePos, 0, measureIndexOfSeg[row.segIdx] ?? 0, undefined, keysAt[row.segIdx] ?? keySemitone)
         const fragPlacedX = pages[pageIndex].notes[pages[pageIndex].notes.length - 1].x
         fragLastRight = pages[pageIndex].notes[pages[pageIndex].notes.length - 1].rightX ?? 0
         // adj294：渲染本音符源码之前的 bracket（紧贴本音符左缘，从远到近排列）
@@ -1629,7 +1618,7 @@ export function layoutScore(
     // 行首小节线占位：非普通 |、非 |/ 的行首线（|: || :|: |* 等）预留 线宽 + 右侧 4px 间距
     const leadBar = leadingEmpty === 1 ? segs[row.start].bar : leadVoltaBar
     const leadPad =
-      leadBar && leadBar.type !== '|' && leadBar.type !== '|/' ? barlineTotalW(leadBar.type) + 4 : 0
+      leadBar && !leadBar.voltaOnly && leadBar.type !== '|' && leadBar.type !== '|/' ? barlineTotalW(leadBar.type) + 4 : 0
     // 行预算：每对相邻内容小节之间按该小节线上类型占位（|/ 不占位）
     let barGaps = 0
     {
@@ -2045,7 +2034,7 @@ export function layoutScore(
         // adj219：beatPos 近整数归整（浮点尾 0.9999… → 1），供减时线按拍分组正确
         const bpRaw = rs.notePos - segBeat
         const bp = Math.abs(bpRaw - Math.round(bpRaw)) < 1e-3 ? Math.round(bpRaw) : bpRaw
-        placeNoteAt(rs.note, segments, yTop, pageIndex, groupIndex, voice, slotIndex, lyricMaps, geciSize, sp, bp, b, undefined, keysAt[b] ?? keySemitone)
+        placeNoteAt(rs.note, segments, yTop, pageIndex, groupIndex, voice, slotIndex, lyricMaps, geciSize, sp, bp, b, measureIndexOfSeg[b] ?? 0, undefined, keysAt[b] ?? keySemitone)
         // adj394：记录该音符的两个停靠点（数字槽中心 / 末时值元素右缘）——渐强渐弱起止定位用
         const justPlaced = pages[pageIndex].notes[pages[pageIndex].notes.length - 1]
         const placedX = justPlaced.x
@@ -2229,6 +2218,8 @@ export function layoutScore(
     isLastRowOfScore = false,
     /** adj625：组内每个 seg 的全曲小节序号（见 `barOrdinalsOf`；不传 = 不画小节序号） */
     ord: (number | null)[] = [],
+    /** adj1323：组内每个 seg 的**真实小节序号**（0 起；组首空 seg = -1） */
+    measureIndexOfSeg: number[] = [],
     /** adj940：返回本行各小节的**小节线实位**（给下一行当对齐基准，见 `prevRowLineX`） */
   ): (number | undefined)[] | undefined => {
     if (row.kind !== 'bars') return undefined
@@ -2721,6 +2712,8 @@ export function layoutScore(
       slotIndex: number,
       beatPos: number,
       barIndex: number,
+      /** adj1323：本组真实小节序号（`barIndex` 是 seg 下标，行首空 seg 会多 1） */
+      measureIndex: number,
       /** adj627：本音当下生效的调号（临时转调之后会变；缺省 = 描述头调号） */
       keyAt: number = keySemitone,
       /** adj732：本音最左墨迹（= 数字左缘 − 左伸量；段内块的 `blockX`）——见 `PlacedToken.inkLeftX` */
@@ -2739,6 +2732,7 @@ export function layoutScore(
         duration: dur,
         beatPos,
         barIndex,
+        measureIndex,
         segments: segList,
         audioPitch: toPlayable(t) ? pitchToName(t.pitch, t.octaveShift, t.accidental, keyAt) : null,
         playable: toPlayable(t),
@@ -2834,7 +2828,7 @@ export function layoutScore(
             if (n.hasHx) xCursor += hxBodyW(m.noteSize)
             // 段左缘 blockX；数字左缘右移 变音角标(accW)+前倚音(leftExt)，给角标/倚音腾位
             const digitLeft = blockX + n.accW + n.leftExt
-            placeNoteSpace(n.t, segments, digitLeft, actualW, rightX, n.slotPos, n.beatPos, b, keysAt[b] ?? keySemitone, blockX)
+            placeNoteSpace(n.t, segments, digitLeft, actualW, rightX, n.slotPos, n.beatPos, b, measureIndexOfSeg[b] ?? 0, keysAt[b] ?? keySemitone, blockX)
             // adj394：记录该音符的停靠点（数字槽中心 / 末时值元素右缘；rightX 已含增时线与附点占宽）
             dynAnchors.push({ center: r1(digitLeft) + halfDigitW(m.noteSize), end: r1(rightX) })
             curX = xCursor
@@ -2861,22 +2855,26 @@ export function layoutScore(
         // adj315：间距只朝向有音符的一侧——行首/行末背对音符那侧不设间距（贴边）。
         // 中间小节线左侧/右侧各 barlinePad；行首（左侧无音符）gapL=0；行末（atEnd）gapR=0。
         // adj427：段边界线再各加 segPadL/segPadR（给段层的大括号/圆括号腾出内侧空间）
-        const gapL = (segLastPb[b] === undefined ? 0 : barGapSide()) + segPadL[b]
-        let gapR = (bk.atEnd ? 0 : barGapSide()) + segPadR[b]
+        // adj1323：`|/`（零占位隐藏）与行首 voltaOnly 注释不画线也不占位；
+        // `|*` 仍按“不画但占位”处理。
+        const zeroBar = bk.bar.voltaOnly === true || bk.bar.type === '|/'
+        const barW = zeroBar ? 0 : barlineTotalW(bk.bar.type)
+        const gapL = (zeroBar || segLastPb[b] === undefined ? 0 : barGapSide()) + segPadL[b]
+        let gapR = (zeroBar || bk.atEnd ? 0 : barGapSide()) + segPadR[b]
         // adj357：临时节拍（|"P:2/4"）在小节线右侧画分数——右侧占位须含「分数半宽×2 + 2×s 起始 + 2px 末距」，
         // 空间优先路径原用固定 barGapSide（不含分数宽），导致分数压到下一小节音符；此处补足。
         // adj398：该间距同时计入上方 nonDurPad 预算（同源函数 meterGapRight），否则行内容右溢。
-        const meterGap = meterGapRight(bk.bar.comment, m.noteSize)
+        const meterGap = zeroBar ? null : meterGapRight(bk.bar.comment, m.noteSize)
         if (meterGap != null) gapR = Math.max(gapR, meterGap)
         // adj314：小节线占位用「线自身宽 + 两侧动态间距」，不再叠加 barlineSpace 固定 +8 空隙——
         // 否则一侧间距被撑到 ~8.5px，超过半个音符宽（4.03px）导致小节线间距过大。
         // 行首小节线（该侧无音符）：线左缘贴边（用线自身半宽）。
-        const barHalf = segLastPb[b] === undefined ? barlineTotalW(bk.bar.type) / 2 : barlineTotalW(bk.bar.type) / 2
+        const barHalf = zeroBar ? 0 : barW / 2
         // 行末小节线（atEnd）：撑满时右缘贴右边距，右侧不设间距；否则按左间距 + 中心推算（自然宽行尾留白）
         // adj398：行末线带临时节拍分数时，分数画在线右缘之后 → 线整体左移「分数占位」，分数右缘贴右边距
         let lineX = curX + gapL + barHalf
         if (bk.atEnd && stretch) {
-          lineX = page.width - config.margin_right - barlineTotalW(bk.bar.type) / 2 - (meterGap ?? 0)
+          lineX = page.width - config.margin_right - barHalf - (meterGap ?? 0)
         }
         const bid: LayoutId = { page: pageIndex, voice, group: groupIndex, index: barCounter }
         // adj625：本 seg 的收尾小节线 = 「下一个算作小节的 seg」的左侧小节线（同 `placeMusicRow`）：
@@ -2912,7 +2910,7 @@ export function layoutScore(
         barCounter++
         // adj940：把**实际**线位记下来（未取整的原值 —— 下一行按它反解，取整会造成 0.05px 漂移）
         rowLineX[b - row.start] = lineX
-        curX += gapL + barlineTotalW(bk.bar.type) + gapR
+        curX += gapL + barW + gapR
         barCursor++
       }
     }
@@ -2951,6 +2949,8 @@ export function layoutScore(
     const segs = splitBars(tokens)
     // adj625：本组每个 seg 的**全曲小节序号**（决定哪几个小节画方框序号）
     const ord = barOrdinalsOf(segs, startBar)
+    // adj1323：每个 seg 的**真实小节序号**（0 起；组首空 seg = -1）
+    const measureIndexOfSeg = ord.map((n) => (n === null ? -1 : n - startBar))
     // adj288：空间优先用「本体宽」判据断行，避免时长优先拍级 need 高估导致过早换行
     const rows = config.noteSpaceLayout === 'space' ? breakRowsSpace(segs, availW, m.noteSize, accInk) : breakRows(segs, availW, m.noteSize, accInk)
     const geciSize = config.geci_size
@@ -3043,10 +3043,10 @@ export function layoutScore(
       const isLastRow = isLastGroup && ri === rows.length - 1
       if (isSpace) {
         // adj940：上一行的**小节线实位**（跨组、跨页都不清空）当基准
-        const lineX = placeMusicRowSpace(segs, row, groupIndex, voice, y, lyricMaps, geciSize, sp, rowSlots[ri], prevRowLineX, singleRowOfScore, isLastRow, ord)
+        const lineX = placeMusicRowSpace(segs, row, groupIndex, voice, y, lyricMaps, geciSize, sp, rowSlots[ri], prevRowLineX, singleRowOfScore, isLastRow, ord, measureIndexOfSeg)
         if (lineX !== undefined) prevRowLineX = lineX
       } else {
-        const pb = placeMusicRow(segs, row, groupIndex, voice, y, lyricMaps, geciSize, sp, rowSlots[ri], refPerBeat, prevRowLineX, singleRowOfScore, isLastRow, ord)
+        const pb = placeMusicRow(segs, row, groupIndex, voice, y, lyricMaps, geciSize, sp, rowSlots[ri], refPerBeat, prevRowLineX, singleRowOfScore, isLastRow, ord, measureIndexOfSeg)
         if (row.kind === 'bars' && pb !== undefined) refPerBeat = pb
       }
       y += rowH + segDown
@@ -3134,6 +3134,8 @@ export function layoutScore(
       }
       return out
     })()
+    // adj1323：每个 seg 的真实小节序号（0 起；组首空 seg = -1）
+    const measureIndexOfBlock = ord.map((n) => (n === null ? -1 : n - startBar))
     /**
      * adj625：块首序号要画在「大括号与音符之间」那条空隙里（用户口径），
      * 而这段留白原本固定 12px——括号自身占 3px、方框 ≈10px 宽 ⇒ 会压到括号上。
@@ -3772,7 +3774,7 @@ export function layoutScore(
               }
             }
             const nIdxBefore = pages[pageIndex].notes.length
-            const dur2 = placeNoteAt(t, segments, voiceY, pageIndex, p.groupIndex, p.voice, slotIndex, p.lyricMaps, geciSize, sp, beatAcc, b, space, partKeys[vi]?.[b] ?? keySemitone)
+            const dur2 = placeNoteAt(t, segments, voiceY, pageIndex, p.groupIndex, p.voice, slotIndex, p.lyricMaps, geciSize, sp, beatAcc, b, measureIndexOfBlock[b] ?? 0, space, partKeys[vi]?.[b] ?? keySemitone)
             // adj394：记录本音符停靠点（数字槽中心 / 末时值元素右缘）
             const placedNote = pages[pageIndex].notes[nIdxBefore]
             dynAnchors.push({
@@ -4047,17 +4049,57 @@ export function layoutScore(
    */
   const startBarOfGroup = new Map<number, number>()
   {
-    const barCountOf = (tokens: MusicToken[]): number =>
-      splitBars(tokens).filter((s, i) => !(i === 0 && s.notes.length === 0)).length
     let acc = 1
     for (const ev of events) {
       if (ev.kind !== 'unit') continue
       let unitBars = 0
       for (const { groupIndex, group } of ev.unit.groups) {
-        unitBars = Math.max(unitBars, barCountOf(group.music.tokens))
+        unitBars = Math.max(unitBars, countMeasures(group.music.tokens))
         startBarOfGroup.set(groupIndex, acc)
       }
       acc += unitBars
+    }
+  }
+
+  /**
+   * adj1323：**按排版单元算“每小节生效调号”**。
+   *
+   * 旧实现 `effectiveKeysOf` 每组都从描述头调号起算 ⇒ 转调线写在上一行末尾时，下一行排版丢调号，
+   * 而播放端走查是沿着 `seq` 连续带 `curKey` 的（实测 `C4,D4,E4,F4` vs `E4,F#4,G4`）。
+   * 这里按单元统一：
+   *  · 起始调号 = 上一单元该声部的结束调号；
+   *  · 单元内任一声部写在同一小节边界上的 `d:` 都对整块生效（与播放端 mergeBarItems 同口径）；
+   *  · 单元结束把所有声部更新到单元末调号；`[fenye]` 断单元但不重置调号。
+   */
+  {
+    const lastKeyByVoice = new Map<number, number>()
+    for (const ev of events) {
+      if (ev.kind !== 'unit') continue
+      const parts = ev.unit.groups.map(({ groupIndex, group }) => ({
+        groupIndex,
+        voice: group.music.voice,
+        segs: splitBars(group.music.tokens),
+      }))
+      if (parts.length === 0) continue
+      const start = lastKeyByVoice.get(parts[0].voice) ?? keySemitone
+      const maxSegs = Math.max(...parts.map((p) => p.segs.length))
+      const changeAt: ({ targetKey?: number; clear?: boolean } | undefined)[] = new Array(maxSegs)
+      for (const p of parts) {
+        for (let b = 0; b < p.segs.length; b++) {
+          const kc = p.segs[b].bar?.keyChange
+          if (kc && !changeAt[b]) changeAt[b] = kc
+        }
+      }
+      const keys: number[] = []
+      let cur = start
+      for (let b = 0; b < maxSegs; b++) {
+        keys.push(cur)
+        cur = keyAfter(cur, changeAt[b], keySemitone)
+      }
+      for (const p of parts) {
+        keysAtByGroup.set(p.groupIndex, keys.slice(0, p.segs.length))
+        lastKeyByVoice.set(p.voice, cur)
+      }
     }
   }
 
@@ -4630,7 +4672,7 @@ export function layoutScore(
   // 在此一次性把段内容追加到 page.notes / page.barlines / page.segmentBrackets，
   // 完全不触碰前面 2500 行的放置逻辑，把扰动面压到最小（连音线/跳房子等后处理已跑完，
   // 不会把段内音符误纳入主旋律的连音配对与行高计算）。
-  placeSegmentOverlays(pages, result, config, keySemitone)
+  placeSegmentOverlays(pages, result, config, keySemitone, keysAtByGroup)
 
   /**
    * adj723q（用户报「`{dsb}` 行的连音线压在段层音符上」）：
@@ -4757,7 +4799,14 @@ export function layoutScore(
   const configKey = JSON.stringify(config)
   // adj651c：延续类连音线（跳房子孤立 `)`）随排版结果交给播放端——演奏上要并成一个长音
   // adj973：这份清单由解析期的 `pairSlurs()` 一并产出（`result.continuationTies`），布局只是转交
-  return { pages, config, configKey, continuationTies: result.continuationTies ?? [] }
+  return {
+    pages,
+    config,
+    configKey,
+    continuationTies: result.continuationTies ?? [],
+    // adj1323：每组全局起始小节号（播放 / 标记段 / flattenScoreNotes 的唯一口径）
+    groupStartBar: result.groups.map((_, gi) => startBarOfGroup.get(gi) ?? 1),
+  }
 }
 
 /**
@@ -4991,7 +5040,13 @@ function spliceTpNotes(
   return out
 }
 
-function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: PageConfig, keySemitone: number): void {
+function placeSegmentOverlays(
+  pages: ScorePage[],
+  result: ParseResult,
+  config: PageConfig,
+  keySemitone: number,
+  keysAtByGroup?: Map<number, number[]>,
+): void {
   /**
    * adj689：**视觉行号索引**（`页|y` → 行号）——与 `layoutScore` 给连音线编号的 `rows` 分组
    * **同一口径**（页内按 y 去重升序），供 `shiftEnvelopeDown` 精确筛选"本行的连音线"
@@ -5009,8 +5064,9 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
     if (segs.length === 0) continue
     const spans = mainSpans(tokens)
     if (spans.length === 0) continue
-    // adj627：本组"每小节生效调号"——段层音符（`{bz ...}`）也要按当下调号定音高
-    const segKeys = effectiveKeysOf(splitBars(tokens), keySemitone)
+    // adj627/adj1323：本组“每小节生效调号”——段层音符（`{bz ...}`）也要按当下调号定音高；
+    // 优先用 layoutScore 按单元预计算的共享调号（跨行/多声部同一口径）
+    const segKeys = keysAtByGroup?.get(gi) ?? effectiveKeysOf(splitBars(tokens), keySemitone)
 
     // 该曲行的全部已放置音符（按 页 → y → x 排序）——与 spans 顺序**一一对应**
     // （段不产生主旋律音符，故两侧次序天然一致）
@@ -5909,6 +5965,7 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
           anchorOf(envStart + beatAt) ?? lastAnc ?? anchorOf(envStart)
         if (anc) lastAnc = anc
         const playBarIndex = anc ? anc.note.barIndex : 0
+        const playMeasureIndex = anc ? anc.note.measureIndex : 0
         /**
          * adj629k（用户报「替谱演奏完，第三拍的 1 没演奏到」）：
          * 拍位**不能用 `r1` 圆到 1 位小数**——`1.25 → 1.3`、`0.75 → 0.8` 会让替谱末音的时间区间
@@ -5993,6 +6050,7 @@ function placeSegmentOverlays(pages: ScorePage[], result: ParseResult, config: P
           duration: dur,
           beatPos: playBeatPos,
           barIndex: playBarIndex,
+          measureIndex: playMeasureIndex,
           segments: segList,
           audioPitch: isPlayableNote(t)
             ? pitchToName(t.pitch, t.octaveShift, t.accidental, segKeys[playBarIndex] ?? keySemitone)

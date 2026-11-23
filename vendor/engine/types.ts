@@ -294,7 +294,8 @@ export interface RhythmToken {
  *  |:  反复开始      :|   反复结束      :|: 反复包围
  *  |/  隐藏小节线1（不显示不占空间，用于行首跳房子等）
  *  |*  隐藏小节线2（不显示但占空间，用于单声部变多声部）
- *  ||/ 双线+隐藏
+ *  ||/ 双细线（可见；合并时按“结束”看）
+ *  ||: 双线 + 反复开始
  *  [] 跳房子起点（可加 / 不封闭、+ 调高度）  ] 跳房子终点
  *  小节线后引号内容为小节线备注
  */
@@ -603,6 +604,15 @@ export interface PlacedToken {
   beatPos: number
   /** 小节索引（行内唯一，用于减时线分组） */
   barIndex: number
+  /**
+   * adj1323：**本组内真实小节序号**（0 起；组首空 seg 没有音符；中间空小节仍占号）。
+   *
+   * 为什么不能继续用 `barIndex` 当“第几小节”：`barIndex` 是 `splitBars()` 的 **seg 下标**，
+   * 行首 barline 会解析出一个没有音符的组首空 seg，于是 `barIndex` 比真实小节序号多 1
+   * （行首带 `|` 时播放小节号曾因此变成 1,3,4）。`measureIndex` 只给“小节号”用；
+   * `barIndex` 继续给段内拍位 / `barStartMs` 下标用，两者不要混。
+   */
+  measureIndex: number
   /**
    * 拍段序列（adj35 拍级宽度）：每段一拍（跨拍音符拆段），供增时线/附点按拍定位。
    * x = 段起点，perBeat = 该拍每拍宽，beats = 段内时值（拍）。
@@ -1073,6 +1083,13 @@ export interface ScoreLayout {
   /** 页面配置快照（用于缓存失效判断，render 需要） */
   config: PageConfig
   configKey: string
+  /**
+   * adj1323：**每个 group（Q 行）的全局起始小节号**（1 起，与谱面画的小节数字同口径）。
+   *
+   * 多声部块内各声部共用同一个号；页切换/行切换都不断号。
+   * 播放序列、标记段、`flattenScoreNotes` 都只消费这一份，不再各自按 barline 数量累加。
+   */
+  groupStartBar: number[]
   /**
    * adj651c（用户报「跳房子 2 / 结束句的连音线按两个半拍演奏」）：**延续类连音线**的音符索引对
    * （跳房子里那个孤立 `)`：起点在房子起始小节线之前、终点是该房子首音）。

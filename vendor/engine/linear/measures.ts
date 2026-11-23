@@ -11,11 +11,11 @@
  *  - **歌词**归属 = 看它挂的那个音符落在哪一小节（`adj1267`：按字的 x 判会丢掉全曲第 1 个字，
  *    因为字是居中放在数字下方的，左缘比数字左缘更靠左）。
  *
- * ⚠ 行首小节线（用户 2026-11-08 特别点出的坑）：
- *  · 普通 `|` 在行首**不画**（`layout/index.ts:2101`，"行从边距开始"）；
- *  · `|/`（隐藏小节线）**不显示也不占位**（`types.ts:295`、`spacing.ts:106`）。
- *  ⇒ 一旦把行拼成一条线，行与行的交界处就**没有可见的线**了。
- *  所以这里把"边界线类型"原样记下来，由 `strip.ts` 在条带上**补一根普通线**。
+ * ⚠ 行首小节线（用户 2026-11-08 特别点出的坑；adj1323 起已由解析期归一化）：
+ *  · 普通 `|` 在行首**不画**（行从边距开始）；
+ *  · `|/`（隐藏小节线）**不显示也不占位**（`types.ts:295`、`spacing.ts:106`）；
+ *  · 行首 barline 会被并到上一行末，所以条带交界处优先取上一行的 `endType`。
+ *  这里仍把"边界线类型"原样记下来，由 `strip.ts` 在条带上补线。
  */
 import type { BarlineType, PageConfig, PlacedBarline, PlacedLyric, PlacedToken, ScoreLayout } from '../types'
 import { rowSpansOfPage } from '../layout/guides'

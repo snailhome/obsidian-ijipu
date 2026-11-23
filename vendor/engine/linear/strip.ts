@@ -22,11 +22,11 @@
  * （逐遍记录、同一个源小节号会出现多次）：
  * 每出现一次就克隆一次，x 往后接。于是条带上**不存在**反复记号/跳房子/`&ds`/`&dc`/`&fine`。
  *
- * ## 行首小节线（用户 2026-11-08 点出的坑）
+ * ## 行首小节线（用户 2026-11-08 点出的坑；adj1323 起已由解析期归一化）
  *
- * 排版里行首的普通 `|` 不画、`|/` 隐藏线不画也不占位 ⇒ 拼接处会缺一根线。
- * 这里在**每个小节起点**补一根线（第一小节除外），类型按源线降级：
- * `|: :| :|:` → `|`（反复已展开，不再画反复记号）、`|/ |*` → `|`、`|| ||/` → `||`。
+ * 解析期已把行首 barline 并到上一行末，行首默认是隐式隐藏小节线。
+ * 拼接处优先用上一行的 `endType`（没有才退回本小节的 `leadType`）：
+ * `||` / `||/` → `||`，反复/隐藏线 → `|`。
  *
  * ## 歌词（adj1267）
  *
@@ -443,7 +443,11 @@ export function buildLinearStrip(
     // 小节线：第一小节不画（条带从内容开始）；其余在小节起点补一根
     if (i > 0) {
       const prev = byNo.get(occ[i - 1].no)
-      const type = prev?.endType === '||' || prev?.endType === '||/' ? '||' : stripBarlineTypeOf(m.leadType)
+      /**
+       * adj1323：行首 barline 现在都归到上一行末，所以优先用 `prev.endType`；
+       * 没有才退回本小节的 `m.leadType`。`||`/`||/` 保留双线，反复/隐藏线降级为 `|`。
+       */
+      const type = stripBarlineTypeOf(prev?.endType ?? m.leadType)
       page.barlines.push(barlineAt(x0, baselineY + m.staffTop, baselineY + m.staffBottom, type))
     }
 

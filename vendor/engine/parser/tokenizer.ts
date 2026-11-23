@@ -172,7 +172,7 @@ export function tokenizeMusicLine(
     '想让这一小节还是 4 拍宽就写 `0---{jz 16}`（排版 4 拍、播放 16 拍）'
   const HINT_TP_IN_LYRIC =
     '替谱段 `{tp … }` 写在**歌词行**里（`C:` = 第 1 遍、`C2:` = 第 2 遍……），段内写"这一遍不同"的那几个音；如 `C2: … 借 {tp 4/ 3// 6,/ 6,// 1/ .1 -} 一 丝 懵 懂 …`'
-  const HINT_VOLTA = '跳房子 `[` 要紧跟在小节线之后；行首跳房子请先用隐藏小节线 `|/`，如 `|/ ["1." 1 2 3 |]`'
+  const HINT_VOLTA = '跳房子 `[` 要紧跟在小节线之后；**行首可直接写 `[`，不必加 `|/`**，如 `["1." 1 2 3 |]`。'
   const HINT_SYMBOL =
     '音符用 `1`-`7`、休止 `0`（隐藏休止 `8`）、节奏 `9`；时值 `-` `/` `.`；高低音点 `\'` `,`；变音 `#` `$` `=`；装饰 `&编码`（如 `&tr`）；注释 `"文字"`；小节线与反复 `|` `||` `|:` `:|`；跳房子 `[` `]`；渐强渐弱 `<` `>` `!`（详见「语法速查」）'
   let lastBlockEnd = -1 // 上一个音符块/小节线块的结束字符偏移
@@ -915,9 +915,17 @@ export function tokenizeMusicLine(
         last.raw += rawAt(i, mod.k)
         lastBlockEnd = mod.k
       } else {
-        if (!last || last.kind !== 'barline') {
+        /**
+         * adj1323（用户 2026-11-23）：**行首 `[` 是合法写法，不再要求先写 `|/`**。
+         * 行首 = 隐式隐藏小节线；这里生成 voltaOnly 注释，解析期会把它放到行首、
+         * 不画竖线、不占小节。只有“音符后面突然写 `[`”（没有小节线可依）才提示。
+         */
+        const lineStart = !tokens.some(
+          (t) => t.kind === 'note' || t.kind === 'rest' || t.kind === 'rhythm' || t.kind === 'barline',
+        )
+        if (!lineStart && (!last || last.kind !== 'barline')) {
           errors.push(
-            err('跳房子 "[" 应写在小节线后（行首请用 |/ 或小节线，adj26）', {
+            err('跳房子 "[" 应写在小节线后（行首可直接写 `[`，不必加 `|/`）', {
               line: pos.line,
               col: pos.col + i,
             }, 'warning', HINT_VOLTA),
