@@ -462,6 +462,22 @@ function greedyPlan(
     start = cut
   }
   if (starts[starts.length - 1] !== measureCount) starts.push(measureCount)
+  /**
+   * 用户 2026-11-24：一行 4 小节重排后，**不应出现只有 1 小节的行**。
+   * 贪心把前面排满后，末尾常剩 1 小节；只要前一行的最后一小节可以移过来
+   * （不跨不可断段），就把尾行补成 2 小节。只剩 1 小节总长的谱面除外。
+   */
+  if (maxMeasures > 1 && measureCount > 1 && starts.length >= 3) {
+    const last = starts.length - 1
+    if (starts[last] - starts[last - 1] === 1) {
+      const prevStart = starts[last - 2] ?? 0
+      const prevLen = starts[last - 1] - prevStart
+      const newStart = starts[last - 1] - 1
+      if (prevLen >= 2 && newStart > prevStart && canBreak(newStart) && measureCount - newStart <= maxMeasures) {
+        starts[last - 1] = newStart
+      }
+    }
+  }
   return { starts, warnings }
 }
 
