@@ -249,7 +249,9 @@ function forcedStartsOf(parts: VoicePart[]): Set<number> {
       if (isBoundary(t)) {
         if (!(measure === 0 && !sawNote)) {
           measure += 1
-          if (t.voltaEnd) out.add(measure)
+          // 同一根线既 `]` 又 `[`（连续跳房子）时不能把断点放在它后面：
+          // 那会把新房子 `[` 留在上一行行末，下一行只有内容、没有起点。
+          if (t.voltaEnd && !t.voltaStart) out.add(measure)
         }
       } else if (isDurational(t)) {
         sawNote = true
@@ -266,6 +268,67 @@ function nextForcedAfter(forced: Set<number>, start: number, measureCount: numbe
     if (f > start && f < best) best = f
   }
   return best
+}
+
+/** 小节 m 属于哪一行（starts 为每行起始小节，末项 = measureCount） */
+function rowOfMeasure(starts: number[], m: number): number {
+  for (let r = 0; r < starts.length - 1; r++) {
+    if (m >= starts[r] && m < starts[r + 1]) return r
+  }
+  return Math.max(0, starts.length - 2)
+}
+
+/** 这个断点是不是“这一遍的结束” */
+function isRepeatEndOf(t: BarlineToken): boolean {
+  return t.type === ':|' || t.type === ':|:' || t.type === '||'
+}
+
+/**
+ * 用户 2026-11-23 口径：**跳房子范围重排后落在同一行内，就改成闭口**。
+ *
+ * 开放 `[` 的范围按“下一个 `]` / 下一遍的 `:|` / 下一个 `[`”确定；
+ * 起止在同一行 ⇒ 给终点小节线补 `voltaEnd`（`|`→`|]`、`:|`→`:|]`）。
+ * 跨行则保持开放（原来跨行渲染靠起止两端画左右半）。
+ */
+function closeVoltasInRow(parts: VoicePart[], starts: number[]): void {
+  for (const p of parts) {
+    let measure = 0
+    let sawNote = false
+    let openStart: number | null = null
+    let lastBar: BarlineToken | null = null
+    let lastEndMeasure = -1
+    for (const t of p.tokens) {
+      if (t.kind !== 'barline') {
+        if (isDurational(t)) sawNote = true
+        continue
+      }
+      if (t.voltaOnly) {
+        if (t.voltaStart && !t.voltaEnd) openStart = measure
+        continue
+      }
+      const lead = measure === 0 && !sawNote
+      if (!lead) measure += 1
+      const endMeasure = measure - 1
+      if (endMeasure >= 0) {
+        lastBar = t
+        lastEndMeasure = endMeasure
+      }
+      // 只有“这一遍结束”的线（`]` / `:|` / 下一段 `[`）才收口；普通 `|` 继续开放
+      if (openStart !== null && (t.voltaEnd || isRepeatEndOf(t) || t.voltaStart)) {
+        if (endMeasure >= 0 && rowOfMeasure(starts, openStart) === rowOfMeasure(starts, endMeasure)) {
+          t.voltaEnd = true
+        }
+        openStart = null
+      }
+      if (t.voltaStart) openStart = measure
+      else if (t.voltaEnd) openStart = null
+    }
+    if (openStart !== null && lastBar && lastEndMeasure >= 0) {
+      if (rowOfMeasure(starts, openStart) === rowOfMeasure(starts, lastEndMeasure)) {
+        lastBar.voltaEnd = true
+      }
+    }
+  }
 }
 /**
  * 不可断的小节断点：段（`{bz}`/`{dsb}`/`{tp}`）跨越的小节边界、
@@ -597,6 +660,7 @@ interface UnitReflow {
 function reflowUnit(unit: UnitInfo, opts: ReflowOptions, cfg: PageConfig): UnitReflow {
   const parts = partsOfGroups(unit.groups)
   const { starts, measureCount, warnings } = planStartsForParts(parts, opts, cfg)
+  closeVoltasInRow(parts, starts)
   const piecesByGroup = new Map<MusicGroup, MusicToken[][]>()
   const slotAtByGroup = new Map<MusicGroup, number[]>()
   for (const group of unit.groups) {
@@ -736,6 +800,7 @@ function reflowRun(units: UnitInfo[], opts: ReflowOptions, cfg: PageConfig): Uni
   }
 
   const { starts, measureCount, warnings } = planStartsForParts(parts, opts, cfg)
+  closeVoltasInRow(parts, starts)
   const piecesByVoice = new Map<number, MusicToken[][]>()
   const slotAtByVoice = new Map<number, number[]>()
   for (const p of parts) {
