@@ -176,7 +176,9 @@ export {
   DEFAULT_METER_BEATS,
   MEASURE_BEATS_EPSILON,
 } from './measures'
-export { layoutScore } from './layout'
+export { layoutScore, measureFixedWidth } from './layout'
+export { reflowJps } from './reflow'
+export type { ReflowOptions, ReflowResult } from './reflow'
 export { renderScoreToSvg, keySignatureOf } from './render'
 // adj863（T-3）：**范围**（整页 / 墨迹 ± 每边 N px）的唯一实现 + SVG 外框改写（插件预览与导出、应用导出、
 // CLI `render --crop` 都消费这一份；墨迹盒由有 DOM 的宿主量好传进来，引擎不瞎估）

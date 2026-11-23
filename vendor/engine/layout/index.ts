@@ -295,6 +295,16 @@ function segNeedW(seg: BarSeg, noteSize = 18, ink?: AccidentalInkMetrics): numbe
 }
 
 /**
+ * adj1324：一个小节的**固定部分宽**（重排用）——音符本体/附点/增时线/倚音/变音墨迹
+ * + 小节线 + 固定侧距。不含行宽分配出来的可拉伸留白。
+ *
+ * 重排按这个宽判断「固定部分占可用宽 > 80%」，与排版自然宽同一口径，不另算一套。
+ */
+export function measureFixedWidth(seg: BarSeg, noteSize = 18, ink?: AccidentalInkMetrics): number {
+  return segNeedW(seg, noteSize, ink) + barlineTotalW(seg.bar?.type ?? '|') + barlinePad(noteSize)
+}
+
+/**
  * 拍级每拍宽分配（adj35 音符间距原则）：
  *  ① 平均分布：正常拍 perBeat = 剩余宽 / 正常拍总时值；
  *  ② 最小间距 1px：每拍 need = max(自然宽 14, 12.16 / 拍内最小时值)；
