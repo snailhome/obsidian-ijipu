@@ -1614,7 +1614,12 @@ function renderVoltaLine(
   // 番号（[ 后引号注释优先；小节线引号备注兼容）显示在跳房子线下方（adj27/28）；
   // adj71：字号 = 音符高度的 0.5（VOLTA_COMMENT_FONT_RATIO），随音符字号
   // adj77：注释相对起点竖线 左上移 2px（x=x1+2、y=线+8）
-  const label = start.voltaStart?.comment ?? start.comment
+  /**
+   * 番号只取 `voltaStart.comment`（`["1."` / `["结束句"`）。
+   * adj1324：**不能回退到 `bar.comment`**——`p:`/`d:` 是小节线的拍号/转调备注，
+   * 不是跳房子番号；回退会把 `p:4/4` 画进跳房子括号里。
+   */
+  const label = start.voltaStart?.comment
   const labelSvg = label
     ? `<text x="${x1 + 2}" y="${y + 8}" font-size="${Math.max(8, Math.round(noteSize * VOLTA_COMMENT_FONT_RATIO))}" font-family="${FONT_CN}" fill="#1b1b1b">${xmlEsc(label)}</text>`
     : ''
