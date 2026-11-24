@@ -1634,11 +1634,9 @@ export function layoutScore(
      */
     const leadAnnotationW =
       leadBar?.comment !== undefined ? (meterGapRight(leadBar.comment, m.noteSize) ?? 0) : 0
-    const leadKeyW = leadBar?.keyChange !== undefined ? Math.round(m.noteSize * 3) : 0
     const leadPad =
       (leadBar && !leadBar.voltaOnly && leadBar.type !== '|' && leadBar.type !== '|/' ? barlineTotalW(leadBar.type) + 4 : 0) +
-      leadAnnotationW +
-      leadKeyW
+      leadAnnotationW
     // 行预算：每对相邻内容小节之间按该小节线上类型占位（|/ 不占位）
     let barGaps = 0
     {
@@ -2262,9 +2260,9 @@ export function layoutScore(
     const leadAnnoBar = leadSegBar ?? leadOutsideBar
     const leadExtra =
       leadAnnoBar?.type === '|/'
-        ? (leadAnnoBar.comment !== undefined
-            ? Math.max(meterGapRight(leadAnnoBar.comment, m.noteSize) ?? 0, Math.round(m.noteSize * 2.6))
-            : 0) + (leadAnnoBar.keyChange !== undefined ? Math.round(m.noteSize * 3) : 0)
+        ? leadAnnoBar.comment !== undefined
+          ? Math.max(meterGapRight(leadAnnoBar.comment, m.noteSize) ?? 0, Math.round(m.noteSize * 2.6))
+          : 0
         : 0
     /**
      * adj967d（**用户口径**："**统一**将放在行首的序号放在上一行的行末" —— 用户实测里还留在行首的那一档）：
@@ -2450,8 +2448,7 @@ export function layoutScore(
       // adj398：带临时节拍分数的小节线，右侧间距取 max(barlinePad, 分数占位)——与放置处 gapR 同源；
       // 无分数时保持 lineW + 2×barlinePad 原值不变（既有排版零影响）
       const meterGap = meterGapRight(bk.bar.comment, m.noteSize)
-      const keyGap = bk.bar.keyChange !== undefined ? Math.round(m.noteSize * 3) : 0
-      const outer = lineW + bp + Math.max(bp, meterGap ?? bp, keyGap)
+      const outer = lineW + bp + Math.max(bp, meterGap ?? bp)
       barOuter[bk.barIdx] = outer
       nonDurPad += outer
     }
@@ -2942,7 +2939,6 @@ export function layoutScore(
         const meterGap = isLeadAnnoBar ? null : meterGapRight(bk.bar.comment, m.noteSize)
         if (meterGap != null) gapR = Math.max(gapR, meterGap)
         if (isLeadAnnoBar) gapR = Math.max(gapR, leadExtra)
-        if (zeroBar && bk.bar.keyChange !== undefined && !isLeadAnnoBar) gapR = Math.max(gapR, Math.round(m.noteSize * 3))
         // adj314：小节线占位用「线自身宽 + 两侧动态间距」，不再叠加 barlineSpace 固定 +8 空隙——
         // 否则一侧间距被撑到 ~8.5px，超过半个音符宽（4.03px）导致小节线间距过大。
         // 行首小节线（该侧无音符）：线左缘贴边（用线自身半宽）。
