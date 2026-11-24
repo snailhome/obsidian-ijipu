@@ -4364,7 +4364,29 @@ export function layoutScore(
     return segs.length > 0 ? segs : [[sp.start, sp.end]]
   }
   const slurInfos: SlurInfo[] = []
+  /**
+   * adj1324：反复跳回的 wrap 线若与一条普通同行连音线**结束在同一音符**，
+   * 普通线已经画了这段弧（如第 19 行 `(6/[5/] |: 6/)`）；不要再从行首补一条
+   * 长横线，否则看起来像从左边距开始、实际重复。
+   */
+  const regularSlurEnds = new Set(
+    slurPairs
+      .filter(
+        (p) =>
+          !p.wrap &&
+          !p.houseTie &&
+          rowOfNote.get(p.start) !== undefined &&
+          rowOfNote.get(p.start) === rowOfNote.get(p.end),
+      )
+      .map((p) => p.end),
+  )
+  /** 多个“前半段”跳回同一个后半段时，后半段只画一次 */
+  const seenWrapEnds = new Set<number>()
   for (const sp of slurPairs) {
+    if (sp.wrap) {
+      if (regularSlurEnds.has(sp.end) || seenWrapEnds.has(sp.end)) continue
+      seenWrapEnds.add(sp.end)
+    }
     // adj137：同行外层才被退化内层打断；跨行外层保持整段（LIFO 跨行两半行为不变）
     const aAll = notesByIndex.get(sp.start)
     const bAll = notesByIndex.get(sp.end)
