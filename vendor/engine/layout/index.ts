@@ -6739,14 +6739,16 @@ export function keepBarlinesOutOfInk(pages: ScorePage[], config: PageConfig): vo
         }
       }
     }
-    // 只针对“线落进增时线/附点/后倚音的墨迹”这一种冲突；普通音旁的线位不动
-    const overlaps = prev !== undefined && prev.tail && prev.right + half > line.x
+    // 只针对“线落进增时线/附点/后倚音的墨迹”这一种冲突；普通音旁的线位不动。
+    // 留 4px 视觉间隙：线宽和增时线端帽会让“贴着但不交”看起来仍像压住。
+    const clear = 4
+    const overlaps = prev !== undefined && prev.tail && prev.right + half + clear > line.x
     if (!overlaps) continue
-    const lo = prev !== undefined ? prev.right + half + 1 : config.margin_left
-    const hi = next !== undefined ? next.left - half - 1 : page.width - config.margin_right
-    if (hi > lo) line.x = Math.round(((lo + hi) / 2) * 10) / 10
-    else if (next !== undefined) line.x = Math.round(hi * 10) / 10
-    else line.x = Math.round(lo * 10) / 10
+    const lo = prev !== undefined ? prev.right + half + clear : config.margin_left
+    const hi = next !== undefined ? next.left - half - clear : page.width - config.margin_right
+    if (next === undefined) line.x = Math.round(lo * 10) / 10
+    else if (hi > lo) line.x = Math.round(((lo + hi) / 2) * 10) / 10
+    else line.x = Math.round(hi * 10) / 10
     line.x = Math.min(Math.max(line.x, config.margin_left), page.width - config.margin_right)
     moved.add(line)
   }
