@@ -6701,13 +6701,12 @@ export function keepBarlinesOutOfInk(pages: ScorePage[], config: PageConfig): vo
    */
   const page = pages[pages.length - 1]
   if (page === undefined || page.barlines.length === 0) return
-  // 以 voiceBlock 作为“排版行”的单位：多声部同一行有多个 barline yTop，不能按 yTop 当成多行。
-  const lastBlock = page.voiceBlocks[page.voiceBlocks.length - 1]
-  if (lastBlock === undefined || page.voiceBlocks.length < 2) return
-  const lines = page.barlines.filter(
-    (line) => line.yTop >= lastBlock.yTop - 1 && line.yTop <= lastBlock.yBottom + 1,
-  )
-  if (lines.length === 0) return
+  /**
+   * 处理最后一页的所有小节线：用户谱可能只有一个 voiceBlock（单声部整页），
+   * 不能靠 voiceBlocks 数量判断“有没有上一行”。只在真正压到带尾墨迹时才动线，
+   * 且只有被移动的线才更新小节序号。
+   */
+  const lines = page.barlines
   const old = page.barlines.map((line) => ({ line, oldX: line.x }))
   const moved = new Set<typeof page.barlines[number]>()
   for (const line of lines) {
