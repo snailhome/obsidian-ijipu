@@ -100,14 +100,6 @@ function hasTpUnit(unit: UnitInfo): boolean {
 }
 
 /** 行首是裸 `[` 跳房子标注 ⇒ 必须留在行首，不能和前一行合并 */
-function startsWithVoltaOnly(unit: UnitInfo): boolean {
-  for (const g of unit.groups) {
-    const first = qTokensOf(g)[0]
-    if (first && first.kind === 'barline' && first.voltaOnly) return true
-  }
-  return false
-}
-
 function barOf(type: BarlineToken['type'] = '|'): BarlineToken {
   return { kind: 'barline', type, pos: 0, raw: type }
 }
@@ -256,17 +248,26 @@ function nextForcedAfter(forced: Set<number>, start: number, measureCount: numbe
 function repositionSlashEnds(parts: VoicePart[], starts: number[]): void {
   for (const p of parts) {
     const events: { token: BarlineToken; measure: number }[] = []
+    const markerStart = new Map<BarlineToken, number>()
     let measure = 0
     let sawNote = false
+    let openStart: number | null = null
     for (const t of p.tokens) {
       if (t.kind !== 'barline') {
         if (isDurational(t)) sawNote = true
         continue
       }
-      if (t.voltaOnly) continue
+      if (t.voltaOnly) {
+        if (t.voltaStart && !t.voltaEnd) openStart = measure
+        continue
+      }
       const lead = measure === 0 && !sawNote
       if (!lead) measure += 1
-      events.push({ token: t, measure: measure - 1 })
+      const endMeasure = measure - 1
+      events.push({ token: t, measure: endMeasure })
+      if (t.voltaEndSlash && !t.voltaStart && openStart !== null) markerStart.set(t, openStart)
+      if (t.voltaEnd && !t.voltaEndSlash) openStart = null
+      if (t.voltaStart) openStart = measure
     }
     if (events.length === 0) continue
     const measureCount = Math.max(...events.map((e) => e.measure)) + 1
@@ -291,10 +292,15 @@ function repositionSlashEnds(parts: VoicePart[], starts: number[]): void {
       }
       if (actualMeasure < 0) actualMeasure = markerMeasure
       if (actualMeasure < markerMeasure) actualMeasure = markerMeasure
-      const row = rowOfMeasure(starts, markerMeasure)
-      const rowEnd = endOfRow(row)
-      // 目标：本行最后一个仍在房子范围内的线；范围在本行结束就用真实末尾
-      const targetMeasure = Math.min(rowEnd, actualMeasure)
+      /**
+       * 用户 2026-11-24：`]/` 的位置看**跳房子的起点行**，不看 `]/` 原来在哪一行。
+       * 房子从某行最后一小节开始、真实末尾在后面行 ⇒ 只画这一小节，`]/` 放这行行末；
+       * 房子范围在本行内结束 ⇒ 到真实末尾改闭口 `]`。
+       */
+      const startMeasure = markerStart.get(token) ?? markerMeasure
+      const startRow = rowOfMeasure(starts, startMeasure)
+      const startRowEnd = endOfRow(startRow)
+      const targetMeasure = actualMeasure <= startRowEnd ? actualMeasure : startRowEnd
       if (targetMeasure === markerMeasure && actualMeasure === markerMeasure) {
         // 就在真实末尾 ⇒ 闭口
         token.voltaEnd = true
@@ -813,6 +819,13 @@ function mergedTokensOf(units: UnitInfo[], voice: number): MusicToken[] {
   return merged
 }
 
+interface LyricSource {
+  /** 这条 C 行在合并后整段里的起始槽位 */
+  startSlot: number
+  /** 这条 C 行自己的槽位（缺的已补 `@`） */
+  slots: string[]
+}
+
 /**
  * 重排一个“同声部集合”的连续段：**先把段内所有 Q 行合并成一条连续谱**，
  * 再按规则重新断行。这是用户 2026-11-23 明确要求的“整体合并再拆分”，
@@ -822,7 +835,7 @@ function reflowRun(units: UnitInfo[], opts: ReflowOptions, cfg: PageConfig): Uni
   const first = units[0]
   const voices = first.groups.map((g) => g.music.voice)
   const parts: VoicePart[] = []
-  const verseSlots = new Map<number, string[][]>()
+  const lyricSources = new Map<number, LyricSource[]>()
   const voiceNames = new Map<number, string | undefined>()
 
   for (const voice of voices) {
@@ -830,16 +843,17 @@ function reflowRun(units: UnitInfo[], opts: ReflowOptions, cfg: PageConfig): Uni
     const groups = units
       .map((u) => u.groups.find((g) => g.music.voice === voice))
       .filter((g): g is MusicGroup => g !== undefined)
-    const maxVerses = Math.max(0, ...groups.map((g) => g.lyrics.length))
-    const streams: string[][] = Array.from({ length: maxVerses }, () => [])
+    const sources: LyricSource[] = []
+    let slotOffset = 0
     for (const group of groups) {
       const slotCount = qTokensOf(group).filter(isDurational).length
-      for (let k = 0; k < maxVerses; k++) {
-        streams[k].push(...slotsOfLyricLine(group.lyrics[k], slotCount))
+      for (const ly of group.lyrics) {
+        sources.push({ startSlot: slotOffset, slots: slotsOfLyricLine(ly, slotCount) })
       }
+      slotOffset += slotCount
     }
     parts.push({ voice, tokens: merged, segs: splitBars(merged), lyrics: [] })
-    verseSlots.set(voice, streams)
+    lyricSources.set(voice, sources)
     voiceNames.set(voice, groups.find((g) => g.music.voiceName)?.music.voiceName)
   }
 
@@ -863,18 +877,31 @@ function reflowRun(units: UnitInfo[], opts: ReflowOptions, cfg: PageConfig): Uni
       const slots = slotAtByVoice.get(voice) ?? []
       const fromSlot = slots[from] ?? 0
       const toSlot = slots[to] ?? fromSlot
-      const streams = verseSlots.get(voice) ?? []
-      const texts = streams.map((stream) => joinLyricSlots(stream.slice(fromSlot, toSlot)))
+      const sources = lyricSources.get(voice) ?? []
+      /**
+       * 不同源 C 行**保持不同行**：每条 C 行按自己在整段里的起始槽位补 `@`，
+       * 只取本行覆盖的那一段。这样房子 1 的“慢品”和房子 2 的“柴”不会接成一句。
+       */
+      const texts: string[] = []
+      for (const src of sources) {
+        const rowLen = Math.max(0, toSlot - fromSlot)
+        if (rowLen === 0 || src.slots.length === 0) continue
+        const arr = new Array<string>(rowLen).fill('@')
+        const off = src.startSlot - fromSlot
+        for (let i = 0; i < src.slots.length; i++) {
+          const at = off + i
+          if (at >= 0 && at < rowLen) arr[at] = src.slots[i]
+        }
+        const text = joinLyricSlots(arr)
+        if (text !== '') texts.push(text)
+      }
       // 声部在这一行已经结束（缩声部之后没有音、也没有词）⇒ 不输出空 Q/C 行
-      if (piece.length === 0 && texts.every((t) => t === '')) continue
+      if (piece.length === 0 && texts.length === 0) continue
       const name = voiceNames.get(voice)
       const prefix = `Q${voice === 1 ? '' : voice}${name ? `"${name}"` : ''}:`
       out.push(piece.length === 0 ? prefix : `${prefix} ${serializeTokens(piece)}`)
-      for (let k = 0; k < texts.length; k++) {
-        const text = texts[k]
-        // 单段词的空行不写；多段词必须逐行保留，否则“第几遍”会串
-        if (text === '' && streams.length === 1) continue
-        out.push(`C${voice === 1 ? '' : voice}:${text === '' ? '' : ` ${text}`}`)
+      for (const text of texts) {
+        out.push(`C${voice === 1 ? '' : voice}: ${text}`)
       }
     }
   }
@@ -910,13 +937,12 @@ function buildRuns(units: UnitInfo[]): UnitInfo[][] {
   for (const u of units) {
     const voices = u.groups.map((g) => g.music.voice).sort((a, b) => a - b).join(',')
     const tp = hasTpUnit(u)
-    const volta = startsWithVoltaOnly(u)
     const prevSet = setOf(prevVoices)
     const nextSet = setOf(voices)
     const subset = cur.length > 0 && [...nextSet].every((v) => prevSet.has(v))
     if (
       cur.length > 0 &&
-      (u.pageBreakBefore || tp || curTp || volta || !subset)
+      (u.pageBreakBefore || tp || curTp || !subset)
     ) {
       flush()
     }
