@@ -4382,10 +4382,12 @@ export function layoutScore(
   )
   /** 多个“前半段”跳回同一个后半段时，后半段只画一次 */
   const seenWrapEnds = new Set<number>()
+  /** 只隐藏 wrap 的后半段，前半段仍要画（用户：25 行 `(6/[5/] :|` 要有前半段） */
+  const suppressWrapRight = new Set<(typeof slurPairs)[number]>()
   for (const sp of slurPairs) {
     if (sp.wrap) {
-      if (regularSlurEnds.has(sp.end) || seenWrapEnds.has(sp.end)) continue
-      seenWrapEnds.add(sp.end)
+      if (regularSlurEnds.has(sp.end) || seenWrapEnds.has(sp.end)) suppressWrapRight.add(sp)
+      else seenWrapEnds.add(sp.end)
     }
     // adj137：同行外层才被退化内层打断；跨行外层保持整段（LIFO 跨行两半行为不变）
     const aAll = notesByIndex.get(sp.start)
@@ -4717,17 +4719,19 @@ export function layoutScore(
        * adj723r：右半部同理——"区间" = 行首（`xStartB`）→ `b.x`。
        */
       const sx2 = r1(b.x + halfDig - sSlur)
-      pages[rows[rowB].page].slurs.push({
-        x1: r1(xStartB),
-        x2: sx2,
-        y: r1(Math.max(spanSlurY(b, rowB, xStartB, sx2, raise), voltaFloorY(rowB) ?? -Infinity)),
-        depth: sp.depth,
-        style: crossRowStyle,
-        tupletCount: sp.tuplet ? noteCount : undefined,
-        half: 'r', // 右半部：从行首最高点到最低处，左侧开口
-        row: rowB, // adj689：右半部画在终点行
-        rowTop: r1(rows[rowB].y), // adj689b
-      })
+      if (!(sp.wrap && suppressWrapRight.has(sp))) {
+        pages[rows[rowB].page].slurs.push({
+          x1: r1(xStartB),
+          x2: sx2,
+          y: r1(Math.max(spanSlurY(b, rowB, xStartB, sx2, raise), voltaFloorY(rowB) ?? -Infinity)),
+          depth: sp.depth,
+          style: crossRowStyle,
+          tupletCount: sp.tuplet ? noteCount : undefined,
+          half: 'r', // 右半部：从行首最高点到最低处，左侧开口
+          row: rowB, // adj689：右半部画在终点行
+          rowTop: r1(rows[rowB].y), // adj689b
+        })
+      }
     }
   }
 
