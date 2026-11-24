@@ -2251,6 +2251,22 @@ export function layoutScore(
     prevRowEndLine = null
     const leadingEmpty = row.start < row.end && segs[row.start].notes.length === 0 ? 1 : 0
     /**
+     * adj1324：行首隐藏线带裸起备注时，把备注宽直接算进起始 x。
+     * 空间优先路径的“行首空 seg”原先只跳过、不推进 `curX`，所以第一行的 `p:5/4`
+     * 不占宽；这里统一用 `leadExtra` 推进，并让行首线自身不再重复加 meter gap。
+     */
+    const leadSegBar = leadingEmpty === 1 ? segs[row.start].bar : null
+    /** 行首 barline 被切在 row 之前（行首空 seg 不属于本行）时，它仍决定本行第一音的起始 x */
+    const leadOutsideBar =
+      leadSegBar === null && row.start > 0 && segs[row.start - 1].notes.length === 0 ? segs[row.start - 1].bar : null
+    const leadAnnoBar = leadSegBar ?? leadOutsideBar
+    const leadExtra =
+      leadAnnoBar?.type === '|/'
+        ? (leadAnnoBar.comment !== undefined
+            ? Math.max(meterGapRight(leadAnnoBar.comment, m.noteSize) ?? 0, Math.round(m.noteSize * 2.6))
+            : 0) + (leadAnnoBar.keyChange !== undefined ? Math.round(m.noteSize * 3) : 0)
+        : 0
+    /**
      * adj967d（**用户口径**："**统一**将放在行首的序号放在上一行的行末" —— 用户实测里还留在行首的那一档）：
      * 本行第一个"算作小节"的 seg。行内埋点用它判断"要标的那一格是不是**行首那一格**"：
      * 典型写法是 Q 行**以小节线开头**（`Q: |/&hs 2' …`、`Q: | 1 2 …`）⇒ 解析出一个"行首空 seg"，
@@ -2405,18 +2421,37 @@ export function layoutScore(
       // adj396：尾部倚音占位计入本体宽和（排在增时线/附点之后，总量与拆分前一致）
       durBodySum += n.noteBodyW + (n.hasDot ? n.dotBodyW : 0) + n.augCount * augBodyW(m.noteSize) + n.grTailW
     }
-    let nonDurPad = 0
+    let nonDurPad = leadOutsideBar !== null ? leadExtra : 0
+    if (
+      leadSegBar !== null &&
+      leadSegBar.type === '|/' &&
+      (leadSegBar.comment !== undefined || leadSegBar.keyChange !== undefined)
+    ) {
+      nonDurPad += leadExtra
+    }
     const bp = barlinePad(m.noteSize)
     /** adj421：每小节的小节线占位（线宽 + 两侧净间距）——槽宽判定要用，与预算同一份值 */
     const barOuter: number[] = new Array(segs.length).fill(0)
     for (const bk of barList) {
+      // 行首隐藏线上裸起备注的占宽已由 `leadExtra` 统一计入 nonDurPad，
+      // 这里不再重复加 `meterGap` / `keyGap`。
+      if (
+        bk.barIdx === row.start &&
+        leadingEmpty === 1 &&
+        bk.bar.type === '|/' &&
+        (bk.bar.comment !== undefined || bk.bar.keyChange !== undefined)
+      ) {
+        barOuter[bk.barIdx] = 0
+        continue
+      }
       // adj314：预算与放置一致——小节线占位 = 线自身宽 + 两侧净间距 barlinePad(noteSize)。
       // 之前用 barlineSpace(含固定 +8 空隙) / 0.5×音符宽 做预算，高估占位→ W 被挤小→ 拍内音符过密。
       const lineW = barlineTotalW(bk.bar.type)
       // adj398：带临时节拍分数的小节线，右侧间距取 max(barlinePad, 分数占位)——与放置处 gapR 同源；
       // 无分数时保持 lineW + 2×barlinePad 原值不变（既有排版零影响）
       const meterGap = meterGapRight(bk.bar.comment, m.noteSize)
-      const outer = lineW + bp + Math.max(bp, meterGap ?? bp)
+      const keyGap = bk.bar.keyChange !== undefined ? Math.round(m.noteSize * 3) : 0
+      const outer = lineW + bp + Math.max(bp, meterGap ?? bp, keyGap)
       barOuter[bk.barIdx] = outer
       nonDurPad += outer
     }
@@ -2777,7 +2812,7 @@ export function layoutScore(
     }
 
     // ---- 放置 ----
-    let curX = config.margin_left
+    let curX = config.margin_left + (leadOutsideBar !== null ? leadExtra : 0)
     let barCursor = 0
     let noteCursor = 0
     /**
@@ -2901,8 +2936,13 @@ export function layoutScore(
         // adj357：临时节拍（|"P:2/4"）在小节线右侧画分数——右侧占位须含「分数半宽×2 + 2×s 起始 + 2px 末距」，
         // 空间优先路径原用固定 barGapSide（不含分数宽），导致分数压到下一小节音符；此处补足。
         // adj398：该间距同时计入上方 nonDurPad 预算（同源函数 meterGapRight），否则行内容右溢。
-        const meterGap = zeroBar ? null : meterGapRight(bk.bar.comment, m.noteSize)
+        const isLeadAnnoBar =
+          b === row.start && leadingEmpty === 1 && zeroBar &&
+          (bk.bar.comment !== undefined || bk.bar.keyChange !== undefined)
+        const meterGap = isLeadAnnoBar ? null : meterGapRight(bk.bar.comment, m.noteSize)
         if (meterGap != null) gapR = Math.max(gapR, meterGap)
+        if (isLeadAnnoBar) gapR = Math.max(gapR, leadExtra)
+        if (zeroBar && bk.bar.keyChange !== undefined && !isLeadAnnoBar) gapR = Math.max(gapR, Math.round(m.noteSize * 3))
         // adj314：小节线占位用「线自身宽 + 两侧动态间距」，不再叠加 barlineSpace 固定 +8 空隙——
         // 否则一侧间距被撑到 ~8.5px，超过半个音符宽（4.03px）导致小节线间距过大。
         // 行首小节线（该侧无音符）：线左缘贴边（用线自身半宽）。

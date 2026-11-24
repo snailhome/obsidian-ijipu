@@ -235,6 +235,23 @@ function applyLeading(
 
   // 非首行：有边界就并到上一行末；没有边界就什么都不加。
   // adj1324：拍号/转调（`p:` / `d:`）作用于下一小节 ⇒ 备注搬到当前行行首，不留在上一行末。
+  // adj1325（用户 2026-11-24）：**上一行末**那条小节线上的 `p:` / `d:` 同样作用于下一小节，
+  // 也要搬到本行行首裸起 —— 否则预览里它挂在上一行末尾，看着像"从上一行就换了拍号"。
+  if (prev) {
+    const last = prev.tokens[prev.tokens.length - 1]
+    if (last && last.kind === 'barline' && hasMeasureChange(last)) {
+      const carried: BarlineTok = { kind: 'barline', type: '|/', pos: last.pos, raw: '|/', bareAnnotation: true }
+      if (last.comment !== undefined) {
+        carried.comment = last.comment
+        delete last.comment
+      }
+      if (last.keyChange !== undefined) {
+        carried.keyChange = last.keyChange
+        delete last.keyChange
+      }
+      music.tokens = [carried, ...music.tokens]
+    }
+  }
   const carries: BarlineTok[] = []
   for (const b of boundaries) {
     let carried: BarlineTok | null = null
