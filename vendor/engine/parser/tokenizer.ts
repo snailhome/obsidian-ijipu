@@ -706,6 +706,8 @@ export function tokenizeMusicLine(
       {
         let guard = 0
         while (guard++ < 6) {
+          // adj1324：小节线附加内容之间允许空格（`|["1." "p:4/4"` 这种顺序写错时也要能认出来）
+          while (j < n && (content[j] === ' ' || content[j] === '\t')) j++
           if (content[j] === '[') {
             // 跳房子开始（adj26：修饰 = + 抬高 / 不封闭 / 引号注释）
             const mod = parseVoltaMods(j + 1)
