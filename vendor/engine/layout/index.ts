@@ -247,7 +247,7 @@ const barlineSpace = (gap: number, type: BarlineType = '|', comment?: string, no
   // adj86：临时节拍占位 = 分数半宽 + 2px 间距（分数从线右缘起画，再留 2px 与下一音符隔开）
   if (comment) {
     const halfW = meterCommentHalfW(comment, noteSize)
-    if (halfW !== null) return Math.max(base, barlineTotalW(type) / 2 + halfW + 2 + 8)
+    if (halfW !== null) return Math.max(base, barlineTotalW(type) / 2 + halfW + 2)
   }
   return base
 }
@@ -261,8 +261,13 @@ const barlineSpace = (gap: number, type: BarlineType = '|', comment?: string, no
  */
 function meterGapRight(comment: string | undefined, noteSize: number): number | null {
   const halfW = comment ? meterCommentHalfW(comment, noteSize) : null
-  // adj1324：分数本身占宽之外再留 8px 安全边，避免紧接的 `&zkh` 左括号压到拍号
-  return halfW === null ? null : 2 * noteScaleOf(noteSize) + 2 * halfW + 2 + 8
+  return halfW === null ? null : 2 * noteScaleOf(noteSize) + 2 * halfW + 2
+}
+
+/** adj1324：拍号后紧接 `&zkh` 时，额外让出左括号宽度（普通音符不额外留） */
+function zkhExtraAfterBar(segs: BarSeg[], barIdx: number, noteSize: number): number {
+  const first = segs[barIdx + 1]?.notes[0]
+  return first?.kind === 'bracket' && first.code === 'zkh' && first.dir === 'open' ? markBodyW('zkh', noteSize) + 4 : 0
 }
 
 /** 小节内每拍信息（adj106：倚音占位按拍记录，不再整小节最大 extra 应用到所有拍——会高估行宽导致早断行） */
@@ -2260,10 +2265,19 @@ export function layoutScore(
     const leadOutsideBar =
       leadSegBar === null && row.start > 0 && segs[row.start - 1].notes.length === 0 ? segs[row.start - 1].bar : null
     const leadAnnoBar = leadSegBar ?? leadOutsideBar
+    const leadNextIdx = leadSegBar !== null ? row.start + 1 : leadOutsideBar !== null ? row.start : -1
+    const leadFirst = leadNextIdx >= 0 ? segs[leadNextIdx]?.notes[0] : undefined
+    const leadZkhExtra =
+      leadFirst?.kind === 'bracket' && leadFirst.code === 'zkh' && leadFirst.dir === 'open'
+        ? markBodyW('zkh', m.noteSize) + 4
+        : 0
     const leadExtra =
       leadAnnoBar?.type === '|/'
         ? leadAnnoBar.comment !== undefined
-          ? Math.max(meterGapRight(leadAnnoBar.comment, m.noteSize) ?? 0, Math.round(m.noteSize * 2.6))
+          ? Math.max(
+              (meterGapRight(leadAnnoBar.comment, m.noteSize) ?? 0) + leadZkhExtra,
+              Math.round(m.noteSize * 2),
+            )
           : 0
         : 0
     /**
@@ -2450,7 +2464,8 @@ export function layoutScore(
       // adj398：带临时节拍分数的小节线，右侧间距取 max(barlinePad, 分数占位)——与放置处 gapR 同源；
       // 无分数时保持 lineW + 2×barlinePad 原值不变（既有排版零影响）
       const meterGap = meterGapRight(bk.bar.comment, m.noteSize)
-      const outer = lineW + bp + Math.max(bp, meterGap ?? bp)
+      const zkhExtra = zkhExtraAfterBar(segs, bk.barIdx, m.noteSize)
+      const outer = lineW + bp + Math.max(bp, (meterGap ?? bp) + zkhExtra)
       barOuter[bk.barIdx] = outer
       nonDurPad += outer
     }
@@ -2899,6 +2914,22 @@ export function layoutScore(
             // adj294：&zkh/&ykh 独立括号标记——占宽、按源码序列序插位、不影响音符
             // adj375：&hx 呼吸记号同样走这条独立标记通道（宽度按 code）
             const bw = markBodyW(tok.code, m.noteSize)
+            /**
+             * adj1324：拍号后紧跟 `&zkh` 时，布局的 meter gap 在少数行没有落到
+             * 括号起点（跨组/行首空 seg）。这里以“当前行最后一根 p 小节线”为准，
+             * 把左括号强制推过拍号文字 + 括号宽 + 4px。
+             */
+            if (tok.code === 'zkh' && tok.dir === 'open') {
+              const prevBar = pages[pageIndex].barlines[pages[pageIndex].barlines.length - 1]
+              if (
+                prevBar?.comment !== undefined &&
+                Math.abs(prevBar.yTop - yTop) < m.noteSize * 2 &&
+                /p\s*:/i.test(prevBar.comment)
+              ) {
+                const need = prevBar.x + (meterGapRight(prevBar.comment, m.noteSize) ?? 0) + bw + 4
+                if (curX < need) curX = need
+              }
+            }
             page.brackets.push({
               code: tok.code,
               dir: tok.dir,
@@ -2936,11 +2967,18 @@ export function layoutScore(
         // 空间优先路径原用固定 barGapSide（不含分数宽），导致分数压到下一小节音符；此处补足。
         // adj398：该间距同时计入上方 nonDurPad 预算（同源函数 meterGapRight），否则行内容右溢。
         const isLeadAnnoBar =
-          b === row.start && leadingEmpty === 1 && zeroBar &&
+          b === row.start && zeroBar &&
           (bk.bar.comment !== undefined || bk.bar.keyChange !== undefined)
         const meterGap = isLeadAnnoBar ? null : meterGapRight(bk.bar.comment, m.noteSize)
-        if (meterGap != null) gapR = Math.max(gapR, meterGap)
-        if (isLeadAnnoBar) gapR = Math.max(gapR, leadExtra)
+        if (meterGap != null) gapR = Math.max(gapR, meterGap + zkhExtraAfterBar(segs, b, m.noteSize))
+        if (isLeadAnnoBar) {
+          const base = bk.bar.comment !== undefined ? (meterGapRight(bk.bar.comment, m.noteSize) ?? 0) : 0
+          gapR = Math.max(
+            gapR,
+            base + zkhExtraAfterBar(segs, b, m.noteSize),
+            bk.bar.comment !== undefined ? Math.round(m.noteSize * 2) : 0,
+          )
+        }
         // adj314：小节线占位用「线自身宽 + 两侧动态间距」，不再叠加 barlineSpace 固定 +8 空隙——
         // 否则一侧间距被撑到 ~8.5px，超过半个音符宽（4.03px）导致小节线间距过大。
         // 行首小节线（该侧无音符）：线左缘贴边（用线自身半宽）。
@@ -4813,6 +4851,7 @@ export function layoutScore(
    * 容不下时**移到后字的上/下位置**」。放在最末：避让需要知道同一行全部歌词的最终 x。
    */
   keepBarlinesOutOfInk(pages, config)
+  fixMeterZkhSpacing(pages, config)
   anchorKeyChangeLabels(pages, config)
   avoidLyricComments(pages, config)
 
@@ -6793,6 +6832,39 @@ function anchorKeyChangeLabels(pages: ScorePage[], config: PageConfig): void {
       if (note === undefined) continue
       bar.keyChangeAnchorX = r1(note.inkLeftX ?? note.x)
       bar.keyChangeAnchorY = r1(note.y - config.note_size * 1.7)
+    }
+  }
+}
+
+/**
+ * adj1324：拍号后紧接 `&zkh` 的最终间距兜底（布局先按临时 x 放括号，最后一行拉伸后
+ * 拍号所在小节线会右移，括号却留在旧位置）。这里按最终小节线重算：
+ * 括号至少在线右缘 + 拍号宽 + 括号宽 + 4px；不够就把括号及其后的本行内容整体右移。
+ */
+function fixMeterZkhSpacing(pages: ScorePage[], config: PageConfig): void {
+  for (const page of pages) {
+    for (const bar of page.barlines) {
+      if (bar.comment === undefined || !/p\s*:/i.test(bar.comment)) continue
+      const zkh = page.brackets
+        .filter((b) => b.code === 'zkh' && b.dir === 'open' && b.yTop > bar.yTop - 2 && b.yTop < bar.yBottom + 2 && b.x > bar.x)
+        .sort((a, b) => a.x - b.x)[0]
+      if (zkh === undefined) continue
+      const need = bar.x + (meterGapRight(bar.comment, config.note_size) ?? 0) + zkh.width + 4
+      const dx = need - zkh.x
+      if (dx <= 0.5) continue
+      const sameRow = (y: number): boolean => y > bar.yTop - 2 && y < bar.yBottom + 2
+      for (const n of page.notes) {
+        if (!sameRow(n.y) || n.x < zkh.x - 0.1) continue
+        n.x = Math.round((n.x + dx) * 10) / 10
+        if (n.rightX !== undefined) n.rightX = Math.round((n.rightX + dx) * 10) / 10
+        if (n.inkLeftX !== undefined) n.inkLeftX = Math.round((n.inkLeftX + dx) * 10) / 10
+        if (n.inkRightX !== undefined) n.inkRightX = Math.round((n.inkRightX + dx) * 10) / 10
+        if (n.segments !== undefined) for (const s of n.segments) s.x = Math.round((s.x + dx) * 10) / 10
+      }
+      for (const l of page.lyrics) if (sameRow(l.y) && l.x >= zkh.x - 0.1) l.x = Math.round((l.x + dx) * 10) / 10
+      for (const b of page.brackets) if (sameRow(b.yTop) && b.x >= zkh.x - 0.1) b.x = Math.round((b.x + dx) * 10) / 10
+      for (const line of page.barlines) if (sameRow(line.yTop) && line.x >= zkh.x - 0.1) line.x = Math.round((line.x + dx) * 10) / 10
+      for (const bn of page.barNumbers) if (sameRow(bn.yBarBottom) && bn.x >= zkh.x - 0.1) bn.x = Math.round((bn.x + dx) * 10) / 10
     }
   }
 }
