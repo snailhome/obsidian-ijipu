@@ -1947,7 +1947,7 @@ export function layoutScore(
      * adj940：本行各小节的**小节线实位**（按行内相对下标）——放置完交给下一行当对齐基准
      * （与空间优先同一份量；`frag` 行在上面已 `return`，不参与）。
      */
-    const durRowLineX: (number | undefined)[] = new Array(row.end - row.start).fill(undefined)
+    const durRowLineX: (number | undefined)[] = new Array(Math.max(0, row.end - row.start - leadingEmpty)).fill(undefined)
     let segIdx = 0
     // adj47：跨行跳房子起点——上一行末的 voltaStart 小节线画在本行行首（贴左边距）
     if (leadVoltaBar) {
@@ -2125,7 +2125,8 @@ export function layoutScore(
             page.width - config.margin_right - halfW - meterGapD,
           )
           // adj940：把**实际**线位记下来（未取整原值）——下一行按它反解，见 `prevRowLineX`
-          durRowLineX[b - row.start] = lineX
+          const lineIdx = b - row.start - leadingEmpty
+        if (lineIdx >= 0) durRowLineX[lineIdx] = lineX
           const bid: LayoutId = { page: pageIndex, voice, group: groupIndex, index: barCounter }
           // adj625：这根是 seg b 的**收尾小节线**，也就是「下一个算作小节的 seg」的**左侧小节线**——
           // 若那个小节在本行内（序号要画在左侧小节线底下），就在这里埋点；
@@ -2818,7 +2819,7 @@ export function layoutScore(
      * 交给下一行当对齐基准。记的是**实际算出来的 `lineX`**（不是"内容宽 + 假设偏移"），
      * 所以本行的线组是什么类型、间距被怎么调过，下一行都不会错。
      */
-    const rowLineX: (number | undefined)[] = new Array(row.end - row.start).fill(undefined)
+    const rowLineX: (number | undefined)[] = new Array(Math.max(0, row.end - row.start - leadingEmpty)).fill(undefined)
     for (let b = row.start; b < row.end; b++) {
       const seg = segs[b]
       const isEmptyLead = leadingEmpty === 1 && b === row.start
@@ -2983,7 +2984,8 @@ export function layoutScore(
         })
         barCounter++
         // adj940：把**实际**线位记下来（未取整的原值 —— 下一行按它反解，取整会造成 0.05px 漂移）
-        rowLineX[b - row.start] = lineX
+        const lineIdx = b - row.start - leadingEmpty
+        if (lineIdx >= 0) rowLineX[lineIdx] = lineX
         curX += gapL + barW + gapR
         barCursor++
       }
