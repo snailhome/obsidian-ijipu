@@ -2729,6 +2729,8 @@ export function layoutScore(
       keyAt: number = keySemitone,
       /** adj732：本音最左墨迹（= 数字左缘 − 左伸量；段内块的 `blockX`）——见 `PlacedToken.inkLeftX` */
       inkLeftX?: number,
+      /** adj1324：本音最右墨迹（含附点/增时线/后倚音/`&hx` 滑音）——流线谱小节线锚点用 */
+      inkRightX?: number,
     ) => {
       const dur = tokenDuration(t)
       const id: LayoutId = { page: pageIndex, voice, group: groupIndex, index: noteCounter }
@@ -2740,6 +2742,7 @@ export function layoutScore(
         width: r1(noteW),
         rightX: r1(rightX),
         ...(inkLeftX !== undefined ? { inkLeftX: r1(inkLeftX) } : {}),
+        ...(inkRightX !== undefined ? { inkRightX: r1(inkRightX) } : {}),
         duration: dur,
         beatPos,
         barIndex,
@@ -2839,7 +2842,13 @@ export function layoutScore(
             if (n.hasHx) xCursor += hxBodyW(m.noteSize)
             // 段左缘 blockX；数字左缘右移 变音角标(accW)+前倚音(leftExt)，给角标/倚音腾位
             const digitLeft = blockX + n.accW + n.leftExt
-            placeNoteSpace(n.t, segments, digitLeft, actualW, rightX, n.slotPos, n.beatPos, b, measureIndexOfSeg[b] ?? 0, keysAt[b] ?? keySemitone, blockX)
+            /**
+             * adj1324：最右墨迹。用户口径：倚音、滑音等修饰符的墨迹算在该音符里，
+             * 流线谱小节线不能从这些记号中间切过去。
+             */
+            const hasTailInk = n.hasDot || n.augCount > 0 || n.grTailW > 0
+            const inkRight = n.hasHx ? xCursor : hasTailInk ? rightX : digitLeft + digitSlotW(m.noteSize)
+            placeNoteSpace(n.t, segments, digitLeft, actualW, rightX, n.slotPos, n.beatPos, b, measureIndexOfSeg[b] ?? 0, keysAt[b] ?? keySemitone, blockX, inkRight)
             // adj394：记录该音符的停靠点（数字槽中心 / 末时值元素右缘；rightX 已含增时线与附点占宽）
             dynAnchors.push({ center: r1(digitLeft) + halfDigitW(m.noteSize), end: r1(rightX) })
             curX = xCursor
@@ -2856,6 +2865,14 @@ export function layoutScore(
               voice,
               group: groupIndex,
             })
+            /**
+             * adj1324：`&hx`（滑音）和 `&ykh`（右括号）在前一音符的**右侧**，
+             * 墨迹应算进前一音符的最右墨迹；否则流线谱小节线会从滑音/右括号中间切过去。
+             */
+            if (tok.code === 'hx' || tok.dir === 'close') {
+              const prevNote = pages[pageIndex].notes[pages[pageIndex].notes.length - 1]
+              if (prevNote !== undefined) prevNote.inkRightX = r1(curX + bw)
+            }
             curX += bw
           }
         }

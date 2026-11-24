@@ -45,6 +45,7 @@ import type {
 } from '../types'
 import type { PlaySequence } from '../playback/sequence'
 import { BAR_NUMBER_BOTTOM_GAP, barNumberBoxH } from '../layout/spacing'
+import { digitSlotW } from '../layout/spaceLayout'
 import { extractMeasures, type SrcMeasure } from './measures'
 import type { LinearStrip, LinearStripOptions, StripNote, StripOnset, StripRun } from './types'
 
@@ -233,6 +234,7 @@ function cloneNote(
   }
   if (n.rightX !== undefined) out.rightX = mapX(n.rightX)
   if (n.inkLeftX !== undefined) out.inkLeftX = mapX(n.inkLeftX)
+  if (n.inkRightX !== undefined) out.inkRightX = mapX(n.inkRightX)
   if (n.segments !== undefined) {
     out.segments = n.segments.map((s) => ({
       ...s,
@@ -241,6 +243,59 @@ function cloneNote(
     }))
   }
   return out
+}
+
+/**
+ * adj1324：`barlineAnchor:'gap'`——把小节线放到「前一音最右墨迹」与「后一音最左墨迹」的中点。
+ *
+ * 用户口径：**倚音、滑音等修饰符的墨迹算在该音符里**。所以这里必须用
+ * `inkRightX` / `inkLeftX`，不能用数字左缘/槽宽；否则小节线会从后倚音或 `&hx` 中间切过去。
+ * 小节序号跟着最近的那根旧线走，保持挂在线正下方。
+ */
+function anchorBarlinesInGaps(page: ScorePage, noteSize: number): void {
+  type InkItem = { x: number; left: number; right: number }
+  const noteItems: InkItem[] = page.notes
+    .filter((n) => n.token.kind !== 'rest')
+    .map((n) => {
+      const left = n.inkLeftX ?? n.x
+      const hasTail = n.token.dots > 0 || n.token.augmentCount > 0
+      const right = n.inkRightX ?? (hasTail ? n.x + n.width : n.x + Math.min(n.width, digitSlotW(noteSize)))
+      return { x: n.x, left, right }
+    })
+  /**
+   * 独立的 `&hx`（滑音）、`&zkh`/`&ykh` 括号也是“音符附近的墨迹”。
+   * 不并进前后音的话，小节线仍可能落在滑音箭头上。
+   */
+  const bracketItems: InkItem[] = page.brackets.map((b) => ({
+    x: b.x,
+    left: b.x - b.width / 2,
+    right: b.x + b.width / 2,
+  }))
+  const items = [...noteItems, ...bracketItems].sort((a, b) => a.x - b.x)
+
+  const barPositions = page.barlines.map((line) => ({ line, oldX: line.x }))
+  for (const line of page.barlines) {
+    let prev: InkItem | null = null
+    let next: InkItem | null = null
+    for (const n of items) {
+      if (n.x < line.x - 0.5) prev = n
+      else {
+        next = n
+        break
+      }
+    }
+    if (prev !== null && next !== null && next.left > prev.right) {
+      line.x = Math.round(((prev.right + next.left) / 2) * 10) / 10
+    }
+  }
+  for (const bn of page.barNumbers) {
+    let best: { line: number; oldX: number; distance: number } | null = null
+    for (const p of barPositions) {
+      const distance = Math.abs(p.oldX - bn.x)
+      if (best === null || distance < best.distance) best = { line: p.line.x, oldX: p.oldX, distance }
+    }
+    if (best !== null) bn.x = best.line
+  }
 }
 
 /** 一条小节线（条带坐标） */
@@ -596,9 +651,11 @@ export function buildLinearStrip(
   for (const v of verseLines.values()) lyricLines = Math.max(lyricLines, v + 1)
 
   const onsets = onsetsOf(notes)
+  const outPage: ScorePage = { ...page, width: Math.max(1, cursor), height }
+  if (opts.barlineAnchor === 'gap') anchorBarlinesInGaps(outPage, noteSize)
 
   return {
-    page: { ...page, width: Math.max(1, cursor), height },
+    page: outPage,
     width: Math.max(1, cursor),
     height,
     baselineY,

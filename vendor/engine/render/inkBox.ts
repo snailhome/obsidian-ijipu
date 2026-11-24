@@ -80,7 +80,7 @@ function addNoteInk(a: Acc, n: PlacedToken, ns: number): void {
   const left = n.inkLeftX ?? n.x
   /** 有附点/增时线 ⇒ 墨迹延伸到**块右端**；否则只到"数字槽宽"（AGENTS §五.9） */
   const hasTail = t.dots > 0 || t.augmentCount > 0
-  const right = hasTail ? n.x + n.width : n.x + Math.min(n.width, digitSlotW(ns))
+  const right = n.inkRightX ?? (hasTail ? n.x + n.width : n.x + Math.min(n.width, digitSlotW(ns)))
   const oct = t.kind === 'note' ? t.octaveShift : 0
   const dc = t.diminishCount
   let top = digitTopY(n.y, ns)

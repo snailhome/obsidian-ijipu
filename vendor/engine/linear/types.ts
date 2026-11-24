@@ -162,4 +162,18 @@ export interface LinearStripOptions {
    * 只在需要"按拍等宽滚动"时用，正常出片不要开（用户 2026-11-09 明确要"别重算间距"）。
    */
   timedStretch?: boolean
+  /**
+   * adj1324：生成模式。目前只支持 `play-order`（默认）：
+   * 按播放顺序展开反复/跳跃，谱带上不画反复/跳跃记号。
+   */
+  mode?: 'play-order'
+  /**
+   * adj1324：小节线横向锚点。
+   * - `measure-start`（默认）：小节线画在小节起点（历史行为）；
+   * - `gap`：画在「前一音最右墨迹」与「后一音最左墨迹」的中点。
+   *
+   * 倚音/滑音等修饰符的墨迹计入音符本体（`inkLeftX` / `inkRightX`），
+   * 所以 `gap` 不会从小节边界处的倚音/滑音中间切过去。
+   */
+  barlineAnchor?: 'measure-start' | 'gap'
 }
