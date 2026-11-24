@@ -247,7 +247,7 @@ const barlineSpace = (gap: number, type: BarlineType = '|', comment?: string, no
   // adj86：临时节拍占位 = 分数半宽 + 2px 间距（分数从线右缘起画，再留 2px 与下一音符隔开）
   if (comment) {
     const halfW = meterCommentHalfW(comment, noteSize)
-    if (halfW !== null) return Math.max(base, barlineTotalW(type) / 2 + halfW + 2)
+    if (halfW !== null) return Math.max(base, barlineTotalW(type) / 2 + halfW + 2 + 8)
   }
   return base
 }
@@ -261,7 +261,8 @@ const barlineSpace = (gap: number, type: BarlineType = '|', comment?: string, no
  */
 function meterGapRight(comment: string | undefined, noteSize: number): number | null {
   const halfW = comment ? meterCommentHalfW(comment, noteSize) : null
-  return halfW === null ? null : 2 * noteScaleOf(noteSize) + 2 * halfW + 2
+  // adj1324：分数本身占宽之外再留 8px 安全边，避免紧接的 `&zkh` 左括号压到拍号
+  return halfW === null ? null : 2 * noteScaleOf(noteSize) + 2 * halfW + 2 + 8
 }
 
 /** 小节内每拍信息（adj106：倚音占位按拍记录，不再整小节最大 extra 应用到所有拍——会高估行宽导致早断行） */
@@ -6736,7 +6737,6 @@ export function keepBarlinesOutOfInk(pages: ScorePage[], config: PageConfig): vo
         }
       }
     }
-    // 只针对“线落进增时线/附点/后倚音的墨迹”这一种冲突；普通音旁的线位不动。
     // 留 4px 视觉间隙：线宽和增时线端帽会让“贴着但不交”看起来仍像压住。
     const clear = 4
     const overlaps = prev !== undefined && prev.tail && prev.right + half + clear > line.x
