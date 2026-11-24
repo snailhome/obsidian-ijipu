@@ -1409,8 +1409,8 @@ function renderBarline(bar: PlacedBarline, noteSize = 18, noteFontFamily = FONT_
   if (bar.keyChangeLabel) {
     const fs = Math.max(8, Math.round(9 * s))
     const kcRaise = ((bar.keyChange?.plus ?? 0) - (bar.keyChange?.minus ?? 0)) * NOTE_COMMENT_RAISE
-    const kcX = x + barRightEdge + 2 * s
-    const kcY = yTop - 3 * s - kcRaise
+    const kcX = bar.keyChangeAnchorX ?? x + barRightEdge + 2 * s
+    const kcY = (bar.keyChangeAnchorY ?? yTop - 3 * s) - kcRaise
     parts.push(
       ...drawKeyName({
         x: r1n(kcX),

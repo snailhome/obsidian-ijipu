@@ -4814,6 +4814,7 @@ export function layoutScore(
    * 容不下时**移到后字的上/下位置**」。放在最末：避让需要知道同一行全部歌词的最终 x。
    */
   keepBarlinesOutOfInk(pages, config)
+  anchorKeyChangeLabels(pages, config)
   avoidLyricComments(pages, config)
 
   /**
@@ -6763,6 +6764,36 @@ export function keepBarlinesOutOfInk(pages: ScorePage[], config: PageConfig): vo
       }
     }
     if (best !== null && bestLine !== null && moved.has(bestLine)) bn.x = best.line
+  }
+}
+
+/**
+ * adj1324：`d:` 的显示锚点 = 后面**第一个可发声元素**。
+ * 转调语义仍从下一小节起算（休止符没有音高，听感一致）；但谱面不能把 `转1=D`
+ * 挂在小节线上——尤其是下一小节先有休止、或跨行时，用户要求标在那个音符上方。
+ */
+function anchorKeyChangeLabels(pages: ScorePage[], config: PageConfig): void {
+  for (let pi = 0; pi < pages.length; pi++) {
+    const page = pages[pi]
+    for (const bar of page.barlines) {
+      if (!bar.keyChangeLabel) continue
+      const playable = page.notes.filter((n) => n.token.kind === 'note')
+      const sameRow = playable
+        .filter((n) => n.y > bar.yTop - 2 && n.y < bar.yBottom + 2 && n.x > bar.x - 0.5)
+        .sort((a, b) => a.x - b.x || a.y - b.y)
+      const nextRows = playable
+        .filter((n) => n.y > bar.yBottom - 1)
+        .sort((a, b) => a.y - b.y || a.x - b.x)
+      let note = sameRow[0] ?? nextRows[0]
+      if (note === undefined && pi + 1 < pages.length) {
+        note = pages[pi + 1].notes
+          .filter((n) => n.token.kind === 'note')
+          .sort((a, b) => a.y - b.y || a.x - b.x)[0]
+      }
+      if (note === undefined) continue
+      bar.keyChangeAnchorX = r1(note.inkLeftX ?? note.x)
+      bar.keyChangeAnchorY = r1(note.y - config.note_size * 1.7)
+    }
   }
 }
 

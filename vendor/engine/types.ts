@@ -756,6 +756,12 @@ export interface PlacedBarline {
    * 字母右移 0.9×角标宽让位）——只给一个拼好的字符串就没法复用同一段画法了。
    */
   keyChangeName?: string
+  /**
+   * adj1324：转调记号的显示锚点（第一个可发声元素）。
+   * 缺省 = 仍画在小节线右上方；有值 = 画在该音符上方。
+   */
+  keyChangeAnchorX?: number
+  keyChangeAnchorY?: number
   /** 小节线中心 x */
   x: number
   /** 行顶 y */
