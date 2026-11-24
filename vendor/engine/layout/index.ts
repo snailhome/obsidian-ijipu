@@ -6745,7 +6745,9 @@ export function keepBarlinesOutOfInk(pages: ScorePage[], config: PageConfig): vo
     const hi = next !== undefined ? next.left - half - clear : page.width - config.margin_right
     if (next === undefined) line.x = Math.round(lo * 10) / 10
     else if (hi > lo) line.x = Math.round(((lo + hi) / 2) * 10) / 10
-    else line.x = Math.round(hi * 10) / 10
+    // 前后音太挤、放不下完整 4px 时：优先满足前一音（不压增时线），
+    // 下一音只保证“线宽不相交”，不再强留 4px。
+    else line.x = Math.round(Math.max(lo, Math.min(next.left - half - 0.5, page.width - config.margin_right)) * 10) / 10
     line.x = Math.min(Math.max(line.x, config.margin_left), page.width - config.margin_right)
     moved.add(line)
   }
