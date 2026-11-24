@@ -819,13 +819,6 @@ function mergedTokensOf(units: UnitInfo[], voice: number): MusicToken[] {
   return merged
 }
 
-interface LyricSource {
-  /** 这条 C 行在合并后整段里的起始槽位 */
-  startSlot: number
-  /** 这条 C 行自己的槽位（缺的已补 `@`） */
-  slots: string[]
-}
-
 /**
  * 重排一个“同声部集合”的连续段：**先把段内所有 Q 行合并成一条连续谱**，
  * 再按规则重新断行。这是用户 2026-11-23 明确要求的“整体合并再拆分”，
@@ -835,7 +828,7 @@ function reflowRun(units: UnitInfo[], opts: ReflowOptions, cfg: PageConfig): Uni
   const first = units[0]
   const voices = first.groups.map((g) => g.music.voice)
   const parts: VoicePart[] = []
-  const lyricSources = new Map<number, LyricSource[]>()
+  const verseSlots = new Map<number, string[][]>()
   const voiceNames = new Map<number, string | undefined>()
 
   for (const voice of voices) {
@@ -843,17 +836,17 @@ function reflowRun(units: UnitInfo[], opts: ReflowOptions, cfg: PageConfig): Uni
     const groups = units
       .map((u) => u.groups.find((g) => g.music.voice === voice))
       .filter((g): g is MusicGroup => g !== undefined)
-    const sources: LyricSource[] = []
-    let slotOffset = 0
+    // 一曲行一词行：按“词行序号”合并；缺这一词行的曲行补 `@`
+    const maxVerses = Math.max(0, ...groups.map((g) => g.lyrics.length))
+    const streams: string[][] = Array.from({ length: maxVerses }, () => [])
     for (const group of groups) {
       const slotCount = qTokensOf(group).filter(isDurational).length
-      for (const ly of group.lyrics) {
-        sources.push({ startSlot: slotOffset, slots: slotsOfLyricLine(ly, slotCount) })
+      for (let k = 0; k < maxVerses; k++) {
+        streams[k].push(...slotsOfLyricLine(group.lyrics[k], slotCount))
       }
-      slotOffset += slotCount
     }
     parts.push({ voice, tokens: merged, segs: splitBars(merged), lyrics: [] })
-    lyricSources.set(voice, sources)
+    verseSlots.set(voice, streams)
     voiceNames.set(voice, groups.find((g) => g.music.voiceName)?.music.voiceName)
   }
 
@@ -877,31 +870,18 @@ function reflowRun(units: UnitInfo[], opts: ReflowOptions, cfg: PageConfig): Uni
       const slots = slotAtByVoice.get(voice) ?? []
       const fromSlot = slots[from] ?? 0
       const toSlot = slots[to] ?? fromSlot
-      const sources = lyricSources.get(voice) ?? []
-      /**
-       * 不同源 C 行**保持不同行**：每条 C 行按自己在整段里的起始槽位补 `@`，
-       * 只取本行覆盖的那一段。这样房子 1 的“慢品”和房子 2 的“柴”不会接成一句。
-       */
-      const texts: string[] = []
-      for (const src of sources) {
-        const rowLen = Math.max(0, toSlot - fromSlot)
-        if (rowLen === 0 || src.slots.length === 0) continue
-        const arr = new Array<string>(rowLen).fill('@')
-        const off = src.startSlot - fromSlot
-        for (let i = 0; i < src.slots.length; i++) {
-          const at = off + i
-          if (at >= 0 && at < rowLen) arr[at] = src.slots[i]
-        }
-        const text = joinLyricSlots(arr)
-        if (text !== '') texts.push(text)
-      }
+      const streams = verseSlots.get(voice) ?? []
+      const texts = streams.map((stream) => joinLyricSlots(stream.slice(fromSlot, toSlot)))
       // 声部在这一行已经结束（缩声部之后没有音、也没有词）⇒ 不输出空 Q/C 行
-      if (piece.length === 0 && texts.length === 0) continue
+      if (piece.length === 0 && texts.every((t) => t === '')) continue
       const name = voiceNames.get(voice)
       const prefix = `Q${voice === 1 ? '' : voice}${name ? `"${name}"` : ''}:`
       out.push(piece.length === 0 ? prefix : `${prefix} ${serializeTokens(piece)}`)
-      for (const text of texts) {
-        out.push(`C${voice === 1 ? '' : voice}: ${text}`)
+      for (let k = 0; k < texts.length; k++) {
+        const text = texts[k]
+        // 单段词的空行不写；多段词必须逐行保留，否则“第几遍”会串
+        if (text === '' && streams.length === 1) continue
+        out.push(`C${voice === 1 ? '' : voice}:${text === '' ? '' : ` ${text}`}`)
       }
     }
   }
