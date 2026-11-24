@@ -739,9 +739,9 @@ function reflowUnit(unit: UnitInfo, opts: ReflowOptions, cfg: PageConfig): UnitR
       }
       for (const ly of group.lyrics) {
         const text = lyricPieceOf(ly, content(ly), fromSlot, toSlot)
-        // 只有一段词时，空段不写；多段词必须保留条数/顺序（否则“第几遍”会串）
-        if (text === '' && group.lyrics.length === 1) continue
-        out.push(`${lyricPrefixOf(ly)}${text === '' ? '' : ` ${text}`}`)
+        // 用户 2026-11-24：空 C 行（没有歌词）直接删除，不写空 `C:`
+        if (text === '') continue
+        out.push(`${lyricPrefixOf(ly)} ${text}`)
       }
     }
   }
@@ -879,9 +879,9 @@ function reflowRun(units: UnitInfo[], opts: ReflowOptions, cfg: PageConfig): Uni
       out.push(piece.length === 0 ? prefix : `${prefix} ${serializeTokens(piece)}`)
       for (let k = 0; k < texts.length; k++) {
         const text = texts[k]
-        // 单段词的空行不写；多段词必须逐行保留，否则“第几遍”会串
-        if (text === '' && streams.length === 1) continue
-        out.push(`C${voice === 1 ? '' : voice}:${text === '' ? '' : ` ${text}`}`)
+        // 用户 2026-11-24：空 C 行（没有歌词）直接删除，不写空 `C:`
+        if (text === '') continue
+        out.push(`C${voice === 1 ? '' : voice}: ${text}`)
       }
     }
   }
