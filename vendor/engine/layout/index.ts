@@ -790,34 +790,35 @@ function breakRows(segs: BarSeg[], availW: number, noteSize = 18, ink?: Accident
 }
 
 /**
+ * adj1324：空间优先模式下**一个小节的固定需求宽**——与 `breakRowsSpace()` 同一口径，
+ * 供重排（`reflow`）使用。此前重排借用了时值优先的 `segNeedW`，对“空间优先”的谱
+ * 会把 4 小节估得过宽，导致重排行数比原谱更多。
+ */
+export function measureSpaceWidth(seg: BarSeg, noteSize = 18, ink?: AccidentalInkMetrics): number {
+  let durSum = 0
+  for (const t of seg.notes) {
+    if (t.kind === 'note' || t.kind === 'rest' || t.kind === 'rhythm') {
+      const s = splitNoteDur(t)
+      const accW = t.kind === 'note' && t.accidental ? accidentalBodyW(noteSize, t.accidental, ink) : 0
+      const grW = t.kind === 'note' ? graceInlineW(t, noteSize) : 0
+      const grTailW = t.kind === 'note' ? graceTailW(t, noteSize) : 0
+      durSum += noteBodyW(noteSize, grW) + accW + (t.dots > 0 ? dotBodyW(noteSize) : 0) + s.augCount * augBodyW(noteSize) + grTailW
+    }
+  }
+  for (const t of seg.notes) {
+    if (t.kind === 'bracket') durSum += markBodyW(t.code, noteSize)
+  }
+  if (seg.bar) durSum += barlineSpace(0, seg.bar.type, seg.bar.comment, noteSize) + digitSlotW(noteSize)
+  return durSum
+}
+
+/**
  * adj288：空间优先模式的断行——按「带时值元素本体宽 + 非时值元素占位」的最小需求宽
  * 累计，超过页面有效宽则断行（对应「可分配宽 < 0 一定换行」）。
  * 不再用时值优先的拍级 need（会高估小节宽，导致过早断行）。超长小节首版不拆 frag。
  */
 function breakRowsSpace(segs: BarSeg[], availW: number, noteSize: number, ink?: AccidentalInkMetrics): LayoutRow[] {
-  const segNeed = segs.map((seg) => {
-    let durSum = 0
-    for (const t of seg.notes) {
-      if (t.kind === 'note' || t.kind === 'rest' || t.kind === 'rhythm') {
-        const s = splitNoteDur(t)
-        const accW = t.kind === 'note' && t.accidental ? accidentalBodyW(noteSize, t.accidental, ink) : 0
-        // adj396：带增时线/附点的后倚音占位排在时值元素之后（inline 与 tail 拆分，合计不变）
-        const grW = t.kind === 'note' ? graceInlineW(t, noteSize) : 0
-        const grTailW = t.kind === 'note' ? graceTailW(t, noteSize) : 0
-        durSum +=
-          noteBodyW(noteSize, grW) + accW + (t.dots > 0 ? dotBodyW(noteSize) : 0) + s.augCount * augBodyW(noteSize) + grTailW
-      }
-    }
-    // adj294/adj375：独立标记（&zkh/&ykh 括号、&hx 呼吸记号）按 token 计数占位宽。
-    // adj377：**必须与本函数里的音符循环平级**——此前被嵌在音符循环内，导致每个音符都把标记宽
-    // 重复计一次（N 个音符 × 标记宽），行宽被大幅高估 → 行内只要有独立标记就过早断行。
-    for (const t of seg.notes) {
-      if (t.kind === 'bracket') durSum += markBodyW(t.code, noteSize)
-    }
-    // 小节线占位（本体宽 + 双侧间距上限 0.5×音符宽）
-    if (seg.bar) durSum += barlineSpace(0, seg.bar.type, seg.bar.comment, noteSize) + 2 * 0.5 * digitSlotW(noteSize)
-    return durSum
-  })
+  const segNeed = segs.map((seg) => measureSpaceWidth(seg, noteSize, ink))
   const rows: LayoutRow[] = []
   let start = 0
   let acc = 0

@@ -28,7 +28,7 @@ import { parseJps } from '../parser/parser'
 import { splitBars, countMeasures } from '../parser/bars'
 import { joinBarlineTokens } from '../parser/barlineJoin'
 import { computeSegments } from '../layout/segments'
-import { measureFixedWidth } from '../layout/index'
+import { measureFixedWidth, measureSpaceWidth } from '../layout/index'
 import { tokenDuration } from '../duration'
 import { extractJpsConfig } from '../settings'
 
@@ -116,7 +116,8 @@ function partsOfGroups(groups: MusicGroup[]): VoicePart[] {
 function availWidthOf(cfg: PageConfig, voices: number): number {
   const page = PAPER_SIZE[cfg.page]?.width ?? 595.28
   const pad = voices > 1 ? cfg.note_size * 2.2 : 0
-  return Math.max(80, page - cfg.margin_left - cfg.margin_right - pad)
+  // 与 breakRows/breakRowsSpace 一样扣掉左右 BAR_PAD（各 6px）
+  return Math.max(80, page - cfg.margin_left - cfg.margin_right - pad - 12)
 }
 
 /** 建排版单元（与 layout / sequence 同一规则：声部号在本单元内重复即断；[fenye] 断） */
@@ -183,11 +184,16 @@ function buildUnits(result: ParseResult): UnitInfo[] {
 }
 
 /** 每个小节的固定部分宽（多声部取各声部最大） */
-function fixedWidthsOf(parts: VoicePart[], noteSize: number): number[] {
+function fixedWidthsOf(parts: VoicePart[], noteSize: number, spaceLayout: boolean): number[] {
   const maxBars = Math.max(0, ...parts.map((p) => p.segs.length))
   const out = new Array<number>(maxBars).fill(0)
   for (const p of parts) {
-    for (let b = 0; b < p.segs.length; b++) out[b] = Math.max(out[b], measureFixedWidth(p.segs[b], noteSize))
+    for (let b = 0; b < p.segs.length; b++) {
+      const w = spaceLayout
+        ? measureSpaceWidth(p.segs[b], noteSize)
+        : measureFixedWidth(p.segs[b], noteSize)
+      out[b] = Math.max(out[b], w)
+    }
   }
   return out
 }
@@ -554,7 +560,7 @@ function planStartsForParts(
   cfg: PageConfig,
 ): { starts: number[]; measureCount: number; warnings: string[] } {
   const measureCount = Math.max(1, ...parts.map((p) => countMeasures(p.tokens)))
-  const fixed = fixedWidthsOf(parts, cfg.note_size)
+  const fixed = fixedWidthsOf(parts, cfg.note_size, cfg.noteSpaceLayout === 'space')
   const avail = availWidthOf(cfg, parts.length)
   const forbidden = forbiddenBreaksOf(parts, measureCount)
   // 用户 2026-11-24 拍板：`|]/` 随实际行宽调整，**不强制换行**；
