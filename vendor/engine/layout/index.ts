@@ -4813,6 +4813,7 @@ export function layoutScore(
    * 「**同一个 C 行的歌词应显示在同一水平线上**（含临时多声部）」+「两字较宽时靠近后字，
    * 容不下时**移到后字的上/下位置**」。放在最末：避让需要知道同一行全部歌词的最终 x。
    */
+  keepBarlinesOutOfInk(pages, config)
   avoidLyricComments(pages, config)
 
   /**
@@ -6685,6 +6686,85 @@ function fillWholeBarLongNotes(pages: ScorePage[], config: PageConfig): void {
  *  ④ 歌词字（含临时多声部里的）永远同一水平线——挪的只有注释。
  * 障碍集含**曲部音符**：上移会够到曲部，不把它算进去就会"从压歌词变成压音符"。
  */
+/**
+ * adj1324：小节线（尤其是末行按上一行对齐的线）不得落进音符/增时线的墨迹里。
+ *
+ * 用户口径：**第一优先墨迹不重叠；第二优先才是末行小节线与上一行对齐**。
+ * 对齐算法把线拉到参考 x 时，如果那个 x 落在前一音的增时线/附点/后倚音里，
+ * 这里把线挪到「前一音右墨迹」与「后一音左墨迹」之间的空档；没有下一音就贴右墨迹之后。
+ * 小节序号跟着最近的那根线走。
+ */
+export function keepBarlinesOutOfInk(pages: ScorePage[], config: PageConfig): void {
+  /**
+   * 只处理**最后一行**：用户口径针对“末行按上一行对齐”的线。
+   * 不碰其它行，避免把正常的行首/行内线位和序号一起推走。
+   */
+  const page = pages[pages.length - 1]
+  if (page === undefined || page.barlines.length === 0) return
+  // 以 voiceBlock 作为“排版行”的单位：多声部同一行有多个 barline yTop，不能按 yTop 当成多行。
+  const lastBlock = page.voiceBlocks[page.voiceBlocks.length - 1]
+  if (lastBlock === undefined || page.voiceBlocks.length < 2) return
+  const lines = page.barlines.filter(
+    (line) => line.yTop >= lastBlock.yTop - 1 && line.yTop <= lastBlock.yBottom + 1,
+  )
+  if (lines.length === 0) return
+  const old = page.barlines.map((line) => ({ line, oldX: line.x }))
+  const moved = new Set<typeof page.barlines[number]>()
+  for (const line of lines) {
+    const half = Math.max(1, line.width) / 2
+    const rowNotes = page.notes
+      .filter((n) => n.y > line.yTop - 2 && n.y < line.yBottom + 2)
+      .map((n) => {
+        const hasTail = n.token.dots > 0 || n.token.augmentCount > 0
+        return {
+          x: n.x,
+          left: n.inkLeftX ?? n.x,
+          right: n.inkRightX ?? (hasTail ? n.x + n.width : n.x + Math.min(n.width, digitSlotW(config.note_size))),
+          tail: hasTail,
+        }
+      })
+      .sort((a, b) => a.x - b.x)
+    let prev: { x: number; left: number; right: number; tail: boolean } | undefined
+    let next: { x: number; left: number; right: number; tail: boolean } | undefined
+    for (const n of rowNotes) {
+      if (n.x < line.x - 0.5) {
+        prev = n
+      } else if (n.x > line.x + 0.5) {
+        next = n
+        break
+      } else {
+        if (n.right + half <= line.x) prev = n
+        else {
+          next = n
+          break
+        }
+      }
+    }
+    // 只针对“线落进增时线/附点/后倚音的墨迹”这一种冲突；普通音旁的线位不动
+    const overlaps = prev !== undefined && prev.tail && prev.right + half > line.x
+    if (!overlaps) continue
+    const lo = prev !== undefined ? prev.right + half + 1 : config.margin_left
+    const hi = next !== undefined ? next.left - half - 1 : page.width - config.margin_right
+    if (hi > lo) line.x = Math.round(((lo + hi) / 2) * 10) / 10
+    else if (next !== undefined) line.x = Math.round(hi * 10) / 10
+    else line.x = Math.round(lo * 10) / 10
+    line.x = Math.min(Math.max(line.x, config.margin_left), page.width - config.margin_right)
+    moved.add(line)
+  }
+  for (const bn of page.barNumbers) {
+    let best: { line: number; oldX: number; distance: number } | null = null
+    let bestLine: typeof page.barlines[number] | null = null
+    for (const p of old) {
+      const distance = Math.abs(p.oldX - bn.x)
+      if (best === null || distance < best.distance) {
+        best = { line: p.line.x, oldX: p.oldX, distance }
+        bestLine = p.line
+      }
+    }
+    if (best !== null && bestLine !== null && moved.has(bestLine)) bn.x = best.line
+  }
+}
+
 function avoidLyricComments(pages: ScorePage[], config: PageConfig): void {
   const size = config.geci_size
   const cfs = lyricCommentFontSize(size)

@@ -176,7 +176,7 @@ export {
   DEFAULT_METER_BEATS,
   MEASURE_BEATS_EPSILON,
 } from './measures'
-export { layoutScore, measureFixedWidth } from './layout'
+export { layoutScore, measureFixedWidth, keepBarlinesOutOfInk } from './layout'
 export { reflowJps } from './reflow'
 export type { ReflowOptions, ReflowResult } from './reflow'
 export { renderScoreToSvg, keySignatureOf } from './render'
