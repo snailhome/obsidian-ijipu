@@ -1628,8 +1628,17 @@ export function layoutScore(
         : null
     // 行首小节线占位：非普通 |、非 |/ 的行首线（|: || :|: |* 等）预留 线宽 + 右侧 4px 间距
     const leadBar = leadingEmpty === 1 ? segs[row.start].bar : leadVoltaBar
+    /**
+     * adj1324：行首裸起备注 `"p:5/4"` / `"d:1=D"` 也要占宽。
+     * 之前 `|/` 直接返回 0，行首隐藏线上的拍号/转调会压到第一音。
+     */
+    const leadAnnotationW =
+      leadBar?.comment !== undefined ? (meterGapRight(leadBar.comment, m.noteSize) ?? 0) : 0
+    const leadKeyW = leadBar?.keyChange !== undefined ? Math.round(m.noteSize * 3) : 0
     const leadPad =
-      leadBar && !leadBar.voltaOnly && leadBar.type !== '|' && leadBar.type !== '|/' ? barlineTotalW(leadBar.type) + 4 : 0
+      (leadBar && !leadBar.voltaOnly && leadBar.type !== '|' && leadBar.type !== '|/' ? barlineTotalW(leadBar.type) + 4 : 0) +
+      leadAnnotationW +
+      leadKeyW
     // 行预算：每对相邻内容小节之间按该小节线上类型占位（|/ 不占位）
     let barGaps = 0
     {
