@@ -195,6 +195,10 @@ export function tokenizeMusicLine(
     lastBlockCounts = true
   }
 
+  /** 是否是“作用于下一小节”的拍号/转调备注（不能当成跳房子番号） */
+  const isMeasureChangeComment = (s: string): boolean =>
+    /^p\s*:\s*\d+\s*\/\s*\d+/i.test(s) || /^d:/i.test(s)
+
   /** 解析 [ 后的跳房子修饰（adj26）：+ 抬高、- 降低（adj356）、/ 不封闭、引号注释（番号） */
   const parseVoltaMods = (start: number): { k: number; slash: boolean; plus: number; minus: number; comment?: string } => {
     let k = start
@@ -220,7 +224,24 @@ export function tokenizeMusicLine(
           errors.push(err('引号注释未闭合', { line: pos.line, col: pos.col + k }, 'error', HINT_QUOTE))
           k = n
         } else {
-          comment = content.slice(k + 1, close)
+          const text = content.slice(k + 1, close)
+          /**
+           * adj1324：`["p:4/4"` 里的引号不是跳房子番号（番号是数字 / 数字. / 结束句 / 结束句.），
+           * 而是临时拍号/转调。**不要吞掉它**，留给后面的小节线备注解析；
+           * 正确写法是 `|"p:4/4"[`（备注在小节线右侧、`[` 之前）。
+           */
+          if (isMeasureChangeComment(text)) {
+            errors.push(
+              err(
+                '拍号/转调备注不能写在 `[` 后（会被当成跳房子番号）',
+                { line: pos.line, col: pos.col + k },
+                'warning',
+                '请写成 `|"p:4/4"[` / `|"d:1=D"[`：备注紧跟小节线，`[` 写在备注之后。',
+              ),
+            )
+            break
+          }
+          comment = text
           k = close + 1
         }
       } else {

@@ -673,10 +673,11 @@ function barlineSourceOf(t: BarlineToken): string {
   if (t.bareAnnotation) return annotationSource()
   let s = t.type
   for (const m of t.marks ?? []) s += `&${m}`
+  // adj1324：拍号/转调备注在小节线右侧、`[`/`]` 之前（`|"p:4/4"[`）
+  s += annotationSource()
   if (t.voltaEnd) s += ']'
   if (t.voltaEndSlash) s += '/'
   s += voltaSrc()
-  s += annotationSource()
   return s
 }
 
