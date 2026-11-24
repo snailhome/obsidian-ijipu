@@ -620,6 +620,29 @@ function ensureEndBarline(tokens: MusicToken[]): MusicToken[] {
   return [...tokens, { kind: 'barline', type: '|', pos: 0, raw: '|' } as BarlineToken]
 }
 
+/**
+ * adj1324：`|"p:5/4"` / `|"d:1=D"` 作用在**下一小节**，不是上一行的收尾。
+ * 重排把行断在这个小节线之后时，把拍号/转调备注搬到**下一行行首**的隐藏小节线上；
+ * 上一行只留原来的线型/反复/跳房子等。这样显示也在行首（“裸起开头”）。
+ */
+function moveMeasureChangesToLineStart(pieces: MusicToken[][]): void {
+  for (let row = 0; row + 1 < pieces.length; row++) {
+    const cur = pieces[row]
+    const next = pieces[row + 1]
+    if (cur.length === 0 || next.length === 0) continue
+    const last = cur[cur.length - 1]
+    if (last.kind !== 'barline' || last.voltaOnly) continue
+    const meter = last.comment !== undefined && /p\s*:\s*\d+\s*\/\s*\d+/i.test(last.comment)
+    if (!meter && !last.keyChange) continue
+    const lead: BarlineToken = { kind: 'barline', type: '|/', pos: last.pos, raw: '|/' }
+    if (last.comment !== undefined) lead.comment = last.comment
+    if (last.keyChange !== undefined) lead.keyChange = last.keyChange
+    delete last.comment
+    delete last.keyChange
+    next.unshift(lead)
+  }
+}
+
 /** 小节线源码（类型 + 修饰 + 跳房子 + 备注/转调；不直接用 raw，避免 P1 拆分后的半截 raw） */
 function barlineSourceOf(t: BarlineToken): string {
   const voltaStart = t.voltaStart
@@ -721,7 +744,9 @@ function reflowUnit(unit: UnitInfo, opts: ReflowOptions, cfg: PageConfig): UnitR
   const slotAtByGroup = new Map<MusicGroup, number[]>()
   for (const group of unit.groups) {
     const tokens = qTokensOf(group)
-    piecesByGroup.set(group, splitVoiceTokens(tokens, starts, measureCount))
+    const pieces = splitVoiceTokens(tokens, starts, measureCount)
+    moveMeasureChangesToLineStart(pieces)
+    piecesByGroup.set(group, pieces)
     slotAtByGroup.set(group, boundarySlotsOf(tokens, measureCount))
   }
 
@@ -862,7 +887,9 @@ function reflowRun(units: UnitInfo[], opts: ReflowOptions, cfg: PageConfig): Uni
   const piecesByVoice = new Map<number, MusicToken[][]>()
   const slotAtByVoice = new Map<number, number[]>()
   for (const p of parts) {
-    piecesByVoice.set(p.voice, splitVoiceTokens(p.tokens, starts, measureCount))
+    const pieces = splitVoiceTokens(p.tokens, starts, measureCount)
+    moveMeasureChangesToLineStart(pieces)
+    piecesByVoice.set(p.voice, pieces)
     slotAtByVoice.set(p.voice, boundarySlotsOf(p.tokens, measureCount))
   }
 

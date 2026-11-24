@@ -187,6 +187,16 @@ function firstLineBoundary(merged: BarlineTok): BarlineTok | null {
   return merged
 }
 
+/**
+ * adj1324：这根线是否带“作用于下一小节”的拍号/转调备注。
+ * 这种线不能整根并到上一行末（否则显示到上一行行尾）；只把线型并过去，
+ * 备注/转调搬到当前行行首的隐藏线上（“裸起开头”）。
+ */
+function hasMeasureChange(t: BarlineTok): boolean {
+  if (t.keyChange !== undefined) return true
+  return t.comment !== undefined && /p\s*:\s*\d+\s*\/\s*\d+/i.test(t.comment)
+}
+
 /** 把一行行首的边界归到上一行末（或首行规则） */
 function applyLeading(
   music: MusicLine,
@@ -223,8 +233,18 @@ function applyLeading(
     return
   }
 
-  // 非首行：有边界就并到上一行末；没有边界就什么都不加
+  // 非首行：有边界就并到上一行末；没有边界就什么都不加。
+  // adj1324：拍号/转调（`p:` / `d:`）作用于下一小节 ⇒ 备注搬到当前行行首，不留在上一行末。
+  const carries: BarlineTok[] = []
   for (const b of boundaries) {
+    let carried: BarlineTok | null = null
+    if (hasMeasureChange(b)) {
+      carried = { kind: 'barline', type: '|/', pos: b.pos, raw: '|/' }
+      if (b.comment !== undefined) carried.comment = b.comment
+      if (b.keyChange !== undefined) carried.keyChange = b.keyChange
+      delete b.comment
+      delete b.keyChange
+    }
     const last = prev!.tokens[prev!.tokens.length - 1]
     if (last && last.kind === 'barline') {
       const { token, warnings } = joinBarlineTokens(last, b)
@@ -233,7 +253,9 @@ function applyLeading(
     } else {
       prev!.tokens.push(b)
     }
+    if (carried !== null) carries.push(carried)
   }
+  if (carries.length > 0) music.tokens = [...carries, ...music.tokens]
   if (volta) music.tokens.unshift(volta)
 }
 
