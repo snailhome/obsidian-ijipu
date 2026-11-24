@@ -634,7 +634,7 @@ function moveMeasureChangesToLineStart(pieces: MusicToken[][]): void {
     if (last.kind !== 'barline' || last.voltaOnly) continue
     const meter = last.comment !== undefined && /p\s*:\s*\d+\s*\/\s*\d+/i.test(last.comment)
     if (!meter && !last.keyChange) continue
-    const lead: BarlineToken = { kind: 'barline', type: '|/', pos: last.pos, raw: '|/' }
+    const lead: BarlineToken = { kind: 'barline', type: '|/', pos: last.pos, raw: '|/', bareAnnotation: true }
     if (last.comment !== undefined) lead.comment = last.comment
     if (last.keyChange !== undefined) lead.keyChange = last.keyChange
     delete last.comment
@@ -656,13 +656,9 @@ function barlineSourceOf(t: BarlineToken): string {
     return s
   }
   if (t.voltaOnly) return voltaSrc()
-  let s = t.type
-  for (const m of t.marks ?? []) s += `&${m}`
-  if (t.voltaEnd) s += ']'
-  if (t.voltaEndSlash) s += '/'
-  s += voltaSrc()
-  const kc = t.keyChange
-  if (kc || t.comment) {
+  const annotationSource = (): string => {
+    const kc = t.keyChange
+    if (!kc && !t.comment) return ''
     let q = ''
     if (kc) {
       if (kc.clear) q += 'd:'
@@ -671,8 +667,16 @@ function barlineSourceOf(t: BarlineToken): string {
       else q += 'd:'
     }
     q += t.comment ?? ''
-    s += `"${q}"`
+    return `"${q}"`
   }
+  // adj1324：行首“裸起”的拍号/转调——源码不写 `|/`
+  if (t.bareAnnotation) return annotationSource()
+  let s = t.type
+  for (const m of t.marks ?? []) s += `&${m}`
+  if (t.voltaEnd) s += ']'
+  if (t.voltaEndSlash) s += '/'
+  s += voltaSrc()
+  s += annotationSource()
   return s
 }
 

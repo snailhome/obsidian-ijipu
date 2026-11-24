@@ -1101,6 +1101,32 @@ export function tokenizeMusicLine(
       }
     }
 
+    /**
+     * adj1324：行首“裸起”的拍号/转调备注——`Q: "p:5/4" 1 2 …` / `Q: "d:1=D" 1 2 …`。
+     * 语法上不写 `|/`（行首本来就是隐式隐藏小节线）；内部仍建一根 `|/` 承载备注，
+     * 这样 layout/render 不用为“裸备注”另开一条路径。
+     */
+    if (c === '"' && tokens.length === 0) {
+      const close = content.indexOf('"', i + 1)
+      if (close === -1) {
+        errors.push(err('引号注释未闭合', { line: pos.line, col: pos.col + i }, 'error', HINT_QUOTE))
+        i = n
+        continue
+      }
+      const rawNote = content.slice(i + 1, close)
+      const t: Extract<MusicToken, { kind: 'barline' }> = {
+        kind: 'barline',
+        type: '|/',
+        pos: i,
+        raw: content.slice(i, close + 1),
+        bareAnnotation: true,
+      }
+      applyKeyChange(t, rawNote)
+      tokens.push(t)
+      i = close + 1
+      continue
+    }
+
     // 未知字符：保留原文作为装饰 token，并给出警告
     errors.push(err(`无法识别的符号 "${c}"`, { line: pos.line, col: pos.col + i }, 'warning', HINT_SYMBOL))
     tokens.push({ kind: 'decoration', code: c, pos: i, raw: c })

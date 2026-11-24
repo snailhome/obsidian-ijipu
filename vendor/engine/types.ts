@@ -337,6 +337,11 @@ export interface BarlineToken {
   voltaEndSlash?: boolean
   /** 纯跳房子起点（无小节线的 [，如 ] 后连续 [ 或行首），渲染不画小节线竖线（adj26） */
   voltaOnly?: boolean
+  /**
+   * adj1324：行首“裸起”的拍号/转调备注（如 `Q: "p:5/4" 1 2 …`）——
+   * 内部仍是一根隐藏线 `|/`，但**源码里不写 `|/`**；重排输出也省略它。
+   */
+  bareAnnotation?: boolean
   /** 小节线备注（引号内容；`d:` 转调指令已从其中剥掉，见 `keyChange`） */
   comment?: string
   /**

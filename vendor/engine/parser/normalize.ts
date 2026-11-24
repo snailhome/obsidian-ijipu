@@ -239,7 +239,7 @@ function applyLeading(
   for (const b of boundaries) {
     let carried: BarlineTok | null = null
     if (hasMeasureChange(b)) {
-      carried = { kind: 'barline', type: '|/', pos: b.pos, raw: '|/' }
+      carried = { kind: 'barline', type: '|/', pos: b.pos, raw: '|/', bareAnnotation: true }
       if (b.comment !== undefined) carried.comment = b.comment
       if (b.keyChange !== undefined) carried.keyChange = b.keyChange
       delete b.comment
