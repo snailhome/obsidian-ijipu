@@ -29,6 +29,18 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
 
+      # 社区目录按 manifest.version 精确找 Release tag；tag 必须是 `0.51.0`，
+      # 不能是 `v0.51.0`，否则会报 "No release matches your manifest version"。
+      - name: Validate tag equals manifest.version (no v prefix)
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          VERSION=$(node -p "require('./manifest.json').version")
+          echo "tag=$TAG manifest=$VERSION"
+          if [ "$TAG" != "$VERSION" ]; then
+            echo "::error::GitHub tag must equal manifest.version without a 'v' prefix"
+            exit 1
+          fi
+
       - uses: actions/setup-node@v4
         with:
           node-version: '22'   # Vite8/rolldown 需要 Node 22+（node:util.styleText 是 Node 22 API）
