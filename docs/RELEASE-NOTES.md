@@ -1,3 +1,22 @@
+# 爱记谱 iJipu 0.51.2
+
+> **修复版**（PATCH）：把新的品牌 logo 带进内嵌应用，顶栏和「关于」里的 logo 不再显示成破图。
+
+## 修复
+
+- 嵌入版资产白名单 `USED_ICONS` 里只有旧版 `Jianpu.png`，而顶栏 `TopBar.tsx` 和「关于」`AboutDialog.tsx` 早已改用 `icons/logo-jp.png`；请求查不到时 `server.ts` 回 204，界面就显示成破图。
+- 白名单补上 `logo-jp.png`。
+- `build:embed` 新增 `assertStaticIconsCovered()`：扫描 `src/**/*.ts|tsx` 里真正渲染的 `src="...icons/..."` 引用，漏一个就构建失败；以后换品牌图不会再静默漏带。
+- 重建内嵌应用资产：51 个资产（49 个图标）/ 166.0 KB；单文件 HTML 1,862.9 KB（1,773,030 字符）。内嵌应用仍为 `0.84.0`，`vendor/engine` 未改。
+
+## 验证
+
+- `npm run build` 通过（`tsc -noEmit -skipLibCheck` 0 错误）。
+- 按插件 `embed/server.ts` 同口径（剥 token + `decodeURIComponent` + `WEBAPP_ASSETS`）请求全部资产：**51/51 返回 200，0 失败**。
+- 深色 1280×900 下顶栏 logo 与「关于」大 logo 的请求均 200，`naturalWidth 1713`；`icons/logo-jp.png` 键在 `webappAssets.ts` 与 `main.js` 中都存在。
+- `npm run smoke`：**839 passed, 1 failed**；唯一失败仍是 `adj770` 跨仓 vendor 比对（本机应用引擎比插件 vendor 新），与本轮 logo 修复无关。
+- 未在真实 Obsidian 里重载本版验证，需用户装上 0.51.2 后看一眼顶栏与「关于」。
+
 # 爱记谱 iJipu 0.51.1
 
 > **修复版**（PATCH）：修复内嵌应用里部分图标按钮显示空白的问题。深色、浅色主题都有，深色背景上更显眼。
