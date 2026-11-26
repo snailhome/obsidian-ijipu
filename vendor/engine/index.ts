@@ -166,6 +166,9 @@ export { matchInterludeHead } from './parser/tokenizer'
 // adj1118：间奏时长的**唯一口径**（`{jz N}` 与注记 `间奏N拍`；播放/校验/宿主都问它）
 export { interludeBeatsOf, interludeExtraBeats, interludeDiagnostics } from './interlude'
 export { tokenDuration, durationMs } from './duration'
+// 乐谱中间表示（ScoreIR）：`.jps` ↔ MusicXML 的唯一转换口径。
+// 见 docs/OMR-PLAN.md §七；五线谱/简谱互转、识图结果落库都走这一层。
+export * from './scoreIR'
 // adj594（用户要求）：小节时值校验（纯函数，解析器已自动并入 ParseResult.errors）
 export {
   checkMeasureBeats,

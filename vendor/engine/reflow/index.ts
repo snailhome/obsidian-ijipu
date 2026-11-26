@@ -28,6 +28,10 @@ import { parseJps } from '../parser/parser'
 import { splitBars, countMeasures } from '../parser/bars'
 import { joinBarlineTokens } from '../parser/barlineJoin'
 import { computeSegments } from '../layout/segments'
+// 用户 2026-11-26（E-2026-615）：重排也是“格式化”——它从 token 重新拼源码，
+// 渐强 `<+++`/连音线 `)` 会被按 token 原顺序拼回 `6--- <+++` / `7-- )`。
+// 这里复用编辑器的同一套规范化，保证**重排与逐行格式化输出一致**。
+import { normalizeHairpinsAndSlurEnds } from '../format/format'
 import { measureFixedWidth, measureSpaceWidth } from '../layout/index'
 import { tokenDuration } from '../duration'
 import { extractJpsConfig } from '../settings'
@@ -683,7 +687,7 @@ function barlineSourceOf(t: BarlineToken): string {
 
 const KEY_NAMES = ['C', '#C', 'D', '$E', 'E', 'F', '#F', 'G', '#G', 'A', '$B', 'B']
 
-/** 一个 token 块 → 源码（段内递归；块间单空格） */
+/** 一个 token 块 → 源码（段内递归；块间单空格；末尾按格式化口径归一渐强/连音线收尾） */
 function serializeTokens(tokens: readonly MusicToken[]): string {
   const parts: string[] = []
   for (const t of tokens) {
@@ -702,7 +706,7 @@ function serializeTokens(tokens: readonly MusicToken[]): string {
     }
     parts.push(t.raw)
   }
-  return parts.filter((s) => s !== '').join(' ')
+  return normalizeHairpinsAndSlurEnds(parts.filter((s) => s !== '').join(' '))
 }
 
 /** 歌词槽位 → 源码字符偏移（含 `{tp}` 起点；用于按断点切片） */
